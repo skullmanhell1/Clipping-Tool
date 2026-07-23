@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+frontend/node_modules
+frontend/dist
+storage/uploads/*
+storage/temp/*
+storage/clips/*
+!storage/**/.gitkeep
+.github/
+*.md
