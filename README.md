@@ -3,12 +3,32 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.2.0 — **Phase 1 (core clip-generating engine) is working.**
-> Paste a URL or upload video, and the tool transcribes it, splits it into
-> clips, reformats them to vertical (or 1:1 / 16:9 / 4:5) with a blurred-background
-> fill, burns in word-timed captions, and serves a gallery with preview +
-> download. AI moment selection, effects, and auto-publishing arrive in later
-> phases.
+> **Status:** v0.3.0 — **Phases 1 & 2 are working.** Paste a URL or upload
+> video, and the tool transcribes it, uses an **LLM to pick the most engaging
+> moments** (with a virality score), reformats them to vertical (or 1:1 / 16:9 /
+> 4:5) with a blurred-background fill, burns in word-timed captions, and
+> **auto-writes per-platform titles, descriptions & hashtags** you can edit or
+> regenerate. Effects and auto-publishing arrive in later phases.
+
+## Phase 2 — smart selection & metadata
+
+- **LLM highlight selection** (pluggable **OpenAI or Anthropic**, key from
+  `.env`): finds hooks, punchlines, complete thoughts, and emotional peaks;
+  scores each clip's **virality** and snaps cuts to sentence boundaries. Honours
+  a **Clip Topic/Keywords** and **Vibe/Tone**, and respects your clip count and
+  target length. Falls back to Phase 1's silence/fixed segmentation when no LLM
+  key is set.
+- **AI metadata per clip, tailored per platform:** title + alternatives,
+  description/caption, hashtags (configurable count), on-screen hook text, CTA,
+  @mentions, and a thumbnail-text idea — with character/hashtag limits enforced.
+- **Editable gallery:** every field is editable and each can be **regenerated**
+  individually; clips show their virality score.
+- **Advanced settings** in the UI: Clip Topic, Vibe/Tone, Process Range,
+  Platform, Hashtag count, and selection method.
+
+> Set `LLM_PROVIDER` and the matching `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in
+> `.env` to enable AI features. Without a key, the tool still produces clips and
+> basic metadata via the deterministic fallback.
 
 ## Phase 1 — what works today
 

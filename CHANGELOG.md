@@ -8,12 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- AI moment selection (LLM) replacing deterministic segmentation
-- Auto-generated titles/hashtags + emoji/overlay effects
+- Emoji / overlay effects
 - Face-tracking reframe (mediapipe) replacing centre-crop
 - Auto-publishing to Whop / YouTube / TikTok / Instagram / X
 - S3 storage backend + retention cleanup
 - RQ-backed distributed worker (currently in-process)
+
+## [0.3.0] - 2026-07-23
+
+### Added — Phase 2: smart selection & metadata
+- **Pluggable LLM client** (`worker/llm_client.py`): OpenAI or Anthropic
+  (key from `.env`), unified `complete` / `complete_json` interface with lenient
+  JSON parsing, a `MockLLMClient`, dependency-injection override
+  (`set_llm_client`), and an availability check.
+- **LLM highlight selection** (`worker/selection.py`): replaces fixed-length
+  cutting. Sends the transcript to the LLM to find hooks, punchlines, complete
+  thoughts, and emotional peaks; returns candidates with a **virality score**
+  and rationale. Honours *Clip Topic/Keywords* and *Vibe/Tone*, respects clip
+  count + target length, snaps start/end to sentence boundaries, and falls back
+  to deterministic segmentation when no LLM is configured.
+- **AI metadata generation** (`worker/metadata.py`): per-clip title (+ 2-3
+  alternatives), description/caption, hashtags (configurable count), on-screen
+  hook text, CTA, @mentions, and thumbnail text idea — tone tailored **per
+  platform** (YouTube / TikTok / Instagram / X / Whop / generic) with character
+  and hashtag limits enforced. Individual fields can be regenerated.
+- **Pipeline integration** (`worker/pipeline.py`): AI selection + per-clip
+  metadata, an optional **Process Range**, and graceful fallback throughout.
+- **API** (v0.3.0): extended options (topic, vibe, platform, hashtag count,
+  process range, selection strategy); `PATCH /api/jobs/{job}/clips/{clip}` to
+  edit clip metadata and `POST .../regenerate` to regenerate a single field;
+  `/api/info` now reports platforms, strategies, and LLM availability.
+- **Web UI**: an **Advanced settings** section (Clip Topic, Vibe/Tone, Process
+  Range, Platform, Hashtag count, selection method) and an editable clip gallery
+  showing the **virality score**, editable title (with alternative chips),
+  description, hashtags, hook, CTA, and thumbnail text — each with a per-field
+  **regenerate** action.
 
 ## [0.2.0] - 2026-07-23
 
