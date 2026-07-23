@@ -1,56 +1,189 @@
-import React from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { api, resolveLanguage } from "./api.js";
+import InputBar from "./components/InputBar.jsx";
+import SettingsPanel from "./components/SettingsPanel.jsx";
+import PreviewCard from "./components/PreviewCard.jsx";
+import JobCard from "./components/JobCard.jsx";
 
-// Planned pipeline stages, shown as placeholder cards on the dashboard.
-// Real controls (upload, job status, clip gallery) arrive in later phases.
-const PIPELINE = [
-  { title: "Transcribe", desc: "faster-whisper turns speech into timed text." },
-  { title: "Select moments", desc: "An LLM picks the most engaging segments." },
-  { title: "Cut & reframe", desc: "Vertical 9:16 with face-tracking." },
-  { title: "Captions & effects", desc: "Burned-in captions, emoji, overlays." },
-  { title: "Metadata", desc: "Auto titles, descriptions, hashtags." },
-  { title: "Publish", desc: "Whop, YouTube, TikTok, Instagram, X." },
-];
+const DEFAULT_SETTINGS = {
+  language: "auto",
+  clip_length: "auto",
+  aspect: "9:16",
+  num_clips: "auto",
+  strategy: "silence",
+  captions: true,
+};
 
-/**
- * Root application component.
- *
- * A dark-themed placeholder dashboard. This is intentionally feature-free for
- * the scaffold phase; it establishes the styling, layout, and build pipeline.
- */
+// Translate UI settings into the backend ProcessingOptions shape.
+function toOptions(settings) {
+  const { language, translate } = resolveLanguage(settings.language);
+  return {
+    language,
+    translate,
+    clip_length: settings.clip_length,
+    aspect: settings.aspect,
+    num_clips: settings.num_clips,
+    strategy: settings.strategy,
+    captions: settings.captions,
+  };
+}
+
 export default function App() {
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [input, setInput] = useState({ urls: [], files: [] });
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [jobs, setJobs] = useState([]);
+  const [trackedIds, setTrackedIds] = useState(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [watch, setWatch] = useState({ enabled: false, folder: "" });
+
+  const pollRef = useRef(null);
+
+  // Load watch-folder status once on mount.
+  useEffect(() => {
+    api.watchStatus().then(setWatch).catch(() => {});
+  }, []);
+
+  // Poll all jobs while any tracked job is unfinished (or watch mode is on).
+  const poll = useCallback(async () => {
+    try {
+      const { jobs: all } = await api.listJobs();
+      setJobs(all);
+    } catch {
+      /* transient; keep last state */
+    }
+  }, []);
+
+  useEffect(() => {
+    const active =
+      watch.enabled ||
+      jobs.some((j) => ["queued", "processing"].includes(j.status));
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (trackedIds.size > 0 || watch.enabled) {
+      poll();
+      pollRef.current = setInterval(poll, active ? 1200 : 4000);
+    }
+    return () => pollRef.current && clearInterval(pollRef.current);
+  }, [trackedIds, watch.enabled, poll, jobs.length]);
+
+  const handlePreview = useCallback(async (url) => {
+    setPreview(null);
+    setPreviewLoading(true);
+    try {
+      const meta = await api.preview(url);
+      setPreview(meta);
+    } catch {
+      setPreview(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, []);
+
+  const track = (newJobs) =>
+    setTrackedIds((prev) => {
+      const next = new Set(prev);
+      newJobs.forEach((j) => next.add(j.id));
+      return next;
+    });
+
+  const handleGetClips = async () => {
+    setError("");
+    const options = toOptions(settings);
+    const { urls, files } = input;
+
+    if (files.length === 0 && urls.length === 0) {
+      setError("Add a video URL or upload a file first.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      let created = [];
+      if (files.length > 0) {
+        const res = await api.upload(files, options);
+        created = res.jobs || [];
+      } else if (urls.length === 1) {
+        created = [await api.submitUrl(urls[0], options)];
+      } else {
+        const res = await api.submitBatch(urls, options);
+        created = res.jobs || [];
+      }
+      track(created);
+      setJobs((prev) => [...created, ...prev]);
+    } catch (e) {
+      setError(e.message || "Failed to submit.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleWatch = async (enabled) => {
+    try {
+      const status = await api.watchToggle(enabled, toOptions(settings));
+      setWatch(status);
+    } catch (e) {
+      setError(e.message || "Watch toggle failed.");
+    }
+  };
+
+  // Jobs to display: tracked ones plus any produced by watch mode.
+  const visibleJobs = jobs.filter(
+    (j) => trackedIds.has(j.id) || j.source?.includes("/watch/")
+  );
+
   return (
     <div className="min-h-full bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-5xl px-6 py-16">
-        <span className="inline-block rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-widest text-brand-accent">
-          Scaffold &middot; v0.1.0
-        </span>
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        <header className="mb-8">
+          <h1 className="bg-gradient-to-r from-brand-accent to-brand bg-clip-text text-3xl font-bold text-transparent">
+            AI Video Clipper
+          </h1>
+          <p className="mt-1 text-slate-400">
+            Paste a link or upload video — get short, captioned, vertical clips.
+          </p>
+        </header>
 
-        <h1 className="mt-5 bg-gradient-to-r from-brand-accent to-brand bg-clip-text text-4xl font-bold text-transparent">
-          AI Video Clipper
-        </h1>
+        <div className="space-y-4">
+          <InputBar onChange={setInput} onPreview={handlePreview} />
+          {input.files.length === 0 && (
+            <PreviewCard preview={preview} loading={previewLoading} />
+          )}
+          <SettingsPanel
+            settings={settings}
+            onChange={setSettings}
+            watch={watch}
+            onToggleWatch={handleToggleWatch}
+          />
 
-        <p className="mt-4 max-w-2xl text-slate-400">
-          Turn long videos into short, vertical, captioned clips ready to
-          auto-publish. This dashboard is a placeholder while the pipeline is
-          built phase by phase.
-        </p>
+          <button
+            onClick={handleGetClips}
+            disabled={submitting}
+            className="w-full rounded-xl bg-emerald-500 py-4 text-lg font-bold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? "Submitting…" : "Get Clips"}
+          </button>
 
-        <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {PIPELINE.map((step, i) => (
-            <div
-              key={step.title}
-              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition hover:border-brand/60"
-            >
-              <div className="text-xs font-mono text-brand-accent">
-                {String(i + 1).padStart(2, "0")}
-              </div>
-              <h2 className="mt-1 text-lg font-semibold">{step.title}</h2>
-              <p className="mt-1 text-sm text-slate-400">{step.desc}</p>
+          {error && (
+            <div className="rounded-lg border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">
+              {error}
             </div>
-          ))}
+          )}
         </div>
 
-        <footer className="mt-12 text-sm text-slate-500">
+        {visibleJobs.length > 0 && (
+          <section className="mt-10 space-y-4">
+            <h2 className="text-lg font-semibold text-slate-200">
+              {watch.enabled ? "Jobs (watch-folder active)" : "Jobs"}
+            </h2>
+            {visibleJobs.map((job) => (
+              <JobCard key={job.id} job={job} />
+            ))}
+          </section>
+        )}
+
+        <footer className="mt-12 border-t border-slate-800 pt-6 text-xs text-slate-500">
           You are responsible for holding the rights to any source footage you
           process. See the README for content &amp; copyright guidance.
         </footer>

@@ -1,56 +1,44 @@
 # =============================================================================
-# Local development stack for the AI Video Clipper.
+# Local stack for the AI Video Clipper (Phase 1).
 #
 #   docker compose up --build
 #
-# Services:
-#   redis   - task queue broker
-#   api     - FastAPI app (bundles FFmpeg), served on http://localhost:8000
-#   worker  - RQ worker running the same image, processes clip jobs
+# The `app` service builds the frontend + backend image, bundles FFmpeg, and
+# serves both the API and the built React UI on http://localhost:8000.
 #
-# Storage is bind-mounted so generated clips are visible on the host.
+# In Phase 1, clip jobs run in-process inside the API container (a background
+# thread pool), so no separate worker/Redis is required. A Redis service is
+# included (commented) for the future RQ-backed worker introduced in a later
+# phase.
 # =============================================================================
 services:
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  api:
+  app:
     build: .
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
     ports:
       - "8000:8000"
     volumes:
+      # Persist generated clips, uploads, temp and the watch folder on the host.
       - ./storage:/app/storage
       - ./assets:/app/assets
-    depends_on:
-      redis:
-        condition: service_healthy
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
-  worker:
-    build: .
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./storage:/app/storage
-      - ./assets:/app/assets
-    depends_on:
-      redis:
-        condition: service_healthy
-    # Worker wiring is completed in a later phase; this is the intended command.
-    command: rq worker --url redis://redis:6379/0 clips
+  # --- Reserved for a later phase (RQ-backed background worker) --------------
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #
+  # worker:
+  #   build: .
+  #   env_file: [.env]
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #   volumes:
+  #     - ./storage:/app/storage
+  #     - ./assets:/app/assets
+  #   depends_on: [redis]
+  #   command: rq worker --url redis://redis:6379/0 clips
