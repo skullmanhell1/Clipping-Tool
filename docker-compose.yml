@@ -1,0 +1,56 @@
+# =============================================================================
+# Local development stack for the AI Video Clipper.
+#
+#   docker compose up --build
+#
+# Services:
+#   redis   - task queue broker
+#   api     - FastAPI app (bundles FFmpeg), served on http://localhost:8000
+#   worker  - RQ worker running the same image, processes clip jobs
+#
+# Storage is bind-mounted so generated clips are visible on the host.
+# =============================================================================
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+      - ./assets:/app/assets
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./storage:/app/storage
+      - ./assets:/app/assets
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Worker wiring is completed in a later phase; this is the intended command.
+    command: rq worker --url redis://redis:6379/0 clips
