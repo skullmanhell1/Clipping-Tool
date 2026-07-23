@@ -1,13 +1,28 @@
 # AI Video Clipper
 
 Turn long-form video into short, vertical, captioned clips — and (optionally)
-auto-publish them. This repository currently contains the **project scaffold
-only**: the folder structure, configuration, Docker setup, a booting API, and a
-placeholder dark-themed UI. Features are implemented phase by phase in later
-work.
+auto-publish them.
 
-> **Status:** v0.1.0 — foundation / stubs only. No processing features are
-> implemented yet.
+> **Status:** v0.2.0 — **Phase 1 (core clip-generating engine) is working.**
+> Paste a URL or upload video, and the tool transcribes it, splits it into
+> clips, reformats them to vertical (or 1:1 / 16:9 / 4:5) with a blurred-background
+> fill, burns in word-timed captions, and serves a gallery with preview +
+> download. AI moment selection, effects, and auto-publishing arrive in later
+> phases.
+
+## Phase 1 — what works today
+
+- **Inputs:** single file upload, paste a video URL (yt-dlp), a **batch** of
+  multiple files/links processed in line, and a toggleable **watch-folder** mode.
+- **Pipeline:** transcribe (faster-whisper, word-level timestamps) → segment
+  (silence-based or fixed-length) → cut → reformat to the chosen aspect ratio
+  (blurred-bg fill) → burn karaoke-style captions → thumbnail.
+- **UI (dark, Opus-Clip style):** URL/upload/batch input, video preview card,
+  settings panel (Language incl. translate, Clip Length, Aspect Ratio, Number
+  of Clips), a full-width green **Get Clips** button, live per-video progress,
+  and a clip gallery grid with inline preview + download.
+- **Runs CPU-only by default** (whisper `base`; set `WHISPER_MODEL=small` for
+  better quality, or `tiny` for speed).
 
 ---
 
@@ -80,13 +95,16 @@ cp .env.example .env        # then fill in any keys you need
 docker compose up --build
 
 # 3. Open the app
-#    API + placeholder UI : http://localhost:8000
+#    Web UI (dashboard)   : http://localhost:8000
 #    API docs (Swagger)   : http://localhost:8000/docs
 #    Health check         : http://localhost:8000/healthz
 ```
 
-Generated clips appear under `./storage/clips` on your host (the `storage/`
-directory is bind-mounted).
+The Docker image builds the React UI and serves it together with the API, so
+`http://localhost:8000` is the full dashboard. Generated clips appear under
+`./storage/clips` on your host (the `storage/` directory is bind-mounted), and
+dropping a video into `./storage/watch` triggers watch-folder processing when
+that mode is enabled.
 
 ## Local development (without Docker)
 
@@ -100,7 +118,9 @@ uvicorn api.main:app --reload          # http://localhost:8000
 ```
 
 > FFmpeg must be installed and on your `PATH` for video features (installed
-> automatically inside the Docker image).
+> automatically inside the Docker image). The first run downloads the whisper
+> model; set `WHISPER_MODEL=tiny` for a fast first start or `small` for higher
+> transcription quality.
 
 **Frontend:**
 
@@ -117,11 +137,15 @@ npm run dev                            # http://localhost:5173 (proxies /api)
 The stack is a standard Docker Compose app, so it deploys to any container host:
 
 - **Render / Railway / Fly.io:** point the platform at this repo; it builds the
-  `Dockerfile` for the API and worker and provisions a managed Redis add-on.
-  Set the environment variables from `.env.example` in the platform dashboard.
+  `Dockerfile` (single container serving the UI + API) and runs it. Set the
+  environment variables from `.env.example` in the platform dashboard. Give the
+  instance enough memory/CPU for whisper and FFmpeg (2 GB+ recommended).
 - **AWS / GCP / Azure:** run the image on ECS/Fargate, Cloud Run, or Container
-  Apps with a managed Redis (ElastiCache / Memorystore) and switch
-  `STORAGE_BACKEND=s3` for durable clip storage.
+  Apps and switch `STORAGE_BACKEND=s3` for durable clip storage.
+
+> Phase 1 processes jobs in-process (a background thread pool). The
+> distributed RQ + Redis worker — and a one-click deploy button — arrive in a
+> later phase.
 
 > A one-click deploy button (e.g. Render Blueprint / Railway template) will be
 > added once the pipeline services are finalised.
