@@ -10,9 +10,19 @@ const DEFAULT_SETTINGS = {
   clip_length: "auto",
   aspect: "9:16",
   num_clips: "auto",
-  strategy: "silence",
+  strategy: "ai",
   captions: true,
+  // Advanced
+  topic: "",
+  vibe: "",
+  platform: "generic",
+  hashtag_count: 5,
+  range_start: "",
+  range_end: "",
+  metadata: true,
 };
+
+const numOrNull = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
 
 // Translate UI settings into the backend ProcessingOptions shape.
 function toOptions(settings) {
@@ -25,6 +35,13 @@ function toOptions(settings) {
     num_clips: settings.num_clips,
     strategy: settings.strategy,
     captions: settings.captions,
+    topic: settings.topic,
+    vibe: settings.vibe,
+    platform: settings.platform,
+    hashtag_count: Number(settings.hashtag_count) || 0,
+    range_start: numOrNull(settings.range_start),
+    range_end: numOrNull(settings.range_end),
+    metadata: settings.metadata,
   };
 }
 
@@ -38,12 +55,25 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
+  const [llmAvailable, setLlmAvailable] = useState(false);
 
   const pollRef = useRef(null);
 
-  // Load watch-folder status once on mount.
+  // Load watch-folder status + LLM availability once on mount.
   useEffect(() => {
     api.watchStatus().then(setWatch).catch(() => {});
+    api.info().then((i) => setLlmAvailable(!!i.llm_available)).catch(() => {});
+  }, []);
+
+  // Merge a server-updated clip back into the jobs state (after edit/regen).
+  const handleClipUpdated = useCallback((jobId, updatedClip) => {
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.id === jobId
+          ? { ...j, clips: j.clips.map((c) => (c.id === updatedClip.id ? updatedClip : c)) }
+          : j
+      )
+    );
   }, []);
 
   // Poll all jobs while any tracked job is unfinished (or watch mode is on).
@@ -178,7 +208,12 @@ export default function App() {
               {watch.enabled ? "Jobs (watch-folder active)" : "Jobs"}
             </h2>
             {visibleJobs.map((job) => (
-              <JobCard key={job.id} job={job} />
+              <JobCard
+                key={job.id}
+                job={job}
+                llmAvailable={llmAvailable}
+                onClipUpdated={handleClipUpdated}
+              />
             ))}
           </section>
         )}

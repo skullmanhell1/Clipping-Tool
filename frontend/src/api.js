@@ -47,6 +47,20 @@ export const api = {
   listJobs: () => fetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => fetch(`/api/jobs/${id}`).then(jsonOrThrow),
 
+  editClip: (jobId, clipId, fields) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    }).then(jsonOrThrow),
+
+  regenerateField: (jobId, clipId, field, platform) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/regenerate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ field, platform }),
+    }).then(jsonOrThrow),
+
   watchStatus: () => fetch("/api/watch").then(jsonOrThrow),
   watchToggle: (enabled, options) =>
     fetch("/api/watch/toggle", {

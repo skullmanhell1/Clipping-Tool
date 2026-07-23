@@ -63,6 +63,35 @@ class JobStore:
                 setattr(job, key, value)
             job.updated_at = time.time()
 
+    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[object]:
+        """Atomically update editable fields on one clip within a job.
+
+        Only known :class:`ClipResult` attributes are updated (unknown keys are
+        ignored). Returns the updated clip, or ``None`` if not found.
+        """
+        import time
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            clip = next((c for c in job.clips if c.id == clip_id), None)
+            if clip is None:
+                return None
+            for key, value in fields.items():
+                if hasattr(clip, key):
+                    setattr(clip, key, value)
+            job.updated_at = time.time()
+            return clip
+
+    def get_clip(self, job_id: str, clip_id: str) -> Optional[object]:
+        """Return a single clip within a job, or ``None``."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            return next((c for c in job.clips if c.id == clip_id), None)
+
 
 class JobManager:
     """Owns the worker pool and drives jobs through the pipeline."""
