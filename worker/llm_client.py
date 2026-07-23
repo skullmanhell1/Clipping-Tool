@@ -62,15 +62,27 @@ class BaseLLMClient(ABC):
 
 
 class OpenAIClient(BaseLLMClient):
-    """OpenAI-backed client using the Chat Completions API."""
+    """Client for OpenAI or any OpenAI-compatible endpoint (Gemini, local, ...).
 
-    def __init__(self) -> None:
-        if not settings.openai_api_key:
+    ``base_url`` lets the same implementation target Google Gemini's
+    OpenAI-compatible API or a local server (Ollama / LM Studio) without any
+    other code change.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> None:
+        api_key = api_key or settings.openai_api_key
+        if not api_key:
             raise LLMError("OPENAI_API_KEY is not set")
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=settings.openai_api_key)
-        self._model = settings.openai_model
+        base_url = base_url or settings.openai_base_url
+        self._client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+        self._model = model or settings.openai_model
 
     def complete(self, prompt, system=None, temperature=0.7, max_tokens=1024) -> str:
         messages = []
@@ -207,6 +219,8 @@ def llm_available() -> bool:
         return True
     if settings.llm_provider is LLMProvider.ANTHROPIC:
         return bool(settings.anthropic_api_key)
+    if settings.llm_provider is LLMProvider.GEMINI:
+        return bool(settings.gemini_api_key)
     return bool(settings.openai_api_key)
 
 
@@ -220,4 +234,13 @@ def get_llm_client() -> BaseLLMClient:
         return _client_override
     if settings.llm_provider is LLMProvider.ANTHROPIC:
         return AnthropicClient()
+    if settings.llm_provider is LLMProvider.GEMINI:
+        # Google Gemini via its OpenAI-compatible endpoint.
+        if not settings.gemini_api_key:
+            raise LLMError("GEMINI_API_KEY is not set")
+        return OpenAIClient(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            base_url=settings.gemini_base_url,
+        )
     return OpenAIClient()
