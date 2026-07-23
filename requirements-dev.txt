@@ -1,0 +1,7 @@
+# Development / CI dependencies (installed on top of requirements.txt).
+-r requirements.txt
+
+ruff>=0.5,<1.0        # lint + format
+black>=24.4,<25.0     # formatter
+mypy>=1.10,<2.0       # static typing
+pytest>=8.2,<9.0      # test runner
