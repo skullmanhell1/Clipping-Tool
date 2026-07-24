@@ -69,7 +69,13 @@ export const api = {
       body: JSON.stringify({ enabled, options }),
     }).then(jsonOrThrow),
 
-  clipUrl: (relativeUrl) => `/${relativeUrl}`,
+  // Pass absolute URLs (e.g. S3 presigned) through unchanged; otherwise the
+  // value is an app-relative clip path that the server serves under /clips.
+  clipUrl: (relativeUrl) => {
+    if (!relativeUrl) return "";
+    if (/^https?:\/\//i.test(relativeUrl)) return relativeUrl;
+    return relativeUrl.startsWith("/") ? relativeUrl : `/${relativeUrl}`;
+  },
   downloadUrl: (jobId, filename) =>
     `/api/clips/${jobId}/${filename}/download`,
   videoDownloadUrl: (jobId, filename) =>
@@ -85,7 +91,51 @@ export const api = {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
   history: (platform = "") =>
     fetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
+
+  // --- Phase 5: storage, profiles, updates ---
+  storage: () => fetch("/api/storage").then(jsonOrThrow),
+  updateStorageSettings: (settings) =>
+    fetch("/api/storage/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    }).then(jsonOrThrow),
+  cleanupStorage: (opts = {}) => {
+    const params = new URLSearchParams(opts).toString();
+    return fetch(`/api/storage/cleanup${params ? `?${params}` : ""}`, {
+      method: "POST",
+    }).then(jsonOrThrow);
+  },
+  deleteSource: (jobId) =>
+    fetch(`/api/jobs/${jobId}/source?confirm=true`, { method: "DELETE" }).then(jsonOrThrow),
+
+  profiles: () => fetch("/api/profiles").then(jsonOrThrow),
+  saveProfile: (payload) =>
+    fetch("/api/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(jsonOrThrow),
+  setDefaultProfile: (id) =>
+    fetch(`/api/profiles/${id}/default`, { method: "POST" }).then(jsonOrThrow),
+  deleteProfile: (id) =>
+    fetch(`/api/profiles/${id}`, { method: "DELETE" }).then(jsonOrThrow),
+
+  updates: (force = false) =>
+    fetch(`/api/updates${force ? "?force=true" : ""}`).then(jsonOrThrow),
 };
+
+export function formatBytes(bytes) {
+  if (!bytes || bytes < 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 // Map the UI Language dropdown value to backend {language, translate}.
 export function resolveLanguage(value) {
