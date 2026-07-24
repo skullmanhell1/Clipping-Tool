@@ -54,8 +54,8 @@ from worker.watch_folder import get_watcher
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.4.0",
-    description="AI-powered video clipping & auto-publishing tool — Phase 3 (auto-publishing).",
+    version="0.5.0",
+    description="AI-powered video clipping & auto-publishing tool — Phase 4 (visual effects).",
 )
 
 app.add_middleware(
@@ -100,6 +100,22 @@ class OptionsModel(BaseModel):
     campaign_id: str = ""
     publish_mode: str = "review"
     schedule_at: Optional[float] = None
+    # Phase 4 — visual effects (all individually toggleable)
+    reframe: bool = False
+    zoom: bool = False
+    transitions: bool = False
+    hook_title: bool = False
+    music: str = ""
+    music_volume: float = 0.12
+    fades: bool = False
+    color: str = ""
+    progress_bar: bool = False
+    emoji: str = "off"
+    emoji_mode: str = "keyword"
+    emoji_animate: bool = True
+    filler_removal: bool = False
+    caption_template: str = "karaoke"
+    caption_position: str = "bottom"
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -179,6 +195,14 @@ def info() -> dict[str, object]:
         "strategies": ["ai", "silence", "fixed"],
         "regeneratable_fields": list(REGENERATABLE_FIELDS),
         "llm_available": _llm_available_safe(),
+        "effects": {
+            "music_moods": ["upbeat", "chill", "dramatic", "corporate", "suspense"],
+            "color_presets": ["vivid", "warm", "cool", "cinematic", "bw"],
+            "emoji_intensities": ["off", "subtle", "standard", "heavy"],
+            "emoji_modes": ["keyword", "ai"],
+            "caption_templates": ["karaoke", "boxed", "minimal"],
+            "caption_positions": ["bottom", "center", "top"],
+        },
     }
 
 
@@ -258,6 +282,22 @@ async def upload(
     campaign_id: str = Form(""),
     publish_mode: str = Form("review"),
     schedule_at: Optional[float] = Form(None),
+    # Phase 4 — visual effects
+    reframe: bool = Form(False),
+    zoom: bool = Form(False),
+    transitions: bool = Form(False),
+    hook_title: bool = Form(False),
+    music: str = Form(""),
+    music_volume: float = Form(0.12),
+    fades: bool = Form(False),
+    color: str = Form(""),
+    progress_bar: bool = Form(False),
+    emoji: str = Form("off"),
+    emoji_mode: str = Form("keyword"),
+    emoji_animate: bool = Form(True),
+    filler_removal: bool = Form(False),
+    caption_template: str = Form("karaoke"),
+    caption_position: str = Form("bottom"),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -287,6 +327,21 @@ async def upload(
             "campaign_id": campaign_id,
             "publish_mode": publish_mode,
             "schedule_at": schedule_at,
+            "reframe": reframe,
+            "zoom": zoom,
+            "transitions": transitions,
+            "hook_title": hook_title,
+            "music": music,
+            "music_volume": music_volume,
+            "fades": fades,
+            "color": color,
+            "progress_bar": progress_bar,
+            "emoji": emoji,
+            "emoji_mode": emoji_mode,
+            "emoji_animate": emoji_animate,
+            "filler_removal": filler_removal,
+            "caption_template": caption_template,
+            "caption_position": caption_position,
         }
     )
 

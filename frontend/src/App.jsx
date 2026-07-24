@@ -21,6 +21,22 @@ const DEFAULT_SETTINGS = {
   range_start: "",
   range_end: "",
   metadata: true,
+  // Phase 4 — visual effects (all individually toggleable)
+  caption_template: "karaoke",
+  caption_position: "bottom",
+  reframe: false,
+  zoom: false,
+  transitions: false,
+  hook_title: false,
+  fades: false,
+  progress_bar: false,
+  color: "",
+  music: "",
+  music_volume: 0.12,
+  emoji: "off",
+  emoji_mode: "keyword",
+  emoji_animate: true,
+  filler_removal: false,
 };
 
 const DEFAULT_PUBLISHING = {
@@ -63,6 +79,22 @@ function toOptions(settings, publishing) {
     campaign_id: publishing.campaign_id,
     publish_mode: publishing.mode,
     schedule_at: scheduleToEpoch(publishing.schedule),
+    // Phase 4 — visual effects
+    caption_template: settings.caption_template,
+    caption_position: settings.caption_position,
+    reframe: settings.reframe,
+    zoom: settings.zoom,
+    transitions: settings.transitions,
+    hook_title: settings.hook_title,
+    fades: settings.fades,
+    progress_bar: settings.progress_bar,
+    color: settings.color,
+    music: settings.music,
+    music_volume: Number(settings.music_volume) || 0,
+    emoji: settings.emoji,
+    emoji_mode: settings.emoji_mode,
+    emoji_animate: settings.emoji_animate,
+    filler_removal: settings.filler_removal,
   };
 }
 
