@@ -65,6 +65,28 @@ class PublishManager:
         result=pub.publish(req)
         self.history.update_attempt(item["id"],state=result.state.value,url=result.url,external_id=result.external_id,
           error=result.error,message=result.message,result_json=result.to_dict(),completed_at=time.time())
+        self._maybe_delete_local(req.video_path, result)
+    def _maybe_delete_local(self, video_path: Path, result):
+        """Delete the local clip after a successful publish, if the toggle is on.
+
+        Only clip files under ``clips_dir`` are ever removed — never a source
+        video. Best-effort; failures are ignored.
+        """
+        try:
+            from runtime_config import get_runtime_config
+            if not get_runtime_config().delete_local_after_publish:
+                return
+            if not (result.success and result.state in (
+                PublishState.PUBLISHED, PublishState.PRIVATE, PublishState.DRAFT)):
+                return
+            clips_root = Path(settings.clips_dir).resolve()
+            path = Path(video_path).resolve()
+            if clips_root in path.parents and path.is_file():
+                path.unlink(missing_ok=True)
+                # Remove the sidecar too, if present.
+                path.with_suffix(".json").unlink(missing_ok=True)
+        except Exception:
+            pass
     def _loop(self):
         while not self._stop.wait(self.poll_seconds):
             try:self.run_due_once()

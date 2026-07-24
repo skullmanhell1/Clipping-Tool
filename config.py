@@ -134,8 +134,29 @@ class Settings(BaseSettings):
         default=BASE_DIR / "storage" / "clips",
         description="Where finished clips are written.",
     )
-    # Number of days finished clips are retained before cleanup.
-    retention_days: int = Field(default=7, description="Clip retention window (days).")
+    # Default number of days finished clips are retained before cleanup.
+    # 0 means "keep forever". This is the *default*; the effective value is
+    # user-tunable at runtime (see runtime_config.py / the Storage settings UI).
+    retention_days: int = Field(default=30, description="Clip retention window (days); 0 = keep forever.")
+    # Auto-delete a job's scratch/temp files when it finishes (toggleable).
+    auto_delete_temp: bool = Field(default=True, description="Delete temp files after each job.")
+    # Delete the local clip copy once it has been published (never the source).
+    delete_local_after_publish: bool = Field(
+        default=False, description="Delete the local clip after a successful publish."
+    )
+    # How often the background retention sweeper runs.
+    retention_sweep_hours: float = Field(default=6.0, description="Retention sweep interval (hours).")
+    # Low-disk warning thresholds surfaced in the UI.
+    disk_warn_free_gb: float = Field(default=2.0, description="Warn when free space drops below this (GB).")
+    disk_warn_percent: float = Field(default=90.0, description="Warn when used space exceeds this (%).")
+    # Runtime-mutable settings + saved profiles are persisted here.
+    runtime_config_path: Path = Field(default=BASE_DIR / "storage" / "runtime_config.json")
+    profiles_path: Path = Field(default=BASE_DIR / "storage" / "profiles.json")
+
+    # --------------------------------------------------------- updates -----
+    # GitHub repo (owner/name) used by the "check for updates" feature.
+    github_repo: str = Field(default="skullmanhell1/Clipping-Tool", description="owner/name for update checks.")
+    update_check_enabled: bool = Field(default=True, description="Enable GitHub release update checks.")
 
     # --------------------------------------------------------------- s3 ----
     s3_bucket: Optional[str] = Field(default=None, description="S3 bucket name.")

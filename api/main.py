@@ -32,7 +32,6 @@ import shutil
 import uuid
 import io
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -43,19 +42,34 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+from profiles import get_profile_store
 from publishers.history import get_history
 from publishers.manager import get_publish_manager
-from worker import metadata as meta_mod
+from runtime_config import RETENTION_CHOICES, get_runtime_store
+from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
+from updates import get_update_checker
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.jobs import get_manager
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import ProcessingOptions
 from worker.watch_folder import get_watcher
 
+def _read_version() -> str:
+    """Read the semantic version from the VERSION file (fallback to a default)."""
+    try:
+        return (Path(__file__).resolve().parent.parent / "VERSION").read_text(
+            encoding="utf-8"
+        ).strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+APP_VERSION = _read_version()
+
 app = FastAPI(
     title=settings.app_name,
-    version="0.5.0",
-    description="AI-powered video clipping & auto-publishing tool — Phase 4 (visual effects).",
+    version=APP_VERSION,
+    description="AI-powered video clipping & auto-publishing tool — Phase 5 (storage, profiles & updates).",
 )
 
 app.add_middleware(
@@ -69,9 +83,15 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup() -> None:
-    """Ensure storage directories exist before serving."""
+    """Ensure storage dirs exist and start the background retention sweeper."""
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
+    try:
+        from storage_backends.retention import get_sweeper
+
+        get_sweeper().start()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +175,24 @@ class CampaignModel(BaseModel):
     id: str = ""
 
 
+class StorageSettingsModel(BaseModel):
+    """User-tunable storage settings (runtime-persisted)."""
+
+    retention_days: Optional[int] = None
+    auto_delete_temp: Optional[bool] = None
+    delete_local_after_publish: Optional[bool] = None
+
+
+class ProfileModel(BaseModel):
+    """Create/update a saved settings profile."""
+
+    name: str
+    settings: dict = {}
+    publishing: dict = {}
+    id: str = ""
+    make_default: bool = False
+
+
 class UrlJobRequest(BaseModel):
     url: str
     options: OptionsModel = OptionsModel()
@@ -203,6 +241,8 @@ def info() -> dict[str, object]:
             "caption_templates": ["karaoke", "boxed", "minimal"],
             "caption_positions": ["bottom", "center", "top"],
         },
+        "storage_backend": settings.storage_backend.value,
+        "retention_choices": list(RETENTION_CHOICES),
     }
 
 
@@ -497,6 +537,116 @@ def publish_attempt(attempt_id: str) -> dict:
     item=get_history().get_attempt(attempt_id)
     if not item: raise HTTPException(status_code=404,detail="Publish attempt not found")
     return item
+
+
+# ---------------------------------------------------------------------------
+# Storage: disk usage, runtime settings, cleanup, and protected source deletion
+# ---------------------------------------------------------------------------
+def _storage_state() -> dict:
+    """Combined disk usage + runtime storage settings + backend name."""
+    cfg = get_runtime_store().get()
+    return {
+        "backend": settings.storage_backend.value,
+        "settings": cfg.to_dict(),
+        "retention_choices": list(RETENTION_CHOICES),
+        "usage": disk_usage(),
+    }
+
+
+@app.get("/api/storage", tags=["storage"])
+def storage_status() -> dict:
+    return _storage_state()
+
+
+@app.post("/api/storage/settings", tags=["storage"])
+def update_storage_settings(req: StorageSettingsModel) -> dict:
+    get_runtime_store().update(**{k: v for k, v in req.model_dump().items() if v is not None})
+    return _storage_state()
+
+
+@app.post("/api/storage/cleanup", tags=["storage"])
+def storage_cleanup(temp: bool = True, expired: bool = True) -> dict:
+    """Run cleanup now: expired clips (per retention) and/or all temp files."""
+    result: dict = {}
+    if expired:
+        result["expired"] = cleanup_expired()
+    if temp:
+        result["temp_removed"] = cleanup_temp()
+    result["usage"] = disk_usage()
+    return result
+
+
+@app.delete("/api/jobs/{job_id}/source", tags=["storage"])
+def delete_source(job_id: str, confirm: bool = False) -> dict:
+    """Delete a job's original source video. Requires ``confirm=true``.
+
+    Source video is never auto-deleted; this endpoint is the only way to remove
+    it, and it refuses to act without explicit confirmation.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400,
+                            detail="Deleting the original source requires confirm=true")
+    job = get_manager().store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.input_type != "file":
+        raise HTTPException(status_code=400,
+                            detail="Only uploaded/downloaded source files can be deleted here")
+    src = Path(job.source).resolve()
+    uploads_root = Path(settings.uploads_dir).resolve()
+    if uploads_root not in src.parents:
+        raise HTTPException(status_code=400, detail="Source is not in the uploads directory")
+    existed = src.is_file()
+    if existed:
+        src.unlink(missing_ok=True)
+    return {"deleted": existed, "source": str(src)}
+
+
+# ---------------------------------------------------------------------------
+# Saved settings profiles
+# ---------------------------------------------------------------------------
+@app.get("/api/profiles", tags=["profiles"])
+def list_profiles() -> dict:
+    store = get_profile_store()
+    default = store.get_default()
+    return {
+        "profiles": [p.to_dict() for p in store.list()],
+        "default_id": default.id if default else None,
+    }
+
+
+@app.post("/api/profiles", tags=["profiles"])
+def save_profile(req: ProfileModel) -> dict:
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Profile name is required")
+    prof = get_profile_store().save(
+        req.name, req.settings, req.publishing,
+        profile_id=req.id, make_default=req.make_default,
+    )
+    return prof.to_dict()
+
+
+@app.post("/api/profiles/{profile_id}/default", tags=["profiles"])
+def set_default_profile(profile_id: str) -> dict:
+    prof = get_profile_store().set_default(profile_id)
+    if prof is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return prof.to_dict()
+
+
+@app.delete("/api/profiles/{profile_id}", tags=["profiles"])
+def delete_profile(profile_id: str) -> dict:
+    if not get_profile_store().delete(profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"deleted": True, "id": profile_id}
+
+
+# ---------------------------------------------------------------------------
+# Updates
+# ---------------------------------------------------------------------------
+@app.get("/api/updates", tags=["updates"])
+def check_updates(force: bool = False) -> dict:
+    return get_update_checker().check(force=force)
 
 
 # ---------------------------------------------------------------------------

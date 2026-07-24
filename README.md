@@ -3,15 +3,46 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.5.0 — **Phases 1–4 are working.** Paste a URL or upload video,
+> **Status:** v0.6.0 — **Phases 1–5 are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
 > applies **toggleable visual effects** (zoom, hook title, mood music, fades,
 > colour grade, progress bar, word-synced auto-emoji, filler-word removal),
 > **auto-writes per-platform titles, descriptions & hashtags** you can edit or
-> regenerate, and can **auto-publish** the finished clips to Whop, YouTube,
-> TikTok, Instagram & X with campaign routing, scheduling, and a full history.
+> regenerate, can **auto-publish** the finished clips to Whop, YouTube,
+> TikTok, Instagram & X with campaign routing, scheduling, and a full history,
+> and manages **storage (retention, S3, disk usage), saved settings profiles,
+> and in-app update checks**.
+
+## Phase 5 — storage, profiles & updates
+
+**Storage** (a *Storage* group under the **Settings** tab):
+
+- **Retention**, exposed in the app: keep clips **7 / 14 / 30 / 60 / 90 days** or
+  **Keep forever** (no auto-deletion). Default **30 days**. A background sweeper
+  enforces it; you can also **clean up now**.
+- **Auto-delete temp files** after each job (toggleable).
+- **Delete local clip copy after publishing** (toggleable).
+- **Disk usage** meter with a **low-space warning**.
+- **Sidecar metadata** — a `<clip>.json` is written next to every clip.
+- Original **source video is never auto-deleted**; removing it requires an
+  explicit, confirmed action.
+- **Optional S3 backend** behind the same storage interface — flip
+  `STORAGE_BACKEND=s3` in `.env` (plus the `S3_*` vars). The code path is
+  identical for local and S3.
+
+**Saved settings profiles** — snapshot the full current configuration (clip
+length, aspect, caption style, effects, publishing targets, …) as a **named
+profile**. Keep multiple profiles, quick-switch, edit/delete, and mark one as
+the **default** that pre-fills settings on load.
+
+**Updates & maintenance** — the running **version** is shown in the UI; an
+**"update available" banner** appears when a newer GitHub release exists;
+[semantic versioning](https://semver.org) via the `VERSION` file; CI builds +
+tests on every push and can **auto-deploy from `main`** to Render/Railway; and
+`CHANGELOG.md` is kept up to date. See [Updating](#updating) for the one-command
+update.
 
 ## Phase 4 — visual effects
 
@@ -237,21 +268,40 @@ npm run dev                            # http://localhost:5173 (proxies /api)
 
 ## One-click / cloud deploy
 
-The stack is a standard Docker Compose app, so it deploys to any container host:
+The stack is a standard Docker app, so it deploys to any container host:
 
-- **Render / Railway / Fly.io:** point the platform at this repo; it builds the
-  `Dockerfile` (single container serving the UI + API) and runs it. Set the
-  environment variables from `.env.example` in the platform dashboard. Give the
-  instance enough memory/CPU for whisper and FFmpeg (2 GB+ recommended).
+- **Render (Blueprint):** this repo ships a [`render.yaml`](./render.yaml)
+  blueprint. In Render choose **New + → Blueprint**, point at the repo, and set
+  the secret env vars (LLM/publisher keys, and `S3_*` if `STORAGE_BACKEND=s3`).
+  A persistent disk is mounted at `/app/storage`.
+- **Railway / Fly.io:** point the platform at this repo; it builds the
+  `Dockerfile` (single container serving the UI + API). Set the environment
+  variables from `.env.example`. Give the instance 2 GB+ for whisper and FFmpeg.
 - **AWS / GCP / Azure:** run the image on ECS/Fargate, Cloud Run, or Container
   Apps and switch `STORAGE_BACKEND=s3` for durable clip storage.
 
-> Phase 1 processes jobs in-process (a background thread pool). The
-> distributed RQ + Redis worker — and a one-click deploy button — arrive in a
-> later phase.
+**Auto-deploy from `main`:** the CI workflow has a `deploy` job that fires on
+pushes to `main` after tests pass. Add a repository secret with your provider's
+deploy hook to enable it (the step is skipped when unset):
 
-> A one-click deploy button (e.g. Render Blueprint / Railway template) will be
-> added once the pipeline services are finalised.
+- `RENDER_DEPLOY_HOOK_URL` — Render service **Settings → Deploy Hook**
+- `RAILWAY_DEPLOY_HOOK_URL` — Railway deploy webhook
+
+---
+
+## Updating
+
+Running with Docker (recommended) — one command pulls the latest code and
+rebuilds:
+
+```bash
+git pull && docker compose up --build
+```
+
+The app checks GitHub for newer releases and shows an **"update available"**
+banner in the UI (and on the **Settings** tab) when your `VERSION` is behind the
+latest release. Set `UPDATE_CHECK_ENABLED=false` to disable the check, or
+`GITHUB_REPO=owner/name` to point it at a fork.
 
 ---
 

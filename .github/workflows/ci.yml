@@ -59,3 +59,27 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  deploy:
+    name: Deploy (main)
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Auto-deploy from main by pinging a provider deploy hook. Configure ONE of
+      # these repository secrets to enable it (the step is skipped when unset):
+      #   RENDER_DEPLOY_HOOK_URL   — Render "Deploy Hook" URL
+      #   RAILWAY_DEPLOY_HOOK_URL  — Railway deploy webhook URL
+      - name: Trigger Render deploy
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
+      - name: Trigger Railway deploy
+        if: ${{ secrets.RAILWAY_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsS -X POST "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}"
+
+      - name: No deploy hook configured
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL == '' && secrets.RAILWAY_DEPLOY_HOOK_URL == '' }}
+        run: echo "No deploy hook secret set — skipping auto-deploy. See README."

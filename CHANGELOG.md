@@ -8,8 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- S3 storage backend + retention cleanup
 - RQ-backed distributed worker (currently in-process)
+
+## [0.6.0] - 2026-07-23
+
+### Added — Phase 5: storage, settings profiles & updates
+- **Storage backends implemented** behind one interface (`storage_backends/`):
+  a full `LocalStorage` and `S3Storage` (`save`/`open`/`url`/`delete`/`exists`/
+  `list`/`size`, presigned URLs, injectable boto3 client) selected by
+  `STORAGE_BACKEND` — **the code path is identical for local and S3**.
+- **Retention & cleanup** (`storage_backends/retention.py`): a user-exposed
+  retention window — **7 / 14 / 30 / 60 / 90 days** or **Keep forever** (default
+  **30**), enforced by a background sweeper that **never touches source video**;
+  plus `disk_usage()` (with a low-space warning) and manual "clean up now".
+- **Temp auto-delete** toggle (removes a job's scratch files when it finishes)
+  and a **delete-local-copy-after-publishing** toggle (guarded to clip files;
+  never the source).
+- **Sidecar metadata**: a `<clip>.json` capturing title/description/hashtags/
+  effects is written next to every clip (and mirrored to the backend).
+- **Protected source deletion**: original source video is only ever removed via
+  an explicit, confirmed `DELETE /api/jobs/{id}/source?confirm=true`.
+- **Runtime-mutable settings** (`runtime_config.py`): retention window and the
+  two toggles are editable from the UI and persisted to
+  `storage/runtime_config.json`, layered over the `.env` defaults.
+- **Saved settings profiles** (`profiles.py`): snapshot the full configuration
+  (clip length, aspect, caption style, effects, publishing targets) as a named
+  profile; multiple profiles, quick-switch, edit/delete, and a **default**
+  profile that pre-fills settings on load.
+- **Update checking** (`updates.py`): compares the `VERSION` file to the latest
+  GitHub release (cached, failure-tolerant) and drives an **"update available"**
+  banner in the UI.
+- **API**: `GET/POST /api/storage`, `/api/storage/settings`, `/api/storage/cleanup`,
+  `DELETE /api/jobs/{id}/source`, `GET/POST /api/profiles`,
+  `POST /api/profiles/{id}/default`, `DELETE /api/profiles/{id}`, `GET /api/updates`;
+  the app version now comes from the `VERSION` file and `/api/info` reports the
+  storage backend + retention choices.
+- **Web UI**: a **Settings** tab with a **Storage** group (disk usage meter +
+  low-space warning, retention, toggles, cleanup), a **Settings profiles** bar
+  (save/switch/default/delete + prefill), the running **version**, and the
+  update banner.
+
+### Changed
+- Default clip retention is now **30 days** (was 7); it is adjustable at runtime.
+- **CI/CD**: the workflow adds a `deploy` job that auto-deploys from `main` to
+  Render/Railway via a deploy-hook secret; a `render.yaml` Blueprint is included.
+- Job pipeline mirrors finished clips (+ sidecar + thumbnail) through the storage
+  backend on the same code path for local and S3; `README` documents the
+  one-command update (`git pull && docker compose up --build`).
 
 ## [0.5.0] - 2026-07-23
 
