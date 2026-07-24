@@ -18,8 +18,8 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install system dependencies (FFmpeg)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install system dependencies (FFmpeg + fonts)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-liberation
 
       - name: Install Python dependencies
         run: |
@@ -35,7 +35,7 @@ jobs:
           python -c "import config; print('config OK', config.settings.app_name)"
           python -c "from api.main import app; print('FastAPI app OK', app.title)"
 
-      - name: Tests (publishers, scheduler, history, API)
+      - name: Tests (effects, publishers, scheduler, history, API)
         run: pytest tests/ -q
 
   frontend:
