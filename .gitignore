@@ -18,6 +18,9 @@ storage/clips/*
 storage/*.db
 storage/*.db-wal
 storage/*.db-shm
+# Runtime state written by the app (user-tunable config + saved profiles)
+storage/runtime_config.json
+storage/profiles.json
 !storage/**/.gitkeep
 
 # Emoji assets are downloaded at build time; keep the directory only

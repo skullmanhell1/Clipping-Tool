@@ -41,6 +41,53 @@ class FakeHTTPClient:
         return self._record("GET", url, kwargs)
 
 
+class FakeS3Client:
+    """Minimal in-memory stand-in for a boto3 S3 client (no network/boto3)."""
+
+    def __init__(self):
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, Bucket, Key, Body):  # noqa: N803
+        self.objects[(Bucket, Key)] = Body if isinstance(Body, (bytes, bytearray)) else Body.read()
+        return {}
+
+    def upload_file(self, filename, Bucket, Key):  # noqa: N803
+        with open(filename, "rb") as fh:
+            self.objects[(Bucket, Key)] = fh.read()
+        return {}
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        import io as _io
+
+        return {"Body": _io.BytesIO(self.objects[(Bucket, Key)])}
+
+    def head_object(self, Bucket, Key):  # noqa: N803
+        if (Bucket, Key) not in self.objects:
+            raise KeyError("404")
+        return {"ContentLength": len(self.objects[(Bucket, Key)])}
+
+    def delete_object(self, Bucket, Key):  # noqa: N803
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
+    def generate_presigned_url(self, op, Params, ExpiresIn):  # noqa: N803
+        return f"https://s3.example.com/{Params['Bucket']}/{Params['Key']}?sig=abc"
+
+    def get_paginator(self, name):
+        objects = self.objects
+
+        class _Paginator:
+            def paginate(self, Bucket, Prefix=""):  # noqa: N803
+                contents = [
+                    {"Key": k, "ContentLength": len(v)}
+                    for (b, k), v in objects.items()
+                    if b == Bucket and k.startswith(Prefix)
+                ]
+                yield {"Contents": contents}
+
+        return _Paginator()
+
+
 class FakePublisher:
     """A configurable BasePublisher stand-in for scheduler/manager tests."""
 

@@ -4,8 +4,10 @@ import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import JobCard from "./components/JobCard.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
+import ProfilesBar from "./components/ProfilesBar.jsx";
 import PublishingPanel from "./components/PublishingPanel.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
+import StorageSettings from "./components/StorageSettings.jsx";
 
 const DEFAULT_SETTINGS = {
   language: "auto",
@@ -114,7 +116,13 @@ export default function App() {
   const [error, setError] = useState("");
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
   const [llmAvailable, setLlmAvailable] = useState(false);
+  const [version, setVersion] = useState("");
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+  const [defaultProfileId, setDefaultProfileId] = useState(null);
+  const [activeProfileId, setActiveProfileId] = useState("");
   const pollRef = useRef(null);
+  const defaultAppliedRef = useRef(false);
 
   const loadPublishingData = useCallback(async () => {
     const [statusResult, campaignResult, historyResult] = await Promise.allSettled([
@@ -133,11 +141,67 @@ export default function App() {
     }
   }, []);
 
+  const applyProfile = useCallback((id) => {
+    setActiveProfileId(id);
+    if (!id) return;
+    const profile = profiles.find((p) => p.id === id);
+    if (!profile) return;
+    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
+    setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
+  }, [profiles]);
+
+  const loadProfiles = useCallback(async () => {
+    try {
+      const data = await api.profiles();
+      setProfiles(data.profiles || []);
+      setDefaultProfileId(data.default_id || null);
+      return data;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     api.watchStatus().then(setWatch).catch(() => {});
-    api.info().then((info) => setLlmAvailable(!!info.llm_available)).catch(() => {});
+    api
+      .info()
+      .then((info) => {
+        setLlmAvailable(!!info.llm_available);
+        setVersion(info.version || "");
+      })
+      .catch(() => {});
+    api.updates().then(setUpdateInfo).catch(() => {});
     loadPublishingData();
-  }, [loadPublishingData]);
+    // Load profiles and pre-fill from the default profile once on startup.
+    loadProfiles().then((data) => {
+      if (data && data.default_id && !defaultAppliedRef.current) {
+        defaultAppliedRef.current = true;
+        const profile = (data.profiles || []).find((p) => p.id === data.default_id);
+        if (profile) {
+          setActiveProfileId(profile.id);
+          setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
+          setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
+        }
+      }
+    });
+  }, [loadPublishingData, loadProfiles]);
+
+  const handleSaveProfile = useCallback(async (name, id) => {
+    const saved = await api.saveProfile({ name, id, settings, publishing });
+    await loadProfiles();
+    setActiveProfileId(saved.id);
+  }, [settings, publishing, loadProfiles]);
+
+  const handleSetDefaultProfile = useCallback(async (id) => {
+    await api.setDefaultProfile(id);
+    await loadProfiles();
+  }, [loadProfiles]);
+
+  const handleDeleteProfile = useCallback(async (id) => {
+    await api.deleteProfile(id);
+    if (id === activeProfileId) setActiveProfileId("");
+    await loadProfiles();
+  }, [activeProfileId, loadProfiles]);
 
   const handleClipUpdated = useCallback((jobId, updatedClip) => {
     setJobs((previous) =>
@@ -265,12 +329,16 @@ export default function App() {
             </h1>
             <p className="mt-1 text-slate-400">
               Create, package, schedule, and publish short-form clips.
+              {version && (
+                <span className="ml-2 text-xs text-slate-600">v{version}</span>
+              )}
             </p>
           </div>
           <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
             {[
               ["create", "Create"],
               ["history", "History"],
+              ["settings", "Settings"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -288,11 +356,58 @@ export default function App() {
           </nav>
         </header>
 
-        {activeView === "history" ? (
-          <HistoryView />
-        ) : (
+        {updateInfo?.update_available && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-700/60 bg-amber-950/40 p-3 text-sm text-amber-200">
+            <span>
+              🎉 Update available — v{updateInfo.latest} is out (you're on v
+              {updateInfo.current}). Update with{" "}
+              <code className="rounded bg-slate-900 px-1">git pull &amp;&amp; docker compose up --build</code>.
+            </span>
+            <a
+              href={updateInfo.html_url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg border border-amber-600 px-3 py-1 font-medium hover:bg-amber-900/40"
+            >
+              Release notes
+            </a>
+          </div>
+        )}
+
+        {activeView === "history" && <HistoryView />}
+
+        {activeView === "settings" && (
+          <div className="space-y-6">
+            <StorageSettings />
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 text-sm text-slate-400">
+              <div className="mb-1 font-semibold text-slate-300">Version &amp; updates</div>
+              <p>
+                Running <span className="text-slate-200">v{version || "?"}</span>
+                {updateInfo?.latest ? ` · latest v${updateInfo.latest}` : ""}
+                {updateInfo && !updateInfo.update_available && updateInfo.latest
+                  ? " · up to date ✓"
+                  : ""}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Update the app with{" "}
+                <code className="rounded bg-slate-950 px-1">git pull &amp;&amp; docker compose up --build</code>.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {activeView === "create" && (
           <>
             <div className="space-y-4">
+              <ProfilesBar
+                profiles={profiles}
+                defaultId={defaultProfileId}
+                activeId={activeProfileId}
+                onApply={applyProfile}
+                onSave={handleSaveProfile}
+                onSetDefault={handleSetDefaultProfile}
+                onDelete={handleDeleteProfile}
+              />
               <InputBar onChange={setInput} onPreview={handlePreview} />
               {input.files.length === 0 && (
                 <PreviewCard preview={preview} loading={previewLoading} />

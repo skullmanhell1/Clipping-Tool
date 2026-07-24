@@ -1,0 +1,46 @@
+# Render.com Blueprint — one-click deploy of the AI Video Clipper.
+#
+# In Render: New + > Blueprint, point at this repo. Render builds the Dockerfile
+# (single container serving the API + built React UI) and runs it. Set the
+# secret env vars (LLM/publisher keys, and S3_* if STORAGE_BACKEND=s3) in the
+# service dashboard — they are marked sync:false below so they are not committed.
+#
+# For auto-deploy from CI, copy the service's "Deploy Hook" URL into the repo
+# secret RENDER_DEPLOY_HOOK_URL (see .github/workflows/ci.yml).
+services:
+  - type: web
+    name: ai-video-clipper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard          # whisper + ffmpeg need memory/CPU (2 GB+)
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: clipper-storage
+      mountPath: /app/storage
+      sizeGB: 10
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: STORAGE_BACKEND
+        value: local        # set to "s3" and fill the S3_* vars for durable storage
+      - key: WHISPER_MODEL
+        value: base
+      - key: RETENTION_DAYS
+        value: "30"
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false

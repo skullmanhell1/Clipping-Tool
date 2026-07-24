@@ -200,12 +200,18 @@ class JobManager:
                 start_progress=start_progress,
             )
 
-            # Persist every created clip independently of the in-memory job store.
+            # Persist every created clip: history record, sidecar metadata, and
+            # mirror into the active storage backend (same call path for local
+            # or S3). For non-local backends the clip URL points at the backend.
             from publishers.history import get_history
+            from storage_backends import get_storage
+            from storage_backends.retention import write_sidecar
             history = get_history()
+            storage = get_storage()
             for clip in clips:
                 path = clips_dir / clip.filename
                 history.record_clip(job_id, clip, path, job.options.campaign_id)
+                self._store_clip(storage, write_sidecar, job_id, clip, clips_dir)
 
             self.store.update(
                 job_id,
@@ -241,9 +247,49 @@ class JobManager:
             self._cleanup_temp(job_id)
 
     @staticmethod
+    def _store_clip(storage, write_sidecar, job_id: str, clip, clips_dir: Path) -> None:
+        """Write a sidecar and mirror clip artefacts into the storage backend.
+
+        Uses the same :class:`BaseStorage` interface for local and S3. For local
+        storage the files already live at the destination (copies are skipped);
+        for S3 they are uploaded and the clip's URLs are repointed at the bucket.
+        Best-effort: a storage failure never fails the job.
+        """
+        try:
+            clip_path = clips_dir / clip.filename
+            if not clip_path.exists():
+                return
+            # 1. Sidecar metadata next to the clip (both backends).
+            sidecar = write_sidecar(clip_path, clip)
+            prefix = f"clips/{job_id}"
+
+            # 2. Mirror media + sidecar via the storage interface.
+            storage.save_file(f"{prefix}/{clip.filename}", clip_path)
+            storage.save_file(f"{prefix}/{sidecar.name}", sidecar)
+            thumb_name = Path(clip.thumbnail_url).name if clip.thumbnail_url else ""
+            thumb_path = clips_dir / thumb_name if thumb_name else None
+            if thumb_path and thumb_path.exists():
+                storage.save_file(f"{prefix}/{thumb_name}", thumb_path)
+
+            # 3. Repoint URLs at non-local backends (S3 presigned URLs).
+            if getattr(storage, "name", "local") != "local":
+                clip.video_url = storage.url(f"{prefix}/{clip.filename}")
+                if thumb_name:
+                    clip.thumbnail_url = storage.url(f"{prefix}/{thumb_name}")
+        except Exception:
+            pass
+
+    @staticmethod
     def _cleanup_temp(job_id: str) -> None:
+        """Remove a job's scratch dir when the auto-delete-temp toggle is on."""
         import shutil
 
+        try:
+            from runtime_config import get_runtime_config
+            if not get_runtime_config().auto_delete_temp:
+                return
+        except Exception:
+            pass
         temp_dir = Path(settings.temp_dir) / job_id
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
