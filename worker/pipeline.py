@@ -28,6 +28,7 @@ from worker import captions as cap
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 from worker import selection as sel
+from worker.effects import compositor, filler, reframe
 from worker.llm_client import BaseLLMClient
 from worker.models import ClipResult, ProcessingOptions
 from worker.transcribe import Transcript, transcribe
@@ -150,43 +151,68 @@ def run_pipeline(
 
         clip_id = f"{idx + 1:02d}_{uuid.uuid4().hex[:6]}"
         raw = temp_dir / f"raw_{clip_id}.mp4"
-        reframed = temp_dir / f"reframed_{clip_id}.mp4"
+        geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
+        applied: list[str] = []
 
         # 1. cut the selected segment
         fu.cut_segment(source, c.start, c.end, raw)
 
-        # 2. reformat to the requested aspect ratio (blurred-bg fill)
-        fu.reformat_aspect(raw, reframed, aspect=options.aspect, mode="crop_blur")
-
-        # 3. burn captions (if enabled and we have words in range)
-        if options.captions and transcript.words:
-            try:
-                cap.build_and_burn(
-                    transcript, reframed, c.start, c.end, final,
-                    ass_path=temp_dir / f"cap_{clip_id}.ass",
-                    video_width=fu.ASPECT_PRESETS[options.aspect][0],
-                    video_height=fu.ASPECT_PRESETS[options.aspect][1],
-                )
-            except fu.FFmpegError:
-                reframed.replace(final)
+        # 2. AI metadata first, so the hook title is available to the renderer.
+        clip_text = c.text or cap_text(transcript, c.start, c.end)
+        if options.metadata:
+            report(base + clip_span / n * 0.3, f"Writing copy for clip {idx + 1}")
+            md = meta_mod.generate_metadata(clip_text, options, client=llm_client)
         else:
-            reframed.replace(final)
+            md = meta_mod.ClipMetadata(platform=options.platform)
 
-        # 4. thumbnail from the finished clip
+        # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
+        words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []
+
+        # 3. filler-word / long-pause removal (adjusts the timeline + words).
+        if options.filler_removal and words:
+            plan = filler.plan_keep_intervals(words, c.duration)
+            if plan.changed:
+                trimmed = temp_dir / f"trim_{clip_id}.mp4"
+                try:
+                    filler.apply_keep_intervals(raw, plan.keeps, trimmed)
+                    raw.unlink(missing_ok=True)
+                    raw = trimmed
+                    words = filler.rebase_words(words, plan.keeps)
+                    applied.append("filler_removal")
+                except fu.FFmpegError:
+                    pass  # keep the untrimmed clip on failure
+
+        # 4. geometry: face-tracking reframe (if enabled) or static crop-blur.
+        if options.reframe:
+            try:
+                reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                applied.append("reframe")
+            except (reframe.ReframeUnavailable, fu.FFmpegError):
+                fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+        else:
+            fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+
+        # 5. compositor: captions/hook + look effects + emoji + music (one pass).
+        report(base + clip_span / n * 0.6, f"Adding effects to clip {idx + 1}")
+        try:
+            rendered = compositor.render_clip(
+                geo, final, options, words, temp_dir,
+                hook_text=md.hook_text, llm_client=llm_client,
+            )
+        except fu.FFmpegError:
+            rendered = None
+        if rendered is not None:
+            applied.extend(rendered.effects_applied)
+        else:
+            geo.replace(final)
+
+        # 6. thumbnail from the finished clip
         thumb = clips_dir / f"clip_{clip_id}.jpg"
         try:
             fu.generate_thumbnail(final, thumb, at=min(1.0, c.duration / 2))
         except fu.FFmpegError:
             thumb = None
-
-        # 5. AI metadata for this clip's transcript text
-        clip_text = c.text or cap_text(transcript, c.start, c.end)
-        if options.metadata:
-            report(base + clip_span / n * 0.5, f"Writing copy for clip {idx + 1}")
-            md = meta_mod.generate_metadata(clip_text, options, client=llm_client)
-        else:
-            md = meta_mod.ClipMetadata(platform=options.platform)
 
         results.append(
             ClipResult(
@@ -209,10 +235,11 @@ def run_pipeline(
                 mentions=md.mentions,
                 thumbnail_text=md.thumbnail_text,
                 transcript_text=clip_text,
+                effects_applied=applied,
             )
         )
 
-        for tmp in (raw, reframed):
+        for tmp in (raw, geo):
             tmp.unlink(missing_ok=True)
 
         report(_P_SELECT_END + clip_span * ((idx + 1) / n),

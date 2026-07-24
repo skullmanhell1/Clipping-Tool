@@ -8,10 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Emoji / overlay effects
-- Face-tracking reframe (mediapipe) replacing centre-crop
 - S3 storage backend + retention cleanup
 - RQ-backed distributed worker (currently in-process)
+
+## [0.5.0] - 2026-07-23
+
+### Added — Phase 4: visual effects (all individually toggleable)
+- **Easy effects** (`worker/effects/overlays.py`), composed into a single
+  efficient video pass: **zoom / Ken-Burns**, **punch-in intro**, **fade in/out**
+  (video + audio), **colour grade** presets (vivid / warm / cool / cinematic /
+  b&w), and a growing **progress bar**.
+- **Hook title overlay**: the AI-generated hook text is burned in at the start
+  (rendered via libass so it needs no `drawtext`/freetype build of ffmpeg).
+- **Background music** (`worker/effects/audio.py`): **mood-selectable** beds
+  (upbeat / chill / dramatic / corporate / suspense). Uses your own licensed
+  track from `assets/music/<mood>.*` if present, otherwise synthesises a soft,
+  copyright-free ambient bed and mixes it under the speech with a configurable
+  volume (and matching fades).
+- **Face-tracking auto-reframe** (`worker/effects/reframe.py`): detects the main
+  speaker (OpenCV Haar cascade, MediaPipe-ready), smooths the crop path
+  (EMA + resample) so the "camera" glides, and applies the moving crop in one
+  ffmpeg pass via `sendcmd` + `crop`. Replaces the static centre-crop when
+  enabled and **degrades gracefully** to the blurred-background reformat if no
+  face is found or OpenCV is unavailable.
+- **Auto-emoji overlays** (`worker/effects/emoji.py`) synced to spoken words via
+  the Whisper word timestamps: a built-in **keyword→emoji map** plus an optional
+  **AI (context-aware) mode**, four **intensity** levels (Off / Subtle /
+  Standard / Heavy), Twemoji PNGs (fetched + cached from the CDN), and an
+  optional alpha **pop** animation.
+- **Filler-word / dead-air removal** (`worker/effects/filler.py`): cuts
+  "um"/"uh" and long pauses, then **rebases** the word timeline so captions and
+  emoji stay in sync.
+- **Caption Template & Position**: templates (karaoke / boxed / minimal) and
+  placement (bottom / center / top), surfaced in the UI.
+- **Compositor** (`worker/effects/compositor.py`): applies all enabled effects
+  in a single ffmpeg pass, stream-copying any track it doesn't change and doing
+  nothing (fast path) when no effect is enabled. Each clip records which effects
+  were applied (shown as badges in the gallery).
+- **Pipeline & API**: per-clip flow is now cut → (filler trim) → geometry
+  (reframe or reformat) → single-pass compositor → thumbnail; all effect options
+  are accepted by the upload / URL / batch endpoints and `/api/info` advertises
+  the available moods, colour presets, emoji intensities, and caption templates.
+- **UI**: a **Visual effects** settings section with every toggle, the caption
+  template/position, colour grade, music mood + volume, and emoji controls.
+
+### Changed
+- `Dockerfile` installs `fonts-liberation` + `fontconfig` so burned-in
+  captions/hook titles render with a metric-compatible font.
 
 ## [0.4.0] - 2026-07-23
 

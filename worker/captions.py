@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from config import settings
 from worker.ffmpeg_utils import FFmpegError, _run
@@ -105,6 +105,56 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
+# Caption position (UI value) -> ASS numpad alignment + default vertical margin.
+# ASS alignments: 2 = bottom-centre, 5 = middle-centre, 8 = top-centre.
+_POSITION_ALIGN: dict[str, tuple[int, int]] = {
+    "bottom": (2, 220),
+    "center": (5, 0),
+    "top": (8, 200),
+}
+
+
+def _caption_style(
+    template: str,
+    position: str,
+    font: str,
+    font_size: int,
+) -> tuple[str, int, bool]:
+    """Return ``(style_line, alignment, karaoke)`` for a caption template.
+
+    Templates:
+        * ``karaoke`` — white text, green per-word fill sweep, bold outline.
+        * ``boxed``   — white text on a semi-opaque box (BorderStyle 3).
+        * ``minimal`` — plain white text, thin outline, no karaoke.
+    """
+    align, margin_v = _POSITION_ALIGN.get(position, _POSITION_ALIGN["bottom"])
+
+    white = "&H00FFFFFF"
+    green = "&H0000FF00"
+    black = "&H00000000"
+    box = "&H80000000"  # semi-transparent black background/shadow
+
+    if template == "boxed":
+        # BorderStyle 3 draws an opaque box behind the text (uses OutlineColour).
+        style = (
+            f"Style: Default,{font},{font_size},{white},{white},{box},{box},"
+            f"-1,0,0,0,100,100,0,0,3,0,0,{align},80,80,{margin_v},1"
+        )
+        return style, align, False
+    if template == "minimal":
+        style = (
+            f"Style: Default,{font},{font_size},{white},{white},{black},&H64000000,"
+            f"-1,0,0,0,100,100,0,0,1,2,1,{align},80,80,{margin_v},1"
+        )
+        return style, align, False
+    # Default: karaoke.
+    style = (
+        f"Style: Default,{font},{font_size},{white},{green},{black},&H64000000,"
+        f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
+    )
+    return style, align, True
+
+
 def build_ass(
     cues: list[Cue],
     dest: str | Path,
@@ -112,19 +162,39 @@ def build_ass(
     video_height: int = 1920,
     font: str = "Arial",
     font_size: int = 84,
-    primary_color: str = "&H00FFFFFF",       # white (AABBGGRR)
-    highlight_color: str = "&H0000FF00",      # green fill highlight
-    outline_color: str = "&H00000000",        # black outline
-    margin_v: int = 220,
-    karaoke: bool = True,
+    template: str = "karaoke",
+    position: str = "bottom",
+    hook_text: str = "",
+    hook_duration: float = 2.5,
+    hook_font_size: int = 110,
+    karaoke: Optional[bool] = None,
 ) -> Path:
-    """Render ``cues`` to an ASS subtitle file at ``dest``.
+    """Render ``cues`` (and an optional hook title) to an ASS file at ``dest``.
 
-    Colours use ASS ``&HAABBGGRR`` notation. When ``karaoke`` is enabled each
-    word gets a ``\\kf`` fill tag so the highlight sweeps word-by-word.
+    Args:
+        cues: Caption cues (may be empty to render only a hook title).
+        template: Caption look — ``karaoke`` | ``boxed`` | ``minimal``.
+        position: ``bottom`` | ``center`` | ``top`` (caption placement).
+        hook_text: When non-empty, a large hook title is shown at the top for
+            ``hook_duration`` seconds with a fade in/out.
+        karaoke: Force karaoke on/off; defaults to the template's behaviour.
+
+    Colours use ASS ``&HAABBGGRR`` notation. When karaoke is active each word
+    gets a ``\\kf`` fill tag so the highlight sweeps word-by-word.
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    style_line, _align, template_karaoke = _caption_style(
+        template, position, font, font_size
+    )
+    use_karaoke = template_karaoke if karaoke is None else karaoke
+
+    # A dedicated top-anchored style for the hook title (alignment 8 = top).
+    hook_style = (
+        f"Style: Hook,{font},{hook_font_size},&H0000E5FF,&H0000E5FF,&H00000000,"
+        f"&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+    )
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -135,20 +205,31 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{font_size},{primary_color},{highlight_color},{outline_color},&H64000000,-1,0,0,0,100,100,0,0,1,4,2,2,80,80,{margin_v},1
+{style_line}
+{hook_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     lines = [header]
+
+    # Optional hook title at the very start with a soft fade.
+    if hook_text.strip():
+        h_start = _ass_timestamp(0.0)
+        h_end = _ass_timestamp(max(0.5, hook_duration))
+        hook = _escape(hook_text.strip().upper())
+        lines.append(
+            f"Dialogue: 1,{h_start},{h_end},Hook,,0,0,0,,{{\\fad(250,350)}}{hook}"
+        )
+
     for cue in cues:
         if not cue.words:
             continue
         start = _ass_timestamp(cue.start)
         end = _ass_timestamp(cue.end)
 
-        if karaoke:
+        if use_karaoke:
             parts = []
             for w in cue.words:
                 dur_cs = max(1, int(round((w.end - w.start) * 100)))
@@ -163,6 +244,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return dest
 
 
+def subtitles_filter(ass: str | Path) -> str:
+    """Return an ffmpeg ``subtitles=...`` filter string for an ASS file.
+
+    The path is escaped for ffmpeg's filter-argument syntax so it can be dropped
+    into a larger ``-vf`` / ``-filter_complex`` chain (used by the compositor).
+    """
+    ass_path = str(Path(ass).resolve())
+    escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    return f"subtitles='{escaped}'"
+
+
 def burn_captions(video: str | Path, ass: str | Path, dest: str | Path) -> Path:
     """Burn the ASS subtitle file ``ass`` into ``video`` and write ``dest``.
 
@@ -172,13 +264,9 @@ def burn_captions(video: str | Path, ass: str | Path, dest: str | Path) -> Path:
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # Escape characters that are special inside an ffmpeg filter argument.
-    ass_path = str(Path(ass).resolve())
-    escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", f"subtitles='{escaped}'",
+        "-vf", subtitles_filter(ass),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "copy",
         "-movflags", "+faststart",

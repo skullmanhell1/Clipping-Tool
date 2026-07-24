@@ -13,6 +13,17 @@ from enum import Enum
 from typing import Any, Optional
 
 
+def _as_bool(value: Any) -> bool:
+    """Coerce form/JSON values (``"true"``, ``"1"``, ``True`` ...) to ``bool``."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 class JobStatus(str, Enum):
     """Lifecycle states for a processing job."""
 
@@ -49,6 +60,23 @@ class ProcessingOptions:
     publish_mode: str = "review"         # auto | review
     schedule_at: Optional[float] = None  # UTC epoch; None = now
 
+    # --- Phase 4: visual effects (all individually toggleable) -----------
+    reframe: bool = False                # face-tracking auto-reframe (vs static crop)
+    zoom: bool = False                   # slow Ken-Burns zoom
+    transitions: bool = False            # subtle punch-in intro
+    hook_title: bool = False             # burn the AI hook text at the start
+    music: str = ""                      # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
+    music_volume: float = 0.12           # background-music level (0..1)
+    fades: bool = False                  # fade in/out (video + audio)
+    color: str = ""                      # "" (off) | vivid | warm | cool | cinematic | bw
+    progress_bar: bool = False           # growing progress bar along the bottom
+    emoji: str = "off"                   # off | subtle | standard | heavy
+    emoji_mode: str = "keyword"          # keyword | ai
+    emoji_animate: bool = True           # pop/scale (alpha) animation on appear
+    filler_removal: bool = False         # cut "um"/"uh"/long pauses
+    caption_template: str = "karaoke"    # karaoke | boxed | minimal
+    caption_position: str = "bottom"     # bottom | center | top
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
         """Build options from a (possibly partial) dict, ignoring unknown keys."""
@@ -74,6 +102,16 @@ class ProcessingOptions:
                 valid["hashtag_count"] = max(0, min(30, int(valid["hashtag_count"])))
             except (TypeError, ValueError):
                 valid["hashtag_count"] = 5
+        # Coerce boolean-ish effect flags that may arrive as strings.
+        for bool_field in ("reframe", "zoom", "transitions", "hook_title", "fades",
+                           "progress_bar", "emoji_animate", "filler_removal"):
+            if bool_field in valid:
+                valid[bool_field] = _as_bool(valid[bool_field])
+        if "music_volume" in valid:
+            try:
+                valid["music_volume"] = max(0.0, min(1.0, float(valid["music_volume"])))
+            except (TypeError, ValueError):
+                valid["music_volume"] = 0.12
         return cls(**valid)
 
 
@@ -107,6 +145,9 @@ class ClipResult:
     mentions: list[str] = field(default_factory=list)  # @tags
     thumbnail_text: str = ""                        # thumbnail text idea
     transcript_text: str = ""                       # clip transcript (for regen)
+
+    # --- Phase 4: which visual effects were applied to this clip ----------
+    effects_applied: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

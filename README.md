@@ -3,13 +3,42 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.4.0 — **Phases 1, 2 & 3 are working.** Paste a URL or upload
-> video, and the tool transcribes it, uses an **LLM to pick the most engaging
-> moments** (with a virality score), reformats them to vertical (or 1:1 / 16:9 /
-> 4:5) with a blurred-background fill, burns in word-timed captions,
+> **Status:** v0.5.0 — **Phases 1–4 are working.** Paste a URL or upload video,
+> and the tool transcribes it, uses an **LLM to pick the most engaging moments**
+> (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
+> optional **face-tracking auto-reframe** — burns in word-timed captions,
+> applies **toggleable visual effects** (zoom, hook title, mood music, fades,
+> colour grade, progress bar, word-synced auto-emoji, filler-word removal),
 > **auto-writes per-platform titles, descriptions & hashtags** you can edit or
 > regenerate, and can **auto-publish** the finished clips to Whop, YouTube,
 > TikTok, Instagram & X with campaign routing, scheduling, and a full history.
+
+## Phase 4 — visual effects
+
+Every effect is **individually toggleable** in the UI's *Visual effects* panel
+and is applied per clip in a **single, efficient ffmpeg pass** (frame-by-frame
+work is opt-in and adds render time).
+
+- **Easy effects:** zoom / Ken-Burns, punch-in intro, fade in/out, colour grade
+  (vivid / warm / cool / cinematic / b&w), and a progress bar.
+- **Hook title:** burns the AI hook text on screen at the start (via libass).
+- **Background music:** mood-selectable (upbeat / chill / dramatic / corporate /
+  suspense). Bring your own licensed track as `assets/music/<mood>.mp3`, or the
+  tool synthesises a soft, **copyright-free** bed and mixes it under the speech.
+- **Face-tracking auto-reframe:** detects and follows the main speaker so the
+  vertical crop glides with them (replaces the static crop); falls back to the
+  blurred-background reformat when no face is found.
+- **Auto-emoji:** word-synced Twemoji overlays with a keyword map **or** an AI
+  context-aware mode, four intensity levels, and an optional pop animation.
+- **Filler-word removal:** cuts "um"/"uh" and long pauses, keeping captions and
+  emoji in sync by rebasing the word timeline.
+- **Caption Template & Position:** karaoke / boxed / minimal, at bottom / center
+  / top.
+
+> Auto-emoji downloads Twemoji PNGs from a CDN on first use (cached under
+> `assets/emoji`); set `EMOJI_ALLOW_DOWNLOAD=false` to use only local assets.
+> Burned-in text uses libass — the Docker image installs `fonts-liberation` so a
+> font is always available.
 
 ## Phase 3 — auto-publishing
 
@@ -127,7 +156,13 @@ Instagram / X.
 │   ├── metadata.py                 # titles / descriptions / hashtags
 │   ├── captions.py                 # subtitle build + burn-in
 │   ├── llm_client.py               # pluggable OpenAI/Anthropic client
-│   └── effects/{reframe,emoji,overlays}.py
+│   └── effects/                    # Phase 4 visual effects
+│       ├── overlays.py             # zoom/color/fade/progress filter builders
+│       ├── audio.py                # mood music beds + mixing
+│       ├── reframe.py              # face-tracking auto-reframe
+│       ├── emoji.py                # word-synced Twemoji overlays
+│       ├── filler.py               # filler-word / pause removal
+│       └── compositor.py           # single-pass effect composition
 ├── publishers/
 │   ├── base.py                     # common publisher interface + status
 │   ├── history.py                  # SQLite clip/publish/campaign history
