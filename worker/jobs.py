@@ -200,6 +200,13 @@ class JobManager:
                 start_progress=start_progress,
             )
 
+            # Persist every created clip independently of the in-memory job store.
+            from publishers.history import get_history
+            history = get_history()
+            for clip in clips:
+                path = clips_dir / clip.filename
+                history.record_clip(job_id, clip, path, job.options.campaign_id)
+
             self.store.update(
                 job_id,
                 clips=clips,
@@ -207,6 +214,21 @@ class JobManager:
                 progress=1.0,
                 stage=f"Completed - {len(clips)} clip(s)",
             )
+
+            # Auto mode routes each finished clip through its campaign/platforms.
+            if job.options.publish_mode == "auto" and job.options.publish_to:
+                from publishers.manager import get_publish_manager
+                publisher = get_publish_manager()
+                for clip in clips:
+                    publisher.submit(
+                        job_id=job_id,
+                        clip=clip,
+                        video_path=clips_dir / clip.filename,
+                        platforms=job.options.publish_to,
+                        campaign_id=job.options.campaign_id,
+                        mode="auto",
+                        schedule_at=job.options.schedule_at,
+                    )
         except Exception as exc:  # capture any failure and surface it
             self.store.update(
                 job_id,

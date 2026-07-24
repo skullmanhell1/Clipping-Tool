@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, resolveLanguage } from "./api.js";
+import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
-import SettingsPanel from "./components/SettingsPanel.jsx";
-import PreviewCard from "./components/PreviewCard.jsx";
 import JobCard from "./components/JobCard.jsx";
+import PreviewCard from "./components/PreviewCard.jsx";
+import PublishingPanel from "./components/PublishingPanel.jsx";
+import SettingsPanel from "./components/SettingsPanel.jsx";
 
 const DEFAULT_SETTINGS = {
   language: "auto",
@@ -12,7 +14,6 @@ const DEFAULT_SETTINGS = {
   num_clips: "auto",
   strategy: "ai",
   captions: true,
-  // Advanced
   topic: "",
   vibe: "",
   platform: "generic",
@@ -22,10 +23,26 @@ const DEFAULT_SETTINGS = {
   metadata: true,
 };
 
-const numOrNull = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+const DEFAULT_PUBLISHING = {
+  platforms: [],
+  campaign_id: "",
+  mode: "review",
+  schedule: "",
+  account_id: "",
+  target_type: "",
+  target_id: "",
+};
 
-// Translate UI settings into the backend ProcessingOptions shape.
-function toOptions(settings) {
+const numOrNull = (value) =>
+  value === "" || value === null || value === undefined ? null : Number(value);
+
+const scheduleToEpoch = (value) => {
+  if (!value) return null;
+  const milliseconds = new Date(value).getTime();
+  return Number.isNaN(milliseconds) ? null : milliseconds / 1000;
+};
+
+function toOptions(settings, publishing) {
   const { language, translate } = resolveLanguage(settings.language);
   return {
     language,
@@ -42,11 +59,20 @@ function toOptions(settings) {
     range_start: numOrNull(settings.range_start),
     range_end: numOrNull(settings.range_end),
     metadata: settings.metadata,
+    publish_to: publishing.mode === "auto" ? publishing.platforms : [],
+    campaign_id: publishing.campaign_id,
+    publish_mode: publishing.mode,
+    schedule_at: scheduleToEpoch(publishing.schedule),
   };
 }
 
 export default function App() {
+  const [activeView, setActiveView] = useState("create");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [publishing, setPublishing] = useState(DEFAULT_PUBLISHING);
+  const [publisherStatuses, setPublisherStatuses] = useState({});
+  const [campaigns, setCampaigns] = useState([]);
+  const [publishAttempts, setPublishAttempts] = useState([]);
   const [input, setInput] = useState({ urls: [], files: [] });
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -56,40 +82,62 @@ export default function App() {
   const [error, setError] = useState("");
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
   const [llmAvailable, setLlmAvailable] = useState(false);
-
   const pollRef = useRef(null);
 
-  // Load watch-folder status + LLM availability once on mount.
-  useEffect(() => {
-    api.watchStatus().then(setWatch).catch(() => {});
-    api.info().then((i) => setLlmAvailable(!!i.llm_available)).catch(() => {});
+  const loadPublishingData = useCallback(async () => {
+    const [statusResult, campaignResult, historyResult] = await Promise.allSettled([
+      api.publisherStatuses(),
+      api.campaigns(),
+      api.history(),
+    ]);
+    if (statusResult.status === "fulfilled") {
+      setPublisherStatuses(statusResult.value.platforms || {});
+    }
+    if (campaignResult.status === "fulfilled") {
+      setCampaigns(campaignResult.value.campaigns || []);
+    }
+    if (historyResult.status === "fulfilled") {
+      setPublishAttempts(historyResult.value.publish_attempts || []);
+    }
   }, []);
 
-  // Merge a server-updated clip back into the jobs state (after edit/regen).
+  useEffect(() => {
+    api.watchStatus().then(setWatch).catch(() => {});
+    api.info().then((info) => setLlmAvailable(!!info.llm_available)).catch(() => {});
+    loadPublishingData();
+  }, [loadPublishingData]);
+
   const handleClipUpdated = useCallback((jobId, updatedClip) => {
-    setJobs((prev) =>
-      prev.map((j) =>
-        j.id === jobId
-          ? { ...j, clips: j.clips.map((c) => (c.id === updatedClip.id ? updatedClip : c)) }
-          : j
+    setJobs((previous) =>
+      previous.map((job) =>
+        job.id === jobId
+          ? {
+              ...job,
+              clips: job.clips.map((clip) =>
+                clip.id === updatedClip.id ? updatedClip : clip
+              ),
+            }
+          : job
       )
     );
   }, []);
 
-  // Poll all jobs while any tracked job is unfinished (or watch mode is on).
   const poll = useCallback(async () => {
     try {
-      const { jobs: all } = await api.listJobs();
-      setJobs(all);
+      const [{ jobs: allJobs }, history] = await Promise.all([
+        api.listJobs(),
+        api.history(),
+      ]);
+      setJobs(allJobs);
+      setPublishAttempts(history.publish_attempts || []);
     } catch {
-      /* transient; keep last state */
+      // Keep the last known state through transient API failures.
     }
   }, []);
 
   useEffect(() => {
     const active =
-      watch.enabled ||
-      jobs.some((j) => ["queued", "processing"].includes(j.status));
+      watch.enabled || jobs.some((job) => ["queued", "processing"].includes(job.status));
     if (pollRef.current) clearInterval(pollRef.current);
     if (trackedIds.size > 0 || watch.enabled) {
       poll();
@@ -102,8 +150,7 @@ export default function App() {
     setPreview(null);
     setPreviewLoading(true);
     try {
-      const meta = await api.preview(url);
-      setPreview(meta);
+      setPreview(await api.preview(url));
     } catch {
       setPreview(null);
     } finally {
@@ -112,19 +159,23 @@ export default function App() {
   }, []);
 
   const track = (newJobs) =>
-    setTrackedIds((prev) => {
-      const next = new Set(prev);
-      newJobs.forEach((j) => next.add(j.id));
+    setTrackedIds((previous) => {
+      const next = new Set(previous);
+      newJobs.forEach((job) => next.add(job.id));
       return next;
     });
 
   const handleGetClips = async () => {
     setError("");
-    const options = toOptions(settings);
+    const options = toOptions(settings, publishing);
     const { urls, files } = input;
 
     if (files.length === 0 && urls.length === 0) {
       setError("Add a video URL or upload a file first.");
+      return;
+    }
+    if (publishing.mode === "auto" && publishing.platforms.length > 0 && !publishing.campaign_id) {
+      setError("Auto publishing requires a saved campaign so each platform has a routing target.");
       return;
     }
 
@@ -132,18 +183,18 @@ export default function App() {
     try {
       let created = [];
       if (files.length > 0) {
-        const res = await api.upload(files, options);
-        created = res.jobs || [];
+        const result = await api.upload(files, options);
+        created = result.jobs || [];
       } else if (urls.length === 1) {
         created = [await api.submitUrl(urls[0], options)];
       } else {
-        const res = await api.submitBatch(urls, options);
-        created = res.jobs || [];
+        const result = await api.submitBatch(urls, options);
+        created = result.jobs || [];
       }
       track(created);
-      setJobs((prev) => [...created, ...prev]);
-    } catch (e) {
-      setError(e.message || "Failed to submit.");
+      setJobs((previous) => [...created, ...previous]);
+    } catch (submissionError) {
+      setError(submissionError.message || "Failed to submit.");
     } finally {
       setSubmitting(false);
     }
@@ -151,76 +202,123 @@ export default function App() {
 
   const handleToggleWatch = async (enabled) => {
     try {
-      const status = await api.watchToggle(enabled, toOptions(settings));
-      setWatch(status);
-    } catch (e) {
-      setError(e.message || "Watch toggle failed.");
+      setWatch(await api.watchToggle(enabled, toOptions(settings, publishing)));
+    } catch (toggleError) {
+      setError(toggleError.message || "Watch toggle failed.");
     }
   };
 
-  // Jobs to display: tracked ones plus any produced by watch mode.
+  const handleCampaignSaved = (campaign) => {
+    setCampaigns((previous) => [campaign, ...previous.filter((item) => item.id !== campaign.id)]);
+  };
+
+  const handlePublished = (attempts) => {
+    setPublishAttempts((previous) => [
+      ...(attempts || []),
+      ...previous.filter((item) => !(attempts || []).some((next) => next.id === item.id)),
+    ]);
+  };
+
   const visibleJobs = jobs.filter(
-    (j) => trackedIds.has(j.id) || j.source?.includes("/watch/")
+    (job) => trackedIds.has(job.id) || job.source?.includes("/watch/")
   );
 
   return (
     <div className="min-h-full bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-6xl px-6 py-10">
-        <header className="mb-8">
-          <h1 className="bg-gradient-to-r from-brand-accent to-brand bg-clip-text text-3xl font-bold text-transparent">
-            AI Video Clipper
-          </h1>
-          <p className="mt-1 text-slate-400">
-            Paste a link or upload video — get short, captioned, vertical clips.
-          </p>
+        <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="bg-gradient-to-r from-brand-accent to-brand bg-clip-text text-3xl font-bold text-transparent">
+              AI Video Clipper
+            </h1>
+            <p className="mt-1 text-slate-400">
+              Create, package, schedule, and publish short-form clips.
+            </p>
+          </div>
+          <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
+            {[
+              ["create", "Create"],
+              ["history", "History"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveView(id)}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                  activeView === id
+                    ? "bg-brand text-white"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
         </header>
 
-        <div className="space-y-4">
-          <InputBar onChange={setInput} onPreview={handlePreview} />
-          {input.files.length === 0 && (
-            <PreviewCard preview={preview} loading={previewLoading} />
-          )}
-          <SettingsPanel
-            settings={settings}
-            onChange={setSettings}
-            watch={watch}
-            onToggleWatch={handleToggleWatch}
-          />
-
-          <button
-            onClick={handleGetClips}
-            disabled={submitting}
-            className="w-full rounded-xl bg-emerald-500 py-4 text-lg font-bold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? "Submitting…" : "Get Clips"}
-          </button>
-
-          {error && (
-            <div className="rounded-lg border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">
-              {error}
-            </div>
-          )}
-        </div>
-
-        {visibleJobs.length > 0 && (
-          <section className="mt-10 space-y-4">
-            <h2 className="text-lg font-semibold text-slate-200">
-              {watch.enabled ? "Jobs (watch-folder active)" : "Jobs"}
-            </h2>
-            {visibleJobs.map((job) => (
-              <JobCard
-                key={job.id}
-                job={job}
-                llmAvailable={llmAvailable}
-                onClipUpdated={handleClipUpdated}
+        {activeView === "history" ? (
+          <HistoryView />
+        ) : (
+          <>
+            <div className="space-y-4">
+              <InputBar onChange={setInput} onPreview={handlePreview} />
+              {input.files.length === 0 && (
+                <PreviewCard preview={preview} loading={previewLoading} />
+              )}
+              <SettingsPanel
+                settings={settings}
+                onChange={setSettings}
+                watch={watch}
+                onToggleWatch={handleToggleWatch}
               />
-            ))}
-          </section>
+              <PublishingPanel
+                value={publishing}
+                onChange={setPublishing}
+                statuses={publisherStatuses}
+                campaigns={campaigns}
+                onCampaignSaved={handleCampaignSaved}
+              />
+
+              <button
+                onClick={handleGetClips}
+                disabled={submitting}
+                className="w-full rounded-xl bg-emerald-500 py-4 text-lg font-bold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submitting ? "Submitting…" : "Get Clips"}
+              </button>
+
+              {error && (
+                <div className="rounded-lg border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">
+                  {error}
+                </div>
+              )}
+            </div>
+
+            {visibleJobs.length > 0 && (
+              <section className="mt-10 space-y-4">
+                <h2 className="text-lg font-semibold text-slate-200">
+                  {watch.enabled ? "Jobs (watch-folder active)" : "Jobs"}
+                </h2>
+                {visibleJobs.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    llmAvailable={llmAvailable}
+                    publishing={publishing}
+                    publisherStatuses={publisherStatuses}
+                    publishAttempts={publishAttempts}
+                    onClipUpdated={handleClipUpdated}
+                    onPublished={handlePublished}
+                  />
+                ))}
+              </section>
+            )}
+          </>
         )}
 
         <footer className="mt-12 border-t border-slate-800 pt-6 text-xs text-slate-500">
-          You are responsible for holding the rights to any source footage you
-          process. See the README for content &amp; copyright guidance.
+          You are responsible for holding the rights to any source footage you process.
+          See the README for content and copyright guidance.
         </footer>
       </div>
     </div>

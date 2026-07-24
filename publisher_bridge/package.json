@@ -1,0 +1,6 @@
+{
+  "name": "video-clipper-publisher-bridge",
+  "private": true,
+  "type": "module",
+  "dependencies": {"@whop/sdk": "latest"}
+}

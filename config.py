@@ -159,27 +159,34 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------- publishers --
-    # Whop
-    whop_api_key: Optional[str] = Field(default=None, description="Whop API key.")
+    history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")
+    publish_poll_seconds: float = Field(default=2.0)
+    publish_default_interval_seconds: float = Field(default=30.0)
+    public_base_url: Optional[str] = Field(default=None)
+    # Whop (@whop/sdk Node bridge)
+    whop_api_key: Optional[str] = Field(default=None)
+    whop_company_id: Optional[str] = Field(default=None)
+    whop_node_binary: str = Field(default="node")
     # YouTube OAuth
-    youtube_client_id: Optional[str] = Field(default=None, description="YT client id.")
-    youtube_client_secret: Optional[str] = Field(
-        default=None, description="YT client secret."
-    )
-    youtube_refresh_token: Optional[str] = Field(
-        default=None, description="YT OAuth refresh token."
-    )
-    # TikTok
-    tiktok_access_token: Optional[str] = Field(
-        default=None, description="TikTok access token."
-    )
-    # Instagram
-    instagram_access_token: Optional[str] = Field(
-        default=None, description="Instagram Graph API access token."
-    )
-    # X / Twitter
-    x_api_key: Optional[str] = Field(default=None, description="X (Twitter) API key.")
-    x_api_secret: Optional[str] = Field(default=None, description="X API secret.")
+    youtube_client_id: Optional[str] = Field(default=None)
+    youtube_client_secret: Optional[str] = Field(default=None)
+    youtube_refresh_token: Optional[str] = Field(default=None)
+    youtube_channel_id: Optional[str] = Field(default=None)
+    # TikTok Content Posting API
+    tiktok_access_token: Optional[str] = Field(default=None)
+    tiktok_open_id: Optional[str] = Field(default=None)
+    tiktok_direct_post_approved: bool = Field(default=False)
+    # Instagram Graph API (Professional account)
+    instagram_access_token: Optional[str] = Field(default=None)
+    instagram_account_id: Optional[str] = Field(default=None)
+    instagram_api_version: str = Field(default="v25.0")
+    instagram_content_publish_approved: bool = Field(default=False)
+    # X API v2 OAuth user context
+    x_api_key: Optional[str] = Field(default=None)
+    x_api_secret: Optional[str] = Field(default=None)
+    x_access_token: Optional[str] = Field(default=None)
+    x_account_id: Optional[str] = Field(default=None)
+    x_direct_post_approved: bool = Field(default=False)
 
     def ensure_local_dirs(self) -> None:
         """Create local storage/asset directories if they do not yet exist.

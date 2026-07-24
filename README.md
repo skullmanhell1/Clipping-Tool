@@ -3,12 +3,55 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.3.0 — **Phases 1 & 2 are working.** Paste a URL or upload
+> **Status:** v0.4.0 — **Phases 1, 2 & 3 are working.** Paste a URL or upload
 > video, and the tool transcribes it, uses an **LLM to pick the most engaging
 > moments** (with a virality score), reformats them to vertical (or 1:1 / 16:9 /
-> 4:5) with a blurred-background fill, burns in word-timed captions, and
+> 4:5) with a blurred-background fill, burns in word-timed captions,
 > **auto-writes per-platform titles, descriptions & hashtags** you can edit or
-> regenerate. Effects and auto-publishing arrive in later phases.
+> regenerate, and can **auto-publish** the finished clips to Whop, YouTube,
+> TikTok, Instagram & X with campaign routing, scheduling, and a full history.
+
+## Phase 3 — auto-publishing
+
+- **One pluggable publisher interface** (`publishers/base.py`) with a registry,
+  so platforms plug in cleanly. Each platform shows a **clear status** in the UI:
+  *not configured*, *limited / review*, or *ready*.
+- **Platform adapters**, all reading secrets from `.env` and degrading
+  gracefully when approval is pending:
+  - **Whop** — uploads the clip through the official **`@whop/sdk`** (a small
+    Node bridge in `publisher_bridge/`) and attaches it to a **chat**, **forum**,
+    or **course** target.
+  - **YouTube** — Data API v3 resumable upload via OAuth; vertical clips post as
+    **Shorts**.
+  - **TikTok / Instagram / X** — built, but **may be limited to draft/private**
+    until your developer app is approved. TikTok uploads to the creator inbox as
+    a draft until Direct Post is approved; Instagram needs content-publish
+    approval; X needs an approved user-context token. Each degrades to a
+    `review_required`/draft state and says so in the UI.
+- **AI metadata attached automatically** — each upload carries the clip's
+  generated title, caption/description, and hashtags.
+- **Multi-channel routing** — tag a clip with a **campaign** that maps each
+  platform to the right account/target.
+- **Throttling + scheduling** — post now or pick a time; a background scheduler
+  respects a minimum per-platform interval so you don't hit rate limits.
+- **Download bundle** — the plain download is a **ZIP** with the video **plus a
+  `.txt`** of that clip's title, caption, and hashtags (a video-only link is
+  also available).
+- **Logs / history** — every created clip and every publish attempt (platform,
+  account, time, success/failure, link) is stored in SQLite and viewable in the
+  **History** tab.
+
+> Set the relevant keys in `.env` (see `.env.example`) to enable each platform.
+> The Whop bridge needs Node.js and `npm install` inside `publisher_bridge/`
+> (handled automatically by the Docker image). Secrets stay in `.env`; the
+> history database stores IDs and statuses only — never tokens.
+
+> **Platform docs used while building the adapters** (details rephrased for
+> compliance with licensing restrictions):
+> [Whop file uploads](https://docs.whop.com/developer/guides/upload-files),
+> [TikTok Content Posting API](https://developers.tiktok.com/doc/content-posting-api-reference-upload-video/),
+> [Instagram content publishing](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login/content-publishing/),
+> [X chunked media upload](https://docs.x.com/x-api/media/quickstart/media-upload-chunked).
 
 ## Phase 2 — smart selection & metadata
 
@@ -85,7 +128,12 @@ Instagram / X.
 │   ├── captions.py                 # subtitle build + burn-in
 │   ├── llm_client.py               # pluggable OpenAI/Anthropic client
 │   └── effects/{reframe,emoji,overlays}.py
-├── publishers/{base,whop,youtube,tiktok,instagram,x}.py
+├── publishers/
+│   ├── base.py                     # common publisher interface + status
+│   ├── history.py                  # SQLite clip/publish/campaign history
+│   ├── manager.py                  # routing + throttled scheduler
+│   └── {whop,youtube,tiktok,instagram,x}.py
+├── publisher_bridge/               # Node @whop/sdk upload bridge
 ├── storage_backends/               # local + S3 + retention/cleanup
 ├── assets/emoji/                   # Twemoji PNGs
 ├── frontend/                       # React + Tailwind dashboard

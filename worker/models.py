@@ -43,6 +43,12 @@ class ProcessingOptions:
     range_end: Optional[float] = None    # ...to this second (Process Range)
     metadata: bool = True                # generate AI metadata per clip
 
+    # --- Phase 3: publishing ---------------------------------------------
+    publish_to: list[str] = field(default_factory=list)
+    campaign_id: str = ""
+    publish_mode: str = "review"         # auto | review
+    schedule_at: Optional[float] = None  # UTC epoch; None = now
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
         """Build options from a (possibly partial) dict, ignoring unknown keys."""
@@ -52,7 +58,7 @@ class ProcessingOptions:
         if valid.get("language") in ("", "auto", "Auto"):
             valid["language"] = None
         # Coerce numeric fields that may arrive as strings from form data.
-        for num_field in ("range_start", "range_end"):
+        for num_field in ("range_start", "range_end", "schedule_at"):
             v = valid.get(num_field)
             if v in ("", None):
                 valid[num_field] = None
@@ -61,6 +67,8 @@ class ProcessingOptions:
                     valid[num_field] = float(v)
                 except (TypeError, ValueError):
                     valid[num_field] = None
+        if "publish_to" in valid and isinstance(valid["publish_to"], str):
+            valid["publish_to"] = [p.strip() for p in valid["publish_to"].split(",") if p.strip()]
         if "hashtag_count" in valid:
             try:
                 valid["hashtag_count"] = max(0, min(30, int(valid["hashtag_count"])))
