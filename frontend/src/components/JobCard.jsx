@@ -13,7 +13,7 @@ const STATUS_STYLES = {
  * Per-video card: header (title/source/status), live progress bar with the
  * current stage, and — once complete — a gallery grid of finished clips.
  */
-export default function JobCard({ job }) {
+export default function JobCard({ job, llmAvailable, onClipUpdated }) {
   const pct = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
 
@@ -60,9 +60,15 @@ export default function JobCard({ job }) {
           {job.clips.length === 0 ? (
             <p className="text-sm text-slate-400">No clips were generated.</p>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {job.clips.map((clip) => (
-                <ClipCard key={clip.id} jobId={job.id} clip={clip} />
+                <ClipCard
+                  key={clip.id}
+                  jobId={job.id}
+                  clip={clip}
+                  llmAvailable={llmAvailable}
+                  onUpdated={(updated) => onClipUpdated?.(job.id, updated)}
+                />
               ))}
             </div>
           )}

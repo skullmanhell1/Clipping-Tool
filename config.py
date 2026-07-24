@@ -34,6 +34,8 @@ class LLMProvider(str, Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    # Google Gemini via its OpenAI-compatible endpoint (has a free tier).
+    GEMINI = "gemini"
 
 
 class StorageBackend(str, Enum):
@@ -85,9 +87,21 @@ class Settings(BaseSettings):
     )
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI key.")
     openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model.")
+    # Optional custom base URL for any OpenAI-compatible endpoint (e.g. a local
+    # Ollama / LM Studio server, or a proxy). Leave unset for real OpenAI.
+    openai_base_url: Optional[str] = Field(
+        default=None, description="Custom OpenAI-compatible base URL."
+    )
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic key.")
     anthropic_model: str = Field(
         default="claude-3-5-sonnet-latest", description="Anthropic model."
+    )
+    # Google Gemini (used via its OpenAI-compatible endpoint).
+    gemini_api_key: Optional[str] = Field(default=None, description="Gemini API key.")
+    gemini_model: str = Field(default="gemini-2.0-flash", description="Gemini model.")
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta/openai/",
+        description="Gemini OpenAI-compatible base URL.",
     )
 
     # ------------------------------------------------------- transcription --
