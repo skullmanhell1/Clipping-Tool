@@ -86,7 +86,7 @@ const COLOR_PRESETS = [
 ];
 
 const MUSIC_MOODS = [
-  { value: "", label: "None" },
+  { value: "", label: "No music" },
   { value: "upbeat", label: "Upbeat" },
   { value: "chill", label: "Chill" },
   { value: "dramatic", label: "Dramatic" },
