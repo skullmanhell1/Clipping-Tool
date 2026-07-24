@@ -9,12 +9,16 @@ const STATUS_STYLES = {
   failed: "bg-rose-500/20 text-rose-300",
 };
 
-/**
- * Per-video card: header (title/source/status), live progress bar with the
- * current stage, and — once complete — a gallery grid of finished clips.
- */
-export default function JobCard({ job, llmAvailable, onClipUpdated }) {
-  const pct = Math.round((job.progress || 0) * 100);
+export default function JobCard({
+  job,
+  llmAvailable,
+  publishing,
+  publisherStatuses,
+  publishAttempts,
+  onClipUpdated,
+  onPublished,
+}) {
+  const percentage = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
 
   return (
@@ -29,7 +33,9 @@ export default function JobCard({ job, llmAvailable, onClipUpdated }) {
             {job.duration ? ` · ${formatDuration(job.duration)}` : ""}
           </div>
         </div>
-        <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${badge}`}>
+        <span
+          className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${badge}`}
+        >
           {job.status}
         </span>
       </div>
@@ -39,12 +45,12 @@ export default function JobCard({ job, llmAvailable, onClipUpdated }) {
           <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
             <div
               className="h-full rounded-full bg-gradient-to-r from-brand-accent to-brand transition-all duration-500"
-              style={{ width: `${pct}%` }}
+              style={{ width: `${percentage}%` }}
             />
           </div>
           <div className="mt-2 flex justify-between text-xs text-slate-400">
             <span>{job.stage}</span>
-            <span>{pct}%</span>
+            <span>{percentage}%</span>
           </div>
         </div>
       )}
@@ -67,7 +73,14 @@ export default function JobCard({ job, llmAvailable, onClipUpdated }) {
                   jobId={job.id}
                   clip={clip}
                   llmAvailable={llmAvailable}
+                  publishing={publishing}
+                  publisherStatuses={publisherStatuses}
+                  attempts={(publishAttempts || []).filter(
+                    (attempt) =>
+                      attempt.job_id === job.id && attempt.clip_id === clip.id
+                  )}
                   onUpdated={(updated) => onClipUpdated?.(job.id, updated)}
+                  onPublished={onPublished}
                 />
               ))}
             </div>
