@@ -231,6 +231,19 @@ export default function ClipCard({
       <div className="flex-1 space-y-3">
         {clip.reason && <p className="text-xs italic text-slate-500">“{clip.reason}”</p>}
 
+        {clip.effects_applied?.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {clip.effects_applied.map((fx) => (
+              <span
+                key={fx}
+                className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-300"
+              >
+                {fx.replace(/[:_]/g, " ")}
+              </span>
+            ))}
+          </div>
+        )}
+
         <Field
           label="Title"
           onRegenerate={llmAvailable ? regenerate("title") : null}

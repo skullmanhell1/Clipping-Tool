@@ -155,7 +155,27 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(
         default=BASE_DIR / "assets" / "emoji",
-        description="Directory containing Twemoji PNG assets.",
+        description="Directory containing (and caching) Twemoji PNG assets.",
+    )
+    music_dir: Path = Field(
+        default=BASE_DIR / "assets" / "music",
+        description="Optional directory of user-supplied mood music beds "
+                    "(e.g. music/upbeat.mp3). Falls back to a synthesised bed.",
+    )
+
+    # ------------------------------------------------------- effects (P4) --
+    # Base CDN for on-demand Twemoji PNG downloads (cached into emoji_assets_dir).
+    twemoji_cdn_base: str = Field(
+        default="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72",
+        description="Base URL for Twemoji 72x72 PNG assets.",
+    )
+    # Allow the emoji overlay to fetch missing PNGs from the CDN at render time.
+    emoji_allow_download: bool = Field(
+        default=True, description="Fetch missing Twemoji PNGs from the CDN."
+    )
+    # Default background-music level (0..1) mixed under the original audio.
+    music_default_volume: float = Field(
+        default=0.12, description="Default background-music volume (0..1)."
     )
 
     # ---------------------------------------------------------- publishers --
@@ -199,6 +219,7 @@ class Settings(BaseSettings):
             self.temp_dir,
             self.clips_dir,
             self.emoji_assets_dir,
+            self.music_dir,
         ):
             Path(path).mkdir(parents=True, exist_ok=True)
 
