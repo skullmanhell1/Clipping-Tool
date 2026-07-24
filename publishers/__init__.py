@@ -1,10 +1,14 @@
-"""Publishers package.
+"""Publisher registry and platform capability discovery."""
+from publishers.base import BasePublisher, PublishRequest, PublishResult, PublishState, PublisherStatus
+from publishers.instagram import InstagramPublisher
+from publishers.tiktok import TikTokPublisher
+from publishers.whop import WhopPublisher
+from publishers.x import XPublisher
+from publishers.youtube import YouTubePublisher
 
-Uniform integrations for auto-publishing finished clips to external platforms
-(Whop, YouTube, TikTok, Instagram, X). All implementations are stubs and share
-the :class:`publishers.base.BasePublisher` interface.
-"""
+PUBLISHER_TYPES={"whop":WhopPublisher,"youtube":YouTubePublisher,"tiktok":TikTokPublisher,
+                 "instagram":InstagramPublisher,"x":XPublisher}
 
-from publishers.base import BasePublisher, PublishRequest, PublishResult
+def build_publishers(): return {name: cls() for name,cls in PUBLISHER_TYPES.items()}
 
-__all__ = ["BasePublisher", "PublishRequest", "PublishResult"]
+__all__=["BasePublisher","PublishRequest","PublishResult","PublishState","PublisherStatus","build_publishers"]

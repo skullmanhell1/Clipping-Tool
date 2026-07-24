@@ -10,9 +10,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Emoji / overlay effects
 - Face-tracking reframe (mediapipe) replacing centre-crop
-- Auto-publishing to Whop / YouTube / TikTok / Instagram / X
 - S3 storage backend + retention cleanup
 - RQ-backed distributed worker (currently in-process)
+
+## [0.4.0] - 2026-07-23
+
+### Added — Phase 3: auto-publishing
+- **Common publisher interface** (`publishers/base.py`): a platform-neutral
+  `PublishRequest` / `PublishResult` / `PublisherStatus` contract with a shared
+  `BasePublisher`, so platforms plug in through one registry
+  (`publishers/__init__.py`).
+- **Platform adapters**, each reporting a clear configured/limited/ready status
+  and degrading gracefully:
+  - **Whop** (`publishers/whop.py` + `publisher_bridge/`): uploads via the
+    official **`@whop/sdk`** through a Node bridge, then attaches the file to a
+    **chat**, **forum**, or **course** target; uploads with no supported target
+    return `review_required` for manual placement.
+  - **YouTube** (`publishers/youtube.py`): Data API v3 resumable upload over the
+    OAuth refresh-token flow; vertical clips publish as **Shorts** (review mode
+    uploads privately).
+  - **TikTok** (`publishers/tiktok.py`): Content Posting API. Uploads to the
+    creator's **inbox as a draft** until Direct Post is approved
+    (`TIKTOK_DIRECT_POST_APPROVED`).
+  - **Instagram** (`publishers/instagram.py`): Graph API resumable **Reels**
+    upload/publish; runs in review mode unless content-publish is approved.
+  - **X** (`publishers/x.py`): chunked media upload + post; returns
+    `review_required` unless an approved user-context token is present.
+- **AI metadata on upload**: each adapter attaches the clip's generated title,
+  description/caption, and hashtags automatically (per-platform limits applied).
+- **Multi-channel routing** (`publishers/history.py` campaigns): tag a clip with
+  a **campaign** that maps each platform to an account/target; clips route to
+  the right destination.
+- **Throttled scheduling** (`publishers/manager.py`): a persistent background
+  scheduler posts **now or at a chosen time**, enforcing a minimum per-platform
+  interval to respect rate limits.
+- **Metadata download bundle**: the primary clip download now returns a **ZIP**
+  containing the MP4 plus a `_metadata.txt` file with the title, caption, and
+  hashtags; a raw video-only download remains available.
+- **Persistent history** (SQLite): every created clip and every publish attempt
+  (platform, account, time, state, link, error) is recorded and survives
+  restarts.
+- **API**: `GET /api/publishers`, `GET|POST /api/campaigns`,
+  `POST /api/jobs/{job}/clips/{clip}/publish`, `GET /api/history`,
+  `GET /api/publish-attempts/{id}`, ZIP + video-only clip downloads; upload/URL
+  jobs accept `publish_to`, `campaign_id`, `publish_mode`, and `schedule_at` for
+  auto-publishing on completion.
+- **Web UI**: a **Publishing settings** panel (Publish To multi-select with live
+  per-platform status, Campaign, Mode auto/review, Schedule, and campaign
+  saving), **per-clip publish/schedule buttons** with live attempt status, the
+  metadata-bundle download, and a dedicated **History** view.
+
+### Changed
+- `Dockerfile` now installs Node.js and the `publisher_bridge` dependencies so
+  the Whop `@whop/sdk` bridge runs inside the container.
+- All publisher secrets and scheduler tuning are read from `.env`
+  (see `.env.example`); the history store persists IDs/status only — never
+  tokens.
 
 ## [0.3.0] - 2026-07-23
 

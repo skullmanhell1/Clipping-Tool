@@ -7,9 +7,14 @@ venv/
 .env
 frontend/node_modules
 frontend/dist
+publisher_bridge/node_modules
 storage/uploads/*
 storage/temp/*
 storage/clips/*
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm
 !storage/**/.gitkeep
 .github/
+tests/
 *.md
