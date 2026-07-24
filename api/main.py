@@ -1,4 +1,4 @@
-"""FastAPI application — Phase 1 clip-generating engine.
+"""FastAPI application — Phase 2 (smart selection & metadata).
 
 Exposes the endpoints the web UI needs:
 
@@ -40,15 +40,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+from worker import metadata as meta_mod
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.jobs import get_manager
+from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import ProcessingOptions
 from worker.watch_folder import get_watcher
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
-    description="AI-powered video clipping & auto-publishing tool — Phase 1.",
+    version="0.3.0",
+    description="AI-powered video clipping & auto-publishing tool — Phase 2 (smart selection & metadata).",
 )
 
 app.add_middleware(
@@ -78,11 +80,39 @@ class OptionsModel(BaseModel):
     clip_length: str = "auto"
     aspect: str = "9:16"
     num_clips: str = "auto"
-    strategy: str = "silence"
+    strategy: str = "ai"
     captions: bool = True
+    # Phase 2 — Advanced settings
+    topic: str = ""
+    vibe: str = ""
+    platform: str = "generic"
+    hashtag_count: int = 5
+    range_start: Optional[float] = None
+    range_end: Optional[float] = None
+    metadata: bool = True
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
+
+
+class ClipEditModel(BaseModel):
+    """Editable clip metadata fields (all optional; only provided ones apply)."""
+
+    title: Optional[str] = None
+    title_alternatives: Optional[list[str]] = None
+    description: Optional[str] = None
+    hashtags: Optional[list[str]] = None
+    hook_text: Optional[str] = None
+    cta: Optional[str] = None
+    mentions: Optional[list[str]] = None
+    thumbnail_text: Optional[str] = None
+
+
+class RegenerateRequest(BaseModel):
+    """Request to regenerate a single metadata field for a clip."""
+
+    field: str
+    platform: Optional[str] = None
 
 
 class UrlJobRequest(BaseModel):
@@ -121,7 +151,21 @@ def info() -> dict[str, object]:
         "aspect_ratios": ["9:16", "1:1", "16:9", "4:5"],
         "clip_lengths": ["auto", "<30s", "30-60s", "60-90s", "90s-3min"],
         "clip_counts": ["auto", "1", "3", "5", "10", "max"],
+        "platforms": list(PLATFORM_PROFILES.keys()),
+        "strategies": ["ai", "silence", "fixed"],
+        "regeneratable_fields": list(REGENERATABLE_FIELDS),
+        "llm_available": _llm_available_safe(),
     }
+
+
+def _llm_available_safe() -> bool:
+    """Return whether an LLM is configured (never raises)."""
+    try:
+        from worker.llm_client import llm_available
+
+        return llm_available()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +221,15 @@ async def upload(
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
     num_clips: str = Form("auto"),
-    strategy: str = Form("silence"),
+    strategy: str = Form("ai"),
     captions: bool = Form(True),
+    topic: str = Form(""),
+    vibe: str = Form(""),
+    platform: str = Form("generic"),
+    hashtag_count: int = Form(5),
+    range_start: Optional[float] = Form(None),
+    range_end: Optional[float] = Form(None),
+    metadata: bool = Form(True),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -197,6 +248,13 @@ async def upload(
             "num_clips": num_clips,
             "strategy": strategy,
             "captions": captions,
+            "topic": topic,
+            "vibe": vibe,
+            "platform": platform,
+            "hashtag_count": hashtag_count,
+            "range_start": range_start,
+            "range_end": range_end,
+            "metadata": metadata,
         }
     )
 
@@ -245,6 +303,63 @@ def get_batch(batch_id: str) -> dict:
     if not jobs:
         raise HTTPException(status_code=404, detail="Batch not found")
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
+
+
+# ---------------------------------------------------------------------------
+# Clip metadata editing + per-field regeneration
+# ---------------------------------------------------------------------------
+@app.patch("/api/jobs/{job_id}/clips/{clip_id}", tags=["metadata"])
+def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
+    """Update editable metadata fields on a clip (title, hashtags, hook, ...)."""
+    fields = {k: v for k, v in edit.model_dump().items() if v is not None}
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    clip = get_manager().store.update_clip(job_id, clip_id, fields)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    return clip.to_dict()
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"])
+def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> dict:
+    """Regenerate a single metadata field for a clip via the LLM.
+
+    Requires an LLM to be configured; returns 400 for unknown fields and 409
+    when no LLM is available.
+    """
+    if req.field not in REGENERATABLE_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Field must be one of {list(REGENERATABLE_FIELDS)}",
+        )
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+
+    if not _llm_available_safe():
+        raise HTTPException(
+            status_code=409,
+            detail="No LLM configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY.",
+        )
+
+    # Apply any per-request platform override on top of the job's options.
+    options = job.options
+    if req.platform:
+        from dataclasses import replace
+
+        options = replace(options, platform=req.platform)
+
+    try:
+        value = regenerate_field(
+            req.field, clip.transcript_text or clip.description or clip.title, options
+        )
+    except Exception as exc:  # LLMError or parsing issue
+        raise HTTPException(status_code=502, detail=f"Regeneration failed: {exc}") from exc
+
+    updated = manager.store.update_clip(job_id, clip_id, {req.field: value})
+    return {"field": req.field, "value": value, "clip": updated.to_dict()}
 
 
 # ---------------------------------------------------------------------------

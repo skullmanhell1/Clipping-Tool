@@ -31,8 +31,17 @@ class ProcessingOptions:
     clip_length: str = "auto"            # auto | <30s | 30-60s | 60-90s | 90s-3min
     aspect: str = "9:16"                 # 9:16 | 1:1 | 16:9 | 4:5
     num_clips: str = "auto"              # auto | 1 | 3 | 5 | 10 | max
-    strategy: str = "silence"            # silence | fixed
+    strategy: str = "ai"                 # ai | silence | fixed
     captions: bool = True                # burn captions
+
+    # --- Phase 2: smart selection & metadata (Advanced settings) ----------
+    topic: str = ""                      # Clip Topic / Keywords to bias toward
+    vibe: str = ""                       # Vibe / Tone (e.g. "energetic", "educational")
+    platform: str = "generic"            # target platform for metadata tone/limits
+    hashtag_count: int = 5               # number of hashtags to generate
+    range_start: Optional[float] = None  # only process from this second...
+    range_end: Optional[float] = None    # ...to this second (Process Range)
+    metadata: bool = True                # generate AI metadata per clip
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
@@ -42,12 +51,32 @@ class ProcessingOptions:
         # Normalise an empty-string language to None (auto).
         if valid.get("language") in ("", "auto", "Auto"):
             valid["language"] = None
+        # Coerce numeric fields that may arrive as strings from form data.
+        for num_field in ("range_start", "range_end"):
+            v = valid.get(num_field)
+            if v in ("", None):
+                valid[num_field] = None
+            else:
+                try:
+                    valid[num_field] = float(v)
+                except (TypeError, ValueError):
+                    valid[num_field] = None
+        if "hashtag_count" in valid:
+            try:
+                valid["hashtag_count"] = max(0, min(30, int(valid["hashtag_count"])))
+            except (TypeError, ValueError):
+                valid["hashtag_count"] = 5
         return cls(**valid)
 
 
 @dataclass
 class ClipResult:
-    """A single finished clip produced by the pipeline."""
+    """A single finished clip produced by the pipeline.
+
+    Carries both the media locations and the AI-generated, user-editable
+    metadata (title + alternatives, description, hashtags, on-screen hook,
+    CTA/mentions, thumbnail text) plus the virality score and selection reason.
+    """
 
     id: str
     filename: str
@@ -57,6 +86,19 @@ class ClipResult:
     title: str = ""
     video_url: str = ""
     thumbnail_url: str = ""
+
+    # --- Phase 2: smart selection + metadata ------------------------------
+    score: float = 0.0                              # virality score 0..100
+    reason: str = ""                                # why this moment was picked
+    platform: str = "generic"                       # platform the metadata targets
+    title_alternatives: list[str] = field(default_factory=list)
+    description: str = ""                            # caption / description
+    hashtags: list[str] = field(default_factory=list)
+    hook_text: str = ""                             # on-screen opening hook
+    cta: str = ""                                   # call to action
+    mentions: list[str] = field(default_factory=list)  # @tags
+    thumbnail_text: str = ""                        # thumbnail text idea
+    transcript_text: str = ""                       # clip transcript (for regen)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
