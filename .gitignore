@@ -15,6 +15,9 @@ venv/
 storage/uploads/*
 storage/temp/*
 storage/clips/*
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm
 !storage/**/.gitkeep
 
 # Emoji assets are downloaded at build time; keep the directory only
@@ -24,6 +27,9 @@ assets/emoji/*
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
+
+# Publisher bridge (Node @whop/sdk) — install at build time, commit the lockfile
+publisher_bridge/node_modules/
 
 # OS / editor
 .DS_Store

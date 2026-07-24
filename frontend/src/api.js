@@ -72,6 +72,19 @@ export const api = {
   clipUrl: (relativeUrl) => `/${relativeUrl}`,
   downloadUrl: (jobId, filename) =>
     `/api/clips/${jobId}/${filename}/download`,
+  videoDownloadUrl: (jobId, filename) =>
+    `/api/clips/${jobId}/${filename}/video`,
+
+  publisherStatuses: () => fetch("/api/publishers").then(jsonOrThrow),
+  campaigns: () => fetch("/api/campaigns").then(jsonOrThrow),
+  saveCampaign: (name, routes, id = "") =>
+    fetch("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, routes, id }) }).then(jsonOrThrow),
+  publishClip: (jobId, clipId, payload) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
+  history: (platform = "") =>
+    fetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
 };
 
 // Map the UI Language dropdown value to backend {language, translate}.

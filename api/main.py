@@ -30,16 +30,21 @@ from __future__ import annotations
 
 import shutil
 import uuid
+import io
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+from publishers.history import get_history
+from publishers.manager import get_publish_manager
 from worker import metadata as meta_mod
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.jobs import get_manager
@@ -49,8 +54,8 @@ from worker.watch_folder import get_watcher
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.3.0",
-    description="AI-powered video clipping & auto-publishing tool — Phase 2 (smart selection & metadata).",
+    version="0.4.0",
+    description="AI-powered video clipping & auto-publishing tool — Phase 3 (auto-publishing).",
 )
 
 app.add_middleware(
@@ -90,6 +95,11 @@ class OptionsModel(BaseModel):
     range_start: Optional[float] = None
     range_end: Optional[float] = None
     metadata: bool = True
+    # Phase 3 — publishing
+    publish_to: list[str] = []
+    campaign_id: str = ""
+    publish_mode: str = "review"
+    schedule_at: Optional[float] = None
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -113,6 +123,20 @@ class RegenerateRequest(BaseModel):
 
     field: str
     platform: Optional[str] = None
+
+
+class PublishClipRequest(BaseModel):
+    platforms: list[str] = []
+    campaign_id: str = ""
+    mode: str = "auto"
+    schedule_at: Optional[float] = None
+    routes: dict[str, dict[str, str]] = {}
+
+
+class CampaignModel(BaseModel):
+    name: str
+    routes: dict[str, dict[str, str]]
+    id: str = ""
 
 
 class UrlJobRequest(BaseModel):
@@ -230,6 +254,10 @@ async def upload(
     range_start: Optional[float] = Form(None),
     range_end: Optional[float] = Form(None),
     metadata: bool = Form(True),
+    publish_to: str = Form(""),
+    campaign_id: str = Form(""),
+    publish_mode: str = Form("review"),
+    schedule_at: Optional[float] = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -255,6 +283,10 @@ async def upload(
             "range_start": range_start,
             "range_end": range_end,
             "metadata": metadata,
+            "publish_to": publish_to,
+            "campaign_id": campaign_id,
+            "publish_mode": publish_mode,
+            "schedule_at": schedule_at,
         }
     )
 
@@ -317,6 +349,7 @@ def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
     clip = get_manager().store.update_clip(job_id, clip_id, fields)
     if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
+    get_history().sync_clip(job_id, clip)
     return clip.to_dict()
 
 
@@ -359,7 +392,56 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
         raise HTTPException(status_code=502, detail=f"Regeneration failed: {exc}") from exc
 
     updated = manager.store.update_clip(job_id, clip_id, {req.field: value})
+    get_history().sync_clip(job_id, updated)
     return {"field": req.field, "value": value, "clip": updated.to_dict()}
+
+
+# ---------------------------------------------------------------------------
+# Publishing, campaigns, scheduling, and history
+# ---------------------------------------------------------------------------
+@app.get("/api/publishers", tags=["publishing"])
+def publisher_statuses() -> dict:
+    return {"platforms": get_publish_manager().statuses()}
+
+
+@app.get("/api/campaigns", tags=["publishing"])
+def list_campaigns() -> dict:
+    return {"campaigns": [c.to_dict() for c in get_history().campaigns()]}
+
+
+@app.post("/api/campaigns", tags=["publishing"])
+def save_campaign(req: CampaignModel) -> dict:
+    if not req.name.strip() or not req.routes:
+        raise HTTPException(status_code=400, detail="Campaign name and routes are required")
+    return get_history().save_campaign(req.name.strip(), req.routes, req.id).to_dict()
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/publish", tags=["publishing"])
+def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
+    manager=get_manager(); job=manager.store.get(job_id); clip=manager.store.get_clip(job_id,clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    if req.mode not in ("auto","review"):
+        raise HTTPException(status_code=400, detail="mode must be auto or review")
+    path=Path(settings.clips_dir)/job_id/clip.filename
+    ids=get_publish_manager().submit(job_id=job_id,clip=clip,video_path=path,
+      platforms=req.platforms,campaign_id=req.campaign_id,mode=req.mode,
+      schedule_at=req.schedule_at,route_overrides=req.routes)
+    if not ids:
+        raise HTTPException(status_code=400, detail="No valid publishing routes")
+    return {"attempt_ids":ids,"attempts":[get_history().get_attempt(i) for i in ids]}
+
+
+@app.get("/api/history", tags=["publishing"])
+def history(limit: int=200, platform: str="") -> dict:
+    return get_history().history(max(1,min(limit,500)),platform)
+
+
+@app.get("/api/publish-attempts/{attempt_id}", tags=["publishing"])
+def publish_attempt(attempt_id: str) -> dict:
+    item=get_history().get_attempt(attempt_id)
+    if not item: raise HTTPException(status_code=404,detail="Publish attempt not found")
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -385,16 +467,35 @@ def watch_options(options: OptionsModel) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Clip download (attachment). Preview streaming is handled by the static mount.
+# Clip downloads. The primary download is a ZIP containing video + metadata TXT.
 # ---------------------------------------------------------------------------
+def _clip_metadata_text(clip) -> str:
+    return (f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
+            f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
+            f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n")
+
+
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
-def download_clip(job_id: str, filename: str) -> FileResponse:
-    # Guard against path traversal.
-    safe_name = Path(filename).name
-    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
-    if not path.exists() or not path.is_file():
+def download_clip(job_id: str, filename: str) -> StreamingResponse:
+    safe_name=Path(filename).name; path=Path(settings.clips_dir)/Path(job_id).name/safe_name
+    job=get_manager().store.get(job_id)
+    clip=next((c for c in job.clips if c.filename==safe_name),None) if job else None
+    if not path.exists() or not path.is_file() or clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
-    return FileResponse(path, filename=safe_name, media_type="video/mp4")
+    buf=io.BytesIO()
+    with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as archive:
+        archive.write(path,arcname=safe_name)
+        archive.writestr(f"{Path(safe_name).stem}_metadata.txt",_clip_metadata_text(clip))
+    buf.seek(0)
+    return StreamingResponse(buf,media_type="application/zip",headers={
+      "Content-Disposition":f'attachment; filename="{Path(safe_name).stem}_package.zip"'})
+
+
+@app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
+def download_video_only(job_id: str, filename: str) -> FileResponse:
+    safe_name=Path(filename).name; path=Path(settings.clips_dir)/Path(job_id).name/safe_name
+    if not path.exists() or not path.is_file(): raise HTTPException(status_code=404,detail="Clip not found")
+    return FileResponse(path,filename=safe_name,media_type="video/mp4")
 
 
 # ---------------------------------------------------------------------------

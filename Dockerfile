@@ -22,11 +22,14 @@ FROM python:3.11-slim
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
 # - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe (later)
+# - nodejs / npm: runs the @whop/sdk publisher bridge (publisher_bridge/whop.mjs)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1 \
@@ -38,6 +41,10 @@ WORKDIR /app
 # Install Python dependencies first for better layer caching.
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache.
+COPY publisher_bridge/package*.json ./publisher_bridge/
+RUN cd publisher_bridge && npm install --omit=dev
 
 # Copy the application source.
 COPY . .
