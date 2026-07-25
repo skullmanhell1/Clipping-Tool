@@ -106,6 +106,29 @@ const EMOJI_MODES = [
   { value: "ai", label: "AI (context-aware)" },
 ];
 
+// --- Tier 1: animated captions / b-roll / visual selection option lists ----
+const CAPTION_PRESETS = [
+  { value: "karaoke", label: "Karaoke" },
+  { value: "boxed", label: "Boxed" },
+  { value: "minimal", label: "Minimal" },
+  { value: "pop", label: "Pop" },
+  { value: "typewriter", label: "Typewriter" },
+  { value: "hormozi", label: "Hormozi" },
+];
+
+const BROLL_INTENSITIES = [
+  { value: "off", label: "Off" },
+  { value: "subtle", label: "Subtle" },
+  { value: "standard", label: "Standard" },
+  { value: "heavy", label: "Heavy" },
+];
+
+const ASSET_SOURCING_MODES = [
+  { value: "off", label: "Off" },
+  { value: "local_only", label: "Local only" },
+  { value: "local_then_external", label: "Local, then external" },
+];
+
 // A small labelled checkbox toggle used across the effects section.
 function Toggle({ label, checked, onChange, hint }) {
   return (
@@ -215,6 +238,24 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
             </label>
           </div>
 
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-slate-400">Selection prompt</span>
+            <textarea
+              rows="2"
+              value={settings.selection_prompt}
+              onChange={(e) => onChange({ ...settings, selection_prompt: e.target.value })}
+              placeholder="Describe the moments to find, e.g. 'every time the speaker laughs'"
+              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
+            />
+          </label>
+
+          <Toggle
+            label="Visual selection"
+            hint="Use visual/scene cues from sampled keyframes in addition to the transcript"
+            checked={settings.visual_selection}
+            onChange={setFlag("visual_selection")}
+          />
+
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
@@ -243,9 +284,68 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
               Captions
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Dropdown label="Caption Template" value={settings.caption_template} onChange={set("caption_template")} options={CAPTION_TEMPLATES} />
+              <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} />
               <Dropdown label="Caption Position" value={settings.caption_position} onChange={set("caption_position")} options={CAPTION_POSITIONS} />
             </div>
+            <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Dropdown label="Caption Template (legacy)" value={settings.caption_template} onChange={set("caption_template")} options={CAPTION_TEMPLATES} />
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              The caption preset supersedes the legacy template when set to a non-default value.
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Toggle
+                label="Highlight keywords"
+                hint="Emphasize important words with a distinct colour/scale"
+                checked={settings.caption_keyword_highlight}
+                onChange={setFlag("caption_keyword_highlight")}
+              />
+              <Toggle
+                label="AI keyword highlight"
+                hint="Use the LLM to pick keywords (falls back to rules if unavailable)"
+                checked={settings.caption_keyword_ai}
+                onChange={setFlag("caption_keyword_ai")}
+              />
+              <Toggle
+                label="Emoji in captions"
+                hint="Insert emoji inline within caption text"
+                checked={settings.caption_emoji}
+                onChange={setFlag("caption_emoji")}
+              />
+            </div>
+          </div>
+
+          {/* B-roll overlays */}
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              B-roll overlays
+            </div>
+            <div className="mb-3">
+              <Toggle
+                label="B-roll overlays"
+                hint="Insert relevant images / short clips over key phrases"
+                checked={settings.broll}
+                onChange={setFlag("broll")}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Dropdown label="B-roll intensity" value={settings.broll_intensity} onChange={set("broll_intensity")} options={BROLL_INTENSITIES} />
+              <Dropdown label="Asset sourcing" value={settings.asset_sourcing_mode} onChange={set("asset_sourcing_mode")} options={ASSET_SOURCING_MODES} />
+              <label className="flex flex-col gap-1.5 text-sm">
+                <span className="text-slate-400">Provider</span>
+                <input
+                  type="text"
+                  value={settings.broll_provider}
+                  onChange={(e) => onChange({ ...settings, broll_provider: e.target.value })}
+                  placeholder="e.g. openverse, pexels"
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
+                />
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              External sourcing ("Local, then external") requires a configured provider API key;
+              without one it behaves as "Local only". All external downloading is off by default.
+            </p>
           </div>
 
           {/* Look / grade / music */}
@@ -271,6 +371,14 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
                   className="accent-emerald-500 disabled:opacity-40"
                 />
               </label>
+            </div>
+            <div className="mt-3">
+              <Toggle
+                label="Permissibility mode (no added audio, local assets only)"
+                hint="Disables all added audio and forces b-roll sourcing to local only"
+                checked={settings.permissibility_mode}
+                onChange={setFlag("permissibility_mode")}
+              />
             </div>
           </div>
 

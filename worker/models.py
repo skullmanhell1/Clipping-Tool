@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from enum import Enum
 from typing import Any, Optional
 
@@ -77,6 +77,36 @@ class ProcessingOptions:
     caption_template: str = "karaoke"    # karaoke | boxed | minimal
     caption_position: str = "bottom"     # bottom | center | top
 
+    # --- Phase 6 / Tier 1: Creator Output Upgrade ------------------------
+    # All new visual/audio/rights features default OFF so an "all-off" run
+    # reproduces v0.6.0 behaviour. Existing fields/defaults above are unchanged.
+    #
+    # Feature A — animated caption presets
+    caption_preset: str = "karaoke"      # karaoke|boxed|minimal|pop|typewriter|hormozi
+    caption_animation: str = ""          # "" = use preset default; else override
+    caption_keyword_highlight: bool = False  # highlight important words
+    caption_keyword_ai: bool = False     # AI-assisted keyword highlighting
+    caption_emoji: bool = False          # in-caption emoji glyphs
+    #
+    # Feature B — b-roll overlays
+    broll: bool = False                  # enable b-roll auto-insertion
+    broll_intensity: str = "standard"    # off|subtle|standard|heavy
+    asset_sourcing_mode: str = "off"     # off|local_only|local_then_external
+    broll_provider: str = ""             # external provider name ("" = none)
+    #
+    # Feature C — prompt / visual selection
+    selection_prompt: str = ""           # free-text selection prompt
+    visual_selection: bool = False       # enable visual/keyframe-aided selection
+    #
+    # Cross-cutting
+    permissibility_mode: bool = False    # forces local_only sourcing + no added audio
+
+    # Known value sets for enum-like string fields (used by ``from_dict``).
+    _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
+    _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
+    _BROLL_INTENSITIES = ("off", "subtle", "standard", "heavy")
+    _ASSET_SOURCING_MODES = ("off", "local_only", "local_then_external")
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
         """Build options from a (possibly partial) dict, ignoring unknown keys."""
@@ -104,7 +134,11 @@ class ProcessingOptions:
                 valid["hashtag_count"] = 5
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in ("reframe", "zoom", "transitions", "hook_title", "fades",
-                           "progress_bar", "emoji_animate", "filler_removal"):
+                           "progress_bar", "emoji_animate", "filler_removal",
+                           # Phase 6 / Tier 1 boolean flags
+                           "caption_keyword_highlight", "caption_keyword_ai",
+                           "caption_emoji", "broll", "visual_selection",
+                           "permissibility_mode"):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
         if "music_volume" in valid:
@@ -112,7 +146,53 @@ class ProcessingOptions:
                 valid["music_volume"] = max(0.0, min(1.0, float(valid["music_volume"])))
             except (TypeError, ValueError):
                 valid["music_volume"] = 0.12
+        # Validate Phase 6 / Tier 1 enum-like string fields against their known
+        # value sets, falling back to the documented default on unknown or
+        # malformed values (never raising).
+        for enum_field, known, default in (
+            ("caption_preset", cls._CAPTION_PRESETS, "karaoke"),
+            ("caption_animation", cls._CAPTION_ANIMATIONS, ""),
+            ("broll_intensity", cls._BROLL_INTENSITIES, "standard"),
+            ("asset_sourcing_mode", cls._ASSET_SOURCING_MODES, "off"),
+        ):
+            if enum_field in valid:
+                v = valid[enum_field]
+                valid[enum_field] = v if v in known else default
         return cls(**valid)
+
+
+def _external_key_configured() -> bool:
+    """Return True when an external b-roll provider API key is configured.
+
+    Reads ``settings.broll_provider_api_key`` defensively: the field is added to
+    ``config.py`` in a later task, so a missing import/attribute is treated as
+    "no key configured" rather than an error. Never raises.
+    """
+    try:
+        from config import settings  # local import to avoid import cycles
+        key = getattr(settings, "broll_provider_api_key", None)
+        return bool(key)
+    except Exception:
+        return False
+
+
+def effective_options(o: "ProcessingOptions") -> "ProcessingOptions":
+    """Return a normalised copy of ``o`` enforcing cross-cutting rules.
+
+    Pure: never mutates the input and always returns a new instance; never
+    raises. Applied once, centrally, before processing.
+
+    - Under ``permissibility_mode``: disable added audio (``music=""``) and force
+      ``asset_sourcing_mode="local_only"`` (Reqs 8.6, 19.1, 19.3).
+    - Downgrade ``asset_sourcing_mode`` from ``local_then_external`` to
+      ``local_only`` when no external provider key is configured (Req 8.4).
+    """
+    result = o
+    if o.permissibility_mode:
+        result = replace(result, music="", asset_sourcing_mode="local_only")
+    if result.asset_sourcing_mode == "local_then_external" and not _external_key_configured():
+        result = replace(result, asset_sourcing_mode="local_only")
+    return result
 
 
 @dataclass
@@ -147,7 +227,32 @@ class ClipResult:
     transcript_text: str = ""                       # clip transcript (for regen)
 
     # --- Phase 4: which visual effects were applied to this clip ----------
+    # ``effects_applied`` holds free-form string markers describing which
+    # optional enhancements ran (and how they degraded). In addition to the
+    # legacy Phase 4 markers, the Tier 1 Creator Output Upgrade introduces the
+    # following markers (produced by later tasks — defined here only):
+    #   - ``caption_preset:<name>``       an animated caption preset was applied
+    #   - ``caption_preset_substituted``  requested preset was unknown/malformed
+    #                                     and karaoke was substituted
+    #   - ``font_substituted:<name>``     preset font missing; ``<name>`` used
+    #   - ``keyword_highlight``           keyword highlighting was applied
+    #   - ``caption_emoji``               in-caption emoji glyphs were rendered
+    #   - ``broll:<keyword>``             a b-roll cue for ``<keyword>`` composited
+    #   - ``broll_source:local_only``     b-roll sourced from the local library only
+    #   - ``broll_asset_failed``          a b-roll asset could not be resolved/decoded
+    #   - ``broll_license_unknown``       a b-roll asset was dropped (unknown license)
+    #   - ``broll_degraded``              b-roll disabled after a build/compose error
+    #   - ``visual_selection``            visual/keyframe-aided selection was used
+    #   - ``visual_degraded``             visual selection fell back to transcript-only
     effects_applied: list[str] = field(default_factory=list)
+
+    # --- Tier 1: provenance for composited b-roll assets ------------------
+    # Populated only for assets actually composited into this clip. Each entry
+    # has the shape ``{provider, source_id, license, attribution, keyword,
+    # path}`` (external assets record provider/source_id/license/attribution;
+    # local assets record their source ``path``). Serialised automatically by
+    # ``to_dict`` via ``asdict``.
+    broll_assets: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
