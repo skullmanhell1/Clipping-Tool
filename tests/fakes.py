@@ -165,3 +165,104 @@ class RecordingDownloader:
             }
         )
         return self._result
+
+
+
+# --------------------------------------------------------------------------- #
+# Speaker-diarisation test doubles (speaker-diarization-reframe)
+# --------------------------------------------------------------------------- #
+class FakeDiarizationBackend:
+    """A canned ``DiarizationBackend`` returning preset ``(label, start, end)``
+    spans and recording every ``assign`` call.
+
+    Implements the ``worker.diarization.DiarizationBackend`` protocol so it can
+    be injected into ``diarize_source`` for offline, deterministic tests.
+    """
+
+    def __init__(self, spans=None):
+        self._spans = list(spans or [])
+        self.calls: list[tuple] = []
+
+    def assign(self, words, duration):
+        self.calls.append((list(words), duration))
+        return list(self._spans)
+
+
+class RaisingDiarizationBackend:
+    """A ``DiarizationBackend`` whose ``assign`` always raises, exercising the
+    diariser's degradation-to-offline fallback path."""
+
+    def __init__(self, exc=None):
+        self._exc = exc or RuntimeError("diarisation backend unavailable")
+        self.calls: list[tuple] = []
+
+    def assign(self, words, duration):
+        self.calls.append((list(words), duration))
+        raise self._exc
+
+
+
+# --------------------------------------------------------------------------- #
+# Speaker-reframe face-detection test double (speaker-diarization-reframe)
+# --------------------------------------------------------------------------- #
+class FakeFaceDetector:
+    """A canned face detector callable ``detector(frame) -> list[(x, y, w, h)]``.
+
+    Injectable as the ``detector`` argument of
+    ``worker.effects.reframe.detect_faces`` so the sampling path runs offline
+    with no cv2. Two modes:
+
+      - ``boxes`` set -> the SAME list of ``(x, y, w, h)`` tuples is returned on
+        every call (a static per-frame detection).
+      - ``script`` set -> a list of per-frame box lists is cycled through, one
+        entry consumed per call (wrapping around when exhausted), so successive
+        sampled frames can yield different detections.
+
+    With neither configured the detector returns ``[]`` (the "no faces"
+    variant). Every call's frame argument is appended to ``calls`` so tests can
+    assert the wiring was exercised.
+    """
+
+    def __init__(self, boxes=None, script=None):
+        self._boxes = [tuple(b) for b in boxes] if boxes is not None else None
+        self._script = (
+            [[tuple(b) for b in frame] for frame in script]
+            if script is not None
+            else None
+        )
+        self.calls: list = []
+
+    def __call__(self, frame):
+        idx = len(self.calls)
+        self.calls.append(frame)
+        if self._script is not None:
+            if not self._script:
+                return []
+            return list(self._script[idx % len(self._script)])
+        if self._boxes is not None:
+            return list(self._boxes)
+        return []
+
+
+
+# --------------------------------------------------------------------------- #
+# Speaker-reframe frame-sampler test double (speaker-diarization-reframe)
+# --------------------------------------------------------------------------- #
+class CannedSampler:
+    """A canned ``sampler(video) -> list[list[FaceBox]]`` for ``apply_speaker_reframe``.
+
+    ``apply_speaker_reframe`` accepts an injected ``sampler`` that, given the
+    video path, returns the per-frame face boxes directly (bypassing cv2 /
+    ffmpeg frame decode). This double returns the same preset per-frame
+    :class:`~worker.effects.reframe.FaceBox` lists on every call and records
+    each invocation's ``video`` argument in ``calls`` so tests can assert the
+    wiring was exercised fully offline.
+    """
+
+    def __init__(self, per_frame_boxes):
+        self._per_frame = list(per_frame_boxes)
+        self.calls: list = []
+
+    def __call__(self, video):
+        self.calls.append(video)
+        return [list(frame) for frame in self._per_frame]

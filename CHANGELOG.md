@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - RQ-backed distributed worker (currently in-process)
 
+## [0.8.0] - 2026-07-23
+
+### Added — Speaker Diarisation & Multi-Speaker Reframe
+- **Speaker diarisation** (`worker/diarization.py`): segments a source into
+  ordered, non-overlapping `Speaker_Turn`s from the offline Whisper word
+  timeline — **CPU-only, no GPU, no network**. An optional dependency-injected
+  diarisation backend is supported but never required; it degrades to
+  word-timeline segmentation on absence/error. Diarisation runs **once per
+  source** and is capped at a configurable max-speakers (default 2).
+- **Speaker-aware reframe** (`worker/effects/reframe.py`): multi-face detection
+  + face-track grouping + a face↔speaker associator drive two output layouts —
+  **follow-active** (a single dynamic crop that glides to whoever is speaking)
+  and **split-screen** (a 2-up composite of the most-talkative speakers) — with
+  **subtle / standard / heavy** smoothing and smooth transitions on speaker
+  change. All geometry is applied in the **existing single ffmpeg pass**.
+- **Graceful degradation**: an explicit precedence ladder — speaker-aware
+  reframe → the existing single-speaker reframe → the static blurred reformat —
+  guarantees a clip is always produced, recording the fallback in
+  `effects_applied` (`speaker_reframe:<layout>`, `speaker_reframe_degraded`,
+  `speaker_reframe_substituted`, `diarization:transcript`/`:model`/`_degraded`).
+- **Permissibility-aware**: under permissibility mode diarisation uses only the
+  offline word timeline (any external backend is bypassed) and no network call
+  occurs.
+- **API + Web UI**: `/api/info` advertises `reframe_layouts` and
+  `reframe_intensities`; `POST /api/upload` accepts `diarization`,
+  `speaker_reframe`, `reframe_layout`, and `reframe_intensity`; the settings
+  panel gains Speaker-aware-reframe + Diarisation toggles and Reframe layout /
+  intensity dropdowns.
+
+### Changed
+- The pipeline geometry stage now routes through the speaker-aware precedence
+  ladder; when both new toggles are off it takes the exact v0.7.0 path.
+
+### Notes
+- **Every new capability defaults OFF** — an "all-off" run reproduces v0.7.0
+  output and `effects_applied` exactly. Transcript-first diarisation is a
+  CPU-only heuristic best suited to turn-based interviews/podcasts; an acoustic
+  BYOK backend can be injected without other changes. Enabling speaker-aware
+  reframe adds roughly 1.0–1.1x the single-speaker reframe render time
+  (follow-active) or ~1.1–1.3x (split-screen); disabled it adds zero cost.
+
 ## [0.7.0] - 2026-07-23
 
 ### Added — Tier 1 Creator Output Upgrade
