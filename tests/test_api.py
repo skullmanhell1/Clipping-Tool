@@ -121,3 +121,101 @@ def test_info_reports_platforms(client):
     resp = client.get("/api/info")
     assert resp.status_code == 200
     assert "platforms" in resp.json()
+
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — Creator Output Upgrade: /api/info superset + option passthrough
+# ---------------------------------------------------------------------------
+def test_info_advertises_tier1_option_lists(client):
+    """`/api/info` advertises the new Tier 1 preset + sourcing-mode lists."""
+    effects = client.get("/api/info").json()["effects"]
+
+    # Caption presets include the legacy templates plus new animated presets.
+    assert "caption_presets" in effects
+    for name in ("karaoke", "pop", "typewriter", "hormozi", "boxed", "minimal"):
+        assert name in effects["caption_presets"]
+
+    # Asset sourcing modes are advertised exactly (Req 8.7).
+    assert effects["asset_sourcing_modes"] == ["off", "local_only", "local_then_external"]
+
+    # B-roll intensities and caption animations are advertised.
+    assert effects["broll_intensities"] == ["off", "subtle", "standard", "heavy"]
+    assert effects["caption_animations"] == ["none", "pop", "typewriter", "karaoke_fill"]
+
+    # broll_providers is present (empty when none configured).
+    assert isinstance(effects["broll_providers"], list)
+
+
+def test_info_retains_existing_effects_keys(client):
+    """New lists are additive — all pre-existing effects keys remain (Req 22.3)."""
+    body = client.get("/api/info").json()
+    effects = body["effects"]
+
+    # Every pre-existing effects key is still present (superset guarantee).
+    for key in (
+        "music_moods",
+        "color_presets",
+        "emoji_intensities",
+        "emoji_modes",
+        "caption_templates",
+        "caption_positions",
+    ):
+        assert key in effects, f"pre-existing effects key missing: {key}"
+
+    # Pre-existing values are unchanged.
+    assert effects["caption_templates"] == ["karaoke", "boxed", "minimal"]
+    assert effects["caption_positions"] == ["bottom", "center", "top"]
+
+    # New top-level broll_available flag is exposed as a bool.
+    assert isinstance(body["broll_available"], bool)
+
+
+def test_options_model_threads_new_fields_into_from_dict():
+    """OptionsModel -> to_options carries the new Tier 1 fields into ProcessingOptions."""
+    from api.main import OptionsModel
+
+    opts = OptionsModel(
+        caption_preset="pop",
+        broll=True,
+        broll_intensity="subtle",
+        asset_sourcing_mode="local_only",
+        visual_selection=True,
+        selection_prompt="find X",
+        caption_keyword_highlight=True,
+        permissibility_mode=True,
+    ).to_options()
+
+    assert opts.caption_preset == "pop"
+    assert opts.broll is True
+    assert opts.broll_intensity == "subtle"
+    assert opts.asset_sourcing_mode == "local_only"
+    assert opts.visual_selection is True
+    assert opts.selection_prompt == "find X"
+    assert opts.caption_keyword_highlight is True
+    assert opts.permissibility_mode is True
+
+
+def test_url_job_carries_new_fields_through(client):
+    """A URL job submitted with new option fields reflects them on the stored job."""
+    resp = client.post(
+        "/api/jobs/url",
+        json={
+            "url": "https://example.com/video",
+            "options": {
+                "caption_preset": "pop",
+                "broll": True,
+                "visual_selection": True,
+                "selection_prompt": "find X",
+            },
+        },
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()["id"]
+
+    job = get_manager().store.get(job_id)
+    assert job is not None
+    assert job.options.caption_preset == "pop"
+    assert job.options.broll is True
+    assert job.options.visual_selection is True
+    assert job.options.selection_prompt == "find X"

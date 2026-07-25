@@ -1,0 +1,117 @@
+{
+  "pbtResults": {
+    "1.4 Property test: new option fields round-trip → `tests/test_options_roundtrip.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946291027
+    },
+    "1.5 Property test: malformed/unknown values apply defaults → `tests/test_options_roundtrip.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946291853
+    },
+    "2.2 Property test: built-in presets are complete → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946559585
+    },
+    "2.3 Property test: unknown/malformed presets fall back to karaoke → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946561058
+    },
+    "2.4 Property test: caption preset round-trip → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946562517
+    },
+    "2.6 Property test: deterministic planning + AI-unavailable equivalence → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946563908
+    },
+    "2.7 Property test: AI-assisted highlighting extends the deterministic set → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784946564737
+    },
+    "3.3 Property test: per-word animation timed and bounded → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947365308
+    },
+    "3.4 Property test: captions use libass ASS tags only → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947366711
+    },
+    "3.5 Property test: keyword highlighting distinct and timing-preserving → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947368134
+    },
+    "3.6 Property test: preset styling applied, position override wins → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947369585
+    },
+    "3.7 Property test: in-caption emoji respect permissibility → `tests/test_caption_presets.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947371019
+    },
+    "3.9 ffmpeg integration test: every preset/position yields a parseable ASS render → `tests/test_captions_templates.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784947371758
+    },
+    "5.4 Property test: b-roll cues well-formed and bounded → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948526236
+    },
+    "5.5 Property test: intensity caps count and total on-screen time → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948527351
+    },
+    "5.6 Property test: no cue lands in a removed interval → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948530227
+    },
+    "5.7 Property test: asset-sourcing mode semantics → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948531212
+    },
+    "5.8 Property test: permissibility forces local-only and mutes audio → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948534146
+    },
+    "5.9 Property test: unusable cues dropped, others retained → `tests/test_broll_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784948535166
+    },
+    "6.2 Property test: overlays bounded, uniquely indexed, layered below captions → `tests/test_broll_overlay.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784949068431
+    },
+    "6.3 Property test: only composited cues recorded with correct provenance → `tests/test_broll_overlay.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784949069877
+    },
+    "6.6 ffmpeg integration test: zero resolvable cues equals b-roll disabled → `tests/test_effects_compositor.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784949070903
+    },
+    "8.3 Property test: visual merge ranked, shape-preserving, snapped → `tests/test_visual_selection.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784950377490
+    },
+    "8.4 Property test: keyframe sampling is bounded → `tests/test_visual_selection.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784950380067
+    },
+    "8.5 Property test: degrade to transcript-only and pass-through when disabled → `tests/test_visual_selection.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784950382564
+    },
+    "9.2 Property test: all new features off reproduces v0.6.0 → `tests/test_pipeline_degradation.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784951001646
+    },
+    "9.3 Property test: missing dependencies still produce clips and record degradation → `tests/test_pipeline_degradation.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784951003140
+    },
+    "9.4 Property test: no external network when external features disabled → `tests/test_pipeline_degradation.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1784951003829
+    }
+  },
+  "executionHistory": {}
+}

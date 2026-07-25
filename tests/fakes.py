@@ -111,3 +111,57 @@ class FakePublisher:
         return PublishResult(True, PublishState.PUBLISHED, self.name,
                              url=f"https://example.com/{self.name}", external_id="ext123",
                              message="ok")
+
+
+
+# --------------------------------------------------------------------------- #
+# B-roll test doubles (Tier 1 — Feature B)
+# --------------------------------------------------------------------------- #
+class SpyAssetProvider:
+    """An ``AssetProvider`` stand-in that records every ``search`` call.
+
+    Configure a single ``result`` returned for any keyword, and/or a per-keyword
+    ``results`` mapping (values may be ``None`` to simulate a miss). ``has_key``
+    lets the same double act as a keyed/unkeyed external provider.
+    """
+
+    def __init__(self, name="spy", result=None, results=None, has_key=True):
+        self.name = name
+        self._result = result
+        self._results = results or {}
+        self._has_key = has_key
+        self.searches: list = []
+
+    @property
+    def has_key(self) -> bool:
+        return self._has_key
+
+    def search(self, keyword):
+        self.searches.append(keyword)
+        if keyword in self._results:
+            return self._results[keyword]
+        return self._result
+
+
+class RecordingDownloader:
+    """A call-recording ``downloader(keyword, api_key, base_url, cache_dir)``.
+
+    Returns the configured ``result`` (an ``AssetRef`` or ``None``) and appends
+    each invocation to ``calls`` so tests can assert no external download
+    occurred under ``local_only`` / permissibility / disabled sourcing.
+    """
+
+    def __init__(self, result=None):
+        self._result = result
+        self.calls: list[dict] = []
+
+    def __call__(self, keyword, api_key, base_url, cache_dir):
+        self.calls.append(
+            {
+                "keyword": keyword,
+                "api_key": api_key,
+                "base_url": base_url,
+                "cache_dir": cache_dir,
+            }
+        )
+        return self._result

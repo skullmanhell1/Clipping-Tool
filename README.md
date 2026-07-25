@@ -3,7 +3,7 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.6.0 — **Phases 1–5 are working.** Paste a URL or upload video,
+> **Status:** v0.7.0 — **Phases 1–5 + the Tier 1 creator-output upgrade are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
@@ -14,6 +14,32 @@ auto-publish them.
 > TikTok, Instagram & X with campaign routing, scheduling, and a full history,
 > and manages **storage (retention, S3, disk usage), saved settings profiles,
 > and in-app update checks**.
+
+## Tier 1 — creator output upgrade
+
+Advanced output controls, all **individually toggleable** and **OFF by default**
+(so an all-off run behaves exactly like v0.6.0):
+
+- **Animated caption presets:** in addition to karaoke / boxed / minimal, choose
+  **pop**, **typewriter**, or **hormozi** — word-timed animations rendered with
+  libass (no `drawtext`).
+- **Keyword highlighting:** automatically emphasise punchy words (deterministic
+  rules, with an optional AI context-aware mode that only extends the set), plus
+  optional **in-caption emoji**.
+- **B-roll auto-insertion:** drop relevant b-roll over key phrases, capped by an
+  **intensity** setting. Source from your **local** `BROLL_DIR` (no network) or,
+  with your own API key, an **external** provider; unknown-license or failed
+  assets are skipped and composited assets are recorded per clip.
+- **Prompt / visual clip finding:** give a **selection prompt** to steer which
+  moments are chosen, augmented by lightweight CPU-only keyframe analysis; it
+  degrades to transcript-only selection when unavailable.
+- **Permissibility mode:** one toggle that forces **local-only** asset sourcing,
+  disables added music, and blocks any external download.
+
+> B-roll external sourcing is opt-in and BYOK: set `BROLL_PROVIDER`,
+> `BROLL_PROVIDER_API_KEY`, `BROLL_PROVIDER_BASE_URL`, and
+> `BROLL_ALLOW_DOWNLOAD=true` in `.env`. With those unset (the default) b-roll
+> uses only local files in `BROLL_DIR` and makes no network calls.
 
 ## Phase 5 — storage, profiles & updates
 

@@ -50,6 +50,7 @@ from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.jobs import get_manager
+from worker.effects import broll, caption_presets
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import ProcessingOptions
 from worker.watch_folder import get_watcher
@@ -136,6 +137,22 @@ class OptionsModel(BaseModel):
     filler_removal: bool = False
     caption_template: str = "karaoke"
     caption_position: str = "bottom"
+    # Tier 1 — Feature A: animated caption presets
+    caption_preset: str = "karaoke"
+    caption_animation: str = ""
+    caption_keyword_highlight: bool = False
+    caption_keyword_ai: bool = False
+    caption_emoji: bool = False
+    # Tier 1 — Feature B: b-roll overlays
+    broll: bool = False
+    broll_intensity: str = "standard"
+    asset_sourcing_mode: str = "off"
+    broll_provider: str = ""
+    # Tier 1 — Feature C: prompt / visual selection
+    selection_prompt: str = ""
+    visual_selection: bool = False
+    # Tier 1 — cross-cutting
+    permissibility_mode: bool = False
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -240,10 +257,24 @@ def info() -> dict[str, object]:
             "emoji_modes": ["keyword", "ai"],
             "caption_templates": ["karaoke", "boxed", "minimal"],
             "caption_positions": ["bottom", "center", "top"],
+            # Tier 1 — Creator Output Upgrade (additive; Reqs 1.4, 8.7, 22.3)
+            "caption_presets": list(caption_presets.BUILTIN_PRESETS.keys()),
+            "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
+            "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
+            "broll_intensities": list(broll.BROLL_INTENSITY.keys()),
+            "broll_providers": _available_broll_providers(),
         },
+        "broll_available": bool(
+            settings.broll_provider_api_key and settings.broll_allow_download
+        ),
         "storage_backend": settings.storage_backend.value,
         "retention_choices": list(RETENTION_CHOICES),
     }
+
+
+def _available_broll_providers() -> list[str]:
+    """Return configured external b-roll providers ([] when none configured)."""
+    return [settings.broll_provider] if settings.broll_provider else []
 
 
 def _llm_available_safe() -> bool:
@@ -338,6 +369,22 @@ async def upload(
     filler_removal: bool = Form(False),
     caption_template: str = Form("karaoke"),
     caption_position: str = Form("bottom"),
+    # Tier 1 — Feature A: animated caption presets
+    caption_preset: str = Form("karaoke"),
+    caption_animation: str = Form(""),
+    caption_keyword_highlight: bool = Form(False),
+    caption_keyword_ai: bool = Form(False),
+    caption_emoji: bool = Form(False),
+    # Tier 1 — Feature B: b-roll overlays
+    broll: bool = Form(False),
+    broll_intensity: str = Form("standard"),
+    asset_sourcing_mode: str = Form("off"),
+    broll_provider: str = Form(""),
+    # Tier 1 — Feature C: prompt / visual selection
+    selection_prompt: str = Form(""),
+    visual_selection: bool = Form(False),
+    # Tier 1 — cross-cutting
+    permissibility_mode: bool = Form(False),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -382,6 +429,18 @@ async def upload(
             "filler_removal": filler_removal,
             "caption_template": caption_template,
             "caption_position": caption_position,
+            "caption_preset": caption_preset,
+            "caption_animation": caption_animation,
+            "caption_keyword_highlight": caption_keyword_highlight,
+            "caption_keyword_ai": caption_keyword_ai,
+            "caption_emoji": caption_emoji,
+            "broll": broll,
+            "broll_intensity": broll_intensity,
+            "asset_sourcing_mode": asset_sourcing_mode,
+            "broll_provider": broll_provider,
+            "selection_prompt": selection_prompt,
+            "visual_selection": visual_selection,
+            "permissibility_mode": permissibility_mode,
         }
     )
 
