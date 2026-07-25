@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
+from worker import diarization
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 from worker import selection as sel
@@ -37,6 +38,23 @@ from worker.transcribe import Transcript, transcribe
 
 # progress_cb(fraction: float, stage: str)
 ProgressCallback = Callable[[float, str], None]
+
+# --- optional dependency-injection seams (mirroring the broll DI style) ------
+# These default to ``None`` (nothing configured), exactly like the b-roll
+# external provider: production wiring or tests replace them by patching the
+# module-level name. Keeping them here (rather than as function args) matches
+# how the pipeline already threads optional collaborators such as the b-roll
+# resolver and the injected ``llm_client``.
+#
+#   DIAR_BACKEND   optional ``worker.diarization.DiarizationBackend`` (None ->
+#                  offline transcript-only segmentation).
+#   FACE_DETECTOR  optional face detector callable ``frame -> [(x, y, w, h)]``
+#                  passed to ``reframe.detect_faces`` (None -> lazy Haar cascade).
+#   FRAME_SAMPLER  optional sampler ``video -> list[list[FaceBox]]`` passed to
+#                  ``reframe.apply_speaker_reframe`` (None -> detect_faces).
+DIAR_BACKEND = None
+FACE_DETECTOR = None
+FRAME_SAMPLER = None
 
 # Progress budget across pipeline stages (fractions of the local span).
 _P_TRANSCRIBE_END = 0.25
@@ -177,6 +195,28 @@ def run_pipeline(
             options, local=broll.LocalProvider(), external=external
         )
 
+    # --- speaker diarisation (ONCE per source) ---------------------------
+    # Diarisation is needed when the diarisation toggle OR speaker-aware reframe
+    # is enabled (Req 15.1). Enabling ``speaker_reframe`` uses diarisation
+    # internally WITHOUT mutating ``options`` — the persisted ``diarization``
+    # toggle is never flipped (Req 16.5). When neither is enabled no diarisation
+    # and no face sampling occur at all (Req 15.4), so an all-off run is the
+    # v0.7.0 code path exactly. ``diarize_source`` is pure/offline; it performs
+    # no network access and, under ``permissibility_mode``, ignores any injected
+    # backend and segments from the offline Word_Timeline only (Reqs 19.1-19.3).
+    need_diar = options.diarization or options.speaker_reframe
+    source_turns: list[diarization.Speaker_Turn] = []
+    source_diar_notes: list[str] = []
+    if need_diar and transcript.words:
+        source_turns = diarization.diarize_source(
+            transcript.words,
+            info.duration,
+            backend=DIAR_BACKEND,
+            max_speakers=settings.diarization_max_speakers,
+            permissibility=options.permissibility_mode,
+            notes=source_diar_notes,
+        )
+
     for idx, c in enumerate(candidates):
         base = _P_SELECT_END + clip_span * (idx / n)
         report(base, f"Rendering clip {idx + 1} of {n}")
@@ -187,6 +227,10 @@ def run_pipeline(
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
         broll_assets: list[dict] = []
+        # Filler keep-plan for this clip (None unless filler removal tightened
+        # the timeline). Used to rebase speaker turns onto the same tightened
+        # timeline the rebased words already use (Reqs 13.4, 13.5).
+        keep_plan: Optional[list] = None
         # Final clip duration for b-roll planning; shrinks after filler removal.
         clip_duration = c.end - c.start
         # Best-effort visual-selection marker (Req 18.2): when visual selection
@@ -220,13 +264,46 @@ def run_pipeline(
                     raw.unlink(missing_ok=True)
                     raw = trimmed
                     words = filler.rebase_words(words, plan.keeps)
+                    keep_plan = plan.keeps
                     clip_duration = sum(k.duration for k in plan.keeps)
                     applied.append("filler_removal")
                 except fu.FFmpegError:
                     pass  # keep the untrimmed clip on failure
 
-        # 4. geometry: face-tracking reframe (if enabled) or static crop-blur.
-        if options.reframe:
+        # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
+        #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.
+        #    When ``speaker_reframe`` is OFF this collapses to the exact v0.7.0
+        #    branch (``if options.reframe ... else ...``) with identical
+        #    ``effects_applied`` — no diarisation, no new markers, no behavioural
+        #    change (Reqs 16.4, 17.2).
+        if options.speaker_reframe:
+            # Derive clip-relative turns from the once-per-source diarisation,
+            # rebased onto the tightened timeline when filler removal changed the
+            # clip so turns stay aligned to the rebased words (Reqs 13.3-13.5).
+            clip_turns = diarization.slice_turns(source_turns, c.start, c.end)
+            if keep_plan is not None:
+                clip_turns = diarization.rebase_turns(clip_turns, keep_plan)
+            try:
+                reframe.apply_speaker_reframe(
+                    raw, geo, turns=clip_turns, aspect=options.aspect,
+                    layout=options.reframe_layout,
+                    intensity=options.reframe_intensity,
+                    detector=FACE_DETECTOR, sampler=FRAME_SAMPLER,
+                )
+                # Record the applied-layout marker (Req 14.5) and attach the
+                # per-source diarisation provenance notes (Reqs 4.2/4.4/16.5).
+                applied.append(f"speaker_reframe:{options.reframe_layout}")
+                applied.extend(source_diar_notes)
+            except (reframe.ReframeUnavailable, fu.FFmpegError):
+                # Fall back along the chain: single-speaker reframe, then static
+                # crop-blur (Reqs 14.1-14.4).
+                applied.append("speaker_reframe_degraded")
+                try:
+                    reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                    applied.append("reframe")
+                except (reframe.ReframeUnavailable, fu.FFmpegError):
+                    fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+        elif options.reframe:
             try:
                 reframe.apply_reframe(raw, geo, aspect=options.aspect)
                 applied.append("reframe")

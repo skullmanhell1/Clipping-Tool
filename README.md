@@ -3,7 +3,7 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.7.0 — **Phases 1–5 + the Tier 1 creator-output upgrade are working.** Paste a URL or upload video,
+> **Status:** v0.8.0 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
@@ -14,6 +14,28 @@ auto-publish them.
 > TikTok, Instagram & X with campaign routing, scheduling, and a full history,
 > and manages **storage (retention, S3, disk usage), saved settings profiles,
 > and in-app update checks**.
+
+## Speaker diarisation & multi-speaker reframe
+
+Multi-speaker awareness for interviews and podcasts, **individually toggleable**
+and **OFF by default** (an all-off run behaves exactly like v0.7.0):
+
+- **Speaker diarisation:** figures out *who is speaking when* from the
+  transcript — fully **CPU-only and offline**, no GPU or extra model required.
+  Capped at 2 speakers by default (configurable).
+- **Speaker-aware reframe** (replaces the single-speaker face reframe when on):
+  - **Follow active speaker** — the vertical crop glides to whoever is talking.
+  - **Split screen** — a stacked 2-up of the two most-talkative speakers.
+  - **Intensity** (subtle / standard / heavy) controls how fast the camera moves
+    and how smooth the transitions are.
+- **Always safe:** if diarisation or face detection can't run, it falls back to
+  the single-speaker reframe and then to the static blurred crop — a clip is
+  always produced.
+- **Permissibility mode** keeps everything local and offline.
+
+> Speaker-aware reframe uses your local OpenCV install for face detection (CPU).
+> An optional acoustic diarisation backend can be plugged in (BYOK) for higher
+> accuracy, but is never required.
 
 ## Tier 1 — creator output upgrade
 

@@ -52,6 +52,11 @@ const DEFAULT_SETTINGS = {
   selection_prompt: "",
   visual_selection: false,
   permissibility_mode: false,
+  // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
+  diarization: false,
+  speaker_reframe: false,
+  reframe_layout: "follow_active",
+  reframe_intensity: "standard",
 };
 
 const DEFAULT_PUBLISHING = {
@@ -123,6 +128,11 @@ function toOptions(settings, publishing) {
     selection_prompt: settings.selection_prompt,
     visual_selection: settings.visual_selection,
     permissibility_mode: settings.permissibility_mode,
+    // Speaker diarisation & multi-speaker reframe
+    diarization: settings.diarization,
+    speaker_reframe: settings.speaker_reframe,
+    reframe_layout: settings.reframe_layout,
+    reframe_intensity: settings.reframe_intensity,
   };
 }
 
@@ -143,6 +153,7 @@ export default function App() {
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
   const [llmAvailable, setLlmAvailable] = useState(false);
   const [version, setVersion] = useState("");
+  const [effects, setEffects] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
@@ -194,6 +205,7 @@ export default function App() {
       .then((info) => {
         setLlmAvailable(!!info.llm_available);
         setVersion(info.version || "");
+        setEffects(info.effects || null);
       })
       .catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
@@ -443,6 +455,7 @@ export default function App() {
                 onChange={setSettings}
                 watch={watch}
                 onToggleWatch={handleToggleWatch}
+                effects={effects}
               />
               <PublishingPanel
                 value={publishing}

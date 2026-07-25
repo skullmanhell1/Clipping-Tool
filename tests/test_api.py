@@ -219,3 +219,63 @@ def test_url_job_carries_new_fields_through(client):
     assert job.options.broll is True
     assert job.options.visual_selection is True
     assert job.options.selection_prompt == "find X"
+
+
+
+# ---------------------------------------------------------------------------
+# v0.8.0 — Speaker Diarisation & Multi-Speaker Reframe:
+#          /api/info superset + upload option passthrough
+# ---------------------------------------------------------------------------
+def test_info_advertises_reframe_option_lists(client):
+    """`/api/info` advertises the new reframe layout + intensity lists in
+    addition to the pre-existing effects lists (superset guarantee)."""
+    effects = client.get("/api/info").json()["effects"]
+
+    # New v0.8.0 lists (Reqs 7.4, 10.6, 17.5, 18.1).
+    assert effects["reframe_layouts"] == ["follow_active", "split_screen"]
+    assert effects["reframe_intensities"] == ["subtle", "standard", "heavy"]
+
+    # Additive — pre-existing effects keys/values remain present (superset).
+    assert "caption_presets" in effects
+    assert effects["caption_templates"] == ["karaoke", "boxed", "minimal"]
+
+
+def test_upload_threads_reframe_fields_into_from_dict(client):
+    """The new v0.8.0 upload Form fields reach ProcessingOptions.from_dict and
+    land on the stored job's options (interception via the job store, mirroring
+    the Tier 1 passthrough test)."""
+    resp = client.post(
+        "/api/upload",
+        files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")},
+        data={
+            "speaker_reframe": "true",
+            "diarization": "true",
+            "reframe_layout": "split_screen",
+            "reframe_intensity": "heavy",
+        },
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()["jobs"][0]["id"]
+
+    job = get_manager().store.get(job_id)
+    assert job is not None
+    assert job.options.speaker_reframe is True
+    assert job.options.diarization is True
+    assert job.options.reframe_layout == "split_screen"
+    assert job.options.reframe_intensity == "heavy"
+
+
+def test_upload_unknown_reframe_layout_falls_back_to_default(client):
+    """An unknown `reframe_layout` submitted via the upload Form falls back to
+    the documented default through the API path (Req 18.5)."""
+    resp = client.post(
+        "/api/upload",
+        files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")},
+        data={"speaker_reframe": "true", "reframe_layout": "bogus"},
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()["jobs"][0]["id"]
+
+    job = get_manager().store.get(job_id)
+    assert job is not None
+    assert job.options.reframe_layout == "follow_active"
