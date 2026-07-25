@@ -232,6 +232,29 @@ class Settings(BaseSettings):
         default=12, description="Max keyframes sampled per source for visual selection."
     )
 
+    # ------------- speaker diarisation & multi-speaker reframe (v0.8.0) ----
+    # Cap on distinct speakers produced by diarisation (least-represented
+    # speakers are merged beyond this cap).
+    diarization_max_speakers: int = Field(
+        default=2, description="Max distinct speakers produced by diarisation."
+    )
+    # Silence gap (seconds) that ends a speaker turn during segmentation.
+    diarization_pause_gap: float = Field(
+        default=0.9, description="Silence gap (s) that ends a speaker turn."
+    )
+    # Face-sampling rate for speaker-aware reframe (matches v0.7.0 reframe).
+    reframe_sample_fps: float = Field(
+        default=5.0, description="Face-sampling rate (fps) for speaker-aware reframe."
+    )
+    # Cap on frames sampled per clip for face detection.
+    reframe_sample_cap: int = Field(
+        default=120, description="Max frames sampled per clip for face detection."
+    )
+    # Default number of regions for split-screen reframe (2-up).
+    split_screen_max_regions: int = Field(
+        default=2, description="Max regions for split-screen reframe (default 2-up)."
+    )
+
     # ---------------------------------------------------------- publishers --
     history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")
     publish_poll_seconds: float = Field(default=2.0)

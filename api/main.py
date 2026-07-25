@@ -153,6 +153,11 @@ class OptionsModel(BaseModel):
     visual_selection: bool = False
     # Tier 1 — cross-cutting
     permissibility_mode: bool = False
+    # v0.8.0 — Speaker diarisation & multi-speaker reframe (default OFF)
+    diarization: bool = False
+    speaker_reframe: bool = False
+    reframe_layout: str = "follow_active"
+    reframe_intensity: str = "standard"
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -263,6 +268,11 @@ def info() -> dict[str, object]:
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
             "broll_intensities": list(broll.BROLL_INTENSITY.keys()),
             "broll_providers": _available_broll_providers(),
+            # v0.8.0 — Speaker Diarisation & Multi-Speaker Reframe (additive;
+            # Reqs 7.4, 10.6, 17.5, 18.1). Sourced from the ProcessingOptions
+            # known-value sets so the API stays in lockstep with the model.
+            "reframe_layouts": list(ProcessingOptions._REFRAME_LAYOUTS),
+            "reframe_intensities": list(ProcessingOptions._REFRAME_INTENSITIES),
         },
         "broll_available": bool(
             settings.broll_provider_api_key and settings.broll_allow_download
@@ -385,6 +395,11 @@ async def upload(
     visual_selection: bool = Form(False),
     # Tier 1 — cross-cutting
     permissibility_mode: bool = Form(False),
+    # v0.8.0 — Speaker diarisation & multi-speaker reframe
+    diarization: bool = Form(False),
+    speaker_reframe: bool = Form(False),
+    reframe_layout: str = Form("follow_active"),
+    reframe_intensity: str = Form("standard"),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -441,6 +456,10 @@ async def upload(
             "selection_prompt": selection_prompt,
             "visual_selection": visual_selection,
             "permissibility_mode": permissibility_mode,
+            "diarization": diarization,
+            "speaker_reframe": speaker_reframe,
+            "reframe_layout": reframe_layout,
+            "reframe_intensity": reframe_intensity,
         }
     )
 

@@ -210,3 +210,161 @@ def test_effective_options_noop_when_permissibility_off_and_no_external():
     eff = effective_options(o)
     assert eff.asset_sourcing_mode == "off"
     assert eff.music == ""
+
+
+
+# ===========================================================================
+# v0.8.0 — Speaker Diarisation & Multi-Speaker Reframe (task 1.4 / 1.5)
+# ===========================================================================
+# New ProcessingOptions fields added in task 1.1:
+#   diarization: bool = False
+#   speaker_reframe: bool = False
+#   reframe_layout: str = "follow_active"   (follow_active | split_screen)
+#   reframe_intensity: str = "standard"     (subtle | standard | heavy)
+
+# Known value sets / documented defaults for the new enum-like fields.
+REFRAME_LAYOUTS = ("follow_active", "split_screen")
+REFRAME_INTENSITIES = ("subtle", "standard", "heavy")
+REFRAME_ENUM_DEFAULTS = {
+    "reframe_layout": "follow_active",
+    "reframe_intensity": "standard",
+}
+
+# The set of fields introduced by the v0.8.0 upgrade (task 1.1).
+V080_FIELDS = (
+    "diarization",
+    "speaker_reframe",
+    "reframe_layout",
+    "reframe_intensity",
+)
+
+
+def _boolish():
+    """Arbitrary truthy/falsy inputs accepted by the bool-coercion path."""
+    return st.one_of(
+        st.booleans(),
+        st.sampled_from(["true", "false", "1", "0", "yes", "no", "on", "off", ""]),
+        st.integers(),
+        st.none(),
+        st.text(max_size=8),
+    )
+
+
+def _reframe_enum_value(valid):
+    """Sometimes a valid enum member, sometimes arbitrary/garbage input."""
+    return st.one_of(
+        st.sampled_from(valid),
+        st.text(max_size=20),
+        st.integers(),
+        st.booleans(),
+        st.none(),
+        st.floats(allow_nan=False, allow_infinity=False),
+    )
+
+
+def _v080_options_dicts():
+    """Dicts covering the new v0.8.0 fields, mixing valid + garbage values."""
+    return st.fixed_dictionaries(
+        {
+            "diarization": _boolish(),
+            "speaker_reframe": _boolish(),
+            "reframe_layout": _reframe_enum_value(REFRAME_LAYOUTS),
+            "reframe_intensity": _reframe_enum_value(REFRAME_INTENSITIES),
+        }
+    )
+
+
+# --- Property 25 ------------------------------------------------------------
+# Feature: speaker-diarization-reframe, Property 25: New option fields round-trip and unknown values apply defaults
+@settings(max_examples=100)
+@given(_v080_options_dicts())
+def test_p25_v080_fields_round_trip_and_defaults(data):
+    """Validates: Requirements 17.3, 17.4, 18.5
+
+    For any options dict, parsing then serialising via ``dataclasses.asdict``
+    and parsing the result again preserves ``diarization``, ``speaker_reframe``,
+    ``reframe_layout`` and ``reframe_intensity`` without loss; and any
+    malformed / unrecognised ``reframe_layout`` / ``reframe_intensity`` value
+    applies the documented default (``follow_active`` / ``standard``) without
+    raising.
+    """
+    first = ProcessingOptions.from_dict(data)  # must not raise
+    # ProcessingOptions has no to_dict(); dataclasses.asdict is the serialised
+    # form, round-tripped back through from_dict.
+    serialised = asdict(first)
+    second = ProcessingOptions.from_dict(serialised)
+
+    # Round-trip preserves every new field without loss.
+    for f in V080_FIELDS:
+        assert getattr(second, f) == getattr(first, f), f"field {f} not preserved"
+
+    # Bool toggles always coerce to real booleans.
+    assert isinstance(first.diarization, bool)
+    assert isinstance(first.speaker_reframe, bool)
+
+    # Enum-like fields always resolve to a known member, and out-of-set inputs
+    # fall back specifically to the documented default.
+    for field_name, known in (
+        ("reframe_layout", REFRAME_LAYOUTS),
+        ("reframe_intensity", REFRAME_INTENSITIES),
+    ):
+        value = getattr(first, field_name)
+        assert value in known
+        if data[field_name] not in known:
+            assert value == REFRAME_ENUM_DEFAULTS[field_name]
+
+
+# --- Unit tests: defaults OFF and toggles independent (task 1.5) -----------
+def test_v080_fields_default_off():
+    """Validates: Requirements 16.1, 16.2, 16.3, 17.1 — new fields default OFF.
+
+    A default-constructed ``ProcessingOptions`` and ``from_dict({})`` both
+    disable diarisation / speaker reframe and use the documented layout /
+    intensity defaults.
+    """
+    for o in (ProcessingOptions(), ProcessingOptions.from_dict({})):
+        assert o.diarization is False
+        assert o.speaker_reframe is False
+        assert o.reframe_layout == "follow_active"
+        assert o.reframe_intensity == "standard"
+
+
+def test_v080_toggles_are_independent():
+    """Validates: Requirements 16.1, 16.2 — the two toggles are independent.
+
+    Setting one of ``diarization`` / ``speaker_reframe`` does not affect the
+    other.
+    """
+    diar_only = ProcessingOptions.from_dict({"diarization": True})
+    assert diar_only.diarization is True
+    assert diar_only.speaker_reframe is False
+
+    reframe_only = ProcessingOptions.from_dict({"speaker_reframe": True})
+    assert reframe_only.speaker_reframe is True
+    assert reframe_only.diarization is False
+
+
+def test_v080_additions_do_not_disturb_v070_defaults():
+    """Validates: Requirements 16.3, 17.1 — pre-existing fields keep defaults.
+
+    Enabling only the new v0.8.0 toggles leaves every pre-existing v0.7.0
+    field at its default, confirming the new fields are the only additions.
+    """
+    base = ProcessingOptions()
+    o = ProcessingOptions(diarization=True, speaker_reframe=True)
+
+    # Every field other than the four new ones keeps its v0.7.0 default.
+    for name in ProcessingOptions.__dataclass_fields__:
+        if name in V080_FIELDS:
+            continue
+        assert getattr(o, name) == getattr(base, name), f"field {name} changed"
+
+    # Representative sanity checks on a spread of existing defaults.
+    assert base.aspect == "9:16"
+    assert base.captions is True
+    assert base.reframe is False
+    assert base.caption_template == "karaoke"
+    assert base.caption_preset == "karaoke"
+    assert base.emoji == "off"
+    assert base.music == ""
+    assert base.permissibility_mode is False
