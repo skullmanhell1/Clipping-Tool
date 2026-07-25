@@ -39,6 +39,19 @@ const DEFAULT_SETTINGS = {
   emoji_mode: "keyword",
   emoji_animate: true,
   filler_removal: false,
+  // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
+  caption_preset: "karaoke",
+  caption_animation: "",
+  caption_keyword_highlight: false,
+  caption_keyword_ai: false,
+  caption_emoji: false,
+  broll: false,
+  broll_intensity: "standard",
+  asset_sourcing_mode: "off",
+  broll_provider: "",
+  selection_prompt: "",
+  visual_selection: false,
+  permissibility_mode: false,
 };
 
 const DEFAULT_PUBLISHING = {
@@ -97,6 +110,19 @@ function toOptions(settings, publishing) {
     emoji_mode: settings.emoji_mode,
     emoji_animate: settings.emoji_animate,
     filler_removal: settings.filler_removal,
+    // Tier 1 — animated captions / b-roll / visual selection
+    caption_preset: settings.caption_preset,
+    caption_animation: settings.caption_animation,
+    caption_keyword_highlight: settings.caption_keyword_highlight,
+    caption_keyword_ai: settings.caption_keyword_ai,
+    caption_emoji: settings.caption_emoji,
+    broll: settings.broll,
+    broll_intensity: settings.broll_intensity,
+    asset_sourcing_mode: settings.asset_sourcing_mode,
+    broll_provider: settings.broll_provider,
+    selection_prompt: settings.selection_prompt,
+    visual_selection: settings.visual_selection,
+    permissibility_mode: settings.permissibility_mode,
   };
 }
 

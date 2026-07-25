@@ -10,6 +10,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - RQ-backed distributed worker (currently in-process)
 
+## [0.7.0] - 2026-07-23
+
+### Added — Tier 1 Creator Output Upgrade
+- **Animated caption presets** (`worker/effects/caption_presets.py` +
+  `worker/captions.py`): a serializable `CaptionPreset` model and registry
+  covering the three legacy templates (karaoke / boxed / minimal) plus new
+  animated presets — **pop**, **typewriter**, and **hormozi** — rendered purely
+  with **libass ASS tags** (no `drawtext`). Per-word animation is anchored and
+  time-bounded to each spoken word.
+- **Keyword highlighting**: a deterministic keyword planner (stopword / length /
+  ALL-CAPS / numeral / high-confidence rules) with an optional **AI
+  (context-aware) mode** that only ever *extends* the deterministic set;
+  highlighted words get a distinct colour/scale while their timing is preserved.
+  Optional **in-caption emoji** rendered inline (independent of the overlay
+  emoji effect).
+- **B-roll auto-insertion** (`worker/effects/broll.py`): a pure cue planner
+  (`plan_broll_cues`) bounded by an **intensity** cap (off / subtle / standard /
+  heavy) on both count and total on-screen time, plus a provider layer —
+  **LocalProvider** (from `broll_dir`, no network) and an optional BYOK
+  **ExternalProvider** (injectable downloader, records
+  provider/source_id/license/attribution). `asset_sourcing_mode`
+  (off / local_only / local_then_external) governs sourcing; unknown-license and
+  failed assets are dropped. Overlays composite **below captions** in the
+  existing single ffmpeg pass, and only composited assets are recorded on
+  `ClipResult.broll_assets`.
+- **Prompt / visual clip finding** (`worker/visual_selection.py`): an optional
+  **selection prompt** plus cheap **CPU-only** keyframe sampling (bounded,
+  once-per-source) and brightness/motion proxies merged with the transcript
+  ranking; degrades cleanly to transcript-only selection when sampling fails, no
+  provider/LLM is configured, or the feature is off.
+- **Permissibility mode**: a single toggle that forces `asset_sourcing_mode` to
+  **local_only**, disables added music, and blocks any external download — for
+  music/sourcing-sensitive workflows.
+- **API**: `/api/info` now advertises `caption_presets`, `caption_animations`,
+  `asset_sourcing_modes`, `broll_intensities`, `broll_providers`, and
+  `broll_available`; `POST /api/upload` accepts the twelve new option fields.
+- **Web UI**: the settings panel gains a caption-preset dropdown, keyword /
+  AI-highlight / in-caption-emoji toggles, a b-roll section (enable, intensity,
+  sourcing mode, provider), a selection-prompt textarea + visual-selection
+  toggle, and a permissibility-mode toggle.
+
+### Changed
+- Clip selection now routes through `select_moments_visual`, which delegates
+  back to the v0.6.0 transcript-only selector whenever visual selection is off
+  or degraded.
+
+### Notes
+- **Every new capability defaults OFF** — an "all-new-options-off" run
+  reproduces v0.6.0 output and `effects_applied` exactly. No external network is
+  used unless BYOK external b-roll is explicitly enabled and configured.
+
 ## [0.6.0] - 2026-07-23
 
 ### Added — Phase 5: storage, settings profiles & updates

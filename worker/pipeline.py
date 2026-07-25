@@ -24,13 +24,15 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
+from config import settings
 from worker import captions as cap
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 from worker import selection as sel
-from worker.effects import compositor, filler, reframe
+from worker import visual_selection
+from worker.effects import broll, compositor, filler, reframe
 from worker.llm_client import BaseLLMClient
-from worker.models import ClipResult, ProcessingOptions
+from worker.models import ClipResult, ProcessingOptions, effective_options
 from worker.transcribe import Transcript, transcribe
 
 # progress_cb(fraction: float, stage: str)
@@ -93,6 +95,13 @@ def run_pipeline(
     clips_dir.mkdir(parents=True, exist_ok=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
+    # Enforce cross-cutting rules ONCE, centrally (Req 19.1): under
+    # ``permissibility_mode`` this mutes added audio and forces ``local_only``
+    # sourcing, and it downgrades ``local_then_external`` -> ``local_only`` when
+    # no external provider key is configured. Every downstream stage (selection,
+    # captions, b-roll, music) then inherits the normalised options.
+    options = effective_options(options)
+
     span = max(0.0, 1.0 - start_progress)
 
     def report(local_frac: float, stage: str) -> None:
@@ -121,7 +130,12 @@ def run_pipeline(
     # The effective duration selection may span (respect an explicit range end).
     eff_duration = min(info.duration, options.range_end) if options.range_end else info.duration
 
-    candidates = sel.select_moments(
+    # Visual / prompt-aware selection (Feature C). ``select_moments_visual``
+    # delegates straight back to ``sel.select_moments`` when visual selection is
+    # disabled or degrades (no LLM / sampling failure / unconfigured provider),
+    # so behaviour is identical to before when the feature is off (Reqs 13.2,
+    # 15.4).
+    candidates = visual_selection.select_moments_visual(
         ranged if (options.range_start is not None or options.range_end is not None)
         else transcript,
         options,
@@ -145,6 +159,24 @@ def run_pipeline(
     clip_span = _P_CLIPS_END - _P_SELECT_END
     n = len(candidates)
 
+    # B-roll engine (Feature B), built once and shared across clips. Providers
+    # are dependency-injected: the local library needs no network, and an
+    # ExternalProvider is only constructed when an operator has configured a
+    # BYOK key AND explicitly enabled external downloading (both OFF by
+    # default). When b-roll is disabled no resolver is threaded into the
+    # compositor at all (Req 18.3).
+    broll_engine = None
+    if options.broll:
+        external = None
+        if settings.broll_provider_api_key and settings.broll_allow_download:
+            external = broll.ExternalProvider(
+                settings.broll_provider_api_key,
+                settings.broll_provider_base_url,
+            )
+        broll_engine = broll.Broll_Engine(
+            options, local=broll.LocalProvider(), external=external
+        )
+
     for idx, c in enumerate(candidates):
         base = _P_SELECT_END + clip_span * (idx / n)
         report(base, f"Rendering clip {idx + 1} of {n}")
@@ -154,6 +186,15 @@ def run_pipeline(
         geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
+        broll_assets: list[dict] = []
+        # Final clip duration for b-roll planning; shrinks after filler removal.
+        clip_duration = c.end - c.start
+        # Best-effort visual-selection marker (Req 18.2): when visual selection
+        # is enabled and candidates were produced, note it on the clip. The
+        # entry point degrades to transcript-only internally, so this is a
+        # best-effort provenance marker rather than a strict guarantee.
+        if options.visual_selection:
+            applied.append("visual_selection")
 
         # 1. cut the selected segment
         fu.cut_segment(source, c.start, c.end, raw)
@@ -179,6 +220,7 @@ def run_pipeline(
                     raw.unlink(missing_ok=True)
                     raw = trimmed
                     words = filler.rebase_words(words, plan.keeps)
+                    clip_duration = sum(k.duration for k in plan.keeps)
                     applied.append("filler_removal")
                 except fu.FFmpegError:
                     pass  # keep the untrimmed clip on failure
@@ -193,17 +235,30 @@ def run_pipeline(
         else:
             fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
 
-        # 5. compositor: captions/hook + look effects + emoji + music (one pass).
+        # 5. compositor: captions/hook + look effects + emoji + b-roll + music
+        #    (one pass). B-roll cues are planned + resolved lazily from the
+        #    REBASED clip-relative timeline (Req 11.1) via a resolver, so no cue
+        #    can land in a removed interval. The resolver is only threaded in
+        #    when b-roll is enabled; otherwise it is ``None`` (b-roll disabled).
         report(base + clip_span / n * 0.6, f"Adding effects to clip {idx + 1}")
+        broll_resolver = None
+        if broll_engine is not None:
+            broll_resolver = (
+                lambda w=words, d=clip_duration:
+                broll_engine.resolve(broll_engine.plan(w, d))
+            )
         try:
             rendered = compositor.render_clip(
                 geo, final, options, words, temp_dir,
                 hook_text=md.hook_text, llm_client=llm_client,
+                broll_resolver=broll_resolver,
             )
         except fu.FFmpegError:
             rendered = None
         if rendered is not None:
             applied.extend(rendered.effects_applied)
+            if rendered.broll_records:
+                broll_assets = rendered.broll_records
         else:
             geo.replace(final)
 
@@ -236,6 +291,7 @@ def run_pipeline(
                 thumbnail_text=md.thumbnail_text,
                 transcript_text=clip_text,
                 effects_applied=applied,
+                broll_assets=broll_assets,
             )
         )
 

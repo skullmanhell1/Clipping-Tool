@@ -199,6 +199,39 @@ class Settings(BaseSettings):
         default=0.12, description="Default background-music volume (0..1)."
     )
 
+    # ------------------------------------------- b-roll (Tier 1) ----------
+    # Local b-roll library used by the LocalProvider (no network required).
+    broll_dir: Path = Field(
+        default=BASE_DIR / "assets" / "broll",
+        description="Directory of user-supplied b-roll clips/images (LocalProvider).",
+    )
+    # Cache directory for assets fetched from an external provider (BYOK).
+    broll_cache_dir: Path = Field(
+        default=BASE_DIR / "assets" / "broll_cache",
+        description="Cache directory for downloaded external b-roll assets.",
+    )
+    # Default external b-roll provider name ("" = none configured).
+    broll_provider: str = Field(
+        default="", description="Default external b-roll provider name ('' = none)."
+    )
+    # Bring-your-own-key credentials for the external b-roll provider.
+    broll_provider_api_key: Optional[str] = Field(
+        default=None, description="API key for the external b-roll provider (BYOK)."
+    )
+    broll_provider_base_url: Optional[str] = Field(
+        default=None, description="Base URL for the external b-roll provider."
+    )
+    # External b-roll downloading is OFF by default (opt-in only).
+    broll_allow_download: bool = Field(
+        default=False, description="Allow fetching b-roll assets from an external provider."
+    )
+
+    # ---------------------------------- visual selection (Tier 1) ---------
+    # Cap on keyframes sampled per source for visual/prompt clip finding.
+    keyframe_sample_limit: int = Field(
+        default=12, description="Max keyframes sampled per source for visual selection."
+    )
+
     # ---------------------------------------------------------- publishers --
     history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")
     publish_poll_seconds: float = Field(default=2.0)
@@ -241,6 +274,8 @@ class Settings(BaseSettings):
             self.clips_dir,
             self.emoji_assets_dir,
             self.music_dir,
+            self.broll_dir,
+            self.broll_cache_dir,
         ):
             Path(path).mkdir(parents=True, exist_ok=True)
 
