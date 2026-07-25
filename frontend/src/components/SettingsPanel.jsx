@@ -129,6 +129,39 @@ const ASSET_SOURCING_MODES = [
   { value: "local_then_external", label: "Local, then external" },
 ];
 
+// --- Speaker diarisation & multi-speaker reframe option lists --------------
+// Known values used as fallbacks / friendly labels; the accepted values mirror
+// /api/info's effects.reframe_layouts / effects.reframe_intensities.
+const REFRAME_LAYOUTS = [
+  { value: "follow_active", label: "Follow active speaker" },
+  { value: "split_screen", label: "Split screen" },
+];
+
+const REFRAME_INTENSITIES = [
+  { value: "subtle", label: "Subtle" },
+  { value: "standard", label: "Standard" },
+  { value: "heavy", label: "Heavy" },
+];
+
+// Friendly labels applied to the raw values advertised by /api/info.
+const REFRAME_LAYOUT_LABELS = {
+  follow_active: "Follow active speaker",
+  split_screen: "Split screen",
+};
+const REFRAME_INTENSITY_LABELS = {
+  subtle: "Subtle",
+  standard: "Standard",
+  heavy: "Heavy",
+};
+
+// Build a labelled option list from a raw list of values advertised by
+// /api/info's effects object, falling back to the known values when the info
+// payload has not loaded (or omits the list) so the control still renders.
+const labelledOptions = (values, labels, fallback) =>
+  Array.isArray(values) && values.length > 0
+    ? values.map((value) => ({ value, label: labels[value] || value }))
+    : fallback;
+
 // A small labelled checkbox toggle used across the effects section.
 function Toggle({ label, checked, onChange, hint }) {
   return (
@@ -153,7 +186,17 @@ function Toggle({ label, checked, onChange, hint }) {
  * Platform, Vibe/Tone, Clip Topic, Process Range, Hashtag count) and
  * captions / watch-folder toggles.
  */
-export default function SettingsPanel({ settings, onChange, watch, onToggleWatch }) {
+export default function SettingsPanel({ settings, onChange, watch, onToggleWatch, effects }) {
+  const reframeLayoutOptions = labelledOptions(
+    effects?.reframe_layouts,
+    REFRAME_LAYOUT_LABELS,
+    REFRAME_LAYOUTS
+  );
+  const reframeIntensityOptions = labelledOptions(
+    effects?.reframe_intensities,
+    REFRAME_INTENSITY_LABELS,
+    REFRAME_INTENSITIES
+  );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showEffects, setShowEffects] = useState(false);
   const set = (key) => (value) => onChange({ ...settings, [key]: value });
@@ -412,6 +455,18 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
                 checked={settings.reframe}
                 onChange={setFlag("reframe")}
               />
+              <Toggle
+                label="Speaker-aware reframe"
+                hint="Reframes to the active speaker across multiple faces (adds render time)"
+                checked={settings.speaker_reframe}
+                onChange={setFlag("speaker_reframe")}
+              />
+              <Toggle
+                label="Diarisation"
+                hint="Detect who is speaking when; auto-enabled by speaker-aware reframe"
+                checked={settings.diarization}
+                onChange={setFlag("diarization")}
+              />
               <Toggle label="Zoom / Ken Burns" checked={settings.zoom} onChange={setFlag("zoom")} />
               <Toggle label="Punch-in intro" checked={settings.transitions} onChange={setFlag("transitions")} />
               <Toggle label="Hook title overlay" hint="Burns the AI hook text at the start" checked={settings.hook_title} onChange={setFlag("hook_title")} />
@@ -422,6 +477,20 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
                 hint='Cuts "um"/"uh" and long pauses'
                 checked={settings.filler_removal}
                 onChange={setFlag("filler_removal")}
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Dropdown
+                label="Reframe layout"
+                value={settings.reframe_layout}
+                onChange={set("reframe_layout")}
+                options={reframeLayoutOptions}
+              />
+              <Dropdown
+                label="Reframe intensity"
+                value={settings.reframe_intensity}
+                onChange={set("reframe_intensity")}
+                options={reframeIntensityOptions}
               />
             </div>
           </div>

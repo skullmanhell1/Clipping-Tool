@@ -101,11 +101,21 @@ class ProcessingOptions:
     # Cross-cutting
     permissibility_mode: bool = False    # forces local_only sourcing + no added audio
 
+    # --- v0.8.0: Speaker diarisation & multi-speaker reframe (default OFF) --
+    # All new fields default OFF/standard so an "all-off" run reproduces
+    # v0.7.0 behaviour exactly. Existing fields/defaults above are unchanged.
+    diarization: bool = False              # persisted diarisation toggle
+    speaker_reframe: bool = False          # speaker-aware reframe toggle
+    reframe_layout: str = "follow_active"  # follow_active | split_screen
+    reframe_intensity: str = "standard"    # subtle | standard | heavy
+
     # Known value sets for enum-like string fields (used by ``from_dict``).
     _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
     _BROLL_INTENSITIES = ("off", "subtle", "standard", "heavy")
     _ASSET_SOURCING_MODES = ("off", "local_only", "local_then_external")
+    _REFRAME_LAYOUTS = ("follow_active", "split_screen")
+    _REFRAME_INTENSITIES = ("subtle", "standard", "heavy")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
@@ -138,7 +148,9 @@ class ProcessingOptions:
                            # Phase 6 / Tier 1 boolean flags
                            "caption_keyword_highlight", "caption_keyword_ai",
                            "caption_emoji", "broll", "visual_selection",
-                           "permissibility_mode"):
+                           "permissibility_mode",
+                           # v0.8.0 boolean flags
+                           "diarization", "speaker_reframe"):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
         if "music_volume" in valid:
@@ -154,6 +166,8 @@ class ProcessingOptions:
             ("caption_animation", cls._CAPTION_ANIMATIONS, ""),
             ("broll_intensity", cls._BROLL_INTENSITIES, "standard"),
             ("asset_sourcing_mode", cls._ASSET_SOURCING_MODES, "off"),
+            ("reframe_layout", cls._REFRAME_LAYOUTS, "follow_active"),
+            ("reframe_intensity", cls._REFRAME_INTENSITIES, "standard"),
         ):
             if enum_field in valid:
                 v = valid[enum_field]
@@ -244,6 +258,21 @@ class ClipResult:
     #   - ``broll_degraded``              b-roll disabled after a build/compose error
     #   - ``visual_selection``            visual/keyframe-aided selection was used
     #   - ``visual_degraded``             visual selection fell back to transcript-only
+    #
+    # v0.8.0 Speaker Diarisation & Multi-Speaker Reframe introduces the
+    # following markers (produced by later tasks — defined here only):
+    #   - ``diarization:transcript``         turns from offline Word_Timeline
+    #                                        segmentation (no backend / permissibility)
+    #   - ``diarization:model``              turns from an injected diarisation backend
+    #   - ``diarization_degraded``           backend errored; offline fallback used
+    #   - ``speaker_reframe:follow_active``  follow-active speaker reframe applied
+    #   - ``speaker_reframe:split_screen``   split-screen speaker reframe applied
+    #   - ``speaker_reframe_substituted``    requested layout substituted (unknown →
+    #                                        follow_active, or split_screen →
+    #                                        follow_active with < 2 tracks)
+    #   - ``faces_none``                     zero face tracks detected
+    #   - ``speaker_reframe_degraded``       speaker-aware geometry unusable/failed;
+    #                                        fell back along the chain
     effects_applied: list[str] = field(default_factory=list)
 
     # --- Tier 1: provenance for composited b-roll assets ------------------
