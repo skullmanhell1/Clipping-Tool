@@ -9,6 +9,20 @@ import PublishingPanel from "./components/PublishingPanel.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
 
+// Advanced AV engines (Req 20.4): a sibling engine spec adds its
+// `<engine_id>_enabled` flag and option defaults *here only* — `toOptions`
+// forwards every key generically, and profiles persist them automatically
+// because they round-trip through the opaque settings blob.
+const DEFAULT_ENGINE_SETTINGS = {};
+
+const engineOptions = (settings) =>
+  Object.fromEntries(
+    Object.keys(DEFAULT_ENGINE_SETTINGS).map((key) => [
+      key,
+      settings[key] === undefined ? DEFAULT_ENGINE_SETTINGS[key] : settings[key],
+    ])
+  );
+
 const DEFAULT_SETTINGS = {
   language: "auto",
   clip_length: "auto",
@@ -57,6 +71,8 @@ const DEFAULT_SETTINGS = {
   speaker_reframe: false,
   reframe_layout: "follow_active",
   reframe_intensity: "standard",
+  // Advanced AV engines — every flag/option default, forwarded generically
+  ...DEFAULT_ENGINE_SETTINGS,
 };
 
 const DEFAULT_PUBLISHING = {
@@ -133,6 +149,8 @@ function toOptions(settings, publishing) {
     speaker_reframe: settings.speaker_reframe,
     reframe_layout: settings.reframe_layout,
     reframe_intensity: settings.reframe_intensity,
+    // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
+    ...engineOptions(settings),
   };
 }
 
@@ -154,6 +172,7 @@ export default function App() {
   const [llmAvailable, setLlmAvailable] = useState(false);
   const [version, setVersion] = useState("");
   const [effects, setEffects] = useState(null);
+  const [engines, setEngines] = useState([]);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
@@ -206,6 +225,7 @@ export default function App() {
         setLlmAvailable(!!info.llm_available);
         setVersion(info.version || "");
         setEffects(info.effects || null);
+        setEngines(Array.isArray(info.engines) ? info.engines : []);
       })
       .catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
@@ -456,6 +476,7 @@ export default function App() {
                 watch={watch}
                 onToggleWatch={handleToggleWatch}
                 effects={effects}
+                engines={engines}
               />
               <PublishingPanel
                 value={publishing}
