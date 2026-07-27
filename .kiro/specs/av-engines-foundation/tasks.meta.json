@@ -1,0 +1,40 @@
+{
+  "pbtResults": {
+    "2.4 Property test: time-base conversions round-trip and the fps fallback is recorded → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133447057
+    },
+    "2.5 Property test: frame quantisation is bounded and snapping is idempotent → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133450024
+    },
+    "2.6 Property test: normalisation yields a canonical, in-bounds Segment_List → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133453678
+    },
+    "2.7 Property test: segment normalisation is idempotent → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133457247
+    },
+    "2.8 Property test: Segment_List serialisation round-trips → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133461649
+    }
+  },
+  "executionHistory": {
+    "1.1 Declare `hypothesis` in `requirements-dev.txt`": [
+      {
+        "executionId": "c861be97-fcba-481f-945f-8acf36adbf22",
+        "chatSessionId": "b1c3cc3b-33c9-4be9-8490-29efbe412d7d",
+        "timestamp": 1785129089628
+      }
+    ],
+    "1.2 Install the dev dependency set from `requirements-dev.txt` in CI": [
+      {
+        "executionId": "c861be97-fcba-481f-945f-8acf36adbf22",
+        "chatSessionId": "b1c3cc3b-33c9-4be9-8490-29efbe412d7d",
+        "timestamp": 1785129090470
+      }
+    ]
+  }
+}

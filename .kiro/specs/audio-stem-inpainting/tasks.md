@@ -1,0 +1,484 @@
+# Implementation Plan — Audio Stem Inpainting Engine
+
+These are incremental, test-first coding steps. Execute them **one task at a time**, in
+order — each task builds on the previous ones so there is never orphaned code.
+
+This engine is built **on top of the approved
+[`av-engines-foundation`](../av-engines-foundation/tasks.md) spec**, whose own plan already
+lands `worker/engines/` (`base.py`, `registry.py`, `capabilities.py`, `timebase.py`,
+`artifacts.py`, `host.py`), the Pipeline stage hooks, the test doubles in `tests/fakes.py`,
+the shared generators in `tests/strategies.py`, **and** the `hypothesis` /
+`requirements-dev.txt` / CI dependency fix. Task 1 here is therefore a **prerequisite
+gate, not a re-implementation**: it verifies those modules and test utilities exist and that
+the foundation suite is green. Nothing in this plan adds `hypothesis`, edits
+`.github/workflows/ci.yml` or `requirements-dev.txt`, or modifies anything under
+`av-engines-foundation/` or `kinetic-typography/` _(Req 20.6)_.
+
+**Cross-spec touch point — epic 7.** This spec needs one **additive** helper,
+`filler_seam_notes(keeps)`, in the foundation-owned `worker/engines/host.py`, plus one extra
+keyword at the existing `run_pipeline` → host AUDIO-hook call site. It changes **no**
+foundation contract, dataclass, enum, protocol, or signature — `Engine_Context.notes`
+already exists with its documented free-form convention, so we add a *value*, not a field —
+and it touches nothing in `filler.py`. It must land **after** the foundation has shipped
+`worker/engines/host.py` and the stage hooks. Apart from that helper, its one call-site
+keyword, and the API/UI surface of Req 18, `worker/engines/stems.py` is the only production
+file this plan writes _(Reqs 6.1–6.3, 8.2, 20.3, 20.6)_.
+
+Ordering is dependency-safe and pure-first: prerequisite gate → engine generators and
+doubles → data models (`Stem_Options`, `Stem_Plan`, `Repair_Window`, `Audio_Format`) → the
+pure planner → seam publication → the `Separator_Backend` protocol and stem assembly → the
+two backend adapters → the ffmpeg pipeline → integrity verification → the `run` gate and
+degradation ladder → workspace lifecycle → idempotence → API/UI surface → the flag-off
+parity gate → ffmpeg integration on tiny clips. Epics 4–5 are pure functions testable with
+no ffmpeg, no `demucs`, no `torch`, no model file and no network _(Reqs 1.4, 1.9, 19.2)_.
+
+Tasks marked with `*` are optional test sub-tasks (unit / property / integration tests).
+Property tests use `hypothesis` with `@settings(max_examples=100, deadline=None)`, one
+property per test, tagged `# Feature: audio-stem-inpainting, Property N: <text>`, in the
+exact files named in the design's Testing Strategy mapping
+(`tests/test_stems_options.py`, `tests/test_stems_plan.py`, `tests/test_stems_backends.py`,
+`tests/test_stems_ffmpeg.py`, `tests/test_stems_ladder.py`, `tests/test_stems_api.py`).
+Word_Timelines use the existing `FakeWord` helper and ffmpeg-dependent behaviour uses the
+existing `requires_ffmpeg`, `make_video`, `probe_duration` helpers from `tests/conftest.py`
+_(Reqs 19.3, 19.4)_. The whole suite runs offline and CPU-only, always through the fake
+backends or the ffmpeg backend, never a model file _(Reqs 19.5, 19.7)_.
+
+Four sub-tasks are **intentionally not marked optional even though they are test/config
+work**: 1.2 (proves the foundation this engine binds to is green before any binding is
+written), 2.1 and 2.2 (the stem generators and doubles every later property task imports),
+and 18.1 / 18.2 (the backward-compatibility parity and dependency gate, which is this
+spec's central promise to an upgrading operator).
+
+## Tasks
+
+- [ ] 1. Prerequisite gate on the AV engines foundation
+  - [ ] 1.1 Verify the foundation modules and contracts this engine binds to exist
+    - Confirm `worker/engines/base.py` exports `AV_Engine` (with `resolve_options`/`plan`/`run`, `flag_field()`, `FLAG_SUFFIX`), `Engine_Stage.AUDIO`, `Engine_Status` (`applied`/`skipped`/`degraded`/`failed`), `Engine_Context` (`source_path`, `clip_path`, `duration`, `time_base`, `words`, `options`, `options_digest`, `seed`/`rng()`, `workspace`, `capabilities`, `permissibility`, `deadline`/`remaining()`, `notes`, `deps`), `Engine_Result` (+ `skipped`/`degraded`/`failed` constructors, `markers`, `artifacts`, `media`, `plan`, `detail`, `elapsed_s`), `Engine_Artifact`, `marker`, the `Engine_Options` protocol, the `coerce_bool`/`coerce_int`/`coerce_float`/`coerce_choice`/`coerce_str` helpers, `dump_options`, `options_digest`, and `derive_seed`.
+    - Confirm `worker/engines/timebase.py` exports `Time_Base` (`snap`, `seconds_to_sample`, `sample_to_seconds`, `seconds_to_frame`, `frame_to_seconds`), `Timeline_Segment` and `normalize_segments`; `worker/engines/capabilities.py` exports `Capability_Report` (`status`, `available`, `first_missing`, `missing`) with the `python_pkg:`/`binary:`/`ffmpeg_filter:`/`model:` kinds and the `MODEL_LOCATORS` registry; `worker/engines/artifacts.py` exports `Engine_Workspace` (`path`, `artifact(name, media_type=…, durable=…)`) and the `<temp_dir>/engines/<job>/<clip>/<engine>__<digest>` allocation; `worker/engines/registry.py` exports the registry and its registration entry point; `worker/engines/host.py` exports the stage runner, the AUDIO-stage `raw = out.media or raw` handoff, and the clip finaliser.
+    - Confirm the AUDIO-stage hook is already invoked from `worker/pipeline.py run_pipeline` after `filler.apply_keep_intervals` and before geometry, and record the exact hook/`notes` parameter names — epic 7 adds one keyword at that existing call site and must use the foundation's spelling, not a second one.
+    - Do **not** add, rename, or widen any foundation symbol; if one is missing, stop and finish the foundation task that owns it.
+    - _Requirements: 1.1, 1.2, 1.5, 1.6, 2.1, 3.3, 20.3, 20.6_
+
+  - [ ] 1.2 Verify the foundation suite and property toolchain are green before binding to them
+    - Run `pytest tests/test_engines_base.py tests/test_engine_registry.py tests/test_engine_capabilities.py tests/test_engine_timebase.py tests/test_engine_artifacts.py tests/test_engine_host.py -q` and confirm it passes.
+    - Confirm `tests/fakes.py` provides the foundation doubles (prober/storage/clock/engine fakes) and that `tests/strategies.py` provides `st_options_mapping`, `st_word_timeline`, `st_time_base`, `st_segment_records`, `st_availability_map`, `st_engine_outcomes`; confirm `hypothesis` imports (the foundation already declares it in `requirements-dev.txt` — do **not** re-add it, and do **not** touch `.github/workflows/ci.yml`).
+    - Confirm the existing `tests/conftest.py` helpers `requires_ffmpeg`, `make_video`, `probe_duration`, `FakeWord` are importable, and that `worker/ffmpeg_utils.py` exports `probe`, `MediaInfo`, `FFmpegError` (`MediaInfo` carries no sample rate or channel count — this engine adds its own private `ffprobe` read rather than widening it).
+    - _Requirements: 19.1, 19.3, 19.4, 19.7, 20.6_
+
+- [ ] 2. Stem-specific generators and test doubles
+  - [ ] 2.1 Add the stem generators to the existing `tests/strategies.py`
+    - Extend the existing shared module (do not create a parallel one) with `st_stem_options` (valid `Stem_Options` field mappings across the declared bounds), `st_stem_gains` (per-`STEM_NAMES` gains over `[0.0, 4.0]` including `0.0`, `1.0` and boost values), `st_mix_preset` (`custom`, `speech_focus`, `music_focus`, `clean_speech`), `st_repair_mode` (`off`, `crossfade`, `spectral`), `st_repair_window_ms` (in-range and out-of-range integers and non-numerics).
+    - Add `st_keep_plan` (`FillerPlan` keep lists of `Interval`s, including single-keep, adjacent, zero-length and many-keep cases), `st_seam_notes` (valid `filler_seam:<float>` tuples mixed with hostile notes: malformed prefixes, non-finite, negative, out-of-bounds, duplicates, other engines' notes), `st_audio_format` (valid sample rate/channel/codec/`start_time` combinations plus missing, zero and negative values), `st_pcm_frames` (tiny float frame buffers including silence, anti-phase and full-scale content), `st_backend_stem_sets` (four-stem, two-stem, unknown-name and omission mappings in arbitrary dict order), `st_gate_scenarios` (capability availability × remaining budget × forced failure, composable with the foundation `st_availability_map`), `st_failure_points` (backend raising / truncating / non-audio, `FFmpegError`, timeout, integrity failure, `OSError`), and `st_tiny_clip` (tiny-clip parameters for `make_video`).
+    - Generators emit `FakeWord` instances and `Interval`s from the existing helpers so they compose with the foundation's `st_word_timeline`; this sub-task is **not optional** because every later property task imports these names.
+    - _Requirements: 19.1, 19.2, 19.6_
+
+  - [ ] 2.2 Add the stem test doubles to the existing `tests/fakes.py`
+    - Extend the existing module with `Fake_Separator_Backend` (writes synthetic per-stem WAVs at the requested `Audio_Format`, records `separate` calls, seed and timeout, and can be configured to sum back to the input exactly), `Raising_Separator_Backend`, `Truncating_Separator_Backend` (wrong-duration output), `Missing_Stem_Backend` (omits one or more Backend_Stems), `Network_Separator_Backend` (`requires_network = True`, for the permissibility rung), `Recording_Command_Runner` (records every argv and timeout, replays canned `CompletedProcess`/`ffprobe` JSON, and can raise `FFmpegError` or `subprocess.TimeoutExpired` at a chosen call index), and `Seam_Note_Fixtures` (named `notes` tuples for the seam cases).
+    - Follow the established naming/pattern of the existing `FakeDiarizationBackend` / `RaisingDiarizationBackend` doubles; require no numeric stack, no model file and no network so the suite stays fast, offline and CPU-only. This sub-task is **not optional** because every later property task imports these names.
+    - _Requirements: 19.1, 19.3, 19.5, 19.7_
+
+- [ ] 3. Checkpoint — foundation gate and test scaffolding complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 4. Module skeleton, constants, and data models
+  - [ ] 4.1 Create `worker/engines/stems.py` with its vocabularies and documented constants
+    - New module with a docstring stating that it imports cleanly with no ffmpeg, no `demucs`, no `torch` and no model file present; stdlib + `worker.engines.*` imports only at module scope, every heavy dependency reached through a function-local lazy import.
+    - Define `STEM_NAMES = ("music", "other", "vocals")` (sorted), `STEM_MAPPING` (`vocals`→`vocals`, `drums`/`bass`→`music`, `other`→`other`), `MIX_PRESETS` (`speech_focus`, `music_focus`, `clean_speech` bundles exactly as designed), `REPAIR_MODES`, `BACKEND_IDS`, `GAIN_MIN`/`GAIN_MAX`/`GAIN_DEFAULT`, `WINDOW_MIN_MS`/`WINDOW_MAX_MS`/`WINDOW_DEFAULT_MS`, `AMPLITUDE_TOLERANCE`, `DISK_BOUND_MULTIPLE`, `MAX_BRIDGE_WINDOWS`, `NOTCH_EXPR_CHUNK`, `ML_THREAD_COUNT`, `MODEL_DIR_ENV`, `MODEL_DIR_DEFAULT`, and the step reserve/threshold constants (`EXTRACT_RESERVE_S`, `SEPARATE_RESERVE_S`, `REPAIR_RESERVE_S`, `REMUX_RESERVE_S`, `MIN_STEP_TIMEOUT_S`, `SEPARATION_MIN_S` per backend, `REPAIR_MIN_S`, `REMUX_MIN_S`).
+    - _Requirements: 1.4, 4.1, 4.2, 5.1, 5.4, 7.1, 7.6, 10.6, 11.7_
+
+  - [ ] 4.2 Implement the `Stem_Options` frozen dataclass with total `parse` and `to_dict`
+    - Exactly the eleven-field surface designed: `mix_preset`, `gain_vocals`, `gain_music`, `gain_other`, `repair_mode`, `repair_window_ms`, `declick`, `backend`, `model`, `retain_stems` — every field a JSON-serialisable scalar so the foundation `Engine_Options` protocol is satisfied.
+    - `parse` is total and never raises: `coerce_choice` against the declared value sets for `mix_preset`/`repair_mode`/`backend` with the documented default on an unrecognised value, `coerce_float` + finite + `[0.0, 4.0]` range check for the gains, `coerce_int` + clamp into `[2, 120]` for the window, `coerce_bool` for the flags, `coerce_str` for the model name; named keys only, so unknown keys are ignored. `to_dict` emits every field in sorted key order with JSON-native types.
+    - _Requirements: 9.1, 9.2, 9.3, 9.5, 5.4, 7.6, 18.5_
+
+  - [ ] 4.3 Implement `Stem_Options.from_processing_options` and the engine's `resolve_options`
+    - Read the `stem_*` attributes off the supplied Processing_Options (already normalised by `worker.models.effective_options`) and route each through `parse`, so resolution is pure, total and idempotent — coercing an already-valid value is the identity.
+    - Read attributes only; never write to the supplied Processing_Options, so the host observes `dataclasses.asdict(options)` unchanged after every invocation.
+    - _Requirements: 1.3, 9.6, 20.2_
+
+  - [ ] 4.4 Implement `Audio_Format`, `Repair_Window` and `Stem_Plan`
+    - `Audio_Format(sample_rate, channels, codec, start_time)` frozen; `Repair_Window(start, end, seams)` frozen with `to_dict`.
+    - `Stem_Plan` frozen with exactly the designed fields (`backend`, `model`, `gains`, `active_stems`, `repair_mode`, `repair_window_ms`, `seams`, `windows`, `sample_rate`, `channels`, `duration`, `declick`, `needs_separation`, `missing_capabilities`, `downgraded_from`, `bridged_windows`, `notched_windows`) and a `to_dict()` that emits sorted JSON-native keys so it can be compared field-by-field and returned in `Engine_Result.plan`.
+    - _Requirements: 10.1, 10.7, 5.7, 6.8_
+
+  - [ ]* 4.5 Property test: options round-trip and digest separation → `tests/test_stems_options.py`
+    - **Property 3: Stem_Options round-trips and its digest separates exactly the distinct values** — for any valid `Stem_Options`, `parse(to_dict(o)).to_dict() == o.to_dict()`; for any pair, the Options_Digests are equal when the values are equal and differ when any field value differs. Generator: `st_stem_options`.
+    - _Requirements: 9.4, 9.7_ · _Properties: P3_
+
+  - [ ]* 4.6 Property test: parsing is total under hostile input → `tests/test_stems_options.py`
+    - **Property 4: Parsing is total — hostile input yields documented defaults, never an exception** — for any mapping of arbitrary values, `Stem_Options.parse` returns a value without raising, with `mix_preset`/`repair_mode`/`backend` members of their declared sets, every gain finite and inside `[0.0, 4.0]`, and `repair_window_ms` inside `[2, 120]`. Generator: `st_options_mapping`.
+    - _Requirements: 5.4, 7.6, 9.3, 9.5, 18.5_ · _Properties: P4_
+
+  - [ ]* 4.7 Property test: resolution is idempotent and survives the options round-trip → `tests/test_stems_options.py`
+    - **Property 5: Option resolution is idempotent and survives the ProcessingOptions round-trip** — for any Processing_Options, `resolve_options` applied twice yields equal `Stem_Options`, and `ProcessingOptions.from_dict(dataclasses.asdict(o)) == o`. Generators: `st_options_mapping`, `st_stem_options`.
+    - _Requirements: 9.6, 9.8, 20.2_ · _Properties: P5_
+
+- [ ] 5. The pure planner
+  - [ ] 5.1 Implement `resolve_gains`
+    - A non-`custom` Mix_Preset returns exactly its `MIX_PRESETS` bundle and ignores the individual gain fields; `custom` returns the validated fields; any non-numeric, negative, non-finite or over-maximum field is replaced by `GAIN_DEFAULT`. Return a mapping keyed by `STEM_NAMES` so iteration order is sorted.
+    - _Requirements: 5.1, 5.2, 5.3, 5.4_
+
+  - [ ] 5.2 Implement `parse_seam_notes`
+    - Keep only well-formed `filler_seam:<float>` notes whose value is finite and inside `[0, duration]`; discard malformed, non-finite, negative and out-of-bounds notes individually while retaining the remaining valid ones; read no other note prefix and infer no Seam from the waveform or from Word_Timeline gaps. Return a sorted, de-duplicated list.
+    - _Requirements: 6.4, 6.5, 6.6_
+
+  - [ ] 5.3 Implement `repair_windows`
+    - Build a symmetric `repair_window_ms` window per Seam, snap the bounds to sample boundaries through `Time_Base`, clamp to `[0, duration]`, then run the list through the foundation `normalize_segments` so the result is sorted, pairwise disjoint and contained — which is what makes overlapping windows merge into one `Repair_Window` repaired exactly once, carrying every merged Seam in `Repair_Window.seams`.
+    - _Requirements: 6.7, 6.8, 7.7_
+
+  - [ ] 5.4 Implement `resolve_backend` and `resolve_repair_mode`
+    - `resolve_backend(opts, caps, needs_separation) -> (backend_id, missing_capability_ids)`: `auto` resolves to `ml` only when both `python_pkg:demucs` and `model:<model>` are available, otherwise `ffmpeg`; an explicit `ml` request with a missing capability also resolves to `ffmpeg` and reports the missing ids so the caller can emit one `degraded:<capability_id>` marker each. A backend that would fetch a checkpoint over the network is treated as model-unavailable here.
+    - `resolve_repair_mode(requested, backend) -> (mode, downgraded)`: `spectral` on a non-`ml` backend returns `("crossfade", True)`.
+    - _Requirements: 12.4, 12.6, 13.1, 13.2, 7.3, 7.4_
+
+  - [ ] 5.5 Implement `plan_stems`, the `plan(ctx)` entry point and the no-op predicate
+    - Compose the helpers above into a serialisable `Stem_Plan`: resolved gains, `active_stems` (gain > 0.0 only), resolved backend and model, Seam list, `Repair_Window` list, probed sample rate/channels/duration, `declick`, `needs_separation` (any gain != 1.0 or `repair_mode == "spectral"`), `missing_capabilities`, `downgraded_from`.
+    - `plan(ctx)` is **pure**: no ffmpeg, no `demucs` import, no network, no model read, no clock, no filesystem; randomness only via `ctx.rng()`; it never reads `ctx.source_path`, and every timestamp is derived from `[0, ctx.duration]` and the rebased `ctx.words`, so no source-relative time can reach the audio processing.
+    - Add the pure `plan_is_noop(plan)` predicate (all resolved gains `1.0` **and** `repair_mode == "off"`) that ladder rung 3 consumes before any probe or subprocess.
+    - _Requirements: 1.9, 2.2, 2.3, 2.7, 2.8, 5.6, 5.7, 10.1, 10.2, 10.7, 12.5, 19.2_
+
+  - [ ]* 5.6 Property test: planning is pure and never mutates the caller → `tests/test_stems_plan.py`
+    - **Property 1: Planning is pure and never mutates the caller** — for any `Stem_Options`, Seam_Note tuple, Word_Timeline and Time_Base, `plan(ctx)` performs zero command-runner invocations, imports no separation package, opens no socket, reads no model file, leaves `dataclasses.asdict(ctx.options)` identical, and every attempted `Engine_Context` field assignment raises. Generators: `st_stem_options`, `st_seam_notes`, `st_word_timeline`, `st_time_base`.
+    - _Requirements: 1.3, 1.9, 2.7, 10.2, 12.5_ · _Properties: P1_
+
+  - [ ]* 5.7 Property test: equal inputs produce equal plans that name their environment → `tests/test_stems_plan.py`
+    - **Property 2: Equal inputs produce equal plans, and the plan names its environment** — for any two invocations with equal clip audio, Seam_Note tuple, Word_Timeline and `Stem_Options`, `plan(ctx).to_dict()` values are equal, every plan timestamp lies inside `[0, duration]`, and `backend` and `model` are non-empty. Generators: `st_stem_options`, `st_seam_notes`, `st_word_timeline`.
+    - _Requirements: 2.3, 2.8, 10.1, 10.7_ · _Properties: P2_
+
+  - [ ]* 5.8 Property test: seam intake is robust and windows are always normalised → `tests/test_stems_plan.py`
+    - **Property 7: Seam intake is robust and windows are always normalised** — for any note tuple mixing arbitrary strings with valid `filler_seam:` notes, the planned Seam list is exactly the finite, in-bounds `filler_seam:` values with no inferred extras, and the planned `Repair_Window` list is sorted, pairwise non-overlapping and contained in `[0, duration]`. Generators: `st_seam_notes`, `st_repair_window_ms`.
+    - _Requirements: 6.4, 6.5, 6.6, 6.7, 6.8_ · _Properties: P7_
+
+  - [ ]* 5.9 Property test: gain resolution follows the preset rules and zero means excluded → `tests/test_stems_backends.py`
+    - **Property 11: Gain resolution follows the preset rules, and zero means excluded** — for any Mix_Preset and gain-field combination, a non-`custom` preset yields exactly its documented bundle and ignores the fields, `custom` yields the validated fields, every stem whose resolved gain is `0.0` appears in neither `active_stems` nor the emitted filtergraph, and the marker set contains `mix:<mix_preset>` exactly once. Generators: `st_mix_preset`, `st_stem_gains`.
+    - Depends on the mix filtergraph emitter (11.3) and the applied rung (13.4) for the marker assertion; schedule it after those land.
+    - _Requirements: 5.1, 5.2, 5.3, 5.7, 5.8_ · _Properties: P11_
+
+  - [ ]* 5.10 Property test: the no-op configuration costs nothing → `tests/test_stems_plan.py`
+    - **Property 8: The no-op configuration costs nothing** — for any `Stem_Options` whose resolved gains are all `1.0` and whose Repair_Mode is `off`, `run` returns `skipped` with no media, zero command-runner invocations, zero backend calls and no file created in the workspace; the same holds for any options while the Feature_Flag is disabled (no workspace allocated, no exclusive capability probed, no media pass). Generators: `st_stem_options`, `st_options_mapping`.
+    - Asserts ladder rungs 0 and 3, so schedule it after 13.2.
+    - _Requirements: 5.6, 7.10, 15.8_ · _Properties: P8_
+
+- [ ] 6. Checkpoint — pure planner complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 7. Seam publication — the one cross-spec touch point
+  - [ ] 7.1 Add the additive `filler_seam_notes(keeps)` helper to `worker/engines/host.py`
+    - **Additive only, and only after the foundation has shipped `worker/engines/host.py`.** Add one pure module-level helper; add, rename or widen **no** foundation dataclass, enum, protocol, method signature or field — `Engine_Context.notes: tuple[str, ...]` already exists with its free-form convention, so this contributes a note *value*, not a new field.
+    - `filler_seam_notes(keeps)` accumulates `keep.duration` over `keeps[:-1]` and emits `f"filler_seam:{round(cursor, 3):.3f}"` per interior boundary, mirroring `filler.rebase_words` rounding exactly so seams and the rebased word times agree; the loop structure means no `0.0` clip-start note and no clip-end note is ever emitted, and `N` keeps yield exactly `N - 1` notes.
+    - Do not call, re-plan or modify anything in `worker/effects/filler.py` — read `FillerPlan.keeps` only.
+    - _Requirements: 6.1, 6.2, 6.3, 6.9, 8.2, 20.6_
+
+  - [ ] 7.2 Wire the notes into the AUDIO-stage Engine_Context at the existing call site
+    - In `worker/pipeline.py run_pipeline`, pass the already-in-scope `FillerPlan` through the **one** extra keyword on the existing host AUDIO-hook call (using the parameter name recorded in 1.1), and in the host build `notes = base_notes + (filler_seam_notes(plan.keeps) if plan else ())`.
+    - Add no Pipeline stage and change no stage order; when filler removal did not run or produced a single keep, zero notes are published and the engine plans an empty Seam list. Engines that do not understand `filler_seam:` ignore it, so `kinetic-typography` is unaffected.
+    - _Requirements: 6.1, 6.5, 8.1, 8.5, 20.3, 20.6_
+
+  - [ ]* 7.3 Property test: seam publication is exactly the interior joins → `tests/test_stems_plan.py`
+    - **Property 6: Seam publication is exactly the interior joins, with `rebase_words` rounding** — for any `FillerPlan` keep list of length `N >= 1`, `filler_seam_notes(keeps)` yields exactly `N - 1` notes, the *i*-th value equals `round(sum of the preceding keep durations, 3)`, no note equals the clip start `0.0` and none equals the total tightened duration. Generator: `st_keep_plan`.
+    - _Requirements: 6.1, 6.2, 6.3, 6.9_ · _Properties: P6_
+
+- [ ] 8. The `Separator_Backend` protocol and stem-set assembly
+  - [ ] 8.1 Define the protocol, the command runner seam, and the engine's exception types
+    - `Separator_Backend` Protocol with `backend_id`, `requires_network` and `separate(source, dest_dir, *, fmt, seed, timeout_s) -> Mapping[str, Path]`; file-based on purpose so the ffmpeg adapter is a first-class implementation and fakes need no numeric stack. Backends raise on failure; the engine converts that to `failed`.
+    - `Command_Runner = Callable[[Sequence[str], float], subprocess.CompletedProcess]` plus the `_run(runner, cmd, timeout_s)` wrapper that always passes an explicit subprocess timeout and re-raises failures as `worker.ffmpeg_utils.FFmpegError`.
+    - Declare `Model_Unavailable`, `Invalid_Audio_Format` and `Integrity_Error`; accept an injected backend, runner, prober and Capability_Report through the constructor and `Engine_Context.deps`.
+    - _Requirements: 4.5, 12.7, 14.2, 14.3, 15.4, 19.1_
+
+  - [ ] 8.2 Implement `assemble_stem_set`
+    - Map Backend_Stems onto the Stem_Set through `STEM_MAPPING`, summing collisions (`drums` + `bass` → `music`); iterate `sorted(raw)` and then `STEM_NAMES`, so the assembled output and every emitted filtergraph string are independent of the backend's dict iteration order.
+    - A Stem_Name with no contributor is written as digital silence of the clip duration at the probed `Audio_Format` via `anullsrc` and reported as `stem_missing:<stem_name>`; verify every returned file's sample rate, channel count and duration against the `Audio_Format` and raise on mismatch (which the engine reports as `failed`).
+    - _Requirements: 4.1, 4.2, 4.3, 4.6, 4.9, 14.2_
+
+  - [ ]* 8.3 Property test: the Stem_Set is always three stems in sorted order → `tests/test_stems_backends.py`
+    - **Property 9: The Stem_Set is always exactly three stems, assembled in sorted order** — for any backend stem mapping (four-stem, two-stem, unknown names, omissions, any dict order), the assembled keys are exactly `{music, other, vocals}`, `drums` and `bass` are summed into `music`, each omitted Stem_Name is a silent file of the clip's duration with exactly one `stem_missing:<name>` marker, and the emitted filtergraph string is identical across permutations of the backend's iteration order. Generator: `st_backend_stem_sets`.
+    - _Requirements: 4.1, 4.2, 4.3, 4.9_ · _Properties: P9_
+
+  - [ ]* 8.4 Property test: stems decompose additively and preserve the Audio_Format → `tests/test_stems_backends.py`
+    - **Property 10: Stems decompose additively and preserve the Audio_Format** — for any clip audio, summing all Stem_Set stems at unit gain reproduces the incoming audio within `AMPLITUDE_TOLERANCE` per sample, and every stem's duration, sample rate and channel count equal the probed `Audio_Format` values. Generators: `st_pcm_frames`, `st_audio_format`.
+    - _Requirements: 4.6, 4.7, 5.5, 13.3_ · _Properties: P10_
+
+- [ ] 9. The two backend adapters
+  - [ ] 9.1 Implement `ML_Separator_Backend` and the model locator
+    - `backend_id = "ml"`, `requires_network = False` by construction. `_locate_model(name, dir)` stats the filesystem only (`dir / f"{name}.th"` or `dir / name / "model.th"`, `dir` defaulting to `Path(os.environ.get(MODEL_DIR_ENV, MODEL_DIR_DEFAULT))`) with no import and no network, and is registered as `MODEL_LOCATORS["htdemucs"]` so `model:htdemucs` reports available only when the file is present locally. `config.py` is left unchanged.
+    - `separate` refuses with `Model_Unavailable` **before importing anything** when the checkpoint is absent, so no download can ever be triggered from inside `run`; only then does it lazily import `torch` and `demucs`, call `torch.set_num_threads(ML_THREAD_COUNT)`, disable grad, `torch.manual_seed(seed & 0xFFFFFFFF)`, best-effort `use_deterministic_algorithms(True)`, load the model from the **local path only** (never a repo id), run on CPU, and write per-Backend_Stem WAVs at the requested `Audio_Format`.
+    - _Requirements: 10.2, 10.3, 12.1, 12.3, 12.4, 12.5, 12.6, 15.2, 16.1, 16.5, 16.6_
+
+  - [ ] 9.2 Implement `Ffmpeg_Separator_Backend`, the documented approximation
+    - `backend_id = "ffmpeg"`, `requires_network = False`, nothing beyond ffmpeg required. Emit the designed single audio-only invocation: `asplit`, mid-channel `pan` (omitted for mono input, where mid extraction is the identity), speech-band `highpass=f=180,lowpass=f=6000` for `vocals`, phase-inverted `volume=-1` + `amix=normalize=0` so `music := clip - vocals`, mapped to `vocals.wav` and `music.wav`.
+    - Deliberately omit `other` so `assemble_stem_set` substitutes silence and records `stem_missing:other`. Document in the module docstring and adapter docstring that this is a band/mid **approximation**, not source separation — it is only ever reached with a `degraded:<capability_id>` marker and `Engine_Status.degraded`, and `music := clip - vocals` is what makes the additive-decomposition invariant hold exactly.
+    - Apply Repair_Mode `crossfade` seam repair on this path with no model involved.
+    - _Requirements: 13.2, 13.3, 13.4, 4.3, 4.7, 10.8_
+
+  - [ ]* 9.3 Property test: nothing leaves the machine and nothing enters the audio → `tests/test_stems_backends.py`
+    - **Property 19: Nothing leaves the machine and nothing enters the audio** — for any enabled configuration with `socket.socket` raising, probing, planning and running all complete; every command argument path lies inside the workspace or is the incoming clip; and silent clip audio in yields silent audio out (no bed, no external sample, no downloaded content). Generators: `st_stem_options`, `st_availability_map`, `st_pcm_frames`.
+    - _Requirements: 5.10, 12.5, 16.4, 16.7_ · _Properties: P19_
+
+  - [ ]* 9.4 Property test: reproducibility holds where it is claimed and only there → `tests/test_stems_backends.py`
+    - **Property 20: Reproducibility holds where it is claimed and only there** — for any clip audio, `Stem_Options` and seed, two in-process runs in the same environment produce byte-identical decoded audio (ML backend behind a fake model shim, and the ffmpeg backend with one ffmpeg build); and for any pair of environments simulated by two backends differing by sub-tolerance noise, the two runs agree on the `Stem_Plan`, the Stem_Set, the `Audio_Format` and the output duration, and differ by at most `AMPLITUDE_TOLERANCE` per sample. Generators: `st_pcm_frames`, `st_stem_options`.
+    - _Requirements: 10.4, 10.6, 10.8_ · _Properties: P20_
+
+  - [ ]* 9.5 Unit tests: locator, thread pinning, and injected collaborators → `tests/test_stems_backends.py`
+    - The model locator with an empty versus populated directory; a fake `torch` shim recording `set_num_threads(1)` and `manual_seed`; `Model_Unavailable` raised before any import when the checkpoint is absent; the injected Capability_Report and injected backend/runner wiring reaching the engine; the repair-only path completing with `demucs` absent.
+    - _Requirements: 4.5, 10.3, 12.3, 12.7, 13.4, 19.1_
+
+- [ ] 10. Checkpoint — backends complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 11. The ffmpeg pipeline
+  - [ ] 11.1 Implement `probe_audio_format` and `step_timeout`
+    - `probe_audio_format(path, runner, timeout_s)` runs the designed `ffprobe -select_streams a:0 -show_entries stream=sample_rate,channels,codec_name,start_time -of json` read (an `ffprobe`, not a media pass), returns `None` when there is no audio stream, and raises `Invalid_Audio_Format` when the sample rate or channel count is missing, zero or negative. Keep using `ffmpeg_utils.probe()` for `has_audio`, `duration` and `fps` on the video-integrity side.
+    - `step_timeout(ctx, reserve_s) = max(MIN_STEP_TIMEOUT_S, ctx.remaining() - reserve_s)`, re-reading `ctx.remaining()` at every step, with the designed reserves and gate thresholds, so every ffmpeg invocation carries an explicit positive timeout derived from the remaining budget.
+    - _Requirements: 4.8, 15.3, 15.4, 17.5_
+
+  - [ ] 11.2 Implement media pass 1 — extract the clip audio
+    - `ffmpeg -nostdin -hide_banner -loglevel error -y -i <clip> -vn -map 0:a:0 -c:a pcm_s16le -ar <sr> -ac <ch> -f wav <ws>/in.wav`, written inside the Engine_Workspace at the probed `Audio_Format`, with `-vn` so no video is decoded, and a `step_timeout(ctx, EXTRACT_RESERVE_S)` timeout.
+    - _Requirements: 4.4, 11.1, 15.3, 15.4_
+
+  - [ ] 11.3 Implement the single gain + repair filtergraph
+    - One audio-only invocation taking the Stem_Set WAVs in `STEM_NAMES` order, **omitting any stem whose resolved gain is `0.0` as an input entirely**; per-input `volume=<gain>:precision=float`, then `amix=inputs=N:normalize=0:dropout_transition=0`.
+    - Seam repair as a single `volume=eval=frame:precision=float` node whose piecewise expression emits, per merged `Repair_Window` `[s, e]` with centre `c` and half-width `h`, the equal-power V-notch `sin(PI/2*abs(t-c)/h)` — unity at both window edges, zero at the join, quarter-sine taper between; `1` everywhere else. Because `repair_windows` already merged overlaps, each merged window contributes exactly one notch, so no sample is faded twice, and the node count is constant in the Seam count. Emit expressions in chunks of `NOTCH_EXPR_CHUNK` chained with `,` into further `volume` filters (identity outside their own disjoint windows, so chunking is semantics-preserving).
+    - Do **not** use `acrossfade` or chained `afade=t=out` for interior repair (the former shortens the output, the latter zeroes everything after the fade). Append `alimiter=limit=…:level=disabled` when `ffmpeg_filter:alimiter` is available; when a boost (> 1.0) is requested and `alimiter` is unavailable, clamp the gains to `1.0` and record `degraded:ffmpeg_filter:alimiter`. Write `mixed.wav` as `pcm_s16le` at the probed `Audio_Format`, so the representation itself enforces the no-clipping invariant.
+    - _Requirements: 5.5, 5.7, 5.9, 7.2, 7.5, 7.7, 15.9_
+
+  - [ ] 11.4 Implement `spectral` per-stem repair and `music` bridging
+    - On the `ml` backend only, apply the same notch construction **per stem before `amix`** with stem-scaled half-widths (`vocals` ×0.35 to protect speech transients, `other` ×0.6, `music` ×1.0).
+    - For the `music` stem only, bridge up to `MAX_BRIDGE_WINDOWS` windows with real neighbouring material using the designed duration-exact `acrossfade` construction (`d = h` over two `h`-length segments, `concat` of `[0,s) + left + right + [e,dur)`); windows within `h` of a clip bound or beyond the cap fall back to the notch. Record `bridged_windows` / `notched_windows` in the `Stem_Plan` as detail only, with no extra marker.
+    - _Requirements: 7.3, 7.5, 7.9_
+
+  - [ ] 11.5 Implement declick and media pass 2 — remux
+    - When `declick` is set, add `afade=t=in:st=0:d=0.001` and `afade=t=out:st=<duration-0.001>:d=0.001` at the ends of the mixed stream — the clip's own head and tail, the two boundaries for which a Seam is forbidden.
+    - Pass 2: `ffmpeg -nostdin -y -i <clip> [-itsoffset <start_time>] -i <ws>/mixed.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a <matching codec> -b:a 192k -ar <sr> -ac <ch> -movflags +faststart <ws>/clip_repaired.<ext>`. `-c:v copy` bit-copies the video; `-shortest` is deliberately **not** used; `-itsoffset` is emitted only when the probed audio `start_time` is non-zero. Timeout from `step_timeout(ctx, REMUX_RESERVE_S)`.
+    - _Requirements: 3.1, 3.2, 3.6, 9.1, 17.1, 17.2, 17.3, 17.4, 15.4_
+
+  - [ ]* 11.6 Property test: repair touches only planned windows, once, without clipping → `tests/test_stems_ffmpeg.py`
+    - **Property 12: Repair touches only planned windows, once, and never exceeds full scale** — for any clip audio, Seam list and Repair_Mode, samples outside the planned `Repair_Window`s are identical to a gain-only reference rendering; each merged window contains exactly one equal-power gain trough (overlapping seams repaired once); and no written sample's absolute amplitude exceeds full scale. Generators: `st_pcm_frames`, `st_seam_notes`, `st_repair_mode`, `st_stem_gains`.
+    - _Requirements: 5.9, 7.2, 7.5, 7.7_ · _Properties: P12_
+
+- [ ] 12. Integrity verification of the Replacement_Media
+  - [ ] 12.1 Implement `verify_replacement`
+    - Raise `Integrity_Error` unless **all** hold: exactly one audio stream and exactly one video stream; audio duration within one audio frame (`1/sample_rate`) of the incoming clip; sample rate and channel count equal the probed `Audio_Format`; video duration and `nb_frames` equal the incoming clip's; audio `start_time` equal to the incoming clip's.
+    - Call it before returning any media; on failure delete the candidate and return `failed` with no media, so the preceding stage's media is used.
+    - _Requirements: 3.5, 17.1, 17.2, 17.3, 17.4, 17.7_
+
+  - [ ]* 12.2 Property test: Replacement_Media preserves duration, format, streams and alignment → `tests/test_stems_ffmpeg.py`
+    - **Property 13: Replacement_Media preserves duration, format, streams and A/V alignment** — for any tiny generated clip and any `Stem_Options`, the Replacement_Media has exactly one audio and one video stream, audio duration within one audio frame of the incoming clip, identical sample rate and channel count, identical video duration and frame count, identical audio start timestamp, and a bit-identical video stream; and the incoming clip file's checksum is unchanged. Generators: `st_tiny_clip`, `st_stem_options` (with `requires_ffmpeg`).
+    - _Requirements: 3.1, 3.2, 3.6, 7.9, 17.1, 17.2, 17.3, 17.4, 17.6, 17.7_ · _Properties: P13_
+
+- [ ] 13. The engine class and the `run` gate / degradation ladder
+  - [ ] 13.1 Declare the ClassVar contract, injected collaborators, and registration
+    - `class Stem_Inpainting_Engine(AV_Engine)` with `engine_id = "stem_inpainting"`, `stage = Engine_Stage.AUDIO`, `priority = 20`, `required_capabilities = ("binary:ffmpeg",)`, the designed `optional_capabilities` tuple (`python_pkg:demucs`, `model:htdemucs`, `ffmpeg_filter:acrossfade`, `afade`, `pan`, `highpass`, `lowpass`, `alimiter`), `requires_network = False`, `requires_model_download = True`, `time_budget_s = 90.0`, `max_media_passes = 2`, `produces_media = True`.
+    - Keyword-only `__init__` injecting `backend`, `runner` and `prober`; register once at import through the foundation registry; keep the inherited `flag_field()` resolving to `stem_inpainting_enabled` (default OFF); keep every heavy dependency behind a lazy call so the module imports with `demucs`, `torch`, the model and ffmpeg all absent.
+    - _Requirements: 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2.1, 15.1, 15.2, 16.1, 16.5, 19.1_
+
+  - [ ] 13.2 Implement ladder rungs 0–6 — the pre-work gates, all No_Media_Outcomes
+    - Strictly ordered, first match returns, every marker built with `marker("stem_inpainting", …)`: **0** flag disabled → body never invoked, no workspace, no exclusive probe, no pass, no media; **1** `binary:ffmpeg` unavailable → `skipped` + `unavailable:binary:ffmpeg`, no media; **2** Permissibility on and the resolved backend declares `requires_network` → `degraded` + `permissibility_blocked`, **no media (Degraded_Without_Media)**; **3** `plan_is_noop` → `skipped`, **no marker at all**, no media; **4** no audio stream → `skipped`, **no marker at all**, no media; **5** probed sample rate/channels missing, zero or negative → `degraded` + `degraded:audio_format`, **no media (Degraded_Without_Media)**; **6** `remaining() < REPAIR_MIN_S + REMUX_MIN_S` before extraction → `degraded` + `degraded:budget`, no media.
+    - Rungs 3 and 4 must return before any workspace file is written, any capability beyond `binary:ffmpeg` is probed and any subprocess is started, so the no-op and no-audio cases are observable as zero runner calls. For every rung here the engine returns no media and the host forwards the preceding stage's media byte-identically.
+    - _Requirements: 1.8, 3.4, 3.11, 4.8, 5.6, 13.6, 15.8, 16.3, 17.5_
+
+  - [ ] 13.3 Implement ladder rungs 7–11 — the degradation rungs, with and without media
+    - **Degraded_With_Media** (status `degraded`, `Engine_Result.media` **set** and used as the clip media exactly as for `applied`): **7** separation needed but `remaining() < SEPARATION_MIN_S(backend) + REPAIR_MIN_S + REMUX_MIN_S` → run the repair-only `crossfade` path on the un-separated audio, markers `degraded:budget` + `repair:crossfade:<n>`; **8** `python_pkg:demucs` and/or `model:htdemucs` unavailable with separation needed → ffmpeg backend, markers `degraded:python_pkg:demucs` and/or `degraded:model:htdemucs` plus `applied:ffmpeg`, `mix:<preset>`, `repair:<mode>:<n>`, `stem_missing:other`; **9** `spectral` requested on a non-`ml` backend → repair as `crossfade`, markers `degraded:python_pkg:demucs` + `repair:crossfade:<n>`.
+    - **Degraded_Without_Media** (status `degraded`, **no media**, preceding stage's media used): **10** a filter required by the resolved path unavailable (`pan`/`highpass`/`lowpass` on the ffmpeg backend, the `volume` chain otherwise) → `unavailable:ffmpeg_filter:<name>`; **11** budget exhausted during separation or later → delete every partial artifact first, then `timeout`.
+    - Emit exactly one degradation marker per missing Capability_Id per clip. Apply the Requirement 17 audio-integrity verification to Degraded_With_Media exactly as to `applied`.
+    - _Requirements: 3.10, 3.11, 7.4, 7.8, 12.4, 12.6, 13.2, 13.5, 13.7, 15.5, 15.6, 15.7_
+
+  - [ ] 13.4 Implement ladder rungs 12–15 — failures and the applied rung
+    - **12** backend raised, returned a non-audio file, or returned wrong-duration audio → `failed` + `failed`, no media; **13** any ffmpeg invocation raised `FFmpegError` → `failed` + `failed`, no media; **14** `verify_replacement` raised → delete the candidate, `failed` + `failed`, no media; **15** otherwise, ML backend used → `applied` with media plus `applied:ml`, `mix:<preset>`, `repair:<mode>:<n>` when `n >= 1`, and one `stem_missing:<name>` per omission.
+    - Catch `OSError` around each workspace write/delete, record the detail in `Engine_Result` and continue producing the clip; let unexpected exceptions propagate to the host, which converts them to `failed` + the `failed` marker and logs the exception type and message. Return the serialised `Stem_Plan` in `Engine_Result.plan`. Every rung that abandons work deletes what it created, so no partial Replacement_Media survives.
+    - _Requirements: 3.1, 3.5, 3.7, 3.11, 5.8, 7.8, 11.6, 13.1, 14.1, 14.2, 14.3, 14.4, 14.5, 15.7_
+
+  - [ ]* 13.5 Property test: the degradation ladder is a total function to (status, markers) → `tests/test_stems_ladder.py`
+    - **Property 15: The degradation ladder is a total function to (status, markers)** — for any combination of capability availability map, remaining budget, `Stem_Options` and backend network declaration, `run` returns the status and the exact marker set of the matching ladder row, with at most one degradation marker per missing Capability_Id, no marker at all for the no-audio and no-op skips, and media returned only on the rows marked "yes" (the Degraded_With_Media rungs 7–9 and the applied rung 15). Generators: `st_availability_map`, `st_gate_scenarios`, `st_stem_options`.
+    - _Requirements: 3.7, 7.4, 7.8, 12.4, 12.6, 13.1, 13.2, 13.5, 13.6, 13.7, 15.5, 15.6, 16.3, 17.5_ · _Properties: P15_
+
+  - [ ]* 13.6 Property test: every failure is isolated and leaves nothing behind → `tests/test_stems_ladder.py`
+    - **Property 16: Every failure is isolated and leaves nothing behind** — for any forced failure point (backend raising, truncated or non-audio backend output, `FFmpegError`, timeout, integrity failure, `OSError` on a workspace operation), `run` returns `failed` or `degraded` with no media, the incoming clip file is byte-identical, no partial Replacement_Media remains on disk, and the clip and its thumbnail are still written from the preceding stage's media. Generators: `st_failure_points`, `st_stem_options`.
+    - _Requirements: 3.4, 3.5, 3.6, 11.6, 14.1, 14.2, 14.3, 14.4, 14.6, 15.7_ · _Properties: P16_
+
+  - [ ]* 13.7 Tests: the media-presence invariant across every outcome → `tests/test_stems_ladder.py`
+    - One host-level example test per outcome class asserting `Engine_Result.media` is set **exactly** for `applied` and the Degraded_With_Media rungs (7, 8, 9) and unset **exactly** for every No_Media_Outcome (`skipped`, `failed`, Degraded_Without_Media — rungs 1–6, 10, 11, 12–14), that the media handed to the geometry stage is byte-identical to the preceding stage's media exactly for the No_Media_Outcomes, and that a Degraded_With_Media result is taken as the current clip media by the host exactly as an `applied` one is and passes the same Requirement 17 integrity checks.
+    - _Requirements: 3.3, 3.4, 3.10, 3.11_
+
+  - [ ]* 13.8 Unit tests: the pinned ClassVar block, registration, flag, and logging → `tests/test_stems_ladder.py`
+    - Assert the declared ClassVars equal the pinned contract block exactly; registration happens once per process under `stem_inpainting`; `flag_field()` resolves to `stem_inpainting_enabled` and defaults to disabled; `caplog` contains the caught exception type and message for a failed invocation; the engine leaves the passed Processing_Options instance unchanged.
+    - _Requirements: 1.1, 1.3, 1.5, 1.6, 1.7, 1.8, 14.5, 15.1, 15.2, 16.1, 16.5_
+
+- [ ] 14. Checkpoint — engine ladder complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 15. Workspace artifact lifecycle, cleanup, and the disk bound
+  - [ ] 15.1 Declare artifacts, durable stems, and the workspace layout
+    - Write `in.wav`, `stems/{music,other,vocals}.wav`, `mixed.wav` and `clip_repaired.<ext>` inside the supplied Engine_Workspace and nowhere else, so no cross-clip or cross-job state is shared. Declare each intermediate as a transient `Engine_Artifact` with a documented media type and the Replacement_Media as the media artifact.
+    - When `retain_stems` is set, declare the per-stem WAVs as **durable** artifacts so the host persists them through the active Storage_Backend under `storage_backends.base.normalize_key`-ed keys before the workspace is deleted; a persistence failure surfaces as the foundation's `artifact_failed` and the clip is still produced.
+    - _Requirements: 2.7, 11.1, 11.2, 11.3, 11.5_
+
+  - [ ] 15.2 Implement the end-of-run cleanup and the bounded-disk guarantee
+    - Before returning, delete `in.wav`, `mixed.wav` and every non-durable stem, retaining only `clip_repaired.<ext>` plus any declared durable artifacts; wrap each delete in `OSError` handling that records the detail and continues. Keep peak usage within the documented `DISK_BOUND_MULTIPLE × extracted-WAV-size + clip-size` bound and document the arithmetic in a comment.
+    - _Requirements: 11.4, 11.6, 11.7_
+
+  - [ ]* 15.3 Property test: cost and disk stay bounded regardless of seams and gains → `tests/test_stems_ffmpeg.py`
+    - **Property 18: Cost and disk stay bounded regardless of seams and gains** — for any Seam count, gain set and clip duration, the engine performs at most two media passes over the clip container, every recorded command carries a positive timeout no greater than `ctx.remaining()` at its step, peak workspace bytes stay within `DISK_BOUND_MULTIPLE × extracted-WAV-size + clip-size`, and after the call only the Replacement_Media and the declared durable artifacts remain in the workspace. Generators: `st_seam_notes`, `st_stem_gains`, `st_audio_format`.
+    - _Requirements: 2.5, 2.6, 11.1, 11.2, 11.3, 11.4, 11.7, 15.3, 15.4, 15.9_ · _Properties: P18_
+
+  - [ ]* 15.4 Integration tests: media handoff before deletion, and temp cleanup → `tests/test_stems_ffmpeg.py`
+    - Two examples: the host takes the Replacement_Media for the geometry stage before the Engine_Workspace is deleted; a completed job with `auto_delete_temp` enabled leaves no `stem_inpainting__*` directory beneath `settings.temp_dir` after `cleanup_temp`.
+    - _Requirements: 11.5, 11.8_
+
+- [ ] 16. Idempotence on repaired output
+  - [ ] 16.1 Make the repair emission re-entrant on already-repaired media
+    - Guard the emitter so an empty Seam list contributes **no** notch node, no bridging and no declick-driven change, and a unit-gain configuration contributes no `volume` node either, so re-running the engine on its own Replacement_Media with the same `Stem_Options` and an empty Seam list is a byte-stable re-render rather than a second repair pass. Document the guard alongside the no-op predicate it complements.
+    - _Requirements: 7.10, 7.11_
+
+  - [ ]* 16.2 Property test: re-running on repaired output changes nothing → `tests/test_stems_ffmpeg.py`
+    - **Property 14: Re-running on repaired output changes nothing** — for any clip, applying the engine to its own Replacement_Media with the same `Stem_Options` and an empty Seam list leaves that media's decoded audio unchanged. Generators: `st_tiny_clip`, `st_stem_options` (with `requires_ffmpeg`).
+    - _Requirements: 7.11_ · _Properties: P14_
+
+- [ ] 17. API and UI surface
+  - [ ] 17.1 Add the eleven Processing_Options fields
+    - Add `stem_inpainting_enabled: bool = False` plus `stem_mix_preset`, `stem_gain_vocals`, `stem_gain_music`, `stem_gain_other`, `stem_repair_mode`, `stem_repair_window_ms`, `stem_declick`, `stem_backend`, `stem_model`, `stem_retain_stems` to `worker/models.py` with exactly the designed defaults, coerced through the existing `from_dict` convention so `from_dict`/`dataclasses.asdict` round-trip losslessly; retain every existing v0.8.0 field and default, and leave `music`, `music_volume` and every existing `effects_applied` marker value untouched.
+    - _Requirements: 9.8, 18.1, 20.2, 20.4, 8.4_
+
+  - [ ] 17.2 Extend `OptionsModel` and the `/api/upload` Form fields
+    - Accept `stem_inpainting_enabled` and every `Stem_Options` field name in `api/main.py`, all optional; unrecognised values are coerced to documented defaults by `Stem_Options.parse` and the job still processes.
+    - _Requirements: 18.1, 18.5_
+
+  - [ ] 17.3 Extend `/api/info`
+    - Add `engines.stem_inpainting`: `{flag, default: false, available, backend, capabilities: {"python_pkg:demucs": bool, "model:htdemucs": bool}, mix_presets, repair_modes, stem_set, repair_window_ms: {min, max, default}}`, advertising the separation package and model availability and that the engine needs an operator-provisioned local model for full fidelity; leave every existing v0.8.0 value — including `audio.available_moods` — untouched.
+    - _Requirements: 12.8, 16.5, 18.2, 18.6_
+
+  - [ ] 17.4 Add the frontend defaults and `toOptions` forwarding
+    - In `frontend/src/App.jsx`, add `stem_inpainting_enabled: false` plus one default per `Stem_Options` field, and forward every one of them from `toOptions`.
+    - _Requirements: 18.3_
+
+  - [ ] 17.5 Add the "Stem repair" group to `SettingsPanel.jsx`
+    - Enable toggle, Mix_Preset `Dropdown`, three gain sliders over `0.0–4.0` disabled unless the preset is `custom`, Repair_Mode `Dropdown`, repair-window slider, declick checkbox; show `spectral` disabled with a "needs local model" hint when `/api/info` reports `model:htdemucs` unavailable.
+    - _Requirements: 18.4_
+
+  - [ ]* 17.6 Property test: every option field survives the API surface → `tests/test_stems_api.py`
+    - **Property 21: Every option field survives the API surface** — for any option mapping posted to `/api/upload`, the request succeeds, the resolved `Stem_Options` equal `Stem_Options.parse` of the same mapping, and the set of `stem_*` field names accepted by `OptionsModel` equals the set forwarded by `toOptions` and the set of `Stem_Options` fields. Generator: `st_options_mapping`.
+    - _Requirements: 18.1, 18.3, 18.5_ · _Properties: P21_
+
+  - [ ]* 17.7 Unit tests: `/api/info` content and the panel field names → `tests/test_stems_api.py`
+    - Assert `/api/info` advertises the engine id, the default-disabled flag, availability, the Mix_Preset values, the Repair_Mode values, the Stem_Set and the window bounds **alongside** the existing values including `audio.available_moods`; assert `SettingsPanel.jsx` references every `stem_*` field name.
+    - _Requirements: 12.8, 18.2, 18.4, 18.6_
+
+- [ ] 18. Backward-compatibility parity and dependency gate
+  - [ ] 18.1 Property test: the Pipeline is unchanged except when the engine applies → `tests/test_stems_ladder.py`
+    - **Property 17: The Pipeline is unchanged except when the engine applies** — for any input and option mapping, a run with the engine registered-but-disabled produces byte-identical clips, identical `effects_applied` and identical metadata to a run with the engine unregistered; and for any availability map or forced failure, an enabled run produces the same clip count and the same clip durations, with the existing `filler_removal` and `music:<mood>` markers unchanged alongside any `engine:stem_inpainting:*` markers. Generators: `st_options_mapping`, `st_availability_map`, `st_gate_scenarios`.
+    - **Not optional** — this is the spec's central promise to an upgrading operator.
+    - _Requirements: 3.8, 3.9, 8.2, 8.4, 8.7, 13.8, 20.1, 20.4_ · _Properties: P17_
+
+  - [ ] 18.2 Static gate: stage order, dependencies, and sibling specs untouched
+    - Assert the `worker/pipeline.py run_pipeline` stage list is unchanged and no new stage was added; assert `requirements.txt` mentions neither `demucs` nor `torch` (both stay optional) and that this plan added nothing to `requirements-dev.txt` and nothing to `.github/workflows/ci.yml`; assert nothing under `.kiro/specs/av-engines-foundation/` or `.kiro/specs/kinetic-typography/` changed.
+    - **Not optional** — it is what keeps the "no new mandatory dependency" and "no foundation change" claims honest.
+    - _Requirements: 20.3, 20.5, 20.6_
+
+- [ ] 19. ffmpeg integration on tiny clips
+  - [ ]* 19.1 Integration test: the module imports with every heavy dependency absent → `tests/test_stems_backends.py`
+    - Import `worker.engines.stems` in a subprocess with `demucs`, `torch` and `ffmpeg` all unavailable and assert it succeeds and that the pure planner still runs there; assert planning performs no socket call and no model read.
+    - _Requirements: 1.4, 1.9, 19.2, 19.7_
+
+  - [ ]* 19.2 Integration tests: tiny-clip end-to-end behaviour → `tests/test_stems_ffmpeg.py`
+    - With `requires_ffmpeg`, `make_video` and `probe_duration`: one `applied` run through a `Fake_Separator_Backend` producing a valid Replacement_Media; one run with filler removal disabled and non-unit gains applying with an empty Seam list; one assertion that the Compositor performs the same number of ffmpeg passes per clip with the engine enabled as disabled; one invalid-probed-format run degrading with no media.
+    - _Requirements: 8.5, 8.6, 17.5, 19.4, 19.5_
+
+- [ ] 20. Final checkpoint
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional test sub-tasks and can be skipped for a faster MVP; **1.2, 2.1, 2.2, 18.1 and 18.2 are deliberately not optional** (foundation gate, shared generators and doubles, parity gate, dependency/stage-order gate).
+- Epic 1 is a **prerequisite gate, not implementation**: `worker/engines/*`, the Pipeline stage hooks, `tests/fakes.py`, `tests/strategies.py` and the `hypothesis` / `requirements-dev.txt` / CI dependency fix are all owned by `av-engines-foundation`. This plan adds no foundation abstraction, edits nothing under `av-engines-foundation/` or `kinetic-typography/`, and does not touch `requirements-dev.txt`, `requirements.txt` or `.github/workflows/ci.yml` _(Reqs 20.5, 20.6)_.
+- **Epic 7 is the only cross-spec touch point.** `filler_seam_notes(keeps)` is an *additive* helper in the foundation-owned `worker/engines/host.py` plus one keyword at the existing `run_pipeline` → host AUDIO-hook call site. It changes no foundation contract, dataclass, enum, protocol or signature — `Engine_Context.notes` already exists — and it must land **after** the foundation has shipped `host.py` and the stage hooks. `worker/effects/filler.py` is never modified: the plan reads `FillerPlan.keeps`, it never recomputes them _(Reqs 6.1–6.3, 8.2, 20.6)_.
+- **The with/without-media distinction is encoded in the ladder tasks, not left implicit.** Task 13.3 splits the degradation rungs into Degraded_With_Media (rungs 7, 8, 9 — reached by Reqs 7.4, 12.6, 13.2, 15.5; media set and taken as the clip media exactly as for `applied`, with the Requirement 17 integrity checks applying unchanged) and Degraded_Without_Media (rungs 2, 5, 6, 10, 11 — reached by Reqs 13.5, 15.6, 16.3, 17.5; no media, preceding stage's media used). Task 13.7 asserts R3.10 and R3.11 directly: media set exactly for `applied` and Degraded_With_Media, and byte-identical pass-through exactly for the No_Media_Outcomes (`skipped`, `failed`, Degraded_Without_Media).
+- All 21 design properties are covered by exactly one property-test sub-task: P3 (4.5), P4 (4.6), P5 (4.7), P1 (5.6), P2 (5.7), P7 (5.8), P11 (5.9), P8 (5.10), P6 (7.3), P9 (8.3), P10 (8.4), P19 (9.3), P20 (9.4), P12 (11.6), P13 (12.2), P15 (13.5), P16 (13.6), P18 (15.3), P14 (16.2), P21 (17.6), P17 (18.1) — landing in the six files the design's Testing Strategy names. P18 is discharged in epic 15 rather than epic 11 because its assertions (peak workspace bytes, surviving artifacts) need the lifecycle code from 15.1/15.2 alongside the media-pass and timeout evidence from epic 11.
+- Two property tests sit in an early epic but assert `run` behaviour, so their waves fall after the ladder lands: 5.9 (P11 marker set, needs 11.3 and 13.4) and 5.10 (P8 zero-cost no-op, needs 13.2). Everything else follows its epic.
+- Property tests use `hypothesis` (`@settings(max_examples=100, deadline=None)`), one property per test, tagged `# Feature: audio-stem-inpainting, Property N: ...`. Stem generators go into the existing `tests/strategies.py` and doubles into the existing `tests/fakes.py` — extend, never fork, those modules.
+- The single cost invariant is that **all seams and all gains go into one filtergraph** (task 11.3), which is what makes "at most 2 media passes, constant in the Seam count" (Req 15.9) provable from the recorded command list rather than argued.
+- Deliberately documented rather than asserted: Req 10.5 (a negative cross-environment claim) and Reqs 2.4 / 20.6 (design rationale, backed by the static check in 18.2).
+
+## Task Dependency Graph
+
+Epic-level view — nodes on the same rank can proceed in parallel once their predecessors
+land (checkpoints 3, 6, 10, 14, 20 are gates, not code):
+
+```mermaid
+flowchart TD
+    T1["1. Foundation<br/>prerequisite gate"]
+    T2["2. Generators + doubles<br/>strategies.py / fakes.py"]
+    CP1{{"3. Checkpoint"}}
+    T4["4. Data models<br/>Stem_Options / Stem_Plan"]
+    T5["5. Pure planner<br/>gains / seams / windows / backend"]
+    CP2{{"6. Checkpoint"}}
+    T7["7. Seam publication<br/>filler_seam_notes (cross-spec)"]
+    T8["8. Backend protocol<br/>assemble_stem_set"]
+    T9["9. Backend adapters<br/>ml / ffmpeg"]
+    CP3{{"10. Checkpoint"}}
+    T11["11. ffmpeg pipeline<br/>extract / notch / bridge / remux"]
+    T12["12. Integrity<br/>verify_replacement"]
+    T13["13. Engine class<br/>gate + degradation ladder"]
+    CP4{{"14. Checkpoint"}}
+    T15["15. Workspace lifecycle<br/>cleanup + disk bound"]
+    T16["16. Idempotence<br/>re-entrant repair"]
+    T17["17. API + UI surface"]
+    T18["18. Parity + dependency gate"]
+    T19["19. ffmpeg integration<br/>tiny clips"]
+    CP5{{"20. Final checkpoint"}}
+
+    T1 --> T2 --> CP1
+    CP1 --> T4 --> T5 --> CP2
+    CP2 --> T7
+    CP2 --> T8 --> T9 --> CP3
+    T7 --> CP3
+    CP3 --> T11 --> T12 --> T13 --> CP4
+    CP4 --> T15 --> T16
+    CP4 --> T17
+    T16 --> T18
+    T17 --> T18
+    T18 --> T19 --> CP5
+```
+
+Leaf-task execution waves (tasks in the same wave are independent and never write the same
+file; tasks in wave *N* require every wave below *N*):
+
+```json
+{
+  "waves": [
+    { "id": 0,  "tasks": ["1.1", "1.2"] },
+    { "id": 1,  "tasks": ["2.1", "2.2"] },
+    { "id": 2,  "tasks": ["4.1"] },
+    { "id": 3,  "tasks": ["4.2"] },
+    { "id": 4,  "tasks": ["4.3"] },
+    { "id": 5,  "tasks": ["4.4"] },
+    { "id": 6,  "tasks": ["5.1", "4.5"] },
+    { "id": 7,  "tasks": ["5.2", "4.6"] },
+    { "id": 8,  "tasks": ["5.3", "4.7"] },
+    { "id": 9,  "tasks": ["5.4"] },
+    { "id": 10, "tasks": ["5.5"] },
+    { "id": 11, "tasks": ["7.1", "5.6"] },
+    { "id": 12, "tasks": ["7.2", "5.7"] },
+    { "id": 13, "tasks": ["8.1", "5.8"] },
+    { "id": 14, "tasks": ["8.2", "7.3"] },
+    { "id": 15, "tasks": ["9.1", "8.3"] },
+    { "id": 16, "tasks": ["9.2", "8.4"] },
+    { "id": 17, "tasks": ["11.1", "9.3"] },
+    { "id": 18, "tasks": ["11.2", "9.4"] },
+    { "id": 19, "tasks": ["11.3", "9.5"] },
+    { "id": 20, "tasks": ["11.4", "5.9"] },
+    { "id": 21, "tasks": ["11.5"] },
+    { "id": 22, "tasks": ["12.1", "11.6"] },
+    { "id": 23, "tasks": ["13.1", "12.2"] },
+    { "id": 24, "tasks": ["13.2"] },
+    { "id": 25, "tasks": ["13.3", "17.1"] },
+    { "id": 26, "tasks": ["13.4", "17.2"] },
+    { "id": 27, "tasks": ["15.1", "13.5", "17.3"] },
+    { "id": 28, "tasks": ["15.2", "13.6", "17.4"] },
+    { "id": 29, "tasks": ["16.1", "13.7", "17.5"] },
+    { "id": 30, "tasks": ["5.10", "13.8", "17.6"] },
+    { "id": 31, "tasks": ["15.3", "17.7"] },
+    { "id": 32, "tasks": ["16.2", "18.1"] },
+    { "id": 33, "tasks": ["15.4", "18.2"] },
+    { "id": 34, "tasks": ["19.1", "19.2"] }
+  ]
+}
+```
