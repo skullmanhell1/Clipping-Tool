@@ -294,28 +294,28 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - `caplog` assertion that a failed engine logs its exception class and message; example assertions that `Stage_Outcome.media` is `None` for a failed/degraded `produces_media` engine (so the caller keeps the prior media) and set for a successful one.
     - _Requirements: 8.3, 8.5_
 
-- [ ] 10. Pipeline hooks and the single-pass compositor kwarg
-  - [ ] 10.1 Add the `engine_contributions` keyword to `compositor.render_clip`
+- [x] 10. Pipeline hooks and the single-pass compositor kwarg
+  - [x] 10.1 Add the `engine_contributions` keyword to `compositor.render_clip`
     - Add exactly one optional keyword, `engine_contributions: Optional[Sequence[Compose_Contribution]] = None`, to `worker/effects/compositor.py` `render_clip`. When it is `None`/empty every existing code path — including the "return `None` when nothing changed" contract — is byte-for-byte unchanged. When contributions exist, append their `inputs` to the same `-i` list and their `video_filters`/`audio_filters` to the same `-filter_complex`, ordered by `(z_order, engine_id)` with captions kept on top, and hand any `subtitle_path` to the existing libass slot — still **one** ffmpeg pass.
     - _Requirements: 1.5, 23.3_
 
-  - [ ] 10.2 Construct the host and add the source-stage hook in `worker/pipeline.py`
+  - [x] 10.2 Construct the host and add the source-stage hook in `worker/pipeline.py`
     - After the existing `options = effective_options(options)`, construct `Engine_Host(options, job_id=temp_dir.name, temp_dir=temp_dir)`; after the existing `info = fu.probe(source)` call `host.run_source(source, info)` guarded by `host.active` so no probe, workspace, or media pass is added when every engine is off. Do not reorder or duplicate any existing call.
     - _Requirements: 4.4, 13.2, 13.7, 19.4, 19.5, 23.2_
 
-  - [ ] 10.3 Add the audio, geometry, compose, and post hooks plus clip/job finalisation
+  - [x] 10.3 Add the audio, geometry, compose, and post hooks plus clip/job finalisation
     - Inside the per-clip loop, insert `host.run_stage(...)` calls guarded by `host.active` at the four designed points — after filler removal + `rebase_words` (AUDIO, `raw = out.media or raw`), after the geometry ladder (GEOMETRY, `geo = out.media or geo`), immediately before `compositor.render_clip` (COMPOSE, passing `engine_contributions=`), and after `fu.generate_thumbnail` (POST) — extending `applied` with each outcome's markers, then `host.finish_clip(clip_id)` and `host.finish_job()`. The existing stage order `cut → filler removal → geometry → compositor → thumbnail` is preserved exactly.
     - _Requirements: 3.1, 3.2, 7.3, 8.3, 15.1, 15.2, 17.1, 17.6, 18.6, 23.2, 23.3_
 
-  - [ ]* 10.4 Property test: clip count is invariant under degradation and failure → `tests/test_pipeline_degradation.py`
+  - [x]* 10.4 Property test: clip count is invariant under degradation and failure → `tests/test_pipeline_degradation.py`
     - **Property 13: Clip count is invariant under degradation and failure** — for any availability map and any subset of engines forced to raise (including `FFmpegError`) or to overrun their budget, the Pipeline produces the same number of ClipResults as the all-engines-disabled run of the same input, and the media handed to the next stage equals the pre-stage media for every failing engine. Generators: `st_availability_map`, failing subsets, `st_engine_outcomes`.
     - _Requirements: 7.3, 7.5, 8.3, 8.7_ · _Properties: P13_
 
-  - [ ]* 10.5 ffmpeg integration test: a compose-stage contribution still renders in one pass → `tests/test_pipeline_effects.py`
+  - [x]* 10.5 ffmpeg integration test: a compose-stage contribution still renders in one pass → `tests/test_pipeline_effects.py`
     - Register one COMPOSE-stage `FakeEngine` contributing a still-image overlay from `png_asset`, render a 2–3s `make_video` clip with `requires_ffmpeg`, spy on the compositor's `_run` to assert **exactly one** ffmpeg invocation, and assert `probe_size`/`probe_duration` match the target.
     - _Requirements: 1.5, 22.5, 23.3_
 
-  - [ ]* 10.6 ffmpeg integration test: an audio-stage engine may replace clip media → `tests/test_pipeline_effects.py`
+  - [x]* 10.6 ffmpeg integration test: an audio-stage engine may replace clip media → `tests/test_pipeline_effects.py`
     - Register one AUDIO-stage `FakeEngine` returning replacement media and assert the final clip is produced with an unchanged duration; then force that engine to raise and assert the clip is still produced from the pre-stage media.
     - _Requirements: 8.3, 22.5_
 

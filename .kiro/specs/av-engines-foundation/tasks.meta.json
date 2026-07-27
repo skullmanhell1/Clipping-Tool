@@ -127,6 +127,10 @@
     "5.5 Property test: reset empties a registry and instances stay isolated → `tests/test_engine_registry.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785147458454
+    },
+    "10.4 Property test: clip count is invariant under degradation and failure → `tests/test_pipeline_degradation.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785149960377
     }
   },
   "executionHistory": {
