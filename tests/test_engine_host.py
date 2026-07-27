@@ -1065,3 +1065,53 @@ def test_finish_clip_deletes_workspaces_regardless_of_auto_delete_temp(
     assert host.finish_clip("clip_a") == []
 
     assert workspace_leaf_names(tmp_path) == []
+
+
+
+def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
+    """Validates: Requirements 1.5, 10.3 — ``first_input_index`` reservation rules.
+
+    The compositor lays the extra ffmpeg inputs out as one contiguous block
+    starting immediately after the primary clip (index 0), so for the enabled
+    COMPOSE engines of a stage run, in registry ``(priority, engine_id)`` order,
+    ``first_input_index == 1 + sum(max_inputs of the preceding engines)``. An
+    engine declaring ``max_inputs == 0`` consumes no index space and is given the
+    documented meaningless ``0``, and no other stage reserves anything.
+    """
+    contributing = FakeEngine("b_two_inputs", Engine_Stage.COMPOSE, priority=10,
+                              max_inputs=2)
+    quiet = FakeEngine("c_no_inputs", Engine_Stage.COMPOSE, priority=20)
+    trailing = FakeEngine("d_one_input", Engine_Stage.COMPOSE, priority=30,
+                          max_inputs=1)
+    disabled = FakeEngine("a_disabled", Engine_Stage.COMPOSE, priority=5,
+                          max_inputs=5)
+    post = FakeEngine("e_post", Engine_Stage.POST, max_inputs=3)
+    engines = [contributing, quiet, trailing, disabled, post]
+
+    options = options_for({
+        "b_two_inputs": True, "c_no_inputs": True, "d_one_input": True,
+        "e_post": True, "a_disabled": False,
+    })
+    host = build_host(
+        tmp_path, registry_of(engines), options,
+        capabilities=Capability_Report(StaticProber({})), clock=FakeClock(),
+    )
+    for stage in (Engine_Stage.COMPOSE, Engine_Stage.POST):
+        host.run_stage(
+            stage, clip_id="clip_a", source="/media/source.mp4",
+            clip_path=tmp_path / "clip_a.mp4", clip_start=0.0, clip_end=6.0,
+            duration=6.0,
+        )
+
+    # The block starts: 1 for the first contributing engine, then + its size. The
+    # engine declaring no input neither consumes space nor gets a real index.
+    assert contributing.last_context.first_input_index == 1
+    assert quiet.last_context.first_input_index == 0
+    assert trailing.last_context.first_input_index == 3
+    # A disabled engine is skipped before its body is entered, so it reserves
+    # nothing and never sees a context at all.
+    assert disabled.run_count == 0
+    # Only COMPOSE contributes inputs; every other stage keeps the default 0.
+    assert post.last_context.first_input_index == 0
+
+    host.finish_clip("clip_a")

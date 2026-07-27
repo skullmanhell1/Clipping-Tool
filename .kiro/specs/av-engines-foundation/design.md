@@ -283,6 +283,10 @@ class Engine_Context:
     permissibility: bool = False          # ProcessingOptions.permissibility_mode
     deadline: float = math.inf            # time.monotonic() budget end (Req 8.6)
     time_budget_s: float = 0.0
+    first_input_index: int = 0            # absolute ffmpeg index of this engine's
+                                          # FIRST reserved -i input, so the engine
+                                          # can write valid [N:v]/[N:a] labels
+                                          # (Req 1.5); 0 == none reserved
     notes: tuple[str, ...] = ()           # e.g. "fps_fallback:0.0" (Req 13.3)
     deps: Mapping[str, Any] = field(default_factory=dict)   # injected fakes (Req 22.1)
 
@@ -395,6 +399,9 @@ class AV_Engine(ABC):
     requires_model_download: ClassVar[bool] = False            # Req 21.1
     time_budget_s: ClassVar[float] = 30.0                      # Req 19.1
     max_media_passes: ClassVar[int] = 1                        # Req 19.1
+    max_inputs: ClassVar[int] = 0                              # ffmpeg -i inputs this
+                                                               # engine may contribute
+                                                               # to the ONE compose pass
     produces_media: ClassVar[bool] = False                     # may return Result.media
 
     @classmethod
@@ -457,6 +464,11 @@ class Engine_Registry:
 
     def __init__(self) -> None:
         self._records: dict[str, Engine_Record] = {}
+        # Registration happens at import time in production and inside tests
+        # otherwise, so the duplicate check and the insert are made atomic. The lock
+        # is a private implementation detail: it is never exposed and never held
+        # across a call into an engine.
+        self._lock = threading.RLock()
 
     def register(self, engine: AV_Engine, *, priority: int | None = None) -> AV_Engine:
         """Register ``engine`` (Req 2.1).
@@ -481,10 +493,20 @@ class Engine_Registry:
     def all(self) -> list[AV_Engine]: ...        # same deterministic order
     def ids(self) -> list[str]: ...              # sorted Engine_Ids
     def records(self) -> list[Engine_Record]: ...
+
+    def stage_of(self, engine_id: str) -> Optional[Engine_Stage]:
+        """The Engine_Stage ``engine_id`` was registered under, or ``None``.
+
+        The stage captured at registration time, so it is stable even if the engine
+        object is mutated afterwards — which is what makes it usable for the
+        stage-partition assertions in P4.
+        """
+
     def reset(self) -> None:
         """Clear every registration (Reqs 2.7, 22.2)."""
     def __len__(self) -> int: ...
     def __contains__(self, engine_id: str) -> bool: ...
+    def __iter__(self): ...                      # iterates ``all()`` — same order
 
 
 _DEFAULT = Engine_Registry()
@@ -883,9 +905,55 @@ if host.active:
 `engine_contributions: Optional[Sequence[Compose_Contribution]] = None`. When it is
 `None`/empty the existing code path — including the "return `None` when nothing changed"
 contract — is unchanged, so an all-off clip still performs the same number of ffmpeg
-passes as v0.8.0 _(Reqs 1.5, 23.3)_. When contributions exist, their `inputs` are appended
-to the same `-i` list and their filters to the same `-filter_complex`, ordered by
-`(z_order, engine_id)`, with captions kept on top.
+passes as v0.8.0 _(Reqs 1.5, 23.3)_. When contributions exist, their `inputs` are added to
+the same `-i` list and their filters to the same `-filter_complex`, with captions kept on
+top.
+
+#### The reserved engine input block — `max_inputs` / `first_input_index` _(Reqs 1.5, 10.3)_
+
+A compose-stage engine writes filter text, so it must be able to name its own inputs
+(`[N:v]`, `[N:a]`). `AV_Engine.max_inputs` declares how many ffmpeg `-i` inputs an engine
+may contribute (default `0`: no input, no index space), and the host publishes the block
+start as `Engine_Context.first_input_index` **before** `run()` executes:
+
+```
+first_input_index(engine_k) = 1 + sum(max_inputs of the preceding engines of the
+                                      same stage run, in registry (priority, engine_id)
+                                      order)
+```
+
+Index `0` is always the primary clip, which no engine owns, so `0` doubles as "nothing
+reserved" — the value every non-COMPOSE stage and every `max_inputs == 0` engine receives.
+The compositor lays the blocks out **immediately after the base clip**, ahead of music,
+b-roll and emoji, because the host cannot know whether music/b-roll/emoji exist for a
+given clip and the index must be fixed before the engine runs; the music / `broll_offset`
+/ `emoji_offset` indices are therefore shifted by the total engine input count:
+
+```
+idx 0        : base clip
+idx 1..N     : reserved engine input blocks (N == total contributed inputs)
+music        : 1 + N            (label "1:a" when N == 0 — the v0.8.0 spelling)
+broll_offset : (2 if music else 1) + N
+emoji_offset : broll_offset + b-roll inputs
+```
+
+With no contribution `N == 0` and every index, filter label and argv element is
+byte-identical to v0.8.0, which is what keeps Property 34 intact _(Req 23.1)_.
+
+**Two orderings, deliberately decoupled.** Inputs are emitted in registry
+`(priority, engine_id)` order — the order the reservation is computed from, and the only
+order an engine can rely on before it runs. Filters keep layering in
+`(z_order, engine_id)` order, which is a *rendering* decision taken after the fact.
+Sorting inputs by `z_order` would let a z-order change silently invalidate filter labels
+an engine had already written, so the two orders are never merged.
+
+**Contract for a contributing engine:** when invoked it must emit exactly `max_inputs`
+inputs, because the compositor appends the inputs it actually receives contiguously; a
+short contribution would shift every later engine's real index. Reservations are computed
+over the *enabled* engines of the stage run, since a disabled engine is gated out before
+its body is entered and contributes nothing _(Req 4.2)_. No engine declares an input today
+(`max_inputs` defaults to `0`), so the whole mechanism is inert until a sibling spec needs
+it.
 
 ## Data Models
 

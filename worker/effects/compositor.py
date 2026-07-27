@@ -56,6 +56,49 @@ def _ordered_contributions(
     return ordered
 
 
+def _input_order_contributions(
+    contributions: Optional[Sequence["Compose_Contribution"]],
+) -> list["Compose_Contribution"]:
+    """Compose_Contributions in **registry** order — the order they arrived in.
+
+    ``Engine_Host.run_stage`` builds ``Stage_Outcome.contributions`` by walking the
+    registry, so the sequence handed to :func:`render_clip` is already in registry
+    ``(priority, engine_id)`` order — exactly the order the host reserved the
+    ffmpeg input indices in (``Engine_Context.first_input_index``). Emitting the
+    extra ``-i`` inputs in this order is what makes an engine's
+    ``[first_input_index:v]`` filter label point at its own input.
+
+    The two orderings **intentionally decouple**: inputs follow registry order
+    because that is what the index reservation is computed from and an index must
+    be knowable before ``run()``, while filters follow ``(z_order, engine_id)``
+    (:func:`_ordered_contributions`) because that is a *layering* decision made
+    after the fact. Sorting the inputs by ``z_order`` would let a z-order change
+    silently invalidate every filter label an engine had already written.
+    """
+    if not contributions:
+        return []
+    return [c for c in contributions if c is not None]
+
+
+def _engine_input_args(
+    contributions: Sequence["Compose_Contribution"],
+) -> list[str]:
+    """The ``-i`` argv fragment for the reserved engine input block.
+
+    ``[]`` when no engine contributed an input, which is what keeps the whole
+    index accounting below byte-identical to v0.8.0 on an all-off run.
+    """
+    args: list[str] = []
+    for contribution in contributions:
+        for item in contribution.inputs:
+            if item.loop:
+                args += ["-loop", "1"]
+            if item.duration > 0:
+                args += ["-t", f"{item.duration:.3f}"]
+            args += ["-i", str(item.path)]
+    return args
+
+
 def render_clip(
     base_clip: str | Path,
     dest: str | Path,
@@ -75,17 +118,29 @@ def render_clip(
 
     ``engine_contributions`` is the advanced-AV-engine seam (Reqs 1.5, 23.3).
     When it is ``None`` or empty — which is the case for every v0.8.0 caller and
-    for any run with no enabled engine — every code path above, including the
-    "return ``None`` when nothing changed" contract, is unchanged. When
-    contributions are present their extra ffmpeg inputs are appended to the same
-    ``-i`` list (last, so the base/music/b-roll/emoji index accounting is
-    untouched) and their filters to the same ``-filter_complex``, ordered by
-    ``(z_order, engine_id)`` and inserted **below** the caption layer so captions
-    stay on top; a contribution's ``subtitle_path`` is handed to the existing
-    libass slot. It is still exactly **one** ffmpeg pass — an engine never
-    invokes ffmpeg itself.
+    for any run with no enabled engine — every code path below, including the
+    input-index accounting and the "return ``None`` when nothing changed"
+    contract, is byte-identical to v0.8.0: the reserved engine input block is
+    empty, so ``broll_offset``/``emoji_offset`` and the music input label keep
+    exactly the values they always had.
+
+    When contributions are present their extra ffmpeg inputs form **one
+    contiguous block immediately after the base clip** (index 0), emitted in
+    registry ``(priority, engine_id)`` order so each input lands on exactly the
+    index the host published as ``Engine_Context.first_input_index``; music,
+    b-roll and emoji inputs shift after that block. Their filters go into the same
+    ``-filter_complex``, ordered by ``(z_order, engine_id)`` and inserted **below**
+    the caption layer so captions stay on top, and a contribution's
+    ``subtitle_path`` is handed to the existing libass slot. It is still exactly
+    **one** ffmpeg pass — an engine never invokes ffmpeg itself.
     """
     contributions = _ordered_contributions(engine_contributions)
+    # Inputs follow registry order, filters follow (z_order, engine_id): the two
+    # orderings decouple deliberately (see :func:`_input_order_contributions`).
+    engine_input_args = _engine_input_args(
+        _input_order_contributions(engine_contributions)
+    )
+    engine_input_count = engine_input_args.count("-i")
     base_clip = Path(base_clip)
     dest = Path(dest)
     temp_dir = Path(temp_dir)
@@ -246,11 +301,20 @@ def render_clip(
     # ---------------------------------------------------------------------
     # Input index accounting (Req 10.3), explicit and collision-free:
     #     idx 0        : base clip
-    #     idx 1        : music (when present)
+    #     idx 1..N     : reserved engine input block (N == engine_input_count,
+    #                    0 on every v0.8.0 / all-off run — Reqs 1.5, 23.3)
+    #     music_index  : music (when present)
     #     broll_offset : b-roll inputs (contiguous)
     #     emoji_offset : emoji inputs (after b-roll)
+    #
+    # The engine block sits immediately after the base clip because the host must
+    # publish each engine's ``first_input_index`` BEFORE the engine runs, and it
+    # knows nothing about the music/b-roll/emoji decisions taken here. Everything
+    # downstream of the block is therefore shifted by ``engine_input_count``; with
+    # no contribution that shift is 0 and every index below is unchanged.
     # ---------------------------------------------------------------------
-    broll_offset = 2 if music_path is not None else 1
+    music_index = 1 + engine_input_count
+    broll_offset = (2 if music_path is not None else 1) + engine_input_count
 
     # Build the b-roll overlay graph (below captions). Any failure degrades to
     # a b-roll-disabled render rather than failing the clip (Reqs 10.6, 9.3).
@@ -279,7 +343,9 @@ def render_clip(
     # Assemble the video filter graph (bottom -> top):
     #     look chain -> b-roll overlays -> captions/progress -> emoji
     # ---------------------------------------------------------------------
-    inputs: list[str] = ["-i", str(base_clip)]
+    # Base clip first, then the reserved engine block (empty unless an engine
+    # contributed an input), then music / b-roll / emoji below.
+    inputs: list[str] = ["-i", str(base_clip), *engine_input_args]
     graph_parts: list[str] = []
     video_label = "0:v"
 
@@ -324,11 +390,14 @@ def render_clip(
     audio_out = "0:a"
     audio_changed = False
     if music_path is not None:
-        # Insert the music input at index 1 (before b-roll/emoji inputs).
+        # Music follows the engine block and precedes the b-roll/emoji inputs, so
+        # its index is 1 on every run without an engine contribution (i.e. the
+        # label is byte-identically ``1:a`` for every v0.8.0 caller).
         inputs += ["-i", str(music_path)]
         graph_parts.append(
-            audio.music_mix_filter("0:a", "1:a", "aout", options.music_volume,
-                                   duration, fade=options.fades)
+            audio.music_mix_filter("0:a", f"{music_index}:a", "aout",
+                                   options.music_volume, duration,
+                                   fade=options.fades)
         )
         audio_out = "aout"
         audio_changed = True
@@ -350,17 +419,11 @@ def render_clip(
         audio_out = "aeng"
         audio_changed = True
 
-    # Inputs are ordered base -> music -> b-roll -> emoji -> engines (Req 10.3);
-    # engine inputs come last so the index accounting above is untouched.
+    # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
+    # the engine block was emitted with the base clip above so its indices are
+    # fixed and knowable before any engine ran.
     inputs += broll_input_args
     inputs += emoji_inputs
-    for contribution in contributions:
-        for item in contribution.inputs:
-            if item.loop:
-                inputs += ["-loop", "1"]
-            if item.duration > 0:
-                inputs += ["-t", f"{item.duration:.3f}"]
-            inputs += ["-i", str(item.path)]
 
     video_changed = bool(look_chain) or bool(caption_chain) or bool(broll_graph) or bool(emoji_graph)
     if not video_changed and not audio_changed:

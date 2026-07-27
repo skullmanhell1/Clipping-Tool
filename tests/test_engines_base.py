@@ -1146,7 +1146,7 @@ _PINNED_FIELDS = {
         "job_id", "clip_id", "engine_id", "stage", "source_path", "clip_path",
         "time_base", "clip_start", "clip_end", "duration", "words", "options",
         "options_digest", "seed", "workspace", "capabilities", "permissibility",
-        "deadline", "time_budget_s", "notes", "deps",
+        "deadline", "time_budget_s", "first_input_index", "notes", "deps",
     ],
     "Engine_Result": [
         "engine_id", "status", "markers", "artifacts", "contribution", "plan",
@@ -1265,13 +1265,14 @@ def test_engine_method_surface_is_pinned():
         for name in (
             "engine_id", "stage", "priority", "required_capabilities",
             "optional_capabilities", "requires_network", "requires_model_download",
-            "time_budget_s", "max_media_passes", "produces_media",
+            "time_budget_s", "max_media_passes", "max_inputs", "produces_media",
         )
     } == {
         "engine_id": "", "stage": Engine_Stage.POST, "priority": 100,
         "required_capabilities": (), "optional_capabilities": (),
         "requires_network": False, "requires_model_download": False,
-        "time_budget_s": 30.0, "max_media_passes": 1, "produces_media": False,
+        "time_budget_s": 30.0, "max_media_passes": 1, "max_inputs": 0,
+        "produces_media": False,
     }
     assert callable(AV_Engine.flag_field) and callable(AV_Engine.is_enabled)
 

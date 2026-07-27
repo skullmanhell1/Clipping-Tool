@@ -62,6 +62,7 @@ from worker.engines.base import (
     Engine_Status,
     coerce_bool,
     coerce_float,
+    coerce_int,
     derive_seed,
     marker,
     merge_markers,
@@ -547,6 +548,9 @@ class Engine_Host:
             return outcome
 
         key = _as_text(clip_id)
+        # Reserved ffmpeg input indices for this stage run, computed BEFORE any
+        # engine runs so every Engine_Context can carry its own block start.
+        offsets = self._input_offsets(coerced)
         for engine in self._registered_for(coerced):
             result = self._invoke(
                 engine,
@@ -560,6 +564,7 @@ class Engine_Host:
                     clip_end=clip_end,
                     duration=duration,
                     words=words,
+                    first_input_index=offsets.get(_engine_id_of(bound), 0),
                 ),
             )
             outcome.results.append(result)
@@ -578,6 +583,48 @@ class Engine_Host:
 
         outcome.markers = merge_markers(outcome.results)
         return outcome
+
+    def _input_offsets(self, stage: Engine_Stage) -> dict[str, int]:
+        """Reserved ``Engine_Context.first_input_index`` per engine of ``stage``.
+
+        The compositor lays the extra ffmpeg inputs out as one contiguous block
+        immediately after the primary clip (index 0), so for the engines of a
+        stage run, taken in registry ``(priority, engine_id)`` order::
+
+            first_input_index(engine_k) = 1 + sum(max_inputs of preceding engines)
+
+        Only COMPOSE-stage engines contribute inputs, so every other stage gets an
+        empty mapping and the documented meaningless ``0``. An engine declaring
+        ``max_inputs == 0`` consumes no index space and is likewise given ``0``,
+        which is why the block start of the *first* contributing engine is always
+        exactly ``1`` no matter how many non-contributing engines precede it.
+
+        The mapping is built from the **enabled** engines of the stage
+        (:meth:`enabled_for`), because a disabled engine is skipped before its body
+        is entered (Req 4.2) and therefore contributes nothing to the compositor's
+        input list. Enablement is pure, so the mapping is deterministic and fixed
+        before any ``run()`` executes.
+
+        Contract for a contributing engine: when it is invoked it must emit exactly
+        ``max_inputs`` inputs, since the compositor appends the inputs it actually
+        receives contiguously. Nothing here can repair a short contribution — an
+        engine that declares two inputs and returns one would shift every later
+        engine's real index. No engine declares an input today (``max_inputs``
+        defaults to ``0``), so the reservation is inert until the first one does.
+        """
+        if stage is not Engine_Stage.COMPOSE:
+            return {}
+        offsets: dict[str, int] = {}
+        cursor = 1
+        for engine in self.enabled_for(stage):
+            declared = coerce_int(getattr(engine, "max_inputs", 0), 0, lo=0)
+            engine_id = _engine_id_of(engine)
+            if declared <= 0:
+                offsets[engine_id] = 0
+                continue
+            offsets[engine_id] = cursor
+            cursor += declared
+        return offsets
 
     def _invoke(
         self, engine: AV_Engine, ctx_factory: Callable[[], Engine_Context]
@@ -771,6 +818,7 @@ class Engine_Host:
         clip_end: float,
         duration: float,
         words: Sequence[Any],
+        first_input_index: int = 0,
     ) -> Engine_Context:
         """Allocate the workspace and build the frozen Engine_Context (step 4).
 
@@ -778,6 +826,10 @@ class Engine_Host:
         disabled or blocked engine never causes a workspace to exist (Req 4.2).
         Raising here (an unusable ``resolve_options``, an ``OSError`` creating the
         directory) is caught by :meth:`_invoke` and reported as ``failed``.
+
+        ``first_input_index`` is the ffmpeg input block :meth:`_input_offsets`
+        reserved for this engine — ``0`` for every non-contributing engine and for
+        every stage other than COMPOSE.
         """
         engine_id = _engine_id_of(engine)
         resolved = engine.resolve_options(self._options)
@@ -816,6 +868,7 @@ class Engine_Host:
             permissibility=self.permissibility,
             deadline=deadline,
             time_budget_s=budget,
+            first_input_index=first_input_index,
             notes=notes,
             deps=deps,
         )
