@@ -19,6 +19,30 @@
     "2.8 Property test: Segment_List serialisation round-trips → `tests/test_engine_timebase.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785133461649
+    },
+    "6.3 Property test: probing is total, offline, and shaped → `tests/test_engine_capabilities.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785142903176
+    },
+    "6.4 Property test: the report caches, is deterministic, serialises, and invalidates → `tests/test_engine_capabilities.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785142906679
+    },
+    "7.4 Property test: workspace paths are contained, sanitised, and unique → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144076178
+    },
+    "7.5 Property test: workspaces are always cleaned up, durable artifacts first → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144079475
+    },
+    "7.6 Property test: durable artifact keys are safe and backend-neutral → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144086289
+    },
+    "7.7 Property test: artifact persistence failure degrades, it does not fail the clip → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144089488
     }
   },
   "executionHistory": {
