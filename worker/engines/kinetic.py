@@ -11,8 +11,11 @@ ffmpeg binary, no libass, and no optional font present**: at import time it
 touches only the standard library, :mod:`worker.effects.caption_presets`, and
 :mod:`worker.engines.*` — all of which are themselves import-safe — and it
 executes no probe, no subprocess, no network call, and no filesystem access.
-(:mod:`worker.captions` is deliberately *not* imported at module scope; the
-planner and emitter reach its helpers lazily in later tasks.) Every heavy
+(:mod:`worker.captions` is deliberately *not* imported at module scope — it pulls
+in ``config``, hence ``pydantic`` — so the layout helpers, planner and emitter
+reach its ``_POSITION_ALIGN`` table, escaping, cue grouping and timestamp helpers
+through the lazy :func:`_captions` accessor and *reuse* them rather than restating
+them.) Every heavy
 dependency (the ffmpeg capability
 probe, the libass burn, the system font enumeration, the optional LLM keyword
 planner) is reached through a *lazy call* made from ``run``/``plan`` at
@@ -30,6 +33,7 @@ registers nothing yet.
 from __future__ import annotations
 
 import dataclasses
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +67,14 @@ __all__ = [
     "Kinetic_Options",
     "Kinetic_Plan",
     "Kinetic_Word",
+    "display_width",
+    "is_space_free",
+    "join_separator",
+    "join_width",
+    "pack_lines",
+    "position_align",
+    "resolve_position",
+    "safe_area_margins",
 ]
 
 # ---------------------------------------------------------------------------
@@ -797,3 +809,237 @@ class Kinetic_Plan:
             colors=_get(data, "colors", {}),
             highlight_scale=_get(data, "highlight_scale", 118),
         )
+
+
+# ---------------------------------------------------------------------------
+# Pure layout helpers and Safe_Area geometry (tasks 5.1-5.3)
+# ---------------------------------------------------------------------------
+#
+# Everything below is a pure function of its arguments: no clock, no locale, no
+# filesystem, no probe, no ffmpeg (Reqs 11.5, 18.2). The single external symbol
+# they reach for is ``worker.captions._POSITION_ALIGN`` — *reused*, never
+# re-spelled, so the alignment/MarginV table can never drift from the v0.8.0
+# caption path (Req 7.3). It is reached through the lazy :func:`_captions`
+# accessor because :mod:`worker.captions` imports ``config`` — and therefore
+# ``pydantic`` — which module-scope import safety forbids (Reqs 1.4, 18.2).
+
+
+def _captions() -> Any:
+    """Lazily import and return :mod:`worker.captions` (Reqs 1.4, 18.2)."""
+    from worker import captions
+
+    return captions
+
+
+#: Code-point ranges of scripts written without inter-word spaces (Reqs 8.2, 8.4):
+#: Han (incl. CJK radicals, compatibility and extension B+), Hiragana, Katakana
+#: (incl. halfwidth), and Hangul (Jamo, compatibility Jamo, extended, syllables).
+_SPACE_FREE_RANGES: tuple[tuple[int, int], ...] = (
+    (0x2E80, 0x2EFF),    # CJK radicals supplement
+    (0x3005, 0x3007),    # ideographic iteration mark, ditto, ideographic zero
+    (0x3040, 0x30FF),    # Hiragana + Katakana
+    (0x3100, 0x312F),    # Bopomofo
+    (0x3130, 0x318F),    # Hangul compatibility Jamo
+    (0x31A0, 0x31BF),    # Bopomofo extended
+    (0x31F0, 0x31FF),    # Katakana phonetic extensions
+    (0x3400, 0x4DBF),    # CJK unified ideographs extension A
+    (0x4E00, 0x9FFF),    # CJK unified ideographs
+    (0xA960, 0xA97F),    # Hangul Jamo extended-A
+    (0xAC00, 0xD7FF),    # Hangul syllables + Jamo extended-B
+    (0xF900, 0xFAFF),    # CJK compatibility ideographs
+    (0xFF66, 0xFF9D),    # halfwidth Katakana
+    (0x1100, 0x11FF),    # Hangul Jamo
+    (0x20000, 0x3FFFF),  # CJK unified ideographs extensions B..
+)
+
+#: ``unicodedata.category`` values that occupy no advance width (Req 8.9).
+_ZERO_WIDTH_CATEGORIES = frozenset({"Mn", "Me", "Cf"})
+
+
+def display_width(text: Any) -> int:
+    """Return the Display_Width of ``text`` in layout units (Reqs 8.1, 8.9).
+
+    East Asian ``F`` (fullwidth) and ``W`` (wide) characters cost 2 units, every
+    other visible character costs 1, and combining marks (categories ``Mn`` /
+    ``Me``) plus zero-width format characters (``Cf``) cost 0 so a *decomposed*
+    grapheme is not counted twice. Total: a non-string argument is rendered with
+    ``str`` rather than raising.
+    """
+    total = 0
+    for char in _text(text):
+        if unicodedata.category(char) in _ZERO_WIDTH_CATEGORIES:
+            continue
+        total += 2 if unicodedata.east_asian_width(char) in ("F", "W") else 1
+    return total
+
+
+def is_space_free(text: Any) -> bool:
+    """True when ``text`` belongs to a script written without inter-word spaces.
+
+    Decided **per word** from its first non-combining code point (Reqs 8.2, 8.4),
+    so a Han/Hiragana/Katakana/Hangul token joins its neighbour with no inserted
+    space while Latin, Cyrillic, Arabic and Hebrew tokens take one. Empty or
+    combining-only text is not space-free (it takes the default Latin join).
+    """
+    for char in _text(text):
+        if unicodedata.category(char) in _ZERO_WIDTH_CATEGORIES:
+            continue
+        code = ord(char)
+        for lo, hi in _SPACE_FREE_RANGES:
+            if lo <= code <= hi:
+                return True
+        return False
+    return False
+
+
+def join_separator(previous: Any, following: Any) -> str:
+    """The separator between two neighbouring words in one Text_Line (Req 8.4).
+
+    ``""`` when **both** neighbours are space-free-script words, otherwise a
+    single space. Shared by :func:`pack_lines` (as the join *cost*) and by the
+    emitter's Text_Line assembly, so measured width and emitted text can never
+    disagree.
+    """
+    return "" if is_space_free(previous) and is_space_free(following) else " "
+
+
+def join_width(previous: Any, following: Any) -> int:
+    """Display_Width cost of :func:`join_separator` — 1 for a space, else 0."""
+    return display_width(join_separator(previous, following))
+
+
+def _word_text(word: Any) -> str:
+    """The text of a :class:`Kinetic_Word`, or of a bare string. Total."""
+    if isinstance(word, str):
+        return word
+    return _text(getattr(word, "text", ""))
+
+
+def pack_lines(
+    words: Any,
+    max_lines: Any = 2,
+    max_width: Any = 22,
+) -> tuple[list[list[int]], list[int]]:
+    """Greedily pack ``words`` into Text_Lines of word indices (Reqs 7.5-7.8, 8.5).
+
+    Returns ``(lines, overflow)`` where ``lines`` holds at most ``max_lines``
+    lists of indices into ``words`` and ``overflow`` is the tail of indices that
+    did not fit — which the planner re-splits into a further Kinetic_Cue with a
+    proportionally divided interval (Req 7.7).
+
+    Packing is left-to-right and never reorders, so right-to-left text stays in
+    Word_Timeline order (Req 8.3). Every word stays intact inside exactly one
+    Text_Line — no word is ever split across a ``\\N`` break (Req 7.8) — and a
+    word whose own Display_Width exceeds ``max_width`` is placed alone on its
+    line rather than broken (Req 8.5).
+    """
+    try:
+        items = list(words)
+    except Exception:  # pragma: no cover - hostile iterable
+        return [], []
+    limit_lines = coerce_int(max_lines, 2, lo=1, hi=4)
+    limit_width = coerce_int(max_width, 22, lo=1)
+
+    lines: list[list[int]] = []
+    current: list[int] = []
+    current_width = 0
+    previous_text = ""
+
+    for index, item in enumerate(items):
+        text = _word_text(item)
+        width = display_width(text)
+        if not current:
+            current = [index]
+            current_width = width
+            previous_text = text
+            continue
+        gap = join_width(previous_text, text)
+        if current_width + gap + width <= limit_width:
+            current.append(index)
+            current_width += gap + width
+            previous_text = text
+            continue
+        # The word does not fit on the current Text_Line: start a new one, or
+        # hand the remaining tail back for re-splitting (Req 7.7).
+        lines.append(current)
+        if len(lines) >= limit_lines:
+            return lines, list(range(index, len(items)))
+        current = [index]
+        current_width = width
+        previous_text = text
+
+    if current:
+        lines.append(current)
+    return lines, []
+
+
+def resolve_position(position: Any, preset_position: Any = "") -> str:
+    """Resolve a caption position, inheriting the Base_Preset value (Req 7.4).
+
+    An **empty** (or unrecognised) ``Kinetic_Options.position`` means "use the
+    Base_Preset ``position``", so a preset such as ``hormozi`` — which declares
+    ``center`` — is not silently rendered at the ``bottom`` default. When neither
+    value is a member of :data:`POSITIONS`, ``"bottom"`` is used.
+    """
+    resolved = coerce_choice(position, POSITIONS, "")
+    if resolved:
+        return resolved
+    return coerce_choice(preset_position, POSITIONS, "bottom")
+
+
+def position_align(position: Any, preset_position: Any = "") -> tuple[int, int]:
+    """Return ``(alignment, default_margin_v)`` for a caption position (Req 7.3).
+
+    Reads :data:`worker.captions._POSITION_ALIGN` — the v0.8.0 table mapping
+    ``bottom``/``center``/``top`` to ASS alignments ``2``/``5``/``8`` with their
+    default ``MarginV`` values — rather than restating it, so the kinetic engine
+    and the existing caption path can never disagree. The position is resolved
+    through :func:`resolve_position` first, so ``""`` inherits the preset.
+    """
+    table = _captions()._POSITION_ALIGN
+    resolved = resolve_position(position, preset_position)
+    align, margin_v = table.get(resolved, table["bottom"])
+    return int(align), int(margin_v)
+
+
+def safe_area_margins(
+    play_res_x: Any = 1080,
+    play_res_y: Any = 1920,
+    *,
+    safe_area_x_pct: Any = 6.0,
+    safe_area_y_pct: Any = 10.0,
+    position: Any = "",
+    preset_position: Any = "",
+) -> tuple[int, int, int, int]:
+    """Return ``(align, margin_l, margin_r, margin_v)`` for the emitted style.
+
+    Reqs 7.2, 7.3, 7.4, 7.10 — the Safe_Area insets are percentages of the
+    probed clip size::
+
+        margin_l = margin_r = round(play_res_x * safe_area_x_pct / 100)
+        margin_v = max(default_margin_v, round(play_res_y * safe_area_y_pct / 100))
+
+    ``max(...)`` keeps the text box inside the Safe_Area rectangle while
+    preserving the v0.8.0 vertical placement whenever the inset is smaller than
+    the preset default (``bottom`` -> 220, ``top`` -> 200); ``center`` has a
+    default of ``0``, so it keeps its "libass centres vertically" semantics and
+    its safe-area obligation is met by the horizontal insets alone.
+
+    Both results are finally clamped so ``margin_l + margin_r < play_res_x`` and
+    ``2 * margin_v < play_res_y`` even for a degenerately small probed size —
+    the caption box always has room to exist.
+    """
+    width = coerce_int(play_res_x, 1080, lo=1)
+    height = coerce_int(play_res_y, 1920, lo=1)
+    pct_x = coerce_float(safe_area_x_pct, 0.0, lo=0.0, hi=100.0)
+    pct_y = coerce_float(safe_area_y_pct, 0.0, lo=0.0, hi=100.0)
+
+    align, default_margin_v = position_align(position, preset_position)
+
+    inset_x = int(round(width * pct_x / 100.0))
+    inset_y = int(round(height * pct_y / 100.0))
+
+    margin_x = min(inset_x, max(0, (width - 1) // 2))
+    margin_v = min(max(default_margin_v, inset_y), max(0, (height - 1) // 2))
+
+    return align, margin_x, margin_x, margin_v
