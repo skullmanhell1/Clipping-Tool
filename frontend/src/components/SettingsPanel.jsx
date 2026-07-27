@@ -162,13 +162,41 @@ const labelledOptions = (values, labels, fallback) =>
     ? values.map((value) => ({ value, label: labels[value] || value }))
     : fallback;
 
+// --- Advanced AV engines (Reqs 20.1, 20.3, 20.4) ---------------------------
+// Engine ids are snake_case ("stem_separation"); show a friendly name.
+const engineLabel = (engine) =>
+  String(engine?.id || "")
+    .split(/[_\-.]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ") || "Engine";
+
+// An unavailable engine says which capabilities it is missing, so a creator
+// cannot enable something that would silently degrade (Req 20.1).
+const engineHint = (engine) => {
+  const missing = Array.isArray(engine?.missing) ? engine.missing : [];
+  if (engine?.available === false) {
+    return missing.length > 0
+      ? `Unavailable — missing ${missing.join(", ")}`
+      : "Unavailable on this install";
+  }
+  return engine?.requires_network
+    ? "Requires network access (blocked in permissibility mode)"
+    : "";
+};
+
 // A small labelled checkbox toggle used across the effects section.
-function Toggle({ label, checked, onChange, hint }) {
+function Toggle({ label, checked, onChange, hint, disabled }) {
   return (
-    <label className="flex cursor-pointer items-start gap-2 text-sm text-slate-300">
+    <label
+      className={`flex items-start gap-2 text-sm text-slate-300 ${
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+      }`}
+    >
       <input
         type="checkbox"
         checked={!!checked}
+        disabled={!!disabled}
         onChange={(e) => onChange(e.target.checked)}
         className="mt-0.5 h-4 w-4 accent-emerald-500"
       />
@@ -186,7 +214,14 @@ function Toggle({ label, checked, onChange, hint }) {
  * Platform, Vibe/Tone, Clip Topic, Process Range, Hashtag count) and
  * captions / watch-folder toggles.
  */
-export default function SettingsPanel({ settings, onChange, watch, onToggleWatch, effects }) {
+export default function SettingsPanel({
+  settings,
+  onChange,
+  watch,
+  onToggleWatch,
+  effects,
+  engines = [],
+}) {
   const reframeLayoutOptions = labelledOptions(
     effects?.reframe_layouts,
     REFRAME_LAYOUT_LABELS,
@@ -197,8 +232,10 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
     REFRAME_INTENSITY_LABELS,
     REFRAME_INTENSITIES
   );
+  const engineRows = Array.isArray(engines) ? engines : [];
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showEffects, setShowEffects] = useState(false);
+  const [showEngines, setShowEngines] = useState(false);
   const set = (key) => (value) => onChange({ ...settings, [key]: value });
   const setFlag = (key) => (checked) => onChange({ ...settings, [key]: checked });
   const setNum = (key) => (e) => {
@@ -500,6 +537,39 @@ export default function SettingsPanel({ settings, onChange, watch, onToggleWatch
             render time. Everything here is applied per clip in a single pass.
           </p>
         </div>
+      )}
+
+      {/* Advanced engines — rendered only when /api/info advertises one, so the
+          v0.8.0 UI is unchanged until an engine ships (Reqs 20.1, 20.3, 20.4). */}
+      {engineRows.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowEngines((v) => !v)}
+            className="mt-4 flex items-center gap-2 text-sm font-medium text-brand-accent hover:underline"
+          >
+            <span>{showEngines ? "▾" : "▸"}</span> Advanced engines
+          </button>
+
+          {showEngines && (
+            <div className="mt-4 space-y-3 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+              {engineRows.map((engine, index) => {
+                const flag = engine?.flag || `${engine?.id || ""}_enabled`;
+                const available = engine?.available !== false;
+                return (
+                  <Toggle
+                    key={flag || index}
+                    label={engineLabel(engine)}
+                    hint={engineHint(engine)}
+                    checked={available && !!settings[flag]}
+                    onChange={setFlag(flag)}
+                    disabled={!available}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-6">
