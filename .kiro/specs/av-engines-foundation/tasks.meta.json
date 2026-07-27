@@ -1,0 +1,64 @@
+{
+  "pbtResults": {
+    "2.4 Property test: time-base conversions round-trip and the fps fallback is recorded → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133447057
+    },
+    "2.5 Property test: frame quantisation is bounded and snapping is idempotent → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133450024
+    },
+    "2.6 Property test: normalisation yields a canonical, in-bounds Segment_List → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133453678
+    },
+    "2.7 Property test: segment normalisation is idempotent → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133457247
+    },
+    "2.8 Property test: Segment_List serialisation round-trips → `tests/test_engine_timebase.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785133461649
+    },
+    "6.3 Property test: probing is total, offline, and shaped → `tests/test_engine_capabilities.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785142903176
+    },
+    "6.4 Property test: the report caches, is deterministic, serialises, and invalidates → `tests/test_engine_capabilities.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785142906679
+    },
+    "7.4 Property test: workspace paths are contained, sanitised, and unique → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144076178
+    },
+    "7.5 Property test: workspaces are always cleaned up, durable artifacts first → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144079475
+    },
+    "7.6 Property test: durable artifact keys are safe and backend-neutral → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144086289
+    },
+    "7.7 Property test: artifact persistence failure degrades, it does not fail the clip → `tests/test_engine_artifacts.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785144089488
+    }
+  },
+  "executionHistory": {
+    "1.1 Declare `hypothesis` in `requirements-dev.txt`": [
+      {
+        "executionId": "c861be97-fcba-481f-945f-8acf36adbf22",
+        "chatSessionId": "b1c3cc3b-33c9-4be9-8490-29efbe412d7d",
+        "timestamp": 1785129089628
+      }
+    ],
+    "1.2 Install the dev dependency set from `requirements-dev.txt` in CI": [
+      {
+        "executionId": "c861be97-fcba-481f-945f-8acf36adbf22",
+        "chatSessionId": "b1c3cc3b-33c9-4be9-8490-29efbe412d7d",
+        "timestamp": 1785129090470
+      }
+    ]
+  }
+}

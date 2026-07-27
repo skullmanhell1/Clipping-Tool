@@ -24,8 +24,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff fastapi uvicorn pydantic pydantic-settings python-dotenv \
-            httpx python-multipart pytest
+          pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
         run: ruff check . || true   # non-blocking until rules are finalised
