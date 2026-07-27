@@ -43,6 +43,46 @@
     "7.7 Property test: artifact persistence failure degrades, it does not fail the clip → `tests/test_engine_artifacts.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785144089488
+    },
+    "9.10 Property test: one engine's failure is isolated → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146203021
+    },
+    "9.6 Property test: marker merge is namespaced, ordered, deduplicated, and silent for skips → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146206110
+    },
+    "9.7 Property test: source-stage engines run once per source and are reused → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146213836
+    },
+    "9.8 Property test: disabled engines cost nothing → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146216794
+    },
+    "9.9 Property test: missing capabilities degrade with exact, single markers → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146219734
+    },
+    "9.11 Property test: time budgets are enforced and abandoned cleanly → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146222670
+    },
+    "9.12 Property test: every engine of a clip shares one Time_Base and adds no probe → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146225881
+    },
+    "9.13 Property test: the rebased Word_Timeline reaches every subsequent engine → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146228862
+    },
+    "9.14 Property test: independent engines are confluent → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146233209
+    },
+    "9.15 Property test: permissibility blocks network engines and keeps runs offline → `tests/test_engine_host.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785146243700
     }
   },
   "executionHistory": {
