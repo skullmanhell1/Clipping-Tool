@@ -23,7 +23,10 @@ Conventions
 
 The first tranche (task 2.3) holds the generators that need no engine contract; the second
 tranche (task 3.4) adds ``st_stage``, ``st_registrations`` and ``st_engine_outcomes``, which
-depend on the ``worker/engines/base.py`` contract.
+depend on the ``worker/engines/base.py`` contract. The third tranche (kinetic-typography
+task 2.1) adds the six engine generators every kinetic property test imports:
+``st_kinetic_options``, ``st_kinetic_style``, ``st_reveal_mode``,
+``st_i18n_word_timeline``, ``st_broken_word_timeline`` and ``st_font_availability``.
 """
 from __future__ import annotations
 
@@ -47,19 +50,27 @@ from worker.engines.timebase import (
 __all__ = [
     "CAPABILITY_KINDS",
     "DEFAULT_SEGMENT_DURATION",
+    "KINETIC_STYLES",
     "LLM_CAPABILITY",
+    "REVEAL_MODES",
     "SAMPLE_RATES",
     "st_availability_map",
+    "st_broken_word_timeline",
     "st_capability_id",
     "st_engine_id",
     "st_engine_outcomes",
+    "st_font_availability",
     "st_hostile_component",
     "st_hostile_value",
+    "st_i18n_word_timeline",
     "st_invalid_fps",
+    "st_kinetic_options",
+    "st_kinetic_style",
     "st_malformed_capability_id",
     "st_options_mapping",
     "st_priority",
     "st_registrations",
+    "st_reveal_mode",
     "st_segment_records",
     "st_stage",
     "st_time_base",
@@ -693,4 +704,523 @@ def st_engine_outcomes(
         ),
         "detail": draw(st.text(max_size=24)),
         "exception": exception,
+    }
+
+
+
+# --------------------------------------------------------------------------- #
+# Tranche 3 (kinetic-typography task 2.1): the six engine generators            #
+# --------------------------------------------------------------------------- #
+# NOTE ON DUPLICATED VOCABULARIES
+# -------------------------------
+# ``worker/engines/kinetic.py`` does not exist yet — kinetic-typography task 3.1 creates
+# it — so ``KINETIC_STYLES`` / ``REVEAL_MODES`` cannot be imported here without making
+# every foundation test collection depend on an unwritten module. They are therefore
+# repeated below as literal constants.
+#
+#   *** Task 3.1 MUST define exactly these values in ``worker/engines/kinetic.py``, and a
+#   *** later test (the natural home is the contract test in ``tests/test_kinetic_engine.py``
+#   *** landed by task 9.4) MUST assert
+#   ***     tuple(kinetic.KINETIC_STYLES) == KINETIC_STYLES
+#   ***     tuple(kinetic.REVEAL_MODES)   == REVEAL_MODES
+#   *** so this duplication cannot silently drift. Once that assertion exists the two
+#   *** spellings are pinned to each other; until then, treat the tuples below as the
+#   *** single source of truth for the generators.
+#
+# NOTE ON WORD CONFIDENCE
+# -----------------------
+# ``tests.conftest.FakeWord`` *does* carry ``.probability``, but it is hard-coded to
+# ``1.0`` and is not a constructor parameter. Rather than widen that shared double, the
+# generators below construct a ``FakeWord`` and then set ``.probability`` on the instance
+# (see :func:`_word`), so the emitted values stay exactly ``FakeWord`` instances and
+# compose with :func:`st_word_timeline`. Consequence for kinetic task 6.8 (Property 13,
+# the Word_Confidence floor): timelines drawn straight from :func:`st_word_timeline`
+# carry ``probability == 1.0`` for every word, so no word can ever sit below a legal
+# ``confidence_floor`` (0.0–1.0). That property must either draw its timeline from
+# :func:`st_i18n_word_timeline` / :func:`st_broken_word_timeline` (both of which draw real
+# probabilities) or set ``.probability`` on the words itself.
+
+#: The 7 Kinetic_Styles, sorted — duplicated from kinetic task 3.1 (see note above).
+KINETIC_STYLES: Tuple[str, ...] = (
+    "bounce",
+    "highlight_sweep",
+    "karaoke_fill",
+    "none",
+    "pop",
+    "slide_up",
+    "typewriter",
+)
+
+#: The 2 Reveal_Modes, sorted — duplicated from kinetic task 3.1 (see note above).
+REVEAL_MODES: Tuple[str, ...] = ("cumulative", "word_by_word")
+
+#: Caption positions (``worker.effects.caption_presets.VALID_POSITIONS``); ``""`` means
+#: "inherit the Base_Preset position" (Req 7.4), so it is a legal option value too.
+_KINETIC_POSITIONS: Tuple[str, ...] = ("bottom", "center", "top")
+
+#: The documented last rung of the font ladder.
+_FALLBACK_FONT = "Arial"
+
+#: Built-in Caption_Preset names (``caption_presets.BUILTIN_PRESETS``), kept as plain
+#: strings so this module imports without the preset registry.
+_PRESET_NAMES: Tuple[str, ...] = (
+    "karaoke",
+    "boxed",
+    "minimal",
+    "pop",
+    "typewriter",
+    "hormozi",
+)
+
+#: Font families worth putting on the ladder: realistic families, families that are never
+#: installed in CI, and hostile-ish spellings the probe must survive.
+_FONT_FAMILIES: Tuple[str, ...] = (
+    "Arial",
+    "Impact",
+    "Inter",
+    "Inter-Bold",
+    "Montserrat",
+    "Anton",
+    "DejaVu Sans",
+    "Noto Sans JP",
+    "Definitely Not Installed",
+    "font;with:punctuation",
+    "  ",
+    "🎬 Display",
+)
+
+
+def _word(start: Any, end: Any, text: str, probability: float = 1.0) -> FakeWord:
+    """A ``tests.conftest.FakeWord`` carrying an explicit Word_Confidence.
+
+    ``FakeWord.__init__`` does not accept ``probability`` (it pins ``1.0``), so it is set
+    on the instance here — the shared double is left untouched and the emitted value is
+    still exactly a ``FakeWord``.
+    """
+    word = FakeWord(start, end, text)
+    word.probability = probability
+    return word
+
+
+# --------------------------------------------------------------------------- #
+# Kinetic_Options field mappings                                                #
+# --------------------------------------------------------------------------- #
+@st.composite
+def st_kinetic_options(
+    draw,
+    *,
+    styles: Sequence[str] = KINETIC_STYLES,
+    reveals: Sequence[str] = REVEAL_MODES,
+    positions: Sequence[str] = _KINETIC_POSITIONS + ("",),
+    captions_enabled: bool = None,
+    hook_enabled: bool = None,
+):
+    """Valid ``Kinetic_Options`` **field mappings** spanning every declared bound.
+
+    Returns a plain ``dict[str, Any]`` of JSON-native scalars, *not* a
+    ``Kinetic_Options`` instance: that dataclass does not exist until kinetic task 3.2,
+    and a mapping is exactly what ``Kinetic_Options.parse`` consumes. Once 3.2 lands,
+    callers write ``Kinetic_Options.parse(draw(st_kinetic_options()))`` — every value is
+    already in range, so ``parse`` is the identity on it (which is what makes the
+    idempotence half of Property 18 meaningful).
+
+    Bounds covered, inclusive, exactly as declared in the design:
+    ``max_lines`` 1–4, ``max_line_width`` 6–80, ``safe_area_x_pct`` 0–25,
+    ``safe_area_y_pct`` 0–40, ``motion_duration_ms`` 20–1000, ``confidence_floor``
+    0.0–1.0. ``style`` / ``reveal`` / ``position`` / the font fields are drawn from their
+    closed vocabularies (``position=""`` means "inherit the Base_Preset position", and
+    ``font_override=""`` means "use ``preset_font``", both legal values).
+
+    ``notes`` is deliberately absent: it is resolution *provenance* written by
+    ``from_processing_options``, never an input field.
+
+    Consumed by kinetic Properties 2, 4, 5, 6, 8, 10–19.
+    """
+    pick = st.sampled_from  # local alias keeps the draws below readable
+    return {
+        # --- motion vocabulary ---
+        "style": draw(pick(list(styles))),
+        "reveal": draw(pick(list(reveals))),
+        # --- look, inherited from the Base_Preset ---
+        "preset_name": draw(pick(list(_PRESET_NAMES))),
+        "font_override": draw(
+            st.one_of(st.just(""), pick(list(_FONT_FAMILIES)))
+        ),
+        "preset_font": draw(pick(list(_FONT_FAMILIES))),
+        "font_size": draw(st.integers(min_value=12, max_value=200)),
+        "position": draw(pick(list(positions))),
+        # --- layout (bounds are inclusive on both ends) ---
+        "max_lines": draw(st.integers(min_value=1, max_value=4)),
+        "max_line_width": draw(st.integers(min_value=6, max_value=80)),
+        "safe_area_x_pct": draw(
+            st.floats(min_value=0.0, max_value=25.0,
+                      allow_nan=False, allow_infinity=False)
+        ),
+        "safe_area_y_pct": draw(
+            st.floats(min_value=0.0, max_value=40.0,
+                      allow_nan=False, allow_infinity=False)
+        ),
+        # --- motion + emphasis ---
+        "motion_duration_ms": draw(st.integers(min_value=20, max_value=1000)),
+        "highlight_keywords": draw(st.booleans()),
+        "keyword_ai": draw(st.booleans()),
+        "emoji_inline": draw(st.booleans()),
+        "confidence_floor": draw(
+            st.floats(min_value=0.0, max_value=1.0,
+                      allow_nan=False, allow_infinity=False)
+        ),
+        # --- carried context ---
+        "captions_enabled": (
+            draw(st.booleans()) if captions_enabled is None else bool(captions_enabled)
+        ),
+        "hook_enabled": (
+            draw(st.booleans()) if hook_enabled is None else bool(hook_enabled)
+        ),
+        "hook_duration_s": draw(
+            st.floats(min_value=0.0, max_value=6.0,
+                      allow_nan=False, allow_infinity=False)
+        ),
+        "hook_font_size": draw(st.integers(min_value=12, max_value=240)),
+        "durable_subtitle": draw(st.booleans()),
+        "permissibility": draw(st.booleans()),
+    }
+
+
+def st_kinetic_style() -> st.SearchStrategy[str]:
+    """One of the 7 :data:`KINETIC_STYLES`; consumed by kinetic Properties 6, 7, 8, 9."""
+    return st.sampled_from(list(KINETIC_STYLES))
+
+
+def st_reveal_mode() -> st.SearchStrategy[str]:
+    """``cumulative`` or ``word_by_word``; consumed by kinetic Properties 6, 7, 9."""
+    return st.sampled_from(list(REVEAL_MODES))
+
+
+# --------------------------------------------------------------------------- #
+# Internationalised word timelines                                              #
+# --------------------------------------------------------------------------- #
+#: Space-free wide scripts: Han, Hiragana, Katakana, Hangul. Every code point here is
+#: East_Asian_Width ``W``/``F``, i.e. 2 Display_Width units per character.
+_WIDE_TOKENS: Tuple[str, ...] = (
+    "漢字",            # Han
+    "日本語",          # Han
+    "中文字幕",        # Han
+    "ひらがな",        # Hiragana
+    "こんにちは",      # Hiragana
+    "カタカナ",        # Katakana
+    "テスト",          # Katakana
+    "한국어",          # Hangul
+    "안녕하세요",      # Hangul
+    "ｆｕｌｌｗｉｄｔｈ",  # fullwidth Latin (East_Asian_Width F)
+)
+
+#: Right-to-left scripts: Arabic and Hebrew, with and without vowel points.
+_RTL_TOKENS: Tuple[str, ...] = (
+    "مرحبا",
+    "العربية",
+    "كَلِمَة",          # Arabic + combining harakat
+    "שלום",
+    "עברית",
+    "בְּרֵאשִׁית",       # Hebrew + combining niqqud
+)
+
+#: Tokens carrying combining marks (Unicode categories ``Mn``/``Me``) — decomposed
+#: sequences that must count 0 Display_Width units for the mark itself.
+_COMBINING_TOKENS: Tuple[str, ...] = (
+    "e\u0301",                 # e + COMBINING ACUTE
+    "cafe\u0301",              # café, decomposed
+    "nai\u0308ve",             # naïve, decomposed
+    "a\u0301\u0300\u0302",     # stacked marks
+    "\u0915\u094d\u0937",      # Devanagari conjunct
+    "o\u20dd",                 # COMBINING ENCLOSING CIRCLE (Me)
+)
+
+#: Emoji tokens: plain, skin-tone modified, ZWJ sequences, and flags.
+_EMOJI_TOKENS: Tuple[str, ...] = (
+    "🎬",
+    "🔥",
+    "👍🏽",
+    "👨‍👩‍👧",
+    "🇯🇵",
+    "word🔥",
+)
+
+#: Single tokens whose Display_Width provably exceeds *any* legal ``max_line_width``
+#: (the declared maximum is 80 units), so the "one over-long word sits alone on its line
+#: and is never split" branch of layout is always reachable.
+_OVER_LONG_TOKENS: Tuple[str, ...] = (
+    "日" * 45,                 # 90 units (wide, 2 each)
+    "ｗ" * 50,                 # 100 units (fullwidth)
+    "A" * 90,                  # 90 units (narrow)
+    "supercalifragilisticexpialidocious" * 3,   # 102 units
+    "🔥" * 41,                 # 82 units (emoji, 2 each)
+    "한글" * 25,               # 100 units
+)
+
+#: Ordinary Latin tokens, so an i18n timeline is a realistic *mixture* rather than
+#: uniformly exotic.
+_LATIN_TOKENS: Tuple[str, ...] = ("this", "changed", "everything", "ok", "I")
+
+
+def _st_i18n_token(*, include_over_long: bool = True) -> st.SearchStrategy[str]:
+    """One internationalised token from the wide / RTL / combining / emoji / Latin pools
+    (plus the over-long pool unless suppressed)."""
+    pools = [
+        st.sampled_from(list(_WIDE_TOKENS)),
+        st.sampled_from(list(_RTL_TOKENS)),
+        st.sampled_from(list(_COMBINING_TOKENS)),
+        st.sampled_from(list(_EMOJI_TOKENS)),
+        st.sampled_from(list(_LATIN_TOKENS)),
+    ]
+    if include_over_long:
+        pools.append(st.sampled_from(list(_OVER_LONG_TOKENS)))
+    return st.one_of(pools)
+
+
+@st.composite
+def st_i18n_word_timeline(
+    draw,
+    *,
+    min_words: int = 1,
+    max_words: int = 8,
+    include_over_long: bool = True,
+):
+    """An internationalised Word_Timeline built **on top of** :func:`st_word_timeline`.
+
+    The timing skeleton is drawn from :func:`st_word_timeline`, so the bounds invariant
+    is identical by construction (``0 <= start <= end <= duration``, sorted by ``start``);
+    only the word ``text`` is replaced, from the wide-script (Han / Hiragana / Katakana /
+    Hangul), right-to-left (Arabic / Hebrew), combining-mark, emoji, Latin and over-long
+    pools. When ``include_over_long`` is set, at least one word is guaranteed to be a
+    single token whose Display_Width exceeds any legal ``max_line_width`` (> 80 units).
+
+    Every word also carries a drawn ``probability`` (see the tranche-3 note above), so
+    the Word_Confidence floor is exercisable from this generator.
+
+    Returns ``(words, duration)`` — the same shape :func:`st_word_timeline` returns, so
+    the two are drop-in interchangeable in a property.
+
+    Consumed by kinetic Properties 7 and 14.
+    """
+    skeleton, duration = draw(
+        st_word_timeline(min_words=min_words, max_words=max_words)
+    )
+    token = _st_i18n_token(include_over_long=include_over_long)
+    words: List[FakeWord] = [
+        _word(
+            w.start,
+            w.end,
+            draw(token),
+            draw(st.floats(min_value=0.0, max_value=1.0,
+                           allow_nan=False, allow_infinity=False)),
+        )
+        for w in skeleton
+    ]
+    if include_over_long and words:
+        index = draw(st.integers(min_value=0, max_value=len(words) - 1))
+        words[index] = _word(
+            words[index].start,
+            words[index].end,
+            draw(st.sampled_from(list(_OVER_LONG_TOKENS))),
+            words[index].probability,
+        )
+    return words, duration
+
+
+# --------------------------------------------------------------------------- #
+# Broken word timelines                                                         #
+# --------------------------------------------------------------------------- #
+#: Non-numeric bound payloads: ``captions._word_bounds`` must coerce every one of these
+#: to ``0.0`` rather than raise.
+_NON_NUMERIC_BOUNDS: Tuple[Any, ...] = (
+    None,
+    "",
+    " ",
+    "abc",
+    "1.0",
+    "nan",
+    "inf",
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    [0.0],
+    {"start": 0.0},
+    (),
+    True,
+)
+
+#: Empty / whitespace-only word texts, which sanitisation must drop entirely.
+_BLANK_TEXTS: Tuple[str, ...] = ("", " ", "   ", "\t", "\n", "\r\n", "\u00a0", "\u3000")
+
+
+def _break_missing_end(word: FakeWord) -> FakeWord:
+    """Drop the ``end`` attribute entirely, so ``getattr(w, "end", None)`` is ``None``."""
+    broken = _word(word.start, word.end, word.text, word.probability)
+    del broken.end
+    return broken
+
+
+@st.composite
+def st_broken_word_timeline(
+    draw,
+    *,
+    min_words: int = 1,
+    max_words: int = 8,
+):
+    """A Word_Timeline whose words are malformed in every documented way.
+
+    Built by drawing a well-formed skeleton from :func:`st_word_timeline` and corrupting
+    a random, possibly empty, subset — so a drawn timeline can be anywhere between
+    entirely valid and entirely broken, which is exactly what the
+    ``SYNTHESISED_RATIO_LIMIT`` branch of Property 12 needs to straddle.
+
+    Corruptions applied, one per word, covering the whole documented set:
+
+    * **missing ``end``** — the attribute is deleted, not set to ``None``;
+    * **non-numeric bounds** — ``None``, ``""``, ``"abc"``, ``"1.0"``, NaN / ±inf, a
+      list, a dict, a tuple, ``True``;
+    * **inverted** — ``end < start``;
+    * **zero-length** — ``end == start``;
+    * **empty / whitespace-only text** — including NBSP and ideographic space.
+
+    Words carry drawn ``probability`` values (see the tranche-3 note above).
+
+    Returns ``(words, duration)``, the :func:`st_word_timeline` shape. ``duration`` is
+    always finite and positive even when every word is broken.
+
+    Consumed by kinetic Property 12.
+    """
+    skeleton, duration = draw(
+        st_word_timeline(min_words=min_words, max_words=max_words)
+    )
+    words: List[FakeWord] = []
+    for source in skeleton:
+        probability = draw(
+            st.floats(min_value=0.0, max_value=1.0,
+                      allow_nan=False, allow_infinity=False)
+        )
+        base = _word(source.start, source.end, source.text, probability)
+        kind = draw(
+            st.sampled_from(
+                [
+                    "valid",
+                    "missing_end",
+                    "non_numeric_start",
+                    "non_numeric_end",
+                    "inverted",
+                    "zero_length",
+                    "blank_text",
+                ]
+            )
+        )
+        if kind == "missing_end":
+            base = _break_missing_end(base)
+        elif kind == "non_numeric_start":
+            base = _word(
+                draw(st.sampled_from(list(_NON_NUMERIC_BOUNDS))),
+                source.end,
+                source.text,
+                probability,
+            )
+        elif kind == "non_numeric_end":
+            base = _word(
+                source.start,
+                draw(st.sampled_from(list(_NON_NUMERIC_BOUNDS))),
+                source.text,
+                probability,
+            )
+        elif kind == "inverted":
+            base = _word(source.end, source.start, source.text, probability)
+        elif kind == "zero_length":
+            base = _word(source.start, source.start, source.text, probability)
+        elif kind == "blank_text":
+            base = _word(
+                source.start,
+                source.end,
+                draw(st.sampled_from(list(_BLANK_TEXTS))),
+                probability,
+            )
+        words.append(base)
+    return words, duration
+
+
+# --------------------------------------------------------------------------- #
+# Font ladder availability                                                      #
+# --------------------------------------------------------------------------- #
+@st.composite
+def st_font_availability(
+    draw,
+    *,
+    fonts: Sequence[str] = _FONT_FAMILIES,
+    noise: st.SearchStrategy = None,
+    allow_none_available: bool = True,
+):
+    """Availability combinations over the ``(font_override, preset_font, "Arial")`` ladder.
+
+    Returns a plain ``dict`` whose keys are a stability contract:
+
+    ``font_override`` / ``preset_font``
+        the two option fields feeding the ladder; ``font_override`` is often ``""``.
+    ``fallback_font``
+        always ``"Arial"`` — the documented last rung.
+    ``ladder``
+        ``tuple[str, ...]``: the non-empty rungs in probe order, duplicates removed,
+        ``"Arial"`` last. This is the *only* set of families the engine may emit.
+    ``availability``
+        ``dict[str, bool]`` keyed by **capability id** (``font:<family>``), ready to hand
+        straight to ``tests.fakes.StaticProber(mapping, default=...)``. Composed with the
+        foundation :func:`st_availability_map`, whose unrelated ids are merged in as
+        noise; the ladder's own entries always win over the noise.
+    ``default``
+        the ``StaticProber`` answer for any id absent from ``availability``.
+    ``available_families``
+        ``tuple[str, ...]``: the ladder members whose id maps to ``True``.
+    ``expected_font``
+        the family the ladder must resolve to: the first available rung, else
+        ``"Arial"``.
+    ``expected_marked``
+        ``True`` when ``expected_font`` differs from the requested family
+        (``ladder[0]``), i.e. exactly one ``degraded:font:<requested>`` marker is owed.
+
+    ``allow_none_available=False`` forces at least one rung available, for tests that
+    need the non-degraded path.
+
+    Consumed by kinetic Property 17.
+    """
+    font_override = draw(st.one_of(st.just(""), st.sampled_from(list(fonts))))
+    preset_font = draw(st.sampled_from(list(fonts)))
+
+    ladder: List[str] = []
+    for family in (font_override, preset_font, _FALLBACK_FONT):
+        if family and family not in ladder:
+            ladder.append(family)
+
+    flags = draw(
+        st.lists(st.booleans(), min_size=len(ladder), max_size=len(ladder))
+    )
+    if not allow_none_available and not any(flags):
+        flags[draw(st.integers(min_value=0, max_value=len(ladder) - 1))] = True
+
+    noise_strategy = st_availability_map(max_size=4) if noise is None else noise
+    availability: Dict[str, bool] = dict(draw(noise_strategy))
+    # The ladder's own answers are authoritative; noise must not shadow them.
+    availability.update(
+        {f"font:{family}": bool(flag) for family, flag in zip(ladder, flags)}
+    )
+
+    available_families = tuple(
+        family for family, flag in zip(ladder, flags) if flag
+    )
+    expected_font = available_families[0] if available_families else _FALLBACK_FONT
+
+    return {
+        "font_override": font_override,
+        "preset_font": preset_font,
+        "fallback_font": _FALLBACK_FONT,
+        "ladder": tuple(ladder),
+        "availability": availability,
+        "default": draw(st.booleans()),
+        "available_families": available_families,
+        "expected_font": expected_font,
+        "expected_marked": expected_font != ladder[0],
     }
