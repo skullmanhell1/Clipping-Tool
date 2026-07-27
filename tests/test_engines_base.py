@@ -31,6 +31,7 @@ cannot prove either claim.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import itertools
 import json
 import math
@@ -950,3 +951,408 @@ def test_every_engine_module_imports_without_heavy_dependencies():
         f"stdout={probe.stdout}\nstderr={probe.stderr}"
     )
     assert probe.stdout.strip() == "ok:" + ",".join(modules)
+
+
+
+# ===========================================================================
+# 13.3 — legacy marker regression and contract-surface pin
+# ---------------------------------------------------------------------------
+# Two guarantees are frozen here, both of them *pins*: a test that fails the
+# moment a name, field, spelling or constructor keyword changes, so the change
+# has to be a deliberate decision rather than an accident.
+#
+#   (1) Req 23.5 — the v0.8.0 ``ClipResult.effects_applied`` marker strings keep
+#       their spellings, stay documented in ``worker/models.py``, and remain
+#       disjoint from the ``engine:`` namespace this spec introduces (Req 3.3).
+#   (2) Req 23.6 / 22.6 — the public names and dataclass fields of
+#       ``worker.engines.{base,registry,capabilities,timebase,artifacts}``, plus
+#       the ``tests/fakes.py`` doubles and ``tests/strategies.py`` generators, are
+#       stable, so the queued **audio stem separation** and **kinetic typography**
+#       specs can depend on them without modification.
+# ===========================================================================
+
+#: ``worker/models.py`` source and the ``effects_applied`` documentation block
+#: inside it. ``index`` raising is itself part of the pin: the anchors must stay.
+_MODELS_SOURCE = (_REPO_ROOT / "worker" / "models.py").read_text(encoding="utf-8")
+_EFFECTS_DOC = _MODELS_SOURCE[
+    _MODELS_SOURCE.index("holds free-form"):
+    _MODELS_SOURCE.index("effects_applied: list[str]")
+]
+
+#: Production modules that emit ``effects_applied`` markers.
+_MARKER_SOURCES = "\n".join(
+    path.read_text(encoding="utf-8")
+    for path in [
+        _REPO_ROOT / "worker" / "pipeline.py",
+        _REPO_ROOT / "worker" / "diarization.py",
+        _REPO_ROOT / "worker" / "visual_selection.py",
+        _REPO_ROOT / "worker" / "captions.py",
+        *sorted((_REPO_ROOT / "worker" / "effects").glob("*.py")),
+    ]
+)
+
+#: v0.8.0 markers documented in ``worker/models.py`` (Tier 1 + v0.8.0 families).
+#: Spellings pinned exactly as documented — trailing ``:`` marks a parameterised
+#: family (``<prefix><value>``).
+V080_DOCUMENTED_MARKERS = (
+    "caption_preset:",
+    "caption_preset_substituted",
+    "font_substituted:",
+    "keyword_highlight",
+    "caption_emoji",
+    "broll:",
+    "broll_source:local_only",
+    "broll_asset_failed",
+    "broll_license_unknown",
+    "broll_degraded",
+    "visual_selection",
+    "visual_degraded",
+    "diarization:transcript",
+    "diarization:model",
+    "diarization_degraded",
+    "speaker_reframe:follow_active",
+    "speaker_reframe:split_screen",
+    "speaker_reframe_substituted",
+    "faces_none",
+    "speaker_reframe_degraded",
+)
+
+#: Legacy Phase-4 markers the Compositor/Pipeline emit as literals.
+V080_LITERAL_MARKERS = (
+    "captions",
+    "hook_title",
+    "zoom",
+    "transitions",
+    "fades",
+    "progress_bar",
+    "reframe",
+    "filler_removal",
+    "visual_selection",
+    "caption_preset_substituted",
+    "keyword_highlight",
+    "caption_emoji",
+    "broll_degraded",
+    "diarization:transcript",
+    "diarization:model",
+    "diarization_degraded",
+    "speaker_reframe_degraded",
+)
+
+#: Parameterised marker families the Compositor/Pipeline build with f-strings.
+V080_MARKER_FAMILIES = (
+    "color:",
+    "emoji:",
+    "music:",
+    "caption_preset:",
+    "font_substituted:",
+    "broll:",
+    "speaker_reframe:",
+    "diarization:",
+)
+
+#: Everything above, for the disjointness check.
+V080_ALL_MARKERS = tuple(
+    sorted(set(V080_DOCUMENTED_MARKERS + V080_LITERAL_MARKERS + V080_MARKER_FAMILIES))
+)
+
+
+def test_v080_effects_applied_markers_are_unchanged():
+    """Validates: Requirements 23.5 — legacy marker spellings are frozen.
+
+    Every documented v0.8.0 marker still appears verbatim in the
+    ``effects_applied`` documentation block of ``worker/models.py``, and every
+    marker the Compositor/Pipeline emit as a literal (or as an f-string family
+    prefix) still appears verbatim in their source. Changing a spelling therefore
+    breaks this test rather than silently breaking a consumer.
+    """
+    for marker_text in V080_DOCUMENTED_MARKERS:
+        assert f"``{marker_text}" in _EFFECTS_DOC, f"undocumented marker: {marker_text}"
+
+    for marker_text in V080_LITERAL_MARKERS:
+        assert f'"{marker_text}"' in _MARKER_SOURCES, f"no longer emitted: {marker_text}"
+
+    for family in V080_MARKER_FAMILIES:
+        assert family in _MARKER_SOURCES, f"family no longer emitted: {family}"
+
+
+def test_v080_markers_are_disjoint_from_the_engine_namespace():
+    """Validates: Requirements 23.5, 3.3 — the two marker namespaces cannot collide.
+
+    No v0.8.0 marker lives in the ``engine:`` namespace, and no engine marker can
+    ever be confused with one: every :func:`marker` result starts with
+    ``engine:`` and neither string is a prefix of the other.
+    """
+    prefix = f"{marker('x', 'y').split(':')[0]}:"
+    assert prefix == "engine:"
+
+    engine_markers = {
+        marker(engine_id, detail)
+        for engine_id in ("stem_separation", "kinetic_typography", "captions", "reframe")
+        for detail in ("applied", "unavailable:python_pkg:demucs", "timeout", "failed")
+    }
+    assert all(entry.startswith(prefix) for entry in engine_markers)
+
+    for legacy in V080_ALL_MARKERS:
+        assert not legacy.startswith(prefix), legacy
+        assert legacy.split(":")[0] != "engine", legacy
+        for engine_marker in engine_markers:
+            assert engine_marker != legacy
+            assert not engine_marker.startswith(legacy)
+            assert not legacy.startswith(engine_marker)
+
+
+#: ``__all__`` of every engine module, pinned exactly (order included).
+_PINNED_EXPORTS = {
+    "worker.engines.base": [
+        "DIGEST_LENGTH", "MARKER_PREFIX", "FLAG_SUFFIX", "Engine_Stage",
+        "Engine_Status", "Engine_Artifact", "Compose_Input", "Compose_Contribution",
+        "Engine_Context", "Engine_Result", "marker", "merge_markers",
+        "Engine_Options", "coerce_bool", "coerce_int", "coerce_float",
+        "coerce_choice", "coerce_str", "dump_options", "options_digest",
+        "derive_seed", "AV_Engine",
+    ],
+    "worker.engines.registry": [
+        "Engine_Registration_Error", "Engine_Record", "Engine_Registry",
+        "get_registry", "register", "reset_registry",
+    ],
+    "worker.engines.capabilities": [
+        "Capability_Kind", "LLM_CAPABILITY", "CAPABILITY_SEPARATOR",
+        "MAX_DETAIL_LENGTH", "FFMPEG_FILTER_TIMEOUT", "parse_capability_id",
+        "Capability_Status", "Prober", "MODEL_LOCATORS", "default_prober",
+        "Capability_Report", "get_report", "reset_report",
+    ],
+    "worker.engines.timebase": [
+        "DEFAULT_FPS", "DEFAULT_SAMPLE_RATE", "MIN_FPS", "MAX_FPS", "Rounding",
+        "Time_Base", "Timeline_Segment", "normalize_segments", "parse_segments",
+        "dump_segments", "total_duration", "invert_segments", "clip_bounds",
+    ],
+    "worker.engines.artifacts": [
+        "ENGINE_TEMP_ROOT", "ENGINE_KEY_ROOT", "MAX_COMPONENT_LEN",
+        "sanitize_component", "Engine_Workspace", "allocate_workspace",
+        "cleanup_workspace", "cleanup_job_workspaces", "cleanup_job_artifacts",
+        "artifact_key", "persist_artifact",
+    ],
+}
+
+#: Dataclass field order of every record the sibling specs construct or read.
+_PINNED_FIELDS = {
+    "Engine_Artifact": ["name", "path", "media_type", "durable", "storage_key"],
+    "Compose_Input": ["path", "loop", "duration"],
+    "Compose_Contribution": [
+        "engine_id", "inputs", "video_filters", "audio_filters", "subtitle_path",
+        "z_order",
+    ],
+    "Engine_Context": [
+        "job_id", "clip_id", "engine_id", "stage", "source_path", "clip_path",
+        "time_base", "clip_start", "clip_end", "duration", "words", "options",
+        "options_digest", "seed", "workspace", "capabilities", "permissibility",
+        "deadline", "time_budget_s", "notes", "deps",
+    ],
+    "Engine_Result": [
+        "engine_id", "status", "markers", "artifacts", "contribution", "plan",
+        "media", "detail", "elapsed_s",
+    ],
+    "Engine_Record": ["engine", "engine_id", "stage", "priority"],
+    "Capability_Status": ["capability_id", "available", "detail"],
+    "Time_Base": ["fps", "sample_rate", "rounding", "fps_substituted"],
+    "Timeline_Segment": ["start", "end"],
+    "Engine_Workspace": [
+        "root", "temp_dir", "job_id", "clip_id", "engine_id", "options_digest",
+    ],
+}
+
+
+def test_engine_module_exports_are_pinned():
+    """Validates: Requirements 23.6 — the five engine modules' public names are stable."""
+    import importlib
+
+    for module_name, exports in _PINNED_EXPORTS.items():
+        module = importlib.import_module(module_name)
+        assert list(module.__all__) == exports, module_name
+        for name in exports:
+            assert hasattr(module, name), f"{module_name}.{name} is missing"
+
+
+def test_engine_record_fields_are_pinned():
+    """Validates: Requirements 23.6 — record shapes the sibling specs build are stable."""
+    from worker.engines.artifacts import Engine_Workspace
+    from worker.engines.base import (
+        Compose_Contribution,
+        Compose_Input,
+        Engine_Artifact,
+    )
+    from worker.engines.capabilities import Capability_Status
+    from worker.engines.registry import Engine_Record
+    from worker.engines.timebase import Timeline_Segment
+
+    records = {
+        "Engine_Artifact": Engine_Artifact,
+        "Compose_Input": Compose_Input,
+        "Compose_Contribution": Compose_Contribution,
+        "Engine_Context": Engine_Context,
+        "Engine_Result": Engine_Result,
+        "Engine_Record": Engine_Record,
+        "Capability_Status": Capability_Status,
+        "Time_Base": Time_Base,
+        "Timeline_Segment": Timeline_Segment,
+        "Engine_Workspace": Engine_Workspace,
+    }
+    assert set(records) == set(_PINNED_FIELDS)
+    for name, cls in records.items():
+        assert dataclasses.is_dataclass(cls), name
+        assert [f.name for f in dataclasses.fields(cls)] == _PINNED_FIELDS[name], name
+        # Every record is frozen, so an engine cannot write back into host state.
+        assert cls.__dataclass_params__.frozen, name
+
+
+def test_engine_enums_and_constants_are_pinned():
+    """Validates: Requirements 23.6 — enum members and documented constants are stable."""
+    from worker.engines.artifacts import (
+        ENGINE_KEY_ROOT,
+        ENGINE_TEMP_ROOT,
+        MAX_COMPONENT_LEN,
+    )
+    from worker.engines.base import MARKER_PREFIX
+    from worker.engines.capabilities import Capability_Kind, LLM_CAPABILITY
+    from worker.engines.timebase import (
+        DEFAULT_FPS,
+        DEFAULT_SAMPLE_RATE,
+        MAX_FPS,
+        MIN_FPS,
+        Rounding,
+    )
+
+    assert [(s.name, s.value) for s in Engine_Stage] == [
+        ("SOURCE", "source"), ("AUDIO", "audio"), ("GEOMETRY", "geometry"),
+        ("COMPOSE", "compose"), ("POST", "post"),
+    ]
+    assert [(s.name, s.value) for s in Engine_Status] == [
+        ("APPLIED", "applied"), ("SKIPPED", "skipped"), ("DEGRADED", "degraded"),
+        ("FAILED", "failed"),
+    ]
+    assert [(k.name, k.value) for k in Capability_Kind] == [
+        ("PYTHON_PKG", "python_pkg"), ("BINARY", "binary"),
+        ("FFMPEG_FILTER", "ffmpeg_filter"), ("FONT", "font"),
+        ("PROVIDER_KEY", "provider_key"), ("MODEL", "model"), ("LLM", "llm"),
+    ]
+    assert [(r.name, r.value) for r in Rounding] == [
+        ("NEAREST", "nearest"), ("FLOOR", "floor"),
+    ]
+    assert (DIGEST_LENGTH, MARKER_PREFIX, FLAG_SUFFIX) == (16, "engine", "_enabled")
+    assert (DEFAULT_FPS, DEFAULT_SAMPLE_RATE, MIN_FPS, MAX_FPS) == (
+        30.0, 48000, 1.0, 240.0,
+    )
+    assert (ENGINE_TEMP_ROOT, ENGINE_KEY_ROOT, MAX_COMPONENT_LEN) == (
+        "engines", "engines", 48,
+    )
+    assert LLM_CAPABILITY == "llm"
+
+
+def test_engine_method_surface_is_pinned():
+    """Validates: Requirements 23.6, 22.2 — the callable surface both siblings use.
+
+    Includes the ``Engine_Registry.stage_of`` / ``__iter__`` conveniences, which
+    are approved parts of the contract and are staying.
+    """
+    from worker.engines import artifacts as artifacts_mod
+    from worker.engines.capabilities import Capability_Report
+    from worker.engines.registry import Engine_Record, Engine_Registry
+
+    # AV_Engine — the surface both sibling specs subclass verbatim.
+    assert sorted(AV_Engine.__abstractmethods__) == ["plan", "resolve_options", "run"]
+    assert {
+        name: getattr(AV_Engine, name)
+        for name in (
+            "engine_id", "stage", "priority", "required_capabilities",
+            "optional_capabilities", "requires_network", "requires_model_download",
+            "time_budget_s", "max_media_passes", "produces_media",
+        )
+    } == {
+        "engine_id": "", "stage": Engine_Stage.POST, "priority": 100,
+        "required_capabilities": (), "optional_capabilities": (),
+        "requires_network": False, "requires_model_download": False,
+        "time_budget_s": 30.0, "max_media_passes": 1, "produces_media": False,
+    }
+    assert callable(AV_Engine.flag_field) and callable(AV_Engine.is_enabled)
+
+    # Engine_Registry, including stage_of and the iteration protocol.
+    assert sorted(n for n in vars(Engine_Registry) if not n.startswith("_")) == [
+        "all", "find", "for_stage", "get", "ids", "records", "register", "reset",
+        "stage_of",
+    ]
+    for dunder in ("__init__", "__len__", "__contains__", "__iter__"):
+        assert dunder in vars(Engine_Registry), dunder
+    assert "sort_key" in vars(Engine_Record)
+    assert isinstance(Engine_Record.sort_key, property)
+
+    # Capability_Report and Engine_Context/Engine_Result helpers.
+    assert sorted(n for n in dir(Capability_Report) if not n.startswith("_")) == [
+        "available", "first_missing", "invalidate", "missing", "status", "to_dict",
+    ]
+    for name in ("rng", "remaining"):
+        assert callable(getattr(Engine_Context, name)), name
+    for name in ("to_dict", "from_dict", "skipped", "degraded", "failed"):
+        assert callable(getattr(Engine_Result, name)), name
+    for name in ("from_media_info", "from_dict", "to_dict", "frame_duration",
+                 "seconds_to_frame", "frame_to_seconds", "seconds_to_sample",
+                 "sample_to_seconds", "snap"):
+        assert callable(getattr(Time_Base, name)), name
+
+    # Workspace/artifact entry points, parameter names included.
+    expected_signatures = {
+        "sanitize_component": ["value", "fallback"],
+        "allocate_workspace": [
+            "temp_dir", "job_id", "clip_id", "engine_id", "options_digest", "create",
+        ],
+        "cleanup_workspace": ["ws", "remover", "logger"],
+        "cleanup_job_workspaces": ["temp_dir", "job_id", "logger"],
+        "artifact_key": ["job_id", "clip_id", "engine_id", "name"],
+        "persist_artifact": ["artifact", "job_id", "clip_id", "engine_id", "storage"],
+    }
+    for name, params in expected_signatures.items():
+        signature = inspect.signature(getattr(artifacts_mod, name))
+        assert list(signature.parameters) == params, name
+    for name in ("path", "artifact", "exists"):
+        assert callable(getattr(artifacts_mod.Engine_Workspace, name)), name
+
+
+def test_shared_test_doubles_and_generators_are_pinned():
+    """Validates: Requirements 22.6, 22.4 — the reuse contract for both sibling specs.
+
+    ``tests/fakes.py`` and ``tests/strategies.py`` exist precisely so the stem
+    separation and kinetic typography specs import rather than redefine them, so
+    the double constructor keywords and the generator names are frozen here.
+    """
+    from tests import fakes, strategies
+
+    expected_doubles = {
+        "FakeEngine": [
+            "engine_id", "stage", "status", "markers", "artifacts", "contribution",
+            "plan", "media", "required_capabilities", "optional_capabilities",
+            "requires_network", "priority",
+        ],
+        "RaisingEngine": ["engine_id", "stage", "exc"],
+        "SlowEngine": ["engine_id", "stage", "overrun"],
+        "StaticProber": ["mapping", "default"],
+        "CountingProber": ["inner"],
+        "RaisingProber": ["exc"],
+        "RecordingStorage": ["fail_on"],
+        "FakeClock": ["start"],
+    }
+    for name, required in expected_doubles.items():
+        double = getattr(fakes, name)
+        params = list(inspect.signature(double.__init__).parameters)[1:]
+        # Designed keywords must all still be accepted, in the designed order;
+        # extra trailing keywords are additive and therefore allowed.
+        assert params[: len(required)] == required, name
+
+    assert list(strategies.__all__) == [
+        "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "LLM_CAPABILITY",
+        "SAMPLE_RATES", "st_availability_map", "st_capability_id", "st_engine_id",
+        "st_engine_outcomes", "st_hostile_component", "st_hostile_value",
+        "st_invalid_fps", "st_malformed_capability_id", "st_options_mapping",
+        "st_priority", "st_registrations", "st_segment_records", "st_stage",
+        "st_time_base", "st_well_formed_capability_id", "st_word_timeline",
+    ]
+    for name in strategies.__all__:
+        assert hasattr(strategies, name), name
