@@ -1112,3 +1112,552 @@ def test_p13_clip_count_invariant_under_degradation_and_failure(data):
 
     reset_registry()
     reset_report()
+
+
+
+# ===========================================================================
+# Advanced AV engines (av-engines-foundation) — Task 13.1 / 13.2
+# ---------------------------------------------------------------------------
+# Property 34: All engines off reproduces v0.8.0 exactly.
+#
+# This is the spec's central backward-compatibility guarantee, so the reference
+# it compares against must be a *genuinely un-hooked* Pipeline — not merely a
+# Pipeline whose host reports ``active == False``. Monkeypatching
+# ``pipeline.Engine_Host`` with a factory that returns an inactive host would
+# still CONSTRUCT a host and would still evaluate every ``if host.active`` guard,
+# so it could never detect a hook that changed behaviour before the guard.
+#
+# ``UNHOOKED_PIPELINE`` therefore rebuilds the v0.8.0 code path from the real
+# ``worker/pipeline.py`` source: the module is parsed, the single
+# ``host = Engine_Host(...)`` construction and all six ``if host.active:`` blocks
+# are removed from the syntax tree, and the result is executed as its own module.
+# The transform asserts the exact number of removals, asserts that no ``host`` /
+# ``Engine_Host`` name survives anywhere in the tree, and finally rebinds
+# ``Engine_Host`` in the baseline module to a factory that RAISES — so if the
+# strip ever silently stops matching, the baseline run fails loudly instead of
+# quietly comparing a hooked run against another hooked run.
+#
+# The property then compares three runs of the same input and options:
+#
+#   (A) ``UNHOOKED_PIPELINE``      — no Engine_Host exists at all (true baseline)
+#   (B) ``pipeline`` + EMPTY registry   — the real hooked code path, host inactive
+#   (C) ``pipeline`` + LOADED registry  — engines registered, every flag off
+#
+# on clip count, per-clip ``effects_applied``, ffmpeg invocation count, ffprobe
+# count, the full ffmpeg argv (and therefore the ``-filter_complex`` string,
+# captured by spying on ``compositor._run``), and the recorded stage order
+# ``cut -> filler removal -> geometry -> compositor -> thumbnail``.
+#
+# Every ffmpeg/ffprobe touch point is stubbed, so one hypothesis example costs a
+# handful of small writes rather than nine ffmpeg encodes; the real-ffmpeg parity
+# example lives in ``test_all_off_ffmpeg_parity_matches_unhooked_baseline`` below
+# (task 13.2). As in P13 above, the two process-wide engine singletons are reset
+# INSIDE the property body, because a fixture runs once per *test*, not per
+# *example*.
+# ===========================================================================
+import ast as _ast
+import re as _re
+import types as _types
+
+from worker.engines.registry import get_registry
+
+try:  # the hostile-options generator from the shared strategies module
+    from tests.strategies import st_options_mapping
+except ImportError:  # pragma: no cover - importable either way under pytest
+    from strategies import st_options_mapping
+
+#: The Pipeline's fixed stage order (Req 23.2). Every per-clip stage sequence the
+#: recorder observes must be a subsequence of this tuple, in this order.
+P34_CANONICAL_STAGES = ("cut", "filler", "geometry", "compositor", "thumbnail")
+
+#: Exact number of engine hook sites in ``worker/pipeline.py``: one host
+#: construction plus six ``if host.active:`` guards (source, audio, geometry,
+#: compose, post, finish_job). Pinned so the baseline builder fails loudly if the
+#: hook shape ever changes.
+P34_EXPECTED_STRIP = {"host_assignments": 1, "active_guards": 6}
+
+
+def _p34_never_construct(*args, **kwargs):  # pragma: no cover - guard, must never run
+    raise AssertionError(
+        "the un-hooked baseline pipeline constructed an Engine_Host: the AST strip "
+        "no longer removes every engine hook, so the P34 baseline is not a genuine "
+        "v0.8.0 reference"
+    )
+
+
+def _build_unhooked_pipeline():
+    """Return ``worker.pipeline`` with every engine hook removed at the AST level.
+
+    The returned module is a real, importable module object sharing the same
+    collaborator modules (``fu``, ``compositor``, ``filler``, ``sel``, ...) as
+    ``worker.pipeline``, so patching those module attributes affects both. Its own
+    ``Engine_Host`` name is rebound to :func:`_p34_never_construct`.
+    """
+    import worker.pipeline as pl
+
+    source = _Path(pl.__file__).read_text(encoding="utf-8")
+    tree = _ast.parse(source)
+    removed = {"host_assignments": 0, "active_guards": 0}
+
+    class _Strip(_ast.NodeTransformer):
+        """Drop ``host = Engine_Host(...)`` and every ``if host.active:`` block."""
+
+        def visit_Assign(self, node):
+            self.generic_visit(node)
+            targets = node.targets
+            if (
+                len(targets) == 1
+                and isinstance(targets[0], _ast.Name)
+                and targets[0].id == "host"
+            ):
+                removed["host_assignments"] += 1
+                return None
+            return node
+
+        def visit_If(self, node):
+            self.generic_visit(node)
+            test = node.test
+            if (
+                isinstance(test, _ast.Attribute)
+                and test.attr == "active"
+                and isinstance(test.value, _ast.Name)
+                and test.value.id == "host"
+            ):
+                removed["active_guards"] += 1
+                return node.orelse or None
+            return node
+
+    stripped = _Strip().visit(tree)
+    _ast.fix_missing_locations(stripped)
+
+    assert removed == P34_EXPECTED_STRIP, (
+        f"unexpected engine-hook shape in worker/pipeline.py: {removed}"
+    )
+    # No ``host`` / ``Engine_Host`` *name* may survive anywhere in the tree, so the
+    # baseline cannot construct, consult or finalise a host by any route.
+    names = {node.id for node in _ast.walk(stripped) if isinstance(node, _ast.Name)}
+    assert "host" not in names, "a 'host' reference survived the strip"
+    assert "Engine_Host" not in names, "an 'Engine_Host' reference survived the strip"
+
+    module = _types.ModuleType("worker._pipeline_unhooked_baseline")
+    module.__dict__["__file__"] = pl.__file__
+    exec(compile(stripped, "<pipeline-unhooked>", "exec"), module.__dict__)
+    # Any surviving hook would now blow up instead of silently re-hooking.
+    module.Engine_Host = _p34_never_construct
+    return module
+
+
+#: The genuine v0.8.0 (un-hooked) Pipeline, built once for the whole module.
+UNHOOKED_PIPELINE = _build_unhooked_pipeline()
+
+
+class P34_Recorder:
+    """Records every stubbed ffmpeg/ffprobe touch point in invocation order."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.commands: list[list[str]] = []
+        self.filter_graphs: list[str] = []
+        self.probes = 0
+
+    def stages(self) -> list[str]:
+        """Only the pipeline stage events, in order."""
+        return [event for event in self.events if event in P34_CANONICAL_STAGES]
+
+    def per_clip(self) -> list[list[str]]:
+        """The stage sequence of each clip (each clip begins with its ``cut``)."""
+        clips: list[list[str]] = []
+        for event in self.stages():
+            if event == "cut":
+                clips.append([])
+            if clips:
+                clips[-1].append(event)
+        return clips
+
+
+def p34_canonical(text, root, tag):
+    """Strip run-specific paths and clip ids so two runs are comparable.
+
+    Each run needs its own ``clips_dir``/``temp_dir`` and the Pipeline mints a
+    fresh ``NN_<hex>`` clip id per clip, so raw ffmpeg argv can never be equal
+    across runs. Replacing exactly those two sources of variation — and nothing
+    else — keeps the comparison strict: a genuine difference in inputs, filters,
+    codecs or maps still shows up.
+    """
+    rendered = str(text)
+    rendered = rendered.replace(str(_Path(root) / tag), "<run>")
+    rendered = rendered.replace(str(root), "<root>")
+    return _re.sub(r"\d{2}_[0-9a-f]{6}", "<clip>", rendered)
+
+
+@contextlib.contextmanager
+def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DURATION):
+    """Patch every ffmpeg/ffprobe/transcribe/selection touch point ``module`` reaches.
+
+    ``module`` is either ``worker.pipeline`` or :data:`UNHOOKED_PIPELINE`; the
+    ffmpeg-facing collaborators are shared module objects, while ``transcribe`` is
+    a name bound in each pipeline module's own namespace and so is patched per
+    module. ``compositor._run`` records the argv (including the
+    ``-filter_complex`` graph) and creates the output file, exactly as a real
+    ffmpeg pass would, so ``render_clip`` returns its usual ``RenderResult``.
+    """
+    from worker.selection import ClipCandidate
+    from worker.transcribe import Transcript, TranscriptSegment, Word
+
+    info = fu.MediaInfo(duration=duration, width=1280, height=720, fps=30.0, has_audio=True)
+
+    def fake_probe(path):
+        rec.probes += 1
+        return info
+
+    def fake_cut(source, start, end, dest, reencode=True):
+        rec.events.append("cut")
+        return av_touch(dest)
+
+    def fake_filler(source, keeps, dest):
+        rec.events.append("filler")
+        return av_touch(dest)
+
+    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur"):
+        rec.events.append("geometry")
+        return av_touch(dest)
+
+    def fake_thumbnail(source, dest, at=0.0, width=640):
+        rec.events.append("thumbnail")
+        return av_touch(dest, b"stub-jpeg")
+
+    def fake_run(cmd):
+        rec.events.append("compositor")
+        argv = [str(part) for part in cmd]
+        rec.commands.append(argv)
+        rec.filter_graphs.append(
+            argv[argv.index("-filter_complex") + 1] if "-filter_complex" in argv else ""
+        )
+        av_touch(_Path(argv[-1]))
+        return None
+
+    def fake_transcribe(source, language=None, translate=False):
+        # "um" / "uh" are real disfluencies, so the untouched filler planner
+        # reports ``changed`` and the filler stage genuinely runs when the option
+        # is on — no need to stub the planner itself.
+        words = [
+            Word(0.2, 0.6, "hello"), Word(0.7, 1.1, "um"), Word(1.2, 1.6, "there"),
+            Word(2.2, 2.6, "my"), Word(2.7, 3.1, "uh"), Word(3.2, 3.6, "friend"),
+        ]
+        return Transcript(
+            language="en",
+            segments=[TranscriptSegment(0.0, duration, "hello um there my uh friend", words)],
+        )
+
+    def fake_select(*args, **kwargs):
+        return [
+            ClipCandidate(start=s, end=e, score=90.0 - i, text="hello there")
+            for i, (s, e) in enumerate(spans)
+        ]
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(module.fu, "probe", fake_probe))
+        stack.enter_context(mock.patch.object(module.fu, "cut_segment", fake_cut))
+        stack.enter_context(mock.patch.object(module.fu, "reformat_aspect", fake_reformat))
+        stack.enter_context(mock.patch.object(module.fu, "generate_thumbnail", fake_thumbnail))
+        stack.enter_context(mock.patch.object(module.compositor, "probe", fake_probe))
+        stack.enter_context(mock.patch.object(module.compositor, "_run", fake_run))
+        stack.enter_context(
+            mock.patch.object(module.filler, "apply_keep_intervals", fake_filler)
+        )
+        stack.enter_context(mock.patch.object(module, "transcribe", fake_transcribe))
+        stack.enter_context(mock.patch.object(module.sel, "select_moments", fake_select))
+        yield
+
+
+#: Effect flags that are safe to vary in a fully offline run: none of them needs
+#: an asset library, a model, an LLM or the network.
+P34_SAFE_FLAGS = (
+    "captions", "zoom", "transitions", "fades", "progress_bar", "filler_removal",
+    "hook_title", "caption_keyword_highlight", "caption_emoji",
+)
+
+P34_COLORS = ("", "vivid", "warm", "cinematic")
+P34_PRESETS = ("karaoke", "boxed", "pop", "typewriter")
+P34_POSITIONS = ("bottom", "center", "top")
+P34_ASPECTS = ("9:16", "1:1", "16:9")
+
+#: Options pinned OFF because they would reach an asset library, a model, an LLM,
+#: OpenCV or the network — none of which this offline property may touch. They are
+#: exercised elsewhere (the tier1 / sdr tests above, and the ffmpeg parity example
+#: below covers the real geometry ladder end to end).
+P34_PINNED = {
+    "metadata": False, "music": "", "emoji": "off", "broll": False,
+    "visual_selection": False, "reframe": False, "speaker_reframe": False,
+    "diarization": False, "caption_keyword_ai": False, "permissibility_mode": False,
+    "asset_sourcing_mode": "off", "range_start": None, "range_end": None,
+    "language": None, "translate": False, "caption_animation": "",
+}
+
+
+def p34_options(data, flags):
+    """Draw one ``ProcessingOptions`` (with every engine Feature_Flag off).
+
+    A hostile ``st_options_mapping`` is merged in first — so ``from_dict`` really
+    is fed junk keys and junk values — then the safe effect flags are drawn, then
+    the asset/network-dependent fields are pinned. Both baseline and treatment
+    runs receive the *same* resulting options object.
+    """
+    mapping = dict(data.draw(st_options_mapping(), label="junk-options"))
+    for name in P34_SAFE_FLAGS:
+        mapping[name] = data.draw(st.booleans(), label=name)
+    mapping["color"] = data.draw(st.sampled_from(P34_COLORS), label="color")
+    mapping["caption_preset"] = data.draw(st.sampled_from(P34_PRESETS), label="preset")
+    mapping["caption_position"] = data.draw(st.sampled_from(P34_POSITIONS), label="position")
+    mapping["aspect"] = data.draw(st.sampled_from(P34_ASPECTS), label="aspect")
+    mapping.update(P34_PINNED)
+
+    sanitized = ProcessingOptions.from_dict(mapping)
+    fields = {
+        entry.name: getattr(sanitized, entry.name)
+        for entry in dataclasses.fields(ProcessingOptions)
+    }
+    return av_options(flags, **fields)
+
+
+def p34_run(module, source, options, root, tag, *, registry=None, report=None):
+    """Run one Pipeline variant and return everything P34 compares."""
+    rec = P34_Recorder()
+    clips_dir = _Path(root) / tag / "clips"
+    temp_dir = _Path(root) / tag / "tmp"
+
+    def factory(opts, **kwargs):
+        return Engine_Host(opts, registry=registry, capabilities=report, **kwargs)
+
+    with p34_stubbed_media(module, rec):
+        if registry is None:
+            clips = module.run_pipeline(
+                source, options, clips_dir=clips_dir, temp_dir=temp_dir
+            )
+        else:
+            with mock.patch.object(module, "Engine_Host", factory):
+                clips = module.run_pipeline(
+                    source, options, clips_dir=clips_dir, temp_dir=temp_dir
+                )
+
+    return {
+        "clip_count": len(clips),
+        "effects": [list(clip.effects_applied) for clip in clips],
+        "ffmpeg_calls": len(rec.stages()),
+        "probes": rec.probes,
+        "stages": rec.per_clip(),
+        "graphs": [p34_canonical(graph, root, tag) for graph in rec.filter_graphs],
+        "commands": [
+            [p34_canonical(part, root, tag) for part in argv] for argv in rec.commands
+        ],
+        "_clips": clips,
+        "_clips_dir": clips_dir,
+        "_temp_dir": temp_dir,
+    }
+
+
+# Feature: av-engines-foundation, Property 34: All engines off reproduces v0.8.0 exactly
+@settings(max_examples=100, deadline=None,
+          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+@given(data=st.data())
+def test_p34_all_engines_off_reproduces_v080_exactly(data):
+    """Validates: Requirements 4.3, 9.4, 23.1, 23.2, 23.3
+
+    For any ``ProcessingOptions`` with every engine Feature_Flag off and for any
+    registry contents (including empty), the hooked Pipeline produces the same
+    clip count, the same ``effects_applied``, the same ffmpeg invocation count and
+    the same ffmpeg argv — ``-filter_complex`` string included — as a baseline run
+    with **no** ``Engine_Host`` at all, and the recorded stage order remains
+    ``cut -> filler removal -> geometry -> compositor -> thumbnail``.
+    """
+    import worker.pipeline as pl
+
+    # Per-example isolation of the two process-wide engine singletons.
+    reset_registry()
+    reset_report()
+
+    registrations = data.draw(st_registrations(min_size=1, max_size=4),
+                              label="registrations")
+    engines = [
+        FakeEngine(engine_id, stage, priority=priority, markers=("ran",))
+        for engine_id, stage, priority in registrations
+    ]
+    loaded = Engine_Registry()
+    for engine in engines:
+        loaded.register(engine)
+    empty = Engine_Registry()
+    report = Capability_Report(StaticProber({}, default=True))
+
+    options = p34_options(data, {engine.engine_id: False for engine in engines})
+
+    # Every flag really is off, so the host the Pipeline builds is inactive.
+    from worker.models import effective_options
+
+    assert Engine_Host(
+        effective_options(options), job_id="probe", temp_dir=_Path("/nonexistent"),
+        registry=loaded, capabilities=report,
+    ).active is False
+
+    with tempfile.TemporaryDirectory() as root:
+        root = _Path(root)
+        source = av_touch(root / "source.mp4", b"stub-source")
+
+        # (A) the genuine v0.8.0 code path: no Engine_Host exists at all.
+        baseline = p34_run(UNHOOKED_PIPELINE, source, options, root, "baseline")
+        # (B) the hooked code path with an EMPTY registry.
+        with_empty = p34_run(pl, source, options, root, "empty",
+                             registry=empty, report=report)
+        # (C) the hooked code path with engines registered but every flag off.
+        with_engines = p34_run(pl, source, options, root, "loaded",
+                               registry=loaded, report=report)
+
+        # --- the parity gate itself (Reqs 23.1, 23.3) ---------------------
+        for key in ("clip_count", "effects", "ffmpeg_calls", "probes", "stages",
+                    "graphs", "commands"):
+            assert with_empty[key] == baseline[key], f"empty-registry run differs: {key}"
+            assert with_engines[key] == baseline[key], f"loaded-registry run differs: {key}"
+
+        # Non-vacuity: clips were really produced and really written.
+        assert baseline["clip_count"] == len(AV_CLIP_SPANS)
+        for run in (baseline, with_empty, with_engines):
+            for clip in run["_clips"]:
+                assert (run["_clips_dir"] / clip.filename).exists()
+
+        # Non-vacuity of the ffmpeg-argv comparison: whenever any look/caption
+        # effect is enabled the compositor really ran once per clip and really
+        # emitted a ``-filter_complex`` graph, so the equality above is comparing
+        # real command lines rather than two empty lists.
+        effect_on = bool(
+            options.captions or options.color or options.zoom
+            or options.transitions or options.fades or options.progress_bar
+        )
+        if effect_on:
+            assert all(graph for graph in baseline["graphs"])
+            assert len(baseline["graphs"]) == len(AV_CLIP_SPANS)
+            for sequence in baseline["stages"]:
+                assert "compositor" in sequence
+        else:
+            assert baseline["graphs"] == []
+
+        # --- stage order (Req 23.2) ---------------------------------------
+        assert len(baseline["stages"]) == len(AV_CLIP_SPANS)
+        for sequence in baseline["stages"]:
+            assert sequence[0] == "cut"
+            assert sequence == [s for s in P34_CANONICAL_STAGES if s in sequence]
+            assert "geometry" in sequence and "thumbnail" in sequence
+            if options.filler_removal:
+                assert "filler" in sequence
+
+        # --- nothing engine-shaped happened (Reqs 4.3, 9.4, 19.5) ---------
+        for engine in engines:
+            assert engine.run_count == 0
+        for run in (baseline, with_empty, with_engines):
+            assert not (run["_temp_dir"] / "engines").exists()
+            for markers in run["effects"]:
+                assert not any(m.startswith("engine:") for m in markers)
+
+    # The default singletons were never touched by any of the three runs.
+    assert len(get_registry()) == 0
+    reset_registry()
+    reset_report()
+
+
+# ===========================================================================
+# 13.2 — all-off ffmpeg parity on a tiny clip (non-optional, same reason as 13.1)
+# ===========================================================================
+@requires_ffmpeg
+def test_all_off_ffmpeg_parity_matches_unhooked_baseline(make_video, tmp_path, monkeypatch):
+    """Validates: Requirements 4.3, 19.5, 23.1, 23.3
+
+    Real ffmpeg, one tiny clip, every engine off: ``compositor.render_clip`` still
+    returns ``None`` (nothing enabled -> the caller keeps the geometry output), the
+    ffmpeg invocation count equals the un-hooked v0.8.0 baseline's exactly, the
+    engine ``-filter_complex``/contribution seam is never exercised, and no
+    ``engines/`` directory is created beneath the job ``temp_dir``.
+    """
+    import worker.pipeline as pl
+    from worker.effects import compositor
+    from worker.selection import ClipCandidate
+
+    reset_registry()
+    reset_report()
+
+    _stub_transcribe(monkeypatch)
+    # The baseline module holds its own ``transcribe`` binding; ``sel`` and every
+    # ffmpeg collaborator are shared module objects, so patching those once is enough.
+    monkeypatch.setattr(UNHOOKED_PIPELINE, "transcribe", pl.transcribe)
+    monkeypatch.setattr(
+        pl.sel, "select_moments",
+        lambda *a, **k: [ClipCandidate(start=0.0, end=1.5, score=50.0, text="hello there")],
+    )
+
+    calls: list[str] = []
+    renders: list[dict] = []
+    real_fu_run = fu._run
+    real_compositor_run = compositor._run
+    real_render_clip = compositor.render_clip
+
+    def counting_fu_run(cmd):
+        calls.append("ffmpeg")
+        return real_fu_run(cmd)
+
+    def counting_compositor_run(cmd):
+        calls.append("ffmpeg")
+        return real_compositor_run(cmd)
+
+    def spying_render_clip(*args, **kwargs):
+        result = real_render_clip(*args, **kwargs)
+        renders.append(
+            {"contributions": kwargs.get("engine_contributions"), "result": result}
+        )
+        return result
+
+    monkeypatch.setattr(fu, "_run", counting_fu_run)
+    monkeypatch.setattr(compositor, "_run", counting_compositor_run)
+    monkeypatch.setattr(compositor, "render_clip", spying_render_clip)
+
+    src = make_video("s.mp4", duration=2.0, w=320, h=240)
+    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+
+    def run(module, tag):
+        calls.clear()
+        renders.clear()
+        clips_dir = tmp_path / tag / "clips"
+        temp_dir = tmp_path / tag / "tmp"
+        clips = module.run_pipeline(src, opts, clips_dir=clips_dir, temp_dir=temp_dir)
+        return {
+            "clips": clips,
+            "ffmpeg": len(calls),
+            "renders": list(renders),
+            "clips_dir": clips_dir,
+            "temp_dir": temp_dir,
+        }
+
+    hooked = run(pl, "hooked")
+    baseline = run(UNHOOKED_PIPELINE, "baseline")
+
+    # One clip each, produced on disk.
+    assert len(hooked["clips"]) == len(baseline["clips"]) == 1
+    assert (hooked["clips_dir"] / hooked["clips"][0].filename).exists()
+    assert (baseline["clips_dir"] / baseline["clips"][0].filename).exists()
+
+    # Same ffmpeg invocation count as the pre-hook baseline (Req 23.3), and a
+    # non-zero one (cut + geometry + thumbnail + probes all shell out).
+    assert hooked["ffmpeg"] == baseline["ffmpeg"] > 0
+
+    # ``render_clip`` still returns None with nothing enabled, and the engine
+    # contribution seam was never used (Reqs 4.3, 23.3).
+    assert [r["result"] for r in hooked["renders"]] == [None]
+    assert [r["result"] for r in baseline["renders"]] == [None]
+    assert all(r["contributions"] in (None, []) for r in hooked["renders"])
+
+    # Identical markers, none of them engine-namespaced (Reqs 23.1, 9.4).
+    assert hooked["clips"][0].effects_applied == baseline["clips"][0].effects_applied
+    assert not any(m.startswith("engine:") for m in hooked["clips"][0].effects_applied)
+
+    # No workspace root was allocated anywhere under the job temp dir (Req 19.5).
+    assert not (hooked["temp_dir"] / "engines").exists()
+    assert not list(hooked["temp_dir"].glob("**/engines"))
+
+    reset_registry()
+    reset_report()
