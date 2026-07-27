@@ -190,37 +190,37 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - Stub `importlib.util.find_spec`, `shutil.which`, the `ffmpeg -filters` output, `captions.font_available`, `settings.<name>_api_key`, and `llm_client.llm_available`; assert each kind maps to the right collaborator, that a sentinel `settings.ffmpeg_binary` is the binary actually invoked for filter probes, and that `parse_capability_id` handles `"llm"` and unknown kinds.
     - _Requirements: 5.1, 5.4, 5.5_
 
-- [ ] 7. Engine workspaces and durable artifacts (`worker/engines/artifacts.py`)
-  - [ ] 7.1 Implement path sanitisation, `Engine_Workspace`, and allocation
+- [x] 7. Engine workspaces and durable artifacts (`worker/engines/artifacts.py`)
+  - [x] 7.1 Implement path sanitisation, `Engine_Workspace`, and allocation
     - Add `ENGINE_TEMP_ROOT="engines"`, `ENGINE_KEY_ROOT="engines"`, `MAX_COMPONENT_LEN=48`, and `sanitize_component` (lowercase, non-`[a-z0-9._-]` → `_`, leading dots stripped, `""`/`"."`/`".."` → fallback, truncated).
     - Add the frozen `Engine_Workspace` (`root`, `temp_dir`, `job_id`, `clip_id`, `engine_id`, `options_digest`) with `path(*parts)` raising `ValueError` on an escape attempt, `artifact(name, *, media_type, durable)`, and `exists()`; and `allocate_workspace(temp_dir, job_id, clip_id, engine_id, options_digest, *, create=True)` producing `<temp_dir>/engines/<job>/<clip>/<engine>__<digest>` with every component sanitised, containment asserted, and parents created.
     - _Requirements: 11.6, 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7_
 
-  - [ ] 7.2 Implement workspace cleanup
+  - [x] 7.2 Implement workspace cleanup
     - Add `cleanup_workspace(ws, *, remover=None, logger=None)` deleting `ws.root`, logging and swallowing `OSError`, and returning success; and `cleanup_job_workspaces(temp_dir, job_id)` deleting `<temp_dir>/engines/<job>` and returning the number of entries removed. The `remover` seam lets tests inject `OSError`.
     - _Requirements: 17.1, 17.4, 17.6_
 
-  - [ ] 7.3 Implement durable artifact keys and persistence
+  - [x] 7.3 Implement durable artifact keys and persistence
     - Add `artifact_key(job_id, clip_id, engine_id, name)` building `engines/<job>/<clip>/<engine>/<name>` from sanitised components and passing it through `storage_backends.base.normalize_key`, and `persist_artifact(artifact, *, job_id, clip_id, storage=None)` saving through `storage or get_storage()` via `BaseStorage.save_file` and returning a copy with `storage_key` set. Errors propagate to the host (which records `engine:<id>:artifact_failed`).
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5_
 
-  - [ ]* 7.4 Property test: workspace paths are contained, sanitised, and unique → `tests/test_engine_artifacts.py`
+  - [x]* 7.4 Property test: workspace paths are contained, sanitised, and unique → `tests/test_engine_artifacts.py`
     - **Property 29: Workspace paths are contained, sanitised, and unique** — for any job/clip/engine/digest and any relative artifact name including traversal payloads, the workspace and every `ws.path(...)` resolve inside the Pipeline `temp_dir`, the directory exists and is writable after allocation, the sanitised components all appear in the path, and distinct tuples map to distinct directories. Generator: `st_hostile_component`; `@settings(deadline=None)` because it touches `tmp_path`.
     - _Requirements: 11.6, 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7_ · _Properties: P29_
 
-  - [ ]* 7.5 Property test: workspaces are always cleaned up, durable artifacts first → `tests/test_engine_artifacts.py`
+  - [x]* 7.5 Property test: workspaces are always cleaned up, durable artifacts first → `tests/test_engine_artifacts.py`
     - **Property 30: Workspaces are always cleaned up, durable artifacts first** — for engines of any status (`applied`, `degraded`, `failed`, timeout), no workspace for that clip remains after cleanup and no `engines/<job_id>` directory remains after job cleanup; a `RecordingStorage` shows every durable artifact saved *before* its workspace was removed; and an injected `OSError` remover returns normally, logs once, and later clips still process. Generators: `st_engine_outcomes`, `OSError` injection.
     - _Requirements: 17.1, 17.4, 17.5, 17.6, 17.7_ · _Properties: P30_
 
-  - [ ]* 7.6 Property test: durable artifact keys are safe and backend-neutral → `tests/test_engine_artifacts.py`
+  - [x]* 7.6 Property test: durable artifact keys are safe and backend-neutral → `tests/test_engine_artifacts.py`
     - **Property 31: Durable artifact keys are safe and backend-neutral** — `artifact_key` output is a fixed point of `normalize_key`, has no empty/`.`/`..` segment and no leading slash, is identical for a local backend and a fake S3 backend (`FakeS3Client`), and is recorded on the returned artifact record. Generator: `st_hostile_component`.
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5_ · _Properties: P31_
 
-  - [ ]* 7.7 Property test: artifact persistence failure degrades, it does not fail the clip → `tests/test_engine_artifacts.py`
+  - [x]* 7.7 Property test: artifact persistence failure degrades, it does not fail the clip → `tests/test_engine_artifacts.py`
     - **Property 32: Artifact persistence failure degrades, it does not fail the clip** — for any storage raising on `save_file` (`RecordingStorage(fail_on=...)`), exactly one `engine:<id>:artifact_failed` marker is recorded, the clip is still produced, and the workspace is still cleaned up.
     - _Requirements: 18.6_ · _Properties: P32_
 
-  - [ ]* 7.8 Unit tests: retention wiring under `auto_delete_temp` → `tests/test_engine_artifacts.py`
+  - [x]* 7.8 Unit tests: retention wiring under `auto_delete_temp` → `tests/test_engine_artifacts.py`
     - Spy `storage_backends.retention.cleanup_temp` and assert it is used for job-level cleanup when `runtime_config.get_runtime_config().auto_delete_temp` is enabled, and that the job workspace root survives when it is disabled (awaiting the `RetentionSweeper` sweep).
     - _Requirements: 17.2, 17.3_
 
