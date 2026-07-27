@@ -435,6 +435,15 @@ class Engine_Context:
     permissibility: bool = False          # ProcessingOptions.permissibility_mode
     deadline: float = math.inf            # time.monotonic() budget end (Req 8.6)
     time_budget_s: float = 0.0
+    #: Absolute ffmpeg input index of this engine's **first** reserved input, so a
+    #: COMPOSE-stage engine can write valid ``[N:v]`` / ``[N:a]`` filter labels
+    #: against its own inputs (Req 1.5). The host reserves one contiguous block of
+    #: :attr:`AV_Engine.max_inputs` indices per contributing engine, immediately
+    #: after the primary clip (index 0), in registry ``(priority, engine_id)``
+    #: order — so the value is known *before* :meth:`AV_Engine.run` executes.
+    #: Meaningless (``0``) for an engine that contributes no inputs, i.e. whose
+    #: ``max_inputs`` is ``0``: such an engine consumes no index space at all.
+    first_input_index: int = 0
     #: Free-form host annotations, e.g. ``"fps_fallback:0.0"`` (Req 13.3, design
     #: P21) or ``"filler_seam:<seconds>"``. Deliberately **not** narrowed to an
     #: enum: engines and sibling specs append their own note kinds here.
@@ -460,6 +469,11 @@ class Engine_Context:
             float(deadline) if _is_number(deadline) else math.inf,
         )
         object.__setattr__(self, "seed", coerce_int(self.seed, 0))
+        # An input index is a non-negative ffmpeg ``-i`` position; index 0 is the
+        # primary clip, which no engine ever owns, so 0 doubles as "not reserved".
+        object.__setattr__(
+            self, "first_input_index", coerce_int(self.first_input_index, 0, lo=0)
+        )
         if not isinstance(self.deps, Mapping):
             object.__setattr__(self, "deps", {})
 
@@ -893,6 +907,14 @@ class AV_Engine(ABC):
     requires_model_download: ClassVar[bool] = False            # Req 21.1
     time_budget_s: ClassVar[float] = 30.0                      # Req 19.1
     max_media_passes: ClassVar[int] = 1                        # Req 19.1
+    #: How many ffmpeg ``-i`` inputs this engine may contribute to the ONE
+    #: compositor pass (Req 1.5). Declared alongside ``max_media_passes`` because
+    #: both bound the cost an engine may add to a clip: ``max_media_passes`` bounds
+    #: the *passes*, ``max_inputs`` the *inputs*. The host reserves a contiguous
+    #: block of exactly this many indices and publishes its start as
+    #: ``Engine_Context.first_input_index``; ``0`` (the default) means the engine
+    #: contributes no input and therefore consumes no index space.
+    max_inputs: ClassVar[int] = 0
     produces_media: ClassVar[bool] = False                     # may return Result.media
 
     @classmethod

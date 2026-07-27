@@ -91,17 +91,20 @@ def test_pipeline_no_effects_still_produces_clip(make_video, tmp_path, monkeypat
 # ``host.active`` remains False for every other test in the suite. Each test
 # asserts that at the end.
 #
-# KNOWN API GAP (worked around here, deliberately not papered over):
-# ``Compose_Contribution`` carries no input-index offset, so an engine cannot know
-# which ffmpeg ``-i`` index its own inputs land on, and the compositor appends the
-# contribution's ``video_filters`` into an existing comma-joined filter *chain*
-# where a second input link cannot be introduced. Task 10.5 below therefore
-#   (a) exercises the input-append seam by asserting the engine's still image is
-#       appended LAST in the ``-i`` list, at exactly the index the documented
-#       ordering (base -> music -> b-roll -> emoji -> engines) predicts, and
-#   (b) uses an index-free video filter (``drawbox``) for the visible overlay.
-# A real image composite needs a seam that tells the engine its first input index
-# (or a label-based contribution API).
+# INPUT-INDEX SEAM (the gap this note used to record is now closed):
+# ``Engine_Context.first_input_index`` tells an engine the absolute ffmpeg ``-i``
+# index of its own first input — the host reserves one contiguous block of
+# ``AV_Engine.max_inputs`` indices per contributing engine immediately after the
+# base clip, in registry ``(priority, engine_id)`` order — so an engine CAN now
+# write ``[N:v]`` labels for its own inputs. The reservation rules and the
+# zero-contribution parity guarantee are covered by
+# ``tests/test_engine_host.py::test_compose_engines_receive_a_reserved_ffmpeg_input_block``
+# and the two seam tests in ``tests/test_effects_compositor.py``.
+# Task 10.5 below still uses an index-free video filter (``drawbox``) for the
+# visible overlay, because the compositor appends a contribution's
+# ``video_filters`` into an existing comma-joined filter *chain* where a second
+# input link cannot be introduced; it asserts the input-block placement (base ->
+# engines -> music -> b-roll -> emoji) instead.
 # ===========================================================================
 from dataclasses import dataclass
 
