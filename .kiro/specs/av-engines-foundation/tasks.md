@@ -168,25 +168,25 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - **Property 6: Reset empties a registry and instances stay isolated** — after `reset()` the length is zero and every stage list empty; and registering into one `Engine_Registry` never changes another instance or the module-level default. Generator: `st_registrations`.
     - _Requirements: 2.7, 22.2_ · _Properties: P6_
 
-- [ ] 6. Capability probing and caching (`worker/engines/capabilities.py`)
-  - [ ] 6.1 Implement capability ids, statuses, and the default prober
+- [x] 6. Capability probing and caching (`worker/engines/capabilities.py`)
+  - [x] 6.1 Implement capability ids, statuses, and the default prober
     - Add the `Capability_Kind` str-Enum (`python_pkg`, `binary`, `ffmpeg_filter`, `font`, `provider_key`, `model`, `llm`), `LLM_CAPABILITY`, `parse_capability_id` (unknown kinds return `("", id)`), the frozen `Capability_Status` (`capability_id`, `available`, `detail`, `to_dict`, `from_dict`), the `Prober` callable alias, and the empty `MODEL_LOCATORS` registry.
     - Implement `default_prober` dispatching on kind: `importlib.util.find_spec`, `shutil.which`, an `settings.ffmpeg_binary -filters` invocation (never a hardcoded binary name), `worker.captions.font_available`, `settings.<name>_api_key`, a registered model locator (absent locator ⇒ unavailable), and `worker.llm_client.llm_available`. Never raise — wrap every underlying error as `available=False` with the error summary as `detail` — and never touch the network.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 21.5_
 
-  - [ ] 6.2 Implement `Capability_Report` caching, serialisation, and invalidation
+  - [x] 6.2 Implement `Capability_Report` caching, serialisation, and invalidation
     - Add `Capability_Report(prober=None)` with the per-process `_cache`, `status` (underlying prober invoked at most once per id), `available`, `first_missing`, `missing` (both in declaration order), `to_dict` (sorted keys, serialisable for `/api/info`), and `invalidate(capability_id=None)`; plus the module-level `get_report(prober=None)` and `reset_report()`.
     - _Requirements: 5.7, 6.1, 6.2, 6.3, 6.4, 6.5, 20.2_
 
-  - [ ]* 6.3 Property test: probing is total, offline, and shaped → `tests/test_engine_capabilities.py`
+  - [x]* 6.3 Property test: probing is total, offline, and shaped → `tests/test_engine_capabilities.py`
     - **Property 10: Probing is total, offline, and shaped** — for any string capability id (well-formed or not) `default_prober` returns a `Capability_Status` with a `bool` `available` and `str` `detail` without raising; for any exception raised by an injected prober the status is unavailable with the exception class name in `detail`; probing performs zero network calls (socket guard); model capabilities with no registered locator report unavailable. Generators: `st_capability_id`, exception classes; doubles: `RaisingProber`.
     - _Requirements: 5.2, 5.3, 5.6, 21.5_ · _Properties: P10_
 
-  - [ ]* 6.4 Property test: the report caches, is deterministic, serialises, and invalidates → `tests/test_engine_capabilities.py`
+  - [x]* 6.4 Property test: the report caches, is deterministic, serialises, and invalidates → `tests/test_engine_capabilities.py`
     - **Property 11: The report caches, is deterministic, serialises, and invalidates** — a `CountingProber` is invoked at most once per id however often `status()` is called; two `to_dict()` calls are equal; `to_dict()` is JSON-round-trippable with sorted keys; `available(id)` equals the injected `StaticProber` map value; and after `invalidate()` the next `status()` re-probes exactly once. Generators: `st_capability_id`, `st_availability_map`.
     - _Requirements: 5.7, 6.1, 6.2, 6.3, 6.4, 6.5, 20.2_ · _Properties: P11_
 
-  - [ ]* 6.5 Unit tests: one test per capability kind with the collaborator stubbed → `tests/test_engine_capabilities.py`
+  - [x]* 6.5 Unit tests: one test per capability kind with the collaborator stubbed → `tests/test_engine_capabilities.py`
     - Stub `importlib.util.find_spec`, `shutil.which`, the `ffmpeg -filters` output, `captions.font_available`, `settings.<name>_api_key`, and `llm_client.llm_available`; assert each kind maps to the right collaborator, that a sentinel `settings.ffmpeg_binary` is the binary actually invoked for filter probes, and that `parse_capability_id` handles `"llm"` and unknown kinds.
     - _Requirements: 5.1, 5.4, 5.5_
 
