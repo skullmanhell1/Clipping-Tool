@@ -7,6 +7,8 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+# Hypothesis example database / cache written by the test runner
+.hypothesis/
 
 # Environment
 .env
