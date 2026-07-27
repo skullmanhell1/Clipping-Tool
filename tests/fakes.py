@@ -320,8 +320,10 @@ class FakeEngine(_AV_Engine):
     The class-level declarations of ``AV_Engine`` (``engine_id``, ``stage``,
     ``priority``, ``required_capabilities``, ``optional_capabilities``,
     ``requires_network``, ``requires_model_download``, ``time_budget_s``,
-    ``max_media_passes``, ``produces_media``) are shadowed per instance, so a
-    registry holding several ``FakeEngine``s sees genuinely different engines.
+    ``max_media_passes``, ``max_inputs``, ``produces_media``) are shadowed per
+    instance, so a registry holding several ``FakeEngine``s sees genuinely
+    different engines. ``max_inputs`` defaults to the number of inputs the canned
+    ``contribution`` carries.
     """
 
     def __init__(
@@ -342,6 +344,7 @@ class FakeEngine(_AV_Engine):
         requires_model_download=False,
         time_budget_s=30.0,
         detail="",
+        max_inputs=None,
     ):
         self.engine_id = str(engine_id)
         self.stage = stage
@@ -358,6 +361,15 @@ class FakeEngine(_AV_Engine):
         self.plan_payload = dict(plan) if plan else {}
         self.media = media
         self.detail = str(detail)
+        # ``max_inputs`` defaults to however many inputs the canned contribution
+        # actually carries, so a double that contributes inputs declares them (and
+        # therefore gets a truthful ``Engine_Context.first_input_index``) without
+        # every call site having to repeat the count.
+        if max_inputs is None:
+            inputs = getattr(contribution, "inputs", ()) or ()
+            self.max_inputs = len(inputs)
+        else:
+            self.max_inputs = int(max_inputs)
         self.produces_media = media is not None
         self.calls: list = []
         self.plan_calls: list = []

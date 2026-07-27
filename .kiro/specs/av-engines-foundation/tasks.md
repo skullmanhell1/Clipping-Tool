@@ -319,7 +319,7 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - Register one AUDIO-stage `FakeEngine` returning replacement media and assert the final clip is produced with an unchanged duration; then force that engine to raise and assert the clip is still produced from the pre-stage media.
     - _Requirements: 8.3, 22.5_
 
-- [ ] 11. Checkpoint — Ensure all tests pass, ask the user if questions arise.
+- [x] 11. Checkpoint — Ensure all tests pass, ask the user if questions arise.
 
 - [x] 12. API and UI surface
   - [x] 12.1 Advertise engines and capabilities from `/api/info`
@@ -352,7 +352,7 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - Assert the documented v0.8.0 `effects_applied` marker strings are unchanged and disjoint from the `engine:` namespace, and pin the public names and dataclass fields of `worker.engines.base` / `registry` / `capabilities` / `timebase` / `artifacts` (plus the `tests/fakes.py` doubles and `tests/strategies.py` generators) so the stem-separation and kinetic-typography specs can depend on them without modification.
     - _Requirements: 22.6, 23.5, 23.6_
 
-- [ ] 14. Final checkpoint — Ensure all tests pass, ask the user if questions arise.
+- [x] 14. Final checkpoint — Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
 
