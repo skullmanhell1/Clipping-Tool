@@ -321,20 +321,20 @@ backward-compatibility parity gate that is this spec's central guarantee).
 
 - [ ] 11. Checkpoint — Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 12. API and UI surface
-  - [ ] 12.1 Advertise engines and capabilities from `/api/info`
+- [x] 12. API and UI surface
+  - [x] 12.1 Advertise engines and capabilities from `/api/info`
     - In `api/main.py`, add an `"engines"` list built from `get_registry().all()` (`id`, `stage`, `priority`, `flag`, `enabled_by_default: False`, `available`, `missing`, `requires_network`, `time_budget_s`) and a `"capabilities"` mapping from `get_report().to_dict()`, consulting the report only for capabilities that registered engines declare. Every existing v0.8.0 key and list is retained unchanged; with no engine registered the list is `[]`.
     - _Requirements: 20.1, 20.2, 20.6_
 
-  - [ ] 12.2 Wire the frontend engine surface
+  - [x] 12.2 Wire the frontend engine surface
     - In `frontend/src/App.jsx`, forward engine keys generically from `DEFAULT_SETTINGS` through `toOptions` (so a sibling engine only adds its default, and profiles persist it automatically). In `frontend/src/components/SettingsPanel.jsx`, add an **Advanced engines** collapsible block rendered from `info.engines` — one row per engine with its name, a toggle bound to `<engine_id>_enabled`, and, when `available` is false, a disabled toggle listing the missing capability names. The block is **not rendered when `info.engines` is empty**, so the v0.8.0 UI is unchanged until an engine ships.
     - _Requirements: 20.1, 20.3, 20.4_
 
-  - [ ]* 12.3 Unit tests: `/api/info` shape and junk option tolerance → `tests/test_api.py`
+  - [x]* 12.3 Unit tests: `/api/info` shape and junk option tolerance → `tests/test_api.py`
     - Assert `/api/info` exposes `engines` (empty with no registration) and `capabilities` while retaining every pre-existing key, that a registered `FakeEngine` appears with `flag == "<engine_id>_enabled"` and `enabled_by_default is False`, and that a `POST /api/upload` carrying unrecognised engine option values still creates a job.
     - _Requirements: 20.1, 20.2, 20.3, 20.5, 20.6_
 
-  - [ ]* 12.4 Property test: engine option fields round-trip through `ProcessingOptions` → `tests/test_options_roundtrip.py`
+  - [x]* 12.4 Property test: engine option fields round-trip through `ProcessingOptions` → `tests/test_options_roundtrip.py`
     - **Property 35: Engine option fields round-trip through ProcessingOptions** — for any options mapping, `ProcessingOptions.from_dict(asdict(from_dict(m))) == from_dict(m)`, every engine Feature_Flag defaults to `False` on a fresh instance, and `AV_Engine.flag_field()` equals `f"{engine_id}_enabled"` for every registered engine. Generators: `st_options_mapping`, `st_engine_id`.
     - _Requirements: 9.1, 9.2, 9.3, 23.4_ · _Properties: P35_
 

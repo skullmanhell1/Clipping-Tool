@@ -244,6 +244,7 @@ def healthz() -> dict[str, str]:
 
 @app.get("/api/info", tags=["system"])
 def info() -> dict[str, object]:
+    engines, capabilities = _engines_info()
     return {
         "app_name": settings.app_name,
         "environment": settings.environment,
@@ -279,7 +280,65 @@ def info() -> dict[str, object]:
         ),
         "storage_backend": settings.storage_backend.value,
         "retention_choices": list(RETENTION_CHOICES),
+        # Advanced AV engines foundation (additive; Reqs 20.1, 20.2, 20.6).
+        # Both are empty until an engine spec registers one, so a stock install
+        # sees the v0.8.0 payload plus two inert keys.
+        "engines": engines,
+        "capabilities": capabilities,
     }
+
+
+def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Return the ``(engines, capabilities)`` pair advertised by ``/api/info``.
+
+    Reqs 20.1/20.2/20.6 — additive only: one row per registered AV engine in the
+    registry's deterministic order, plus the serialisable Capability_Report.
+
+    The report is consulted **only** for capability ids that registered engines
+    actually declare, so with no engine registered this returns ``([], {})``
+    having performed **zero** capability probes (Req 20.2). Never raises: a
+    broken engine declaration must not take ``/api/info`` down.
+    """
+    try:
+        from worker.engines.registry import get_registry
+
+        engines = get_registry().all()
+    except Exception:
+        return [], {}
+    if not engines:
+        # No engine registered => nothing to probe (Reqs 20.2, 20.6).
+        return [], {}
+
+    from worker.engines.capabilities import get_report
+
+    report = get_report()
+    rows: list[dict[str, object]] = []
+    for engine in engines:
+        try:
+            required = list(getattr(engine, "required_capabilities", ()) or ())
+            optional = list(getattr(engine, "optional_capabilities", ()) or ())
+            missing = report.missing(required)
+            for capability_id in optional:
+                # Declared by this engine, so it belongs in the advertised
+                # report even when it is only an optional degradation.
+                report.available(capability_id)
+            stage = getattr(engine, "stage", None)
+            rows.append(
+                {
+                    "id": str(getattr(engine, "engine_id", "")),
+                    "stage": getattr(stage, "value", stage),
+                    "priority": getattr(engine, "priority", 100),
+                    "flag": engine.flag_field(),
+                    "enabled_by_default": False,
+                    "available": not missing,
+                    "missing": missing,
+                    "requires_network": bool(getattr(engine, "requires_network", False)),
+                    "time_budget_s": getattr(engine, "time_budget_s", None),
+                }
+            )
+        except Exception:
+            continue
+    return rows, report.to_dict()
 
 
 def _available_broll_providers() -> list[str]:

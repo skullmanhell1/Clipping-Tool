@@ -368,3 +368,105 @@ def test_v080_additions_do_not_disturb_v070_defaults():
     assert base.emoji == "off"
     assert base.music == ""
     assert base.permissibility_mode is False
+
+
+
+# ===========================================================================
+# Advanced AV engines foundation (task 12.4)
+# ===========================================================================
+# This spec registers no engines, so it adds no ProcessingOptions fields. What
+# it *does* fix is the Feature_Flag convention every sibling engine spec relies
+# on: `<engine_id>_enabled`, absent-or-False on a fresh instance, surviving the
+# `from_dict` / `asdict` round-trip untouched.
+
+import math  # noqa: E402
+
+from tests.fakes import FakeEngine  # noqa: E402
+from tests.strategies import st_engine_id, st_options_mapping  # noqa: E402
+from worker.engines.base import FLAG_SUFFIX, AV_Engine, Engine_Stage  # noqa: E402
+from worker.engines.capabilities import reset_report  # noqa: E402
+from worker.engines.registry import get_registry, register, reset_registry  # noqa: E402
+
+
+def _options_equal(a: ProcessingOptions, b: ProcessingOptions) -> bool:
+    """Field-wise equality treating two NaN floats as equal.
+
+    `ProcessingOptions` is a plain dataclass, so `==` compares field values —
+    and a NaN that survives coercion (e.g. a float NaN handed to `range_start`)
+    would make an otherwise faithful round-trip compare unequal purely because
+    `nan != nan`. Round-tripping such a value is still lossless, so NaN-vs-NaN
+    counts as preserved here.
+    """
+    fa, fb = asdict(a), asdict(b)
+    if fa.keys() != fb.keys():
+        return False
+    for name, left in fa.items():
+        right = fb[name]
+        if (
+            isinstance(left, float)
+            and isinstance(right, float)
+            and math.isnan(left)
+            and math.isnan(right)
+        ):
+            continue
+        if left != right:
+            return False
+    return True
+
+
+# Feature: av-engines-foundation, Property 35: Engine option fields round-trip through ProcessingOptions
+@settings(max_examples=100)
+@given(mapping=st_options_mapping(), engine_id=st_engine_id())
+def test_p35_engine_option_fields_round_trip(mapping, engine_id):
+    """Validates: Requirements 9.1, 9.2, 9.3, 23.4
+
+    For any (hostile) options mapping,
+    `ProcessingOptions.from_dict(asdict(from_dict(m))) == from_dict(m)`; every
+    engine Feature_Flag is off on a fresh instance; and `flag_field()` equals
+    `f"{engine_id}_enabled"` for every registered engine.
+
+    The module-level default registry and capability report are reset **inside**
+    the property body (not only in a fixture), because a fixture runs once per
+    test while hypothesis runs this body once per example — state from example N
+    must not leak into example N+1. The `finally` block guarantees the default
+    registry is empty again for every other test in the suite.
+    """
+    # --- round-trip through the serialised form ---------------------------
+    first = ProcessingOptions.from_dict(mapping)  # must not raise
+    second = ProcessingOptions.from_dict(asdict(first))
+    assert _options_equal(second, first)
+
+    # --- every engine Feature_Flag defaults OFF --------------------------
+    fresh = ProcessingOptions()
+    for name in ProcessingOptions.__dataclass_fields__:
+        if name.endswith(FLAG_SUFFIX):
+            assert getattr(fresh, name) is False, f"engine flag {name} defaults on"
+
+    # --- flag_field() is the `<engine_id>_enabled` convention ------------
+    reset_registry()
+    reset_report()
+    try:
+        register(FakeEngine(engine_id, Engine_Stage.AUDIO))
+        registry = get_registry()
+        assert len(registry) == 1
+        for engine in registry.all():
+            expected = f"{engine.engine_id}_enabled"
+            assert engine.flag_field() == expected == f"{engine.engine_id}{FLAG_SUFFIX}"
+            # A registered engine's flag is absent-or-off on fresh options, so
+            # every engine is disabled until the user opts in (Reqs 9.2, 23.4).
+            assert getattr(fresh, engine.flag_field(), False) is False
+            # ...and the mapping-derived options never turn it on either.
+            assert getattr(first, engine.flag_field(), False) is False
+
+        # The inherited classmethod default derives the same name from a
+        # class-level `engine_id` (what real engines declare).
+        declared = type(
+            "_Flag_Field_Probe_Engine",
+            (AV_Engine,),
+            {"engine_id": engine_id, "stage": Engine_Stage.AUDIO},
+        )
+        assert declared.flag_field() == f"{engine_id}_enabled"
+    finally:
+        reset_registry()
+        reset_report()
+    assert len(get_registry()) == 0

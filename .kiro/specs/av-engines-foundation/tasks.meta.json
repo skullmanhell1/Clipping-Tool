@@ -131,6 +131,10 @@
     "10.4 Property test: clip count is invariant under degradation and failure → `tests/test_pipeline_degradation.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785149960377
+    },
+    "12.4 Property test: engine option fields round-trip through `ProcessingOptions` → `tests/test_options_roundtrip.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785152994278
     }
   },
   "executionHistory": {
