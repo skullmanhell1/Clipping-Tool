@@ -529,8 +529,7 @@ contributions the new code is inert.
 def render_clip(
     base_clip, dest, options, words, temp_dir, hook_text="",
     llm_client=None, emoji_resolver=None, broll_resolver=None,
-    *,
-    compose_contributions: Sequence[Any] = (),   # Compose_Contribution[] from host.run_stage
+    engine_contributions: Optional[Sequence["Compose_Contribution"]] = None,   # from host.run_stage
 ) -> Optional[RenderResult]:
 ```
 
@@ -544,7 +543,7 @@ need_hook = options.hook_title and bool(hook_text.strip())
 # returned Engine_Status.applied (skipped/degraded/failed carry contribution=None),
 # so this single check is the caption-ownership decision.
 kinetic_ass: Optional[Path] = None
-for contribution in compose_contributions:
+for contribution in engine_contributions or ():
     if (getattr(contribution, "engine_id", "") == "kinetic_typography"
             and getattr(contribution, "subtitle_path", None) is not None):
         kinetic_ass = Path(contribution.subtitle_path)
