@@ -279,3 +279,141 @@ def test_upload_unknown_reframe_layout_falls_back_to_default(client):
     job = get_manager().store.get(job_id)
     assert job is not None
     assert job.options.reframe_layout == "follow_active"
+
+
+
+# ---------------------------------------------------------------------------
+# Advanced AV engines foundation (task 12.3): `/api/info` engine surface and
+# junk engine-option tolerance (Reqs 20.1, 20.2, 20.3, 20.5, 20.6).
+# ---------------------------------------------------------------------------
+
+#: Every top-level `/api/info` key that existed **before** this spec. Pinned
+#: explicitly (not derived) so a future regression that drops one fails here.
+PREEXISTING_INFO_KEYS = frozenset(
+    {
+        "app_name",
+        "environment",
+        "version",
+        "aspect_ratios",
+        "clip_lengths",
+        "clip_counts",
+        "platforms",
+        "strategies",
+        "regeneratable_fields",
+        "llm_available",
+        "effects",
+        "broll_available",
+        "storage_backend",
+        "retention_choices",
+    }
+)
+
+
+@pytest.fixture
+def engine_registry():
+    """The **default** engine registry, emptied before and after the test.
+
+    `/api/info` reads the process-wide default registry via `get_registry()`, so
+    a test that needs a registered engine visible to the endpoint must register
+    it there rather than into an isolated instance. Teardown resets the registry
+    *and* the capability report and asserts the registry is empty again, so no
+    other test in the suite (in particular the all-off parity gate) ever sees a
+    registered engine.
+    """
+    from worker.engines.capabilities import reset_report
+    from worker.engines.registry import get_registry, reset_registry
+
+    reset_registry()
+    reset_report()
+    try:
+        yield get_registry()
+    finally:
+        reset_registry()
+        reset_report()
+        assert len(get_registry()) == 0, "default engine registry leaked out of the test"
+
+
+def test_info_exposes_engine_keys_and_retains_preexisting_keys(client, engine_registry):
+    """Validates: Requirements 20.1, 20.2, 20.6
+
+    `engines` / `capabilities` are additive: with nothing registered the list is
+    empty and the capability mapping is empty (no probe performed), while every
+    pre-existing v0.8.0 top-level key is still present.
+    """
+    body = client.get("/api/info").json()
+
+    # Additive keys are present and inert with an empty registry.
+    assert body["engines"] == []
+    assert isinstance(body["capabilities"], dict)
+    assert body["capabilities"] == {}
+
+    # Superset guarantee: no pre-existing key was dropped or renamed.
+    missing = PREEXISTING_INFO_KEYS - set(body)
+    assert not missing, f"pre-existing /api/info keys missing: {sorted(missing)}"
+
+    # The registry really was untouched by serving the endpoint.
+    assert len(engine_registry) == 0
+
+
+def test_info_advertises_registered_engine_flag_and_default_off(client, engine_registry):
+    """Validates: Requirements 20.1, 20.3, 20.6
+
+    A registered engine shows up in `/api/info`'s `engines` list with the
+    `<engine_id>_enabled` flag name the UI binds its toggle to, and is never
+    enabled by default.
+    """
+    from tests.fakes import FakeEngine
+    from worker.engines.base import Engine_Stage
+
+    engine_registry.register(FakeEngine("stem_separation", Engine_Stage.AUDIO, priority=42))
+
+    body = client.get("/api/info").json()
+    rows = body["engines"]
+    assert len(rows) == 1
+    row = rows[0]
+
+    assert row["id"] == "stem_separation"
+    assert row["flag"] == "stem_separation_enabled"
+    assert row["enabled_by_default"] is False
+    assert row["stage"] == "audio"
+    assert row["priority"] == 42
+    assert row["requires_network"] is False
+    # No declared capabilities => nothing missing, engine advertised available.
+    assert row["missing"] == []
+    assert row["available"] is True
+    # The capability mapping stays serialisable (empty: nothing was declared).
+    assert body["capabilities"] == {}
+
+    # Pre-existing keys survive the registered-engine case too.
+    assert PREEXISTING_INFO_KEYS <= set(body)
+
+
+def test_upload_with_unrecognised_engine_options_still_creates_job(client):
+    """Validates: Requirements 20.5
+
+    Unrecognised engine option values submitted by a newer UI are ignored, not
+    rejected: the upload must still create a job (never a 422) and the stored
+    options keep their documented defaults.
+    """
+    resp = client.post(
+        "/api/upload",
+        files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")},
+        data={
+            # Flags for engines that no spec has registered yet.
+            "stem_separation_enabled": "true",
+            "kinetic_typography_enabled": "not-a-bool",
+            # Junk engine option payloads.
+            "stem_separation_model": "{}",
+            "kinetic_typography_intensity": "🎬",
+            "engine_unknown_option": "-1e400",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["jobs"][0]["id"]
+
+    job = get_manager().store.get(job_id)
+    assert job is not None
+    # Unknown keys landed nowhere and the pre-existing defaults are intact.
+    assert not hasattr(job.options, "stem_separation_enabled")
+    assert job.options.aspect == "9:16"
+    assert job.options.captions is True
