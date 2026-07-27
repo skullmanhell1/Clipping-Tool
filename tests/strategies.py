@@ -719,13 +719,15 @@ def st_engine_outcomes(
 # repeated below as literal constants.
 #
 #   *** Task 3.1 MUST define exactly these values in ``worker/engines/kinetic.py``, and a
-#   *** later test (the natural home is the contract test in ``tests/test_kinetic_engine.py``
-#   *** landed by task 9.4) MUST assert
+#   *** later test MUST assert
 #   ***     tuple(kinetic.KINETIC_STYLES) == KINETIC_STYLES
 #   ***     tuple(kinetic.REVEAL_MODES)   == REVEAL_MODES
-#   *** so this duplication cannot silently drift. Once that assertion exists the two
-#   *** spellings are pinned to each other; until then, treat the tuples below as the
-#   *** single source of truth for the generators.
+#   *** so this duplication cannot silently drift.
+#
+# DISCHARGED (kinetic task 3.6): that pin now lives in
+# ``tests/test_kinetic_engine.py::test_kinetic_vocabularies_match_the_shared_generators``,
+# which asserts both equalities (and that both spellings are sorted and de-duplicated) on
+# every run. The two spellings are therefore pinned to each other; keep them in sync.
 #
 # NOTE ON WORD CONFIDENCE
 # -----------------------

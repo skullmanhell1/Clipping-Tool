@@ -1,0 +1,13 @@
+{
+  "pbtResults": {
+    "3.5 Property test: options and plans round-trip; resolution is idempotent → `tests/test_kinetic_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785159775034
+    },
+    "3.6 Property test: an unrecognised style falls back once, and names it → `tests/test_kinetic_engine.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785159777886
+    }
+  },
+  "executionHistory": {}
+}
