@@ -32,6 +32,8 @@ from worker import metadata as meta_mod
 from worker import selection as sel
 from worker import visual_selection
 from worker.effects import broll, compositor, filler, reframe
+from worker.engines.base import Engine_Stage
+from worker.engines.host import Engine_Host
 from worker.llm_client import BaseLLMClient
 from worker.models import ClipResult, ProcessingOptions, effective_options
 from worker.transcribe import Transcript, transcribe
@@ -120,6 +122,13 @@ def run_pipeline(
     # captions, b-roll, music) then inherits the normalised options.
     options = effective_options(options)
 
+    # Advanced AV engines (Reqs 4.4, 23.2): the host is built from the ALREADY
+    # normalised options, and every hook below is guarded by ``host.active`` — so
+    # with no engine registered or none enabled there is no probe, no workspace,
+    # no extra media pass and no extra marker, and this run reproduces v0.8.0
+    # exactly (Reqs 19.5, 23.1). The host never mutates ``options`` (Req 1.3).
+    host = Engine_Host(options, job_id=temp_dir.name, temp_dir=temp_dir)
+
     span = max(0.0, 1.0 - start_progress)
 
     def report(local_frac: float, stage: str) -> None:
@@ -130,6 +139,12 @@ def run_pipeline(
     info = fu.probe(source)
     if info.duration <= 0:
         raise ValueError("Source video has zero duration")
+
+    # SOURCE-stage engines run at most once per source, reusing the probe just
+    # performed to build the job's shared Time_Base — no additional ffprobe pass
+    # is added (Reqs 3.5, 13.2, 13.7, 19.3, 19.4).
+    if host.active:
+        host.run_source(source, info)
 
     # --- transcribe -------------------------------------------------------
     report(0.05, "Transcribing audio")
@@ -270,6 +285,20 @@ def run_pipeline(
                 except fu.FFmpegError:
                     pass  # keep the untrimmed clip on failure
 
+        # 3b. AUDIO-stage engines. They see the REBASED clip-relative words and
+        #     the post-filler duration (Reqs 15.1, 15.2) and may hand back
+        #     replacement media; a failed or degraded engine returns no media, so
+        #     ``raw`` (the pre-stage media) is kept and the clip still renders
+        #     (Req 8.3).
+        if host.active:
+            out = host.run_stage(
+                Engine_Stage.AUDIO, clip_id=clip_id, source=source, clip_path=raw,
+                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                words=words,
+            )
+            raw = out.media or raw
+            applied.extend(out.markers)
+
         # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
         #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.
         #    When ``speaker_reframe`` is OFF this collapses to the exact v0.7.0
@@ -312,6 +341,18 @@ def run_pipeline(
         else:
             fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
 
+        # 4b. GEOMETRY-stage engines, after the untouched ladder above. As at the
+        #     audio stage, replacement media is adopted only when an engine
+        #     actually succeeded; otherwise ``geo`` is kept (Req 8.3).
+        if host.active:
+            out = host.run_stage(
+                Engine_Stage.GEOMETRY, clip_id=clip_id, source=source, clip_path=geo,
+                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                words=words,
+            )
+            geo = out.media or geo
+            applied.extend(out.markers)
+
         # 5. compositor: captions/hook + look effects + emoji + b-roll + music
         #    (one pass). B-roll cues are planned + resolved lazily from the
         #    REBASED clip-relative timeline (Req 11.1) via a resolver, so no cue
@@ -324,11 +365,21 @@ def run_pipeline(
                 lambda w=words, d=clip_duration:
                 broll_engine.resolve(broll_engine.plan(w, d))
             )
+        # COMPOSE-stage engines contribute filter-graph fragments to that SAME
+        # single pass — they never invoke ffmpeg themselves (Reqs 1.5, 23.3).
+        compose = None
+        if host.active:
+            compose = host.run_stage(
+                Engine_Stage.COMPOSE, clip_id=clip_id, source=source, clip_path=geo,
+                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                words=words,
+            )
         try:
             rendered = compositor.render_clip(
                 geo, final, options, words, temp_dir,
                 hook_text=md.hook_text, llm_client=llm_client,
                 broll_resolver=broll_resolver,
+                engine_contributions=(compose.contributions if compose is not None else None),
             )
         except fu.FFmpegError:
             rendered = None
@@ -338,6 +389,8 @@ def run_pipeline(
                 broll_assets = rendered.broll_records
         else:
             geo.replace(final)
+        if compose is not None:
+            applied.extend(compose.markers)
 
         # 6. thumbnail from the finished clip
         thumb = clips_dir / f"clip_{clip_id}.jpg"
@@ -345,6 +398,19 @@ def run_pipeline(
             fu.generate_thumbnail(final, thumb, at=min(1.0, c.duration / 2))
         except fu.FFmpegError:
             thumb = None
+
+        # 6b. POST-stage engines see the finished clip, then this clip's engine
+        #     lifecycle is closed: durable artifacts are persisted BEFORE the
+        #     workspaces are deleted, and a persistence failure only adds an
+        #     ``engine:<id>:artifact_failed`` marker (Reqs 17.1, 17.6, 17.7, 18.6).
+        if host.active:
+            out = host.run_stage(
+                Engine_Stage.POST, clip_id=clip_id, source=source, clip_path=final,
+                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                words=words,
+            )
+            applied.extend(out.markers)
+            applied.extend(host.finish_clip(clip_id))
 
         results.append(
             ClipResult(
@@ -377,6 +443,12 @@ def run_pipeline(
 
         report(_P_SELECT_END + clip_span * ((idx + 1) / n),
                f"Rendered clip {idx + 1} of {n}")
+
+    # Release the job's engine scratch space (and finalise the SOURCE stage,
+    # which belongs to no clip). Job-level markers have no ClipResult to land in,
+    # so the host logs them (Reqs 17.1, 17.6).
+    if host.active:
+        host.finish_job()
 
     report(1.0, "Done")
     return results
