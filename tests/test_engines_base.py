@@ -1347,13 +1347,21 @@ def test_shared_test_doubles_and_generators_are_pinned():
         # extra trailing keywords are additive and therefore allowed.
         assert params[: len(required)] == required, name
 
+    # Sorted, and additive only: the foundation names below must never be renamed or
+    # removed. The ``KINETIC_*`` / ``REVEAL_MODES`` constants and the six ``st_kinetic*``
+    # / ``st_i18n*`` / ``st_broken*`` / ``st_font_availability`` generators are the
+    # kinetic-typography spec's tranche (its task 2.1) added to the same shared module.
     assert list(strategies.__all__) == [
-        "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "LLM_CAPABILITY",
-        "SAMPLE_RATES", "st_availability_map", "st_capability_id", "st_engine_id",
-        "st_engine_outcomes", "st_hostile_component", "st_hostile_value",
-        "st_invalid_fps", "st_malformed_capability_id", "st_options_mapping",
-        "st_priority", "st_registrations", "st_segment_records", "st_stage",
-        "st_time_base", "st_well_formed_capability_id", "st_word_timeline",
+        "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "KINETIC_STYLES",
+        "LLM_CAPABILITY", "REVEAL_MODES", "SAMPLE_RATES", "st_availability_map",
+        "st_broken_word_timeline", "st_capability_id", "st_engine_id",
+        "st_engine_outcomes", "st_font_availability", "st_hostile_component",
+        "st_hostile_value", "st_i18n_word_timeline", "st_invalid_fps",
+        "st_kinetic_options", "st_kinetic_style", "st_malformed_capability_id",
+        "st_options_mapping", "st_priority", "st_registrations", "st_reveal_mode",
+        "st_segment_records", "st_stage", "st_time_base",
+        "st_well_formed_capability_id", "st_word_timeline",
     ]
+    assert list(strategies.__all__) == sorted(strategies.__all__)
     for name in strategies.__all__:
         assert hasattr(strategies, name), name
