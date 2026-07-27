@@ -226,71 +226,71 @@ backward-compatibility parity gate that is this spec's central guarantee).
 
 - [ ] 8. Checkpoint — Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 9. Engine host: gating, isolation, timeouts, and lifecycle (`worker/engines/host.py`)
-  - [ ] 9.1 Implement host construction, gating, and the shared time base
+- [x] 9. Engine host: gating, isolation, timeouts, and lifecycle (`worker/engines/host.py`)
+  - [x] 9.1 Implement host construction, gating, and the shared time base
     - Add `Stage_Outcome` (`stage`, `results`, `markers`, `artifacts`, `contributions`, `media`) and `Engine_Host(options, *, job_id, temp_dir, registry=None, capabilities=None, storage=None, clock=time.monotonic, logger=None, sample_rate=DEFAULT_SAMPLE_RATE)` where `options` is already `effective_options(...)`-normalised and every collaborator defaults lazily (`get_registry()`, `get_report()`, `get_storage()` only when needed).
     - Implement `active` (true only when at least one registered engine is enabled), `enabled_for(stage)` (registry order), and `time_base(info)` building and caching one `Time_Base` per job from the source probe so no additional ffprobe pass is added.
     - _Requirements: 4.1, 4.4, 13.7, 19.2, 19.4, 19.5, 22.1_
 
-  - [ ] 9.2 Implement the gating ladder in `_invoke`
+  - [x] 9.2 Implement the gating ladder in `_invoke`
     - Steps 1–3: disabled engine ⇒ `skipped` with no marker, no capability probe and no workspace; `permissibility_mode` plus `requires_network` ⇒ `degraded` with `engine:<id>:permissibility_blocked` and the engine body never entered; first missing required capability in declaration order ⇒ `degraded` with `engine:<id>:unavailable:<capability_id>`; each missing optional capability ⇒ `engine:<id>:degraded:<capability_id>`, capped at one degradation marker per engine per clip.
     - _Requirements: 4.2, 7.1, 7.2, 7.4, 9.5, 21.2, 21.3_
 
-  - [ ] 9.3 Implement execution, failure isolation, timeout, and marker merging
+  - [x] 9.3 Implement execution, failure isolation, timeout, and marker merging
     - Step 4 onwards: allocate the workspace, build the frozen `Engine_Context` (clip-relative bounds, shared `Time_Base`, rebased words, resolved options, `options_digest`, `derive_seed`, `deadline = clock() + time_budget_s`, `fps_fallback:<value>` note when substituted, injected `deps`), then run on a single-worker thread with `future.result(timeout=...)`.
     - Catch every `Exception` (including `worker.ffmpeg_utils.FFmpegError`) ⇒ `failed` + exactly one `engine:<id>:failed`, logging the exception class and message; budget overrun ⇒ `failed` + exactly one `engine:<id>:timeout` with the contribution and artifacts abandoned; then namespace and de-duplicate markers via `merge_markers` in registry order and continue with the remaining engines.
     - _Requirements: 3.2, 3.3, 3.6, 8.1, 8.2, 8.4, 8.5, 8.6, 13.3, 19.1_
 
-  - [ ] 9.4 Implement `run_source`, `source_result`, and `run_stage`
+  - [x] 9.4 Implement `run_source`, `source_result`, and `run_stage`
     - `run_source(source, info)` invokes SOURCE-stage engines at most once per source per `run_pipeline` call and caches each result for `source_result(engine_id)` so every clip reuses it.
     - `run_stage(stage, *, clip_id, source, clip_path, clip_start, clip_end, duration, words=())` invokes every enabled engine of that stage through `_invoke`, accumulates results/markers/artifacts/contributions into a `Stage_Outcome`, and returns replacement `media` only when a `produces_media` engine succeeded — so a failed or degraded engine leaves the preceding stage's media in place.
     - _Requirements: 3.1, 3.5, 7.3, 8.3, 15.1, 15.2, 19.3_
 
-  - [ ] 9.5 Implement `finish_clip` and `finish_job`
+  - [x] 9.5 Implement `finish_clip` and `finish_job`
     - `finish_clip(clip_id)` persists durable artifacts through `persist_artifact` **before** deleting that clip's workspaces, returns any extra markers (`engine:<id>:artifact_failed`), honours `runtime_config.get_runtime_config().auto_delete_temp`, routes job-level cleanup through `storage_backends.retention.cleanup_temp`, and logs-and-swallows `OSError`. `finish_job()` removes `<temp_dir>/engines/<job_id>` when `auto_delete_temp` is enabled.
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 18.6_
 
-  - [ ]* 9.6 Property test: marker merge is namespaced, ordered, deduplicated, and silent for skips → `tests/test_engine_host.py`
+  - [x]* 9.6 Property test: marker merge is namespaced, ordered, deduplicated, and silent for skips → `tests/test_engine_host.py`
     - **Property 7: Marker merge is namespaced, ordered, deduplicated, and silent for skips** — the merged list contains every non-skipped engine's markers exactly once, in registry invocation order, each matching `^engine:<engine_id>:`, with `skipped` results contributing nothing. Generators: `st_registrations`, `st_engine_outcomes`.
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6_ · _Properties: P7_
 
-  - [ ]* 9.7 Property test: source-stage engines run once per source and are reused → `tests/test_engine_host.py`
+  - [x]* 9.7 Property test: source-stage engines run once per source and are reused → `tests/test_engine_host.py`
     - **Property 8: Source-stage engines run once per source and are reused** — for any clip count `n >= 1` a counting SOURCE-stage `FakeEngine` records exactly one invocation and every clip observes the same cached `Engine_Result`. Generators: `st_engine_outcomes`, clip counts in `[1, 5]`.
     - _Requirements: 3.5, 19.3_ · _Properties: P8_
 
-  - [ ]* 9.8 Property test: disabled engines cost nothing → `tests/test_engine_host.py`
+  - [x]* 9.8 Property test: disabled engines cost nothing → `tests/test_engine_host.py`
     - **Property 9: Disabled engines cost nothing** — for any subset of enabled flags exactly that subset is invoked; for every disabled engine the `CountingProber` records zero probes of its exclusive capabilities, no workspace directory exists on disk, and no additional media pass occurs; with the empty subset the prober call count is zero overall. Generators: `st_registrations`, boolean-flag subsets.
     - _Requirements: 4.1, 4.2, 19.5_ · _Properties: P9_
 
-  - [ ]* 9.9 Property test: missing capabilities degrade with exact, single markers → `tests/test_engine_host.py`
+  - [x]* 9.9 Property test: missing capabilities degrade with exact, single markers → `tests/test_engine_host.py`
     - **Property 12: Missing capabilities degrade with exact, single markers** — an unavailable required capability yields `degraded` with exactly `engine:<id>:unavailable:<first missing required id>` and a `run` body that never executed; each missing optional capability yields exactly `engine:<id>:degraded:<capability_id>`; at most one degradation marker per engine per clip. Generators: `st_registrations`, `st_availability_map`.
     - _Requirements: 7.1, 7.2, 7.4_ · _Properties: P12_
 
-  - [ ]* 9.10 Property test: one engine's failure is isolated → `tests/test_engine_host.py`
+  - [x]* 9.10 Property test: one engine's failure is isolated → `tests/test_engine_host.py`
     - **Property 14: One engine's failure is isolated** — for any subset of `RaisingEngine`s (any exception type, including `fu.FFmpegError`), each yields `failed` with exactly one `engine:<id>:failed` marker and every remaining engine of that stage is still invoked in registry order. Generators: `st_registrations`, exception classes.
     - _Requirements: 8.1, 8.2, 8.4_ · _Properties: P14_
 
-  - [ ]* 9.11 Property test: time budgets are enforced and abandoned cleanly → `tests/test_engine_host.py`
+  - [x]* 9.11 Property test: time budgets are enforced and abandoned cleanly → `tests/test_engine_host.py`
     - **Property 15: Time budgets are enforced and abandoned cleanly** — for any declared `time_budget_s` and any `SlowEngine` overrunning it under `FakeClock`, the result carries exactly one `engine:<id>:timeout` marker, no contribution or artifact from that engine is applied or persisted, and the clip still completes. Generators: budgets and overrun factors.
     - _Requirements: 8.6, 19.1_ · _Properties: P15_
 
-  - [ ]* 9.12 Property test: every engine of a clip shares one Time_Base and adds no probe → `tests/test_engine_host.py`
+  - [x]* 9.12 Property test: every engine of a clip shares one Time_Base and adds no probe → `tests/test_engine_host.py`
     - **Property 23: Every engine of a clip shares one Time_Base and adds no probe** — all recorded `ctx.time_base` values for a clip are equal (and the same object) and the ffprobe spy count added by the host is zero. Generators: `st_registrations`, clip counts.
     - _Requirements: 13.7, 19.4_ · _Properties: P23_
 
-  - [ ]* 9.13 Property test: the rebased Word_Timeline reaches every subsequent engine → `tests/test_engine_host.py`
+  - [x]* 9.13 Property test: the rebased Word_Timeline reaches every subsequent engine → `tests/test_engine_host.py`
     - **Property 27: The rebased Word_Timeline reaches every subsequent engine** — for any Word_Timeline and any filler keep-plan, the words recorded by every engine invoked after filler removal equal `filler.rebase_words(words, keeps)` and every word bound lies within `[0, ctx.duration]`. Generators: `st_word_timeline`, keep-plans.
     - _Requirements: 15.1, 15.2_ · _Properties: P27_
 
-  - [ ]* 9.14 Property test: independent engines are confluent → `tests/test_engine_host.py`
+  - [x]* 9.14 Property test: independent engines are confluent → `tests/test_engine_host.py`
     - **Property 28: Independent engines are confluent** — for any two engines whose contributions occupy disjoint time ranges, running them in either relative priority order yields equal merged marker sets and equal produced-artifact key sets. Generators: `st_registrations`, disjoint segment pairs.
     - _Requirements: 15.6_ · _Properties: P28_
 
-  - [ ]* 9.15 Property test: permissibility blocks network engines and keeps runs offline → `tests/test_engine_host.py`
+  - [x]* 9.15 Property test: permissibility blocks network engines and keeps runs offline → `tests/test_engine_host.py`
     - **Property 33: Permissibility blocks network engines and keeps runs offline** — with `permissibility_mode` on, no engine declaring `requires_network` executes its `run` body, each yields `degraded` with exactly one `engine:<id>:permissibility_blocked` marker, resolved options equal the documented safe values, and a clip of purely local engines completes with `socket.socket` patched to raise. Generators: `st_registrations`, network-declaring subsets.
     - _Requirements: 9.5, 21.2, 21.3, 21.4_ · _Properties: P33_
 
-  - [ ]* 9.16 Unit tests: failure logging and media fallback examples → `tests/test_engine_host.py`
+  - [x]* 9.16 Unit tests: failure logging and media fallback examples → `tests/test_engine_host.py`
     - `caplog` assertion that a failed engine logs its exception class and message; example assertions that `Stage_Outcome.media` is `None` for a failed/degraded `produces_media` engine (so the caller keeps the prior media) and set for a successful one.
     - _Requirements: 8.3, 8.5_
 
