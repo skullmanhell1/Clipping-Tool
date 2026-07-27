@@ -7,6 +7,14 @@
     "3.6 Property test: an unrecognised style falls back once, and names it → `tests/test_kinetic_engine.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785159777886
+    },
+    "5.4 Property test: layout respects line count, line width, and word integrity → `tests/test_kinetic_layout.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785194326492
+    },
+    "5.5 Property test: style margins keep the caption box inside the Safe_Area → `tests/test_kinetic_layout.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785194329540
     }
   },
   "executionHistory": {}
