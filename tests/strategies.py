@@ -21,18 +21,20 @@ Conventions
   :func:`st_segment_records`) are plain builtins / ``tests.conftest.FakeWord``
   instances, never spec-private types.
 
-This first tranche (task 2.3) holds the generators that need no engine contract; the
-second tranche (task 3.4) adds ``st_stage``, ``st_registrations`` and
-``st_engine_outcomes`` once ``worker/engines/base.py`` exists.
+The first tranche (task 2.3) holds the generators that need no engine contract; the second
+tranche (task 3.4) adds ``st_stage``, ``st_registrations`` and ``st_engine_outcomes``, which
+depend on the ``worker/engines/base.py`` contract.
 """
 from __future__ import annotations
 
 import string
+from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 from hypothesis import strategies as st
 
 from tests.conftest import FakeWord
+from worker.engines.base import Engine_Artifact, Engine_Stage, Engine_Status
 from worker.engines.timebase import (
     DEFAULT_FPS,
     DEFAULT_SAMPLE_RATE,
@@ -50,13 +52,16 @@ __all__ = [
     "st_availability_map",
     "st_capability_id",
     "st_engine_id",
+    "st_engine_outcomes",
     "st_hostile_component",
     "st_hostile_value",
     "st_invalid_fps",
     "st_malformed_capability_id",
     "st_options_mapping",
     "st_priority",
+    "st_registrations",
     "st_segment_records",
+    "st_stage",
     "st_time_base",
     "st_well_formed_capability_id",
     "st_word_timeline",
@@ -516,3 +521,176 @@ def st_hostile_component() -> st.SearchStrategy[str]:
         ]
     )
     return st.one_of(fixtures, st.text(max_size=64), st.text(min_size=200, max_size=300))
+
+
+
+# --------------------------------------------------------------------------- #
+# Tranche 2 (task 3.4): generators that depend on the engine contract           #
+# --------------------------------------------------------------------------- #
+#: Media types an ``Engine_Artifact`` declares (mirrors the ``base`` docstring).
+_ARTIFACT_MEDIA_TYPES: Tuple[str, ...] = (
+    "video",
+    "audio",
+    "image",
+    "subtitle",
+    "data",
+)
+
+#: Exception classes engines realistically raise; the host must isolate all of them.
+_ENGINE_EXCEPTIONS: Tuple[type, ...] = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    OSError,
+    TimeoutError,
+    MemoryError,
+    ZeroDivisionError,
+)
+
+
+def st_stage() -> st.SearchStrategy[Engine_Stage]:
+    """Any :class:`worker.engines.base.Engine_Stage` member; consumed by P4 (stage
+    lookup partitions the registry) and by both sibling specs' stage-hook tests."""
+    return st.sampled_from(list(Engine_Stage))
+
+
+@st.composite
+def st_registrations(
+    draw,
+    *,
+    min_size: int = 0,
+    max_size: int = 6,
+    allow_duplicate_ids: bool = False,
+):
+    """``(engine_id, stage, priority)`` registration sets, ties and conflicts included.
+
+    Returns a ``list`` of triples in *arbitrary registration order* — the order is
+    meaningful input, because P3 asserts ``for_stage`` is invariant under permutation.
+    Priorities come from the deliberately narrow :func:`st_priority` band, so
+    ``(priority, engine_id)`` **ties are common** (P3/P4 need them), and one drawn
+    priority is often copied onto another entry to force an exact tie.
+
+    Ids are unique by default, so the set can be registered wholesale. Pass
+    ``allow_duplicate_ids=True`` to have a duplicate id appended (with a possibly
+    different stage/priority) — the shape P5 needs for the duplicate-registration
+    error.
+    """
+    n = draw(st.integers(min_value=min_size, max_value=max_size))
+    records: List[Tuple[str, Engine_Stage, int]] = []
+    seen: set = set()
+    for _ in range(n):
+        engine_id = draw(st_engine_id(max_words=2))
+        if engine_id in seen:
+            # Keep ids unique without discarding the draw: suffix until distinct.
+            engine_id = f"{engine_id}_{len(records)}"
+        seen.add(engine_id)
+        records.append((engine_id, draw(st_stage()), draw(st_priority())))
+
+    # Force an exact (priority, engine_id) tie often enough to matter for ordering.
+    if len(records) >= 2 and draw(st.booleans()):
+        donor = draw(st.integers(min_value=0, max_value=len(records) - 1))
+        target = draw(st.integers(min_value=0, max_value=len(records) - 1))
+        engine_id, stage, _ = records[target]
+        records[target] = (engine_id, stage, records[donor][2])
+
+    if allow_duplicate_ids and records:
+        index = draw(st.integers(min_value=0, max_value=len(records) - 1))
+        duplicate_id = records[index][0]
+        records.append((duplicate_id, draw(st_stage()), draw(st_priority())))
+        return records
+
+    return list(draw(st.permutations(records)))
+
+
+@st.composite
+def _st_engine_artifact(draw, *, durable: bool = None):
+    """One :class:`worker.engines.base.Engine_Artifact` with a workspace-relative path."""
+    name = draw(st_engine_id(max_words=1))
+    suffix = draw(st.sampled_from([".mp4", ".wav", ".png", ".ass", ".json", ""]))
+    file_name = f"{name}{suffix}"
+    return Engine_Artifact(
+        name=file_name,
+        path=Path("engines") / file_name,
+        media_type=draw(st.sampled_from(list(_ARTIFACT_MEDIA_TYPES))),
+        durable=draw(st.booleans()) if durable is None else bool(durable),
+    )
+
+
+@st.composite
+def st_engine_outcomes(
+    draw,
+    *,
+    engine_id: str = None,
+    max_markers: int = 3,
+    max_artifacts: int = 2,
+    allow_exception: bool = True,
+):
+    """The status × markers × artifacts × exception cross product one engine can produce.
+
+    Returns a plain ``dict`` whose keys are a stability contract (the sibling specs
+    splat it into :class:`tests.fakes.FakeEngine` and into ``Engine_Result``):
+
+    ``engine_id``
+        the engine the outcome belongs to (a valid Engine_Id).
+    ``status``
+        an :class:`worker.engines.base.Engine_Status` member — every member is reachable.
+    ``markers``
+        ``tuple[str, ...]``, a mix of already ``engine:<id>:<detail>``-namespaced and bare
+        details, sometimes with a repeat so de-duplication is exercised.
+    ``artifacts``
+        ``tuple[Engine_Artifact, ...]`` with mixed ``durable`` flags and media types.
+    ``plan``
+        a small JSON-safe planning mapping.
+    ``detail``
+        a short human-readable string.
+    ``exception``
+        an ``Exception`` instance the engine should raise instead of returning, or
+        ``None`` for a normal return. Independent of ``status`` on purpose: the host
+        must cope with a failing engine whatever status it *would* have reported.
+        Pass ``allow_exception=False`` for a returns-only outcome.
+
+    Consumed by P1, P2, P7, P13 and P30, and by both sibling specs' host tests.
+    """
+    eid = engine_id if engine_id is not None else draw(st_engine_id(max_words=2))
+    details = st.one_of(
+        st.sampled_from(["applied", "skipped", "degraded", "timeout", "fallback", "cached"]),
+        st.text(alphabet=_SNAKE_ALPHABET + "_", min_size=1, max_size=10),
+    )
+    markers: List[str] = draw(
+        st.lists(
+            st.one_of(details.map(lambda d: f"engine:{eid}:{d}"), details),
+            max_size=max_markers,
+        )
+    )
+    if markers and draw(st.booleans()):
+        markers.append(markers[0])          # duplicate -> exercises merge_markers dedup
+
+    artifacts = draw(st.lists(_st_engine_artifact(), max_size=max_artifacts))
+
+    exception = None
+    if allow_exception and draw(st.booleans()):
+        exc_type = draw(st.sampled_from(list(_ENGINE_EXCEPTIONS)))
+        exception = exc_type("engine failed")
+
+    return {
+        "engine_id": eid,
+        "status": draw(st.sampled_from(list(Engine_Status))),
+        "markers": tuple(markers),
+        "artifacts": tuple(artifacts),
+        "plan": draw(
+            st.dictionaries(
+                st.sampled_from(["segments", "cues", "intensity", "model", "seed"]),
+                st.one_of(
+                    st.integers(min_value=-1000, max_value=1000),
+                    st.floats(min_value=-100.0, max_value=100.0,
+                              allow_nan=False, allow_infinity=False),
+                    st.booleans(),
+                    st.text(max_size=8),
+                ),
+                max_size=3,
+            )
+        ),
+        "detail": draw(st.text(max_size=24)),
+        "exception": exception,
+    }
