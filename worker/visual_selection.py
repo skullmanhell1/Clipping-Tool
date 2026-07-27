@@ -103,7 +103,13 @@ def sample_keyframes(
     for t in timestamps:
         path = active_sampler(source, t)  # may raise -> propagate to caller
         if path:
-            frames.append(Keyframe(t=round(float(t), 3), path=str(path)))
+            # Timestamps are rounded to keep them tidy, but for very short
+            # clips (sub-10ms) rounding a bucket midpoint up can push it past
+            # total_duration, so clamp the recorded value back into
+            # [0, total_duration]. The sampler above still receives the exact
+            # unrounded ``t``, so which frames get sampled is unaffected.
+            recorded_t = min(max(round(float(t), 3), 0.0), float(total_duration))
+            frames.append(Keyframe(t=recorded_t, path=str(path)))
     return frames
 
 

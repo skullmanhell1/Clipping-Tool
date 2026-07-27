@@ -16,13 +16,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 from config import settings
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
 from worker.ffmpeg_utils import _run, probe
 from worker.models import ProcessingOptions
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import added
+    from worker.engines.base import Compose_Contribution
 
 
 @dataclass
@@ -38,6 +41,21 @@ class RenderResult:
     broll_records: list[dict] = field(default_factory=list)
 
 
+def _ordered_contributions(
+    contributions: Optional[Sequence["Compose_Contribution"]],
+) -> list["Compose_Contribution"]:
+    """Compose_Contributions in deterministic ``(z_order, engine_id)`` order.
+
+    ``None``/empty yields ``[]``, which is what keeps the whole engine layer of
+    :func:`render_clip` inert on an all-off run (Reqs 1.5, 23.3).
+    """
+    if not contributions:
+        return []
+    ordered = [c for c in contributions if c is not None]
+    ordered.sort(key=lambda c: (getattr(c, "z_order", 0), getattr(c, "engine_id", "")))
+    return ordered
+
+
 def render_clip(
     base_clip: str | Path,
     dest: str | Path,
@@ -48,12 +66,26 @@ def render_clip(
     llm_client=None,
     emoji_resolver=None,
     broll_resolver: Optional[Callable[[], list]] = None,
+    engine_contributions: Optional[Sequence["Compose_Contribution"]] = None,
 ) -> Optional[RenderResult]:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
     Returns a :class:`RenderResult`, or ``None`` when no effect (and no caption)
     is enabled (the caller should then use ``base_clip`` directly).
+
+    ``engine_contributions`` is the advanced-AV-engine seam (Reqs 1.5, 23.3).
+    When it is ``None`` or empty — which is the case for every v0.8.0 caller and
+    for any run with no enabled engine — every code path above, including the
+    "return ``None`` when nothing changed" contract, is unchanged. When
+    contributions are present their extra ffmpeg inputs are appended to the same
+    ``-i`` list (last, so the base/music/b-roll/emoji index accounting is
+    untouched) and their filters to the same ``-filter_complex``, ordered by
+    ``(z_order, engine_id)`` and inserted **below** the caption layer so captions
+    stay on top; a contribution's ``subtitle_path`` is handed to the existing
+    libass slot. It is still exactly **one** ffmpeg pass — an engine never
+    invokes ffmpeg itself.
     """
+    contributions = _ordered_contributions(engine_contributions)
     base_clip = Path(base_clip)
     dest = Path(dest)
     temp_dir = Path(temp_dir)
@@ -159,7 +191,15 @@ def render_clip(
         color=options.color, zoom=options.zoom, transitions=options.transitions,
         fades=options.fades, progress_bar=False, subtitles=None,
     )
+    # Engine compose contributions render *below* the caption layer (Req 23.3),
+    # so they sit above the look chain and any b-roll but under captions/progress
+    # and the emoji layer. Empty unless an engine actually contributed, in which
+    # case ``caption_chain`` is exactly what it has always been.
     caption_chain: list[str] = []
+    for contribution in contributions:
+        caption_chain.extend(contribution.video_filters)
+        if contribution.subtitle_path:
+            caption_chain.append(cap.subtitles_filter(contribution.subtitle_path))
     if subtitles_filter:
         caption_chain.append(subtitles_filter)
     if options.progress_bar:
@@ -301,9 +341,26 @@ def render_clip(
         audio_out = "aout"
         audio_changed = True
 
-    # Inputs are ordered base -> music -> b-roll -> emoji (Req 10.3).
+    # Engine audio contributions chain onto whatever audio label the compositor
+    # produced (Req 23.3). Skipped entirely when the source has no audio track,
+    # exactly like the music/fade paths above.
+    engine_audio = [f for c in contributions for f in c.audio_filters]
+    if engine_audio and info.has_audio:
+        graph_parts.append(f"[{audio_out}]{','.join(engine_audio)}[aeng]")
+        audio_out = "aeng"
+        audio_changed = True
+
+    # Inputs are ordered base -> music -> b-roll -> emoji -> engines (Req 10.3);
+    # engine inputs come last so the index accounting above is untouched.
     inputs += broll_input_args
     inputs += emoji_inputs
+    for contribution in contributions:
+        for item in contribution.inputs:
+            if item.loop:
+                inputs += ["-loop", "1"]
+            if item.duration > 0:
+                inputs += ["-t", f"{item.duration:.3f}"]
+            inputs += ["-i", str(item.path)]
 
     video_changed = bool(look_chain) or bool(caption_chain) or bool(broll_graph) or bool(emoji_graph)
     if not video_changed and not audio_changed:

@@ -325,6 +325,19 @@ def test_catastrophic_failure_returns_empty(monkeypatch):
     assert result == []
 
 
+def test_keyframe_timestamps_clamped_for_sub_millisecond_durations():
+    """Validates: Requirements 15.1 — rounding never pushes t past the duration.
+
+    Regression for duration=0.0078125, limit=13: rounding a bucket midpoint to
+    3 decimals used to round up beyond the clip duration.
+    """
+    duration = 0.0078125
+    frames = sample_keyframes("src.mp4", duration, limit=13, sampler=_fake_sampler)
+    assert len(frames) == 13
+    for f in frames:
+        assert 0.0 <= f.t <= duration
+
+
 def test_derive_visual_cues_degrades_without_imaging_libs():
     """Validates: Requirements 14.1 — cue derivation never fails on bad paths."""
     frames = [

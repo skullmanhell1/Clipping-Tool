@@ -778,3 +778,337 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
     assert backend.calls == []  # permissibility -> backend bypassed, no network
     assert "speaker_reframe:follow_active" in clips_c[0].effects_applied
     assert (tmp_path / "cc" / clips_c[0].filename).exists()
+
+
+
+# ===========================================================================
+# Advanced AV engines (av-engines-foundation) — Task 10.4
+# ---------------------------------------------------------------------------
+# Property 13: Clip count is invariant under degradation and failure.
+#
+# This property drives the REAL ``run_pipeline`` with the Task-10 engine hooks
+# wired in, but **fully offline**: every ffmpeg/ffprobe touch point
+# (``probe``/``cut_segment``/``reformat_aspect``/``generate_thumbnail`` plus the
+# compositor pass) is replaced by a stub that writes a placeholder file, so one
+# hypothesis example costs a handful of small writes instead of several ffmpeg
+# encodes. That is what makes a *property* (rather than a single ffmpeg example)
+# affordable here; the two ffmpeg integration examples for this task live in
+# ``tests/test_pipeline_effects.py``.
+#
+# Global-state isolation: ``worker.engines`` owns a process-wide default
+# Engine_Registry and Capability_Report which would leak from one hypothesis
+# example into the next (a fixture runs once per *test*, not per *example*).
+# Every example therefore resets both singletons **inside the property body**,
+# builds its own ``Engine_Registry``, and injects it (plus its own
+# Capability_Report, storage backend and clock) into the host that
+# ``run_pipeline`` constructs — so the default registry stays empty and
+# ``host.active`` remains False for the rest of the suite.
+# ===========================================================================
+import contextlib
+import dataclasses
+import tempfile
+from unittest import mock
+
+from hypothesis import HealthCheck
+
+import worker.ffmpeg_utils as fu
+from worker.engines.base import Engine_Stage
+from worker.engines.capabilities import Capability_Report, reset_report
+from worker.engines.host import Engine_Host
+from worker.engines.registry import Engine_Registry, reset_registry
+
+try:  # module-level test doubles / generators from the shared modules
+    from tests.fakes import (
+        FakeClock,
+        FakeEngine,
+        RaisingEngine,
+        RecordingStorage,
+        SlowEngine,
+        StaticProber,
+    )
+    from tests.strategies import (
+        st_availability_map,
+        st_engine_outcomes,
+        st_registrations,
+    )
+except ImportError:  # pragma: no cover - importable either way under pytest
+    from fakes import (
+        FakeClock,
+        FakeEngine,
+        RaisingEngine,
+        RecordingStorage,
+        SlowEngine,
+        StaticProber,
+    )
+    from strategies import st_availability_map, st_engine_outcomes, st_registrations
+
+#: The two candidate spans every engine run below produces clips for, so "same
+#: number of ClipResults" is asserted against a known, non-zero count.
+AV_CLIP_SPANS = ((0.0, 2.0), (2.0, 4.0))
+
+#: Source duration the stubbed probe reports (covers both spans above).
+AV_SOURCE_DURATION = 4.0
+
+
+def av_options(flags, **overrides):
+    """``ProcessingOptions`` carrying a real ``<engine_id>_enabled`` field per engine.
+
+    ``AV_Engine.is_enabled`` reads its Feature_Flag off the *resolved* options, and
+    ``run_pipeline`` passes those options through ``effective_options`` (which may
+    return a ``dataclasses.replace`` copy). A dynamically attached attribute could
+    be dropped by that copy, so the flags are added as genuine dataclass fields on
+    a per-example subclass instead — that survives ``replace`` exactly like every
+    other option field.
+    """
+    names = sorted(flags)
+    cls = dataclasses.make_dataclass(
+        "Engine_Processing_Options",
+        [(f"{name}_enabled", bool, dataclasses.field(default=False)) for name in names],
+        bases=(ProcessingOptions,),
+    )
+    base = dict(captions=False, metadata=False, aspect="9:16")
+    base.update(overrides)
+    return cls(**base, **{f"{name}_enabled": bool(flags[name]) for name in names})
+
+
+def av_touch(path, payload=b"stub-media"):
+    """Create ``path`` (with parents) so a stubbed ffmpeg step leaves real bytes."""
+    path = _Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return path
+
+
+@contextlib.contextmanager
+def av_ffmpeg_free_pipeline(pl, render_calls, *, spans=AV_CLIP_SPANS):
+    """Patch every ffmpeg/ffprobe/LLM touch point ``run_pipeline`` reaches.
+
+    ``render_calls`` collects one record per compositor invocation (its
+    ``base_clip`` and the ``engine_contributions`` it was handed), so the COMPOSE
+    seam can be asserted without running ffmpeg. ``render_clip`` returns ``None``,
+    which is the compositor's documented "nothing changed" answer, so the pipeline
+    promotes the geometry output to the final clip exactly as it does in
+    production.
+    """
+    from worker.selection import ClipCandidate
+    from worker.transcribe import Transcript, TranscriptSegment, Word
+
+    info = fu.MediaInfo(
+        duration=AV_SOURCE_DURATION, width=1280, height=720, fps=30.0, has_audio=True
+    )
+
+    def fake_probe(path):
+        return info
+
+    def fake_cut(source, start, end, dest, reencode=True):
+        return av_touch(dest)
+
+    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur"):
+        return av_touch(dest)
+
+    def fake_thumbnail(source, dest, at=0.0, width=640):
+        return av_touch(dest, b"stub-jpeg")
+
+    def fake_render(base_clip, dest, options, words, temp_dir, **kwargs):
+        render_calls.append(
+            {
+                "base_clip": _Path(base_clip),
+                "contributions": kwargs.get("engine_contributions"),
+            }
+        )
+        return None
+
+    def fake_transcribe(source, language=None, translate=False):
+        words = [Word(0.2, 0.6, "hello"), Word(0.8, 1.2, "there"),
+                 Word(2.2, 2.6, "my"), Word(2.8, 3.2, "friend")]
+        return Transcript(
+            language="en",
+            segments=[TranscriptSegment(0.0, AV_SOURCE_DURATION, "hello there my friend",
+                                        words)],
+        )
+
+    def fake_select(*args, **kwargs):
+        return [
+            ClipCandidate(start=s, end=e, score=90.0 - i, text="hello there")
+            for i, (s, e) in enumerate(spans)
+        ]
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(fu, "probe", fake_probe))
+        stack.enter_context(mock.patch.object(fu, "cut_segment", fake_cut))
+        stack.enter_context(mock.patch.object(fu, "reformat_aspect", fake_reformat))
+        stack.enter_context(mock.patch.object(fu, "generate_thumbnail", fake_thumbnail))
+        stack.enter_context(mock.patch.object(pl.compositor, "render_clip", fake_render))
+        stack.enter_context(mock.patch.object(pl, "transcribe", fake_transcribe))
+        stack.enter_context(mock.patch.object(pl.sel, "select_moments", fake_select))
+        yield
+
+
+@contextlib.contextmanager
+def av_injected_host(pl, registry, report, storage, clock):
+    """Make ``run_pipeline`` build its host on an ISOLATED registry + collaborators."""
+    def factory(options, **kwargs):
+        return Engine_Host(
+            options,
+            registry=registry,
+            capabilities=report,
+            storage=storage,
+            clock=clock,
+            **kwargs,
+        )
+
+    with mock.patch.object(pl, "Engine_Host", factory):
+        yield
+
+
+def av_engine_double(engine_id, stage, priority, outcome, *, exception, overrun,
+                     required, clock):
+    """The ``tests.fakes`` double matching one generated engine outcome."""
+    if exception is not None:
+        return RaisingEngine(engine_id, stage, exc=exception, priority=priority,
+                             required_capabilities=required)
+    if overrun:
+        return SlowEngine(engine_id, stage, overrun=2.0, clock=clock, priority=priority,
+                          time_budget_s=1.0, required_capabilities=required)
+    return FakeEngine(
+        engine_id, stage,
+        status=outcome["status"], markers=outcome["markers"],
+        artifacts=outcome["artifacts"], plan=outcome["plan"], detail=outcome["detail"],
+        priority=priority, required_capabilities=required,
+    )
+
+
+def av_expected_stage_media(ctx, temp_dir, clips_dir):
+    """The media the Pipeline owes an engine at ``ctx.stage`` (its pre-stage file).
+
+    SOURCE sees no clip; AUDIO sees the cut clip; GEOMETRY and COMPOSE see the
+    geometry output; POST sees the finished clip. A failing engine can never
+    replace media, so every recorded context must name exactly these paths.
+    """
+    if ctx.stage is Engine_Stage.SOURCE:
+        return None
+    if ctx.stage is Engine_Stage.AUDIO:
+        return temp_dir / f"raw_{ctx.clip_id}.mp4"
+    if ctx.stage in (Engine_Stage.GEOMETRY, Engine_Stage.COMPOSE):
+        return temp_dir / f"geo_{ctx.clip_id}.mp4"
+    return clips_dir / f"clip_{ctx.clip_id}.mp4"
+
+
+# Feature: av-engines-foundation, Property 13: Clip count is invariant under degradation and failure
+@settings(max_examples=25, deadline=None,
+          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+@given(data=st.data())
+def test_p13_clip_count_invariant_under_degradation_and_failure(data):
+    """Validates: Requirements 7.3, 7.5, 8.3, 8.7
+
+    For any capability availability map and any subset of engines forced to raise
+    (``FFmpegError`` included) or to overrun their time budget, ``run_pipeline``
+    produces the same number of ``ClipResult``s as the all-engines-disabled run of
+    the same input, every clip file still exists, and the media handed to each
+    stage is exactly the Pipeline's own pre-stage file — no failing engine can
+    substitute media. The all-disabled run additionally carries no ``engine:``
+    marker and invokes no engine at all.
+    """
+    import worker.pipeline as pl
+
+    # Per-example isolation of the two process-wide engine singletons.
+    reset_registry()
+    reset_report()
+
+    registrations = data.draw(st_registrations(min_size=1, max_size=4),
+                              label="registrations")
+    availability = data.draw(st_availability_map(max_size=4), label="availability")
+    capability_ids = sorted(availability)
+
+    clock = FakeClock()
+    engines = []
+    for index, (engine_id, stage, priority) in enumerate(registrations):
+        outcome = data.draw(st_engine_outcomes(engine_id=engine_id),
+                            label=f"outcome:{engine_id}")
+        exception = outcome["exception"]
+        # Cover the FFmpegError case explicitly (Req 8.7), not just by luck.
+        if exception is not None and data.draw(st.booleans(), label=f"ffmpeg:{engine_id}"):
+            exception = fu.FFmpegError("engine ffmpeg failure")
+        overrun = (
+            False if exception is not None
+            else data.draw(st.booleans(), label=f"overrun:{engine_id}")
+        )
+        required = (
+            (capability_ids[index % len(capability_ids)],) if capability_ids else ()
+        )
+        engines.append(
+            av_engine_double(engine_id, stage, priority, outcome, exception=exception,
+                             overrun=overrun, required=required, clock=clock)
+        )
+
+    registry = Engine_Registry()
+    for engine in engines:
+        registry.register(engine)
+    report = Capability_Report(StaticProber(availability))
+    storage = RecordingStorage()
+    engine_ids = [engine.engine_id for engine in engines]
+
+    with tempfile.TemporaryDirectory() as root:
+        root = _Path(root)
+        source = av_touch(root / "source.mp4", b"stub-source")
+
+        def run(tag, flags):
+            clips_dir = root / tag / "clips"
+            temp_dir = root / tag / "tmp"
+            renders: list = []
+            with av_ffmpeg_free_pipeline(pl, renders), av_injected_host(
+                pl, registry, report, storage, clock
+            ):
+                clips = pl.run_pipeline(
+                    source, av_options(flags), clips_dir=clips_dir, temp_dir=temp_dir
+                )
+            return clips, renders, clips_dir, temp_dir
+
+        # (A) every engine disabled — the reference run.
+        off_flags = {engine_id: False for engine_id in engine_ids}
+        baseline, baseline_renders, baseline_clips_dir, _ = run("off", off_flags)
+
+        assert len(baseline) == len(AV_CLIP_SPANS)
+        assert all(engine.run_count == 0 for engine in engines)   # Req 7.3 / 19.5
+        for clip in baseline:
+            assert not any(m.startswith("engine:") for m in clip.effects_applied)
+            assert (baseline_clips_dir / clip.filename).exists()
+        assert len(baseline_renders) == len(AV_CLIP_SPANS)
+        assert all(call["contributions"] in (None, []) for call in baseline_renders)
+
+        # (B) every engine enabled — degraded, failing and overrunning included.
+        on_flags = {engine_id: True for engine_id in engine_ids}
+        treatment, renders, clips_dir, temp_dir = run("on", on_flags)
+
+        # Clip count is invariant (Reqs 7.3, 8.3) and every clip still exists.
+        assert len(treatment) == len(baseline)
+        for clip in treatment:
+            assert (clips_dir / clip.filename).exists()
+
+        # The media handed to each stage is the Pipeline's own pre-stage file, so
+        # a failing engine leaves the preceding stage's media in place (Req 8.3).
+        for engine in engines:
+            for ctx in engine.contexts:
+                assert ctx.clip_path == av_expected_stage_media(ctx, temp_dir, clips_dir)
+
+        # The compositor still ran once per clip, always on the geometry output.
+        assert len(renders) == len(AV_CLIP_SPANS)
+        for call in renders:
+            assert call["base_clip"].parent == temp_dir
+            assert call["base_clip"].name.startswith("geo_")
+
+        # Non-vacuity: every engine whose required capability is available really
+        # was invoked (once per source at SOURCE, once per clip elsewhere), and
+        # every engine gated off by a missing capability never ran (Req 7.1).
+        for engine in engines:
+            runnable = not report.missing(engine.required_capabilities)
+            if not runnable:
+                expected = 0
+            elif engine.stage is Engine_Stage.SOURCE:
+                expected = 1
+            else:
+                expected = len(treatment)
+            assert engine.run_count == expected
+
+    reset_registry()
+    reset_report()
