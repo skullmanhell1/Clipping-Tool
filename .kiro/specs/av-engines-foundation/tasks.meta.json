@@ -135,6 +135,10 @@
     "12.4 Property test: engine option fields round-trip through `ProcessingOptions` → `tests/test_options_roundtrip.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785152994278
+    },
+    "13.1 Property test: all engines off reproduces v0.8.0 exactly → `tests/test_pipeline_degradation.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785154873091
     }
   },
   "executionHistory": {

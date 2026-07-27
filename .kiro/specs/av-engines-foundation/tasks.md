@@ -338,17 +338,17 @@ backward-compatibility parity gate that is this spec's central guarantee).
     - **Property 35: Engine option fields round-trip through ProcessingOptions** — for any options mapping, `ProcessingOptions.from_dict(asdict(from_dict(m))) == from_dict(m)`, every engine Feature_Flag defaults to `False` on a fresh instance, and `AV_Engine.flag_field()` equals `f"{engine_id}_enabled"` for every registered engine. Generators: `st_options_mapping`, `st_engine_id`.
     - _Requirements: 9.1, 9.2, 9.3, 23.4_ · _Properties: P35_
 
-- [ ] 13. All-off parity gate and contract pin
-  - [ ] 13.1 Property test: all engines off reproduces v0.8.0 exactly → `tests/test_pipeline_degradation.py`
+- [x] 13. All-off parity gate and contract pin
+  - [x] 13.1 Property test: all engines off reproduces v0.8.0 exactly → `tests/test_pipeline_degradation.py`
     - **Property 34: All engines off reproduces v0.8.0 exactly** — for any `ProcessingOptions` with every engine Feature_Flag off and for any registry contents (including empty), the Pipeline produces the same **clip count**, the same **`effects_applied`** list, and the same **ffmpeg invocation count** as the baseline run with no `Engine_Host`, and the recorded stage order remains `cut → filler removal → geometry → compositor → thumbnail`. Generators: `st_options_mapping`, `st_registrations`; ffmpeg calls counted with a spy on `_run` / `fu` helpers.
     - This is the spec's central backward-compatibility guarantee, so it is **not** an optional sub-task.
     - _Requirements: 4.3, 9.4, 23.1, 23.2, 23.3_ · _Properties: P34_
 
-  - [ ] 13.2 All-off ffmpeg parity check on a tiny clip → `tests/test_pipeline_degradation.py`
+  - [x] 13.2 All-off ffmpeg parity check on a tiny clip → `tests/test_pipeline_degradation.py`
     - With `make_video` and `requires_ffmpeg`, run an all-off clip through the hooked Pipeline and assert `compositor.render_clip` still returns `None` when no effect is enabled, that the ffmpeg invocation count equals the pre-hook baseline, and that no `engines/` directory is created beneath the job `temp_dir`. Non-optional for the same reason as 13.1.
     - _Requirements: 4.3, 19.5, 23.1, 23.3_
 
-  - [ ]* 13.3 Unit tests: legacy marker regression and contract-surface pin → `tests/test_engines_base.py`
+  - [x]* 13.3 Unit tests: legacy marker regression and contract-surface pin → `tests/test_engines_base.py`
     - Assert the documented v0.8.0 `effects_applied` marker strings are unchanged and disjoint from the `engine:` namespace, and pin the public names and dataclass fields of `worker.engines.base` / `registry` / `capabilities` / `timebase` / `artifacts` (plus the `tests/fakes.py` doubles and `tests/strategies.py` generators) so the stem-separation and kinetic-typography specs can depend on them without modification.
     - _Requirements: 22.6, 23.5, 23.6_
 
