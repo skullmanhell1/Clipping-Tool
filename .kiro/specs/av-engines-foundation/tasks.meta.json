@@ -83,6 +83,50 @@
     "9.15 Property test: permissibility blocks network engines and keeps runs offline → `tests/test_engine_host.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785146243700
+    },
+    "3.5 Property test: `Engine_Result` is serialisable with a closed status domain → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147410359
+    },
+    "3.6 Property test: invocation never mutates the caller's options or context → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147414112
+    },
+    "3.7 Property test: options parsing is total and ignores unknown keys → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147416972
+    },
+    "3.8 Property test: options serialisation round-trips → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147420327
+    },
+    "3.9 Property test: resolution is idempotent and order-insensitive → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147425693
+    },
+    "3.10 Property test: the options digest is deterministic, order-insensitive, discriminating, and stable → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147433026
+    },
+    "3.11 Property test: planning is pure, seeded, and reproducible → `tests/test_engines_base.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147436285
+    },
+    "5.2 Property test: registry order is independent of registration order → `tests/test_engine_registry.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147439215
+    },
+    "5.3 Property test: stage lookup partitions the registry and lookup round-trips → `tests/test_engine_registry.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147446090
+    },
+    "5.4 Property test: duplicate Engine_Id registration is a named error → `tests/test_engine_registry.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147455441
+    },
+    "5.5 Property test: reset empties a registry and instances stay isolated → `tests/test_engine_registry.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785147458454
     }
   },
   "executionHistory": {
