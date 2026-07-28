@@ -33,6 +33,7 @@ registers nothing yet.
 from __future__ import annotations
 
 import dataclasses
+import math
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -46,8 +47,9 @@ from worker.engines.base import (
     coerce_float,
     coerce_int,
     coerce_str,
+    marker,
 )
-from worker.engines.timebase import Timeline_Segment
+from worker.engines.timebase import Time_Base, Timeline_Segment, normalize_segments
 
 __all__ = [
     "ASS_NAME",
@@ -55,6 +57,7 @@ __all__ = [
     "CUE_FADE_MS",
     "DEFAULT_REVEAL",
     "DEFAULT_STYLE",
+    "ENGINE_ID",
     "FALLBACK_FONT",
     "KINETIC_STYLES",
     "KINETIC_Z_ORDER",
@@ -72,6 +75,7 @@ __all__ = [
     "join_separator",
     "join_width",
     "pack_lines",
+    "plan_kinetic",
     "position_align",
     "resolve_position",
     "safe_area_margins",
@@ -111,6 +115,12 @@ POSITIONS: tuple[str, ...] = ("bottom", "center", "top")
 
 #: Req 9.3 — the last rung of the font ladder (``captions._FALLBACK_FONT``).
 FALLBACK_FONT = "Arial"
+
+#: Req 1.1 — the engine identifier, and therefore the ``engine:<id>:<detail>``
+#: marker namespace the *planner* already needs (Reqs 4.8, 6.3, 14.4). The engine
+#: class (task 9.1) declares ``engine_id = ENGINE_ID`` rather than a second
+#: literal, so the two spellings cannot drift.
+ENGINE_ID = "kinetic_typography"
 
 #: Req 2.3 — Caption_Layer z-order band for the compose contribution.
 KINETIC_Z_ORDER = 100
@@ -1043,3 +1053,693 @@ def safe_area_margins(
     margin_v = min(max(default_margin_v, inset_y), max(0, (height - 1) // 2))
 
     return align, margin_x, margin_x, margin_v
+
+
+# ---------------------------------------------------------------------------
+# The pure planner — ``plan_kinetic`` (tasks 6.1-6.5) — Reqs 4.7-4.8, 5, 6, 7, 14.4
+# ---------------------------------------------------------------------------
+#
+# ``plan_kinetic`` is a **pure function of its arguments**: no I/O, no ffmpeg, no
+# clock, no subprocess, no network, no randomness (Reqs 11.1, 11.5, 15.6, 18.2).
+# The three collaborators it needs from the impure world are *injected* — the
+# resolved font family, the keyword planner, and the ``remaining`` budget reader —
+# so the planner itself never probes anything. Everything it borrows from the
+# v0.8.0 caption path (``_word_bounds``, ``words_to_cues``, ``_escape``,
+# ``_preset_style_line``) is reached through the lazy :func:`_captions` accessor,
+# which is what keeps module import free of ``pydantic`` (Reqs 1.4, 18.2).
+
+
+@dataclass(frozen=True)
+class _Source_Word:
+    """A sanitised Word_Timeline entry (planner-internal, never serialised).
+
+    Carries the **raw** (un-escaped) text and the Word_Confidence so it can be
+    handed to ``caption_presets.plan_keywords`` and compared against
+    ``Kinetic_Options.confidence_floor`` (Reqs 5.9, 6.5); ``captions.words_to_cues``
+    consumes it duck-typed through ``.text`` / ``.start`` / ``.end``.
+    """
+
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    probability: float = 1.0
+    synthesised: bool = False   # Req 6.1 — this word's interval was invented
+
+
+def _is_finite_number(value: Any) -> bool:
+    """True when ``value`` is a usable (finite, non-bool) numeric or numeric string."""
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        try:
+            return math.isfinite(float(value))
+        except Exception:  # pragma: no cover - exotic numeric type
+            return False
+    if isinstance(value, str):
+        try:
+            return math.isfinite(float(value.strip()))
+        except Exception:
+            return False
+    return False
+
+
+def _word_probability(word: Any) -> float:
+    """Word_Confidence of ``word``, defaulting to ``1.0`` (Req 6.5). Total."""
+    return coerce_float(getattr(word, "probability", None), 1.0, lo=0.0, hi=1.0)
+
+
+def _sanitise_words(words: Any) -> list[_Source_Word]:
+    """Planner step 1 — drop unusable words and coerce their bounds (Reqs 6.1, 6.6).
+
+    Empty and whitespace-only words are dropped entirely, so the remaining words
+    of their cue are retained (Req 6.6). Bounds are coerced exactly the way
+    ``captions._word_bounds`` does — a missing or non-numeric value reads as
+    ``0.0`` and an inverted pair collapses to ``end = start`` — and any word whose
+    ``start``/``end`` was missing, non-numeric, inverted, or zero-length is
+    flagged :attr:`_Source_Word.synthesised` so step 4 can invent its interval
+    (Req 6.1).
+    """
+    captions = _captions()
+    try:
+        items = list(words) if words is not None else []
+    except Exception:  # pragma: no cover - hostile iterable
+        items = []
+
+    out: list[_Source_Word] = []
+    for item in items:
+        text = _word_text(item).strip()
+        if not text:
+            continue                                   # Req 6.6
+        raw_start, raw_end = captions._word_bounds(item)
+        start = coerce_float(raw_start, 0.0, lo=0.0)   # rejects NaN/inf too
+        end = coerce_float(raw_end, start, lo=0.0)
+        if end < start:
+            end = start
+        attr_start = None if isinstance(item, str) else getattr(item, "start", None)
+        attr_end = None if isinstance(item, str) else getattr(item, "end", None)
+        synthesised = (
+            not _is_finite_number(attr_start)
+            or not _is_finite_number(attr_end)
+            or end <= start
+        )
+        out.append(
+            _Source_Word(
+                text=text,
+                start=start,
+                end=end,
+                probability=_word_probability(item),
+                synthesised=synthesised,
+            )
+        )
+    return out
+
+
+def _finalise_lines(
+    lines: list[list[int]], count: int, max_lines: int
+) -> tuple[tuple[int, ...], ...]:
+    """Return ``lines`` as a tuple, guaranteeing every word index appears once.
+
+    ``pack_lines`` only leaves indices out when it reports an overflow tail, and
+    the re-splitter consumes every tail — this is the belt-and-braces guard that
+    keeps the plan self-consistent (every word in exactly one Text_Line, Req 7.8)
+    even for a degenerate input that hit the re-split iteration cap.
+    """
+    placed = [index for line in lines for index in line]
+    missing = [index for index in range(count) if index not in placed]
+    packed = [list(line) for line in lines if line]
+    if missing:
+        if packed and len(packed) >= max(1, max_lines):
+            packed[-1].extend(missing)
+        else:
+            packed.append(missing)
+    return tuple(tuple(line) for line in packed)
+
+
+def _split_drafts(
+    cue_start: float,
+    cue_end: float,
+    items: list[_Source_Word],
+    max_lines: int,
+    max_width: int,
+    time_base: Any,
+) -> list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]]:
+    """Planner step 3 — lay out one cue, re-splitting it on overflow (Reqs 7.5-7.8).
+
+    ``pack_lines`` packs the cue greedily into at most ``max_lines`` Text_Lines of
+    at most ``max_width`` Display_Width. When words are left over the cue is split
+    **at that word boundary** and the original interval is divided in proportion
+    to the two halves' word-time spans::
+
+        head_span = head[-1].end - head[0].start
+        tail_span = tail[-1].end - tail[0].start
+        ratio     = 0.5 if head_span + tail_span <= 0 else head_span / total
+        boundary  = time_base.snap(start + (end - start) * ratio)
+
+    A degenerate pair of spans (all-zero timings) splits the interval evenly. The
+    boundary is snapped to the frame grid and clamped into ``[start, end]``, so the
+    parts stay contiguous and their union is exactly the original interval
+    (Req 7.7). The tail is re-examined in place, so a cue that overflows twice
+    produces three contiguous parts in Word_Timeline order.
+    """
+    drafts: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
+    pending: list[tuple[float, float, list[_Source_Word]]] = [
+        (cue_start, cue_end, items)
+    ]
+    # Every split consumes at least one word, so the queue is bounded by the word
+    # count; the cap is pure paranoia against a pathological packing.
+    budget = 4 * len(items) + 16
+
+    while pending and budget > 0:
+        budget -= 1
+        start, end, words = pending.pop(0)
+        lines, overflow = pack_lines(words, max_lines, max_width)
+        if not overflow or not lines or not lines[0]:
+            drafts.append((start, end, words, _finalise_lines(lines, len(words), max_lines)))
+            continue
+
+        boundary_index = overflow[0]
+        head = words[:boundary_index]
+        tail = words[boundary_index:]
+        if not head or not tail:  # pragma: no cover - pack_lines keeps >=1 word
+            drafts.append((start, end, words, _finalise_lines(lines, len(words), max_lines)))
+            continue
+
+        head_span = head[-1].end - head[0].start
+        tail_span = tail[-1].end - tail[0].start
+        total = head_span + tail_span
+        ratio = 0.5 if total <= 0.0 else head_span / total
+        boundary = _snap(time_base, start + (end - start) * ratio)
+        boundary = min(max(boundary, start), end)
+
+        drafts.append(
+            (start, boundary, head, _finalise_lines(lines, len(head), max_lines))
+        )
+        pending.insert(0, (boundary, end, tail))
+
+    for start, end, words in pending:  # pragma: no cover - cap never reached
+        lines, _overflow = pack_lines(words, max_lines, max_width)
+        drafts.append((start, end, words, _finalise_lines(lines, len(words), max_lines)))
+    return drafts
+
+
+def _fill_timings(
+    start: float, end: float, items: list[_Source_Word]
+) -> list[_Source_Word]:
+    """Planner step 4 — invent the flagged words' intervals (Reqs 6.1, 6.2).
+
+    A word flagged in step 1 takes its share of the **cue span**, distributed
+    evenly across the cue's words in Word_Timeline order; a word whose duration is
+    still zero is widened to :data:`MIN_WORD_S`. Words with usable timings are
+    left exactly as transcribed, so Req 5.9's "spoken timing unchanged" holds.
+    """
+    count = len(items)
+    if not count:
+        return []
+    span = max(0.0, end - start)
+    step = span / count
+    filled: list[_Source_Word] = []
+    for index, word in enumerate(items):
+        word_start = word.start
+        word_end = word.end
+        if word.synthesised:
+            word_start = start + step * index
+            word_end = word_start + step
+        if word_end - word_start <= 0.0:
+            word_end = word_start + MIN_WORD_S       # Req 6.2
+        filled.append(dataclasses.replace(word, start=word_start, end=word_end))
+    return filled
+
+
+def _snap(time_base: Any, seconds: float) -> float:
+    """``time_base.snap`` guarded for a hostile/absent time base (Reqs 5.4, 16.2)."""
+    try:
+        return float(time_base.snap(seconds))
+    except Exception:  # pragma: no cover - duck-typed time base without snap
+        return float(seconds)
+
+
+def _snap_floor(time_base: Any, seconds: float) -> float:
+    """The greatest frame boundary **not after** ``seconds`` (Reqs 5.4, 5.6).
+
+    ``Time_Base.snap`` rounds to the *nearest* boundary, so snapping the clip
+    duration can land above it; the foundation's ``normalize_segments`` resolves
+    that by clamping after snapping, which leaves the clip end un-snapped. The
+    planner instead clamps to this floor, so every emitted bound is both inside
+    ``[0, duration]`` **and** exactly on the frame grid — at the cost of at most
+    the final fraction of a frame.
+    """
+    value = _snap(time_base, seconds)
+    if value <= seconds:
+        return max(0.0, value)
+    frame = _frame_duration(time_base)
+    lowered = _snap(time_base, seconds - frame / 2.0)
+    return max(0.0, lowered if lowered <= seconds else seconds)
+
+
+def _frame_duration(time_base: Any) -> float:
+    """One frame in seconds, guarded for a duck-typed time base."""
+    try:
+        frame = float(time_base.frame_duration())
+    except Exception:  # pragma: no cover - duck-typed time base
+        frame = 0.0
+    return frame if frame > 0.0 and math.isfinite(frame) else 1.0 / 30.0
+
+
+def _covering_segment(
+    segments: list[Timeline_Segment], start: float, end: float
+) -> Timeline_Segment | None:
+    """The normalised segment overlapping ``[start, end)``, or ``None`` if dropped.
+
+    ``normalize_segments`` merges touching/overlapping cue intervals, so a cue
+    survives normalisation when *some* canonical segment still covers part of its
+    interval; a cue whose whole interval was dropped (out of bounds, or shorter
+    than ``min_duration`` and not merged into a neighbour) has no covering
+    segment and therefore drops its words with it.
+    """
+    for segment in segments:
+        if segment.start < end and start < segment.end:
+            return segment
+        if segment.start <= start < segment.end:  # pragma: no cover - zero-length cue
+            return segment
+    return None
+
+
+def _style_line(
+    preset: Any,
+    font: str,
+    font_size: int,
+    align: int,
+    margin_l: int,
+    margin_r: int,
+    margin_v: int,
+) -> str:
+    """The ``Style: Default`` line: v0.8.0 look, Safe_Area margins (Reqs 7.2, 10.4).
+
+    Every look field comes from ``captions._preset_style_line`` — *reused*, not
+    re-spelled, so colours, border style and the karaoke-thickened outline/shadow
+    can never drift from the existing caption path — and only the three margin
+    columns are replaced with the Safe_Area values computed by
+    :func:`safe_area_margins`.
+    """
+    base = _captions()._preset_style_line(preset, font, font_size, align, margin_v)
+    fields = base.split(",")
+    # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour,
+    # OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX,
+    # ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL,
+    # MarginR, MarginV, Encoding  -> 23 fields, margins at indices 19..21.
+    if len(fields) == 23:
+        fields[19] = str(int(margin_l))
+        fields[20] = str(int(margin_r))
+        fields[21] = str(int(margin_v))
+        return ",".join(fields)
+    return base  # pragma: no cover - the shape is pinned by task 15.2
+
+
+def _hook_style_line(font: str, hook_font_size: int) -> str:
+    """The ``Style: Hook`` line, identical in shape to ``build_ass``'s (Req 3.3).
+
+    ``captions`` keeps this definition as a literal inside ``build_ass`` /
+    ``_preset_header_styles`` rather than a reusable helper, and
+    ``_preset_header_styles`` cannot be called from a *pure* planner because it
+    probes the host font list (``fc-list``, a subprocess). The numbers are
+    therefore repeated verbatim here; task 8.10's property test asserts the two
+    spellings stay identical.
+    """
+    return (
+        f"Style: Hook,{font},{int(hook_font_size)},&H0000E5FF,&H0000E5FF,"
+        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+    )
+
+
+def plan_kinetic(
+    words: Any,
+    duration: Any,
+    time_base: Any = None,
+    opts: Any = None,
+    font: Any = "",
+    hook_text: Any = "",
+    keyword_planner: Any = None,
+    remaining: Any = None,
+    *,
+    play_res_x: Any = 1080,
+    play_res_y: Any = 1920,
+) -> Kinetic_Plan:
+    """Turn a rebased Word_Timeline into a :class:`Kinetic_Plan` — **pure**.
+
+    No I/O, no ffmpeg, no clock, no subprocess, no network, no randomness: the
+    result depends only on the arguments (Reqs 11.1, 11.5, 11.7, 15.6, 18.2).
+
+    Pipeline (design "The pure planner"):
+
+    1. **Sanitise** — drop empty/whitespace-only words (Req 6.6) and coerce bounds
+       like ``captions._word_bounds``, flagging invented intervals (Req 6.1).
+    2. **Group** — ``captions.words_to_cues`` with its existing defaults, so cue
+       grouping matches the v0.8.0 caption path exactly (Req 5.2).
+    3. **Lay out and re-split** — :func:`pack_lines` per cue; overflow splits the
+       cue at a word boundary and divides the interval in proportion to the two
+       halves' word-time spans (Reqs 7.5-7.8).
+    4. **Budget** — ``remaining()`` is consulted **exactly once**, between layout
+       and normalisation; at ``<= 0`` planning stops with ``degraded`` and the
+       ``degraded:budget`` marker (Req 14.4).
+    5. **Fill, snap, normalise** — invented intervals get their share of the cue
+       span, zero-length words widen to :data:`MIN_WORD_S` (Reqs 6.1, 6.2), every
+       cue bound is snapped with ``time_base.snap`` and the cue list runs through
+       ``normalize_segments(..., min_duration=MIN_WORD_S)``; cues dropped there
+       drop their words too, survivors clamp their words into their own snapped
+       bounds (Reqs 5.3-5.8, 16.2).
+    6. **Emphasis** — the injected ``keyword_planner`` selects flat indices, which
+       are only ever *membership-tested* against a positional index, never
+       iterated, so ordering stays deterministic (Reqs 5.9, 11.4); a word below
+       ``opts.confidence_floor`` loses its emphasis but keeps text and timing
+       (Req 6.5).
+    7. **Degrade** — over :data:`SYNTHESISED_RATIO_LIMIT` synthesised words the
+       plan falls back to cue-level animation (Reqs 6.3, 6.4).
+
+    Args:
+        words: The clip-relative rebased Word_Timeline (Req 5.1).
+        duration: Clip duration in seconds; every timestamp stays in ``[0, d]``.
+        time_base: Foundation ``Time_Base`` used for ``snap`` (Reqs 5.4, 16.2).
+        opts: The resolved :class:`Kinetic_Options` (a mapping is parsed).
+        font: The already-resolved font ladder rung (Req 9.7) — injected, because
+            probing the host font list is impure.
+        hook_text: The hook title carried on ``ctx.deps["hook_text"]`` (Req 3.3).
+        keyword_planner: ``caption_presets.plan_keywords``-shaped callable (Req 18.1).
+        remaining: ``Engine_Context.remaining``-shaped callable (Req 14.4).
+        play_res_x: Probed clip width for ``PlayResX`` (Req 7.1).
+        play_res_y: Probed clip height for ``PlayResY`` (Req 7.1).
+
+    Returns:
+        The complete :class:`Kinetic_Plan`; never raises (Req 6.7).
+    """
+    # -- resolved inputs ----------------------------------------------------
+    options = (
+        opts
+        if isinstance(opts, Kinetic_Options)
+        else Kinetic_Options.parse(opts if isinstance(opts, Mapping) else None)
+    )
+    base = time_base if hasattr(time_base, "snap") else Time_Base()
+    limit = coerce_float(duration, 0.0, lo=0.0)
+    preset, _substituted = caption_presets.resolve_preset(options.preset_name)
+    family = coerce_str(font, "", 128) or options.font_override or options.preset_font
+
+    # -- geometry (task 5.3 helpers; Base_Preset position per Req 7.4) ------
+    position = resolve_position(options.position, preset.position)
+    align, margin_l, margin_r, margin_v = safe_area_margins(
+        play_res_x,
+        play_res_y,
+        safe_area_x_pct=options.safe_area_x_pct,
+        safe_area_y_pct=options.safe_area_y_pct,
+        position=options.position,
+        preset_position=preset.position,
+    )
+    width = coerce_int(play_res_x, 1080, lo=1)
+    height = coerce_int(play_res_y, 1920, lo=1)
+
+    colors = {
+        "box": getattr(preset.colors, "box", ""),
+        "highlight": getattr(preset.colors, "highlight", ""),
+        "outline": getattr(preset.colors, "outline", ""),
+        "primary": getattr(preset.colors, "primary", ""),
+    }
+    highlight_scale = coerce_int(
+        int(round(coerce_float(preset.highlight_scale, 1.18, lo=0.01, hi=10.0) * 100)),
+        118,
+        lo=1,
+        hi=1000,
+    )
+
+    # Resolution provenance (``style_substituted`` / ``position_substituted``)
+    # becomes a namespaced marker the engine forwards verbatim (Req 4.8).
+    markers: list[str] = [marker(ENGINE_ID, note) for note in options.notes]
+
+    def _build(
+        cues: tuple[Kinetic_Cue, ...],
+        *,
+        cue_level: bool,
+        degraded: bool,
+        extra_markers: tuple[str, ...],
+        detail: str,
+    ) -> Kinetic_Plan:
+        return Kinetic_Plan(
+            style=options.style,
+            reveal=options.reveal,
+            font=family,
+            font_size=options.font_size,
+            position=position,
+            align=align,
+            play_res_x=width,
+            play_res_y=height,
+            margin_l=margin_l,
+            margin_r=margin_r,
+            margin_v=margin_v,
+            duration=limit,
+            style_line=_style_line(
+                preset,
+                family,
+                options.font_size,
+                align,
+                margin_l,
+                margin_r,
+                margin_v,
+            ),
+            hook_style=_hook_style_line(family, options.hook_font_size),
+            hook_text=_text(hook_text),
+            hook_duration_s=options.hook_duration_s,
+            cues=cues,
+            cue_level=cue_level,
+            degraded=degraded,
+            markers=tuple(markers) + extra_markers,
+            detail=detail,
+            colors=colors,
+            highlight_scale=highlight_scale,
+        )
+
+    # -- step 1: sanitise ---------------------------------------------------
+    source = _sanitise_words(words)
+    if not source or limit <= 0.0:
+        return _build(
+            (),
+            cue_level=False,
+            degraded=False,
+            extra_markers=(),
+            detail="0 cues, 0 words",
+        )
+
+    # -- step 2: group with the v0.8.0 cue rules ---------------------------
+    try:
+        grouped = _captions().words_to_cues(source)
+    except Exception:  # pragma: no cover - bounds are already sanitised floats
+        grouped = []
+
+    # -- step 3: layout + proportional re-splitting -------------------------
+    drafts: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
+    for cue in grouped:
+        cue_words = [word for word in cue.words if isinstance(word, _Source_Word)]
+        if not cue_words:
+            continue
+        drafts.extend(
+            _split_drafts(
+                coerce_float(cue.start, 0.0, lo=0.0),
+                coerce_float(cue.end, 0.0, lo=0.0),
+                cue_words,
+                options.max_lines,
+                options.max_line_width,
+                base,
+            )
+        )
+
+    # -- step 4: the single budget consultation (Req 14.4) ------------------
+    if callable(remaining):
+        try:
+            left = coerce_float(remaining(), 1.0)
+        except Exception:  # pragma: no cover - hostile budget reader
+            left = 1.0
+        if left <= 0.0:
+            return _build(
+                (),
+                cue_level=False,
+                degraded=True,
+                extra_markers=(marker(ENGINE_ID, "degraded:budget"),),
+                detail="budget exhausted during planning",
+            )
+
+    # -- step 5: snap, widen degenerate cues, fill timings, normalise -------
+    # Bounds are clamped to the last frame boundary at or before the clip end, so
+    # every emitted timestamp is snapped *and* inside [0, duration] (Reqs 5.4, 5.6).
+    grid_limit = _snap_floor(base, limit)
+    bounds: list[tuple[float, float]] = []
+    for start, end, _cue_words, _lines in drafts:
+        cue_start = min(max(_snap(base, start), 0.0), grid_limit)
+        cue_end = min(max(_snap(base, end), 0.0), grid_limit)
+        if cue_end < cue_start:
+            cue_end = cue_start
+        bounds.append((cue_start, cue_end))
+
+    # A cue whose snapped interval collapsed to a point has *no span to
+    # distribute* (the whole cue's timings were missing), so it would be dropped
+    # by ``normalize_segments`` and take its words with it — a fully broken
+    # transcript would then emit an empty document instead of degrading. Such
+    # cues (and only such cues: a cue with a real interval is left exactly as
+    # laid out, so re-split parts stay contiguous per Req 7.7) are given the
+    # documented minimum on-screen span, laid out after the previous cue and
+    # never past the next cue that does have a real start (Reqs 6.1, 6.2).
+    frame = _frame_duration(base)
+    filled_bounds: list[tuple[float, float]] = []
+    cursor_pre = 0.0
+    for index, (cue_start, cue_end) in enumerate(bounds):
+        if cue_end <= cue_start:
+            cue_start = max(cue_start, cursor_pre)
+            ceiling = grid_limit
+            for later_start, later_end in bounds[index + 1 :]:
+                if later_end > later_start and later_start > cue_start:
+                    ceiling = min(ceiling, later_start)
+                    break
+            # ``+ frame`` absorbs the half-frame snap error, so the snapped span
+            # is never *shorter* than MIN_WORD_S (which would drop the cue).
+            cue_end = min(
+                max(ceiling, cue_start),
+                _snap(base, cue_start + MIN_WORD_S + frame),
+            )
+        cursor_pre = max(cursor_pre, cue_end)
+        filled_bounds.append((cue_start, cue_end))
+
+    snapped: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
+    segments: list[Timeline_Segment] = []
+    for (cue_start, cue_end), (_s, _e, cue_words, lines) in zip(filled_bounds, drafts):
+        filled = _fill_timings(cue_start, cue_end, cue_words)
+        snapped.append((cue_start, cue_end, filled, lines))
+        segments.append(Timeline_Segment(start=cue_start, end=cue_end))
+
+    normalised = normalize_segments(
+        segments, limit, time_base=base, min_duration=MIN_WORD_S
+    )
+
+    kept: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
+    cursor = 0.0
+    for cue_start, cue_end, filled, lines in sorted(
+        snapped, key=lambda entry: (entry[0], entry[1])
+    ):
+        segment = _covering_segment(normalised, cue_start, cue_end)
+        if segment is None:
+            continue                        # dropped by normalisation: words go too
+        start = max(cue_start, float(segment.start), cursor)
+        end = min(cue_end, float(segment.end))
+        if end <= start:
+            continue
+        cursor = end
+        kept.append((start, end, filled, lines))
+
+    # -- step 6: emphasis (keywords, then the Word_Confidence floor) --------
+    flat: list[_Source_Word] = [word for _s, _e, cue_words, _l in kept for word in cue_words]
+    selected: Any = None
+    if options.highlight_keywords and callable(keyword_planner) and flat:
+        try:
+            selected = keyword_planner(flat, use_ai=options.keyword_ai, client=None)
+        except Exception:  # pragma: no cover - a planner failure loses emphasis only
+            selected = None
+
+    emphasis: list[bool] = []
+    for index, word in enumerate(flat):
+        hit = False
+        if selected is not None:
+            try:
+                # Membership test against a *positional* index only — the set is
+                # never iterated, so its iteration order cannot leak (Req 11.4).
+                hit = index in selected
+            except Exception:  # pragma: no cover - hostile container
+                hit = False
+        if hit and word.probability < options.confidence_floor:
+            hit = False                     # Reqs 5.9, 6.5 — text/timing untouched
+        emphasis.append(hit)
+
+    # -- build the cue records ---------------------------------------------
+    captions = _captions()
+    cues: list[Kinetic_Cue] = []
+    synthesised_count = 0
+    flat_index = 0
+    for start, end, cue_words, lines in kept:
+        line_of: dict[int, int] = {}
+        for line_index, line in enumerate(lines):
+            for word_index in line:
+                line_of.setdefault(word_index, line_index)
+
+        planned: list[Kinetic_Word] = []
+        for offset, word in enumerate(cue_words):
+            word_start = min(max(word.start, start), end)
+            word_end = min(max(word.end, word_start), end)
+            if word.synthesised and word_end - word_start < MIN_WORD_S:
+                word_end = min(end, word_start + MIN_WORD_S)
+                word_start = max(start, word_end - MIN_WORD_S)
+            rel_ms = int(round((word_start - start) * 1000))
+            rel_ms = max(0, min(rel_ms, int(math.floor((word_end - start) * 1000))))
+            if word.synthesised:
+                synthesised_count += 1
+            planned.append(
+                Kinetic_Word(
+                    text=captions._escape(word.text),      # Req 4.7
+                    start=word_start,
+                    end=word_end,
+                    rel_ms=rel_ms,
+                    emphasis=emphasis[flat_index] if flat_index < len(emphasis) else False,
+                    timing_synthesised=word.synthesised,
+                    emoji=_inline_emoji(word, preset, options),
+                    line=line_of.get(offset, 0),
+                )
+            )
+            flat_index += 1
+
+        cues.append(
+            Kinetic_Cue(
+                segment=Timeline_Segment(start=start, end=end),
+                words=tuple(planned),
+                lines=lines,
+            )
+        )
+
+    # -- step 7: the synthesised-timing degradation check (Reqs 6.3, 6.4) ---
+    word_count = sum(len(cue.words) for cue in cues)
+    ratio = (synthesised_count / word_count) if word_count else 0.0
+    extra: tuple[str, ...] = ()
+    cue_level = False
+    degraded = False
+    detail = (
+        f"{len(cues)} cues, {word_count} words, "
+        f"style={options.style}, reveal={options.reveal}"
+    )
+    if ratio > SYNTHESISED_RATIO_LIMIT:
+        cue_level = True
+        degraded = True
+        extra = (marker(ENGINE_ID, "degraded:word_timings"),)
+        detail = (
+            f"{synthesised_count}/{word_count} words had synthesised timings; "
+            "cue-level animation"
+        )
+
+    return _build(
+        tuple(cues),
+        cue_level=cue_level,
+        degraded=degraded,
+        extra_markers=extra,
+        detail=detail,
+    )
+
+
+def _inline_emoji(word: Any, preset: Any, options: Kinetic_Options) -> str:
+    """The inline emoji glyph for ``word``, or ``""`` (Reqs 8.6, 8.7).
+
+    Delegates to ``captions.caption_emoji_glyph`` — a pure, font-glyph-only,
+    download-free helper — and only when in-caption emoji is enabled on **both**
+    the Base_Preset and the resolved options (``Kinetic_Options.emoji_inline`` is
+    already the conjunction of the two). An unavailable glyph returns ``""``, so
+    the glyph is dropped while the surrounding words are retained (Req 8.7).
+    """
+    if not options.emoji_inline:
+        return ""
+    try:
+        return _text(
+            _captions().caption_emoji_glyph(
+                word, preset, permissible=options.permissibility
+            )
+        )
+    except Exception:  # pragma: no cover - the helper never raises
+        return ""
