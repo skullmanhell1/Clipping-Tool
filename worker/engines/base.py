@@ -449,6 +449,22 @@ class Engine_Context:
     #: enum: engines and sibling specs append their own note kinds here.
     notes: tuple[str, ...] = ()
     deps: Mapping[str, Any] = field(default_factory=dict)   # injected fakes (Req 22.1)
+    #: Read-only per-clip Clip_Metadata: values produced **upstream** of this stage
+    #: run and supplied by the Pipeline at stage invocation (Req 15.8). A separate
+    #: channel from :attr:`deps`, which stays the host's injected clock/logger/
+    #: storage seam. Known keys today:
+    #:
+    #:   ``"hook_text"``  -> ``str``, the generated hook title for this clip
+    #:   ``"clip_size"``  -> ``tuple[int, int]``, the target ``(width, height)``
+    #:
+    #: Unknown keys pass through untouched — no filtering, coercion, renaming or
+    #: defaulting — so a later consumer needs no further contract change: an engine
+    #: reads the keys it understands and treats a missing key as absent. Defaults to
+    #: empty, so a context built without it is unchanged and the all-off path is
+    #: inert. Appended at the **end** of the field list on purpose: the
+    #: contract-surface pin (Req 23.6) asserts the exact field order, so a new field
+    #: only ever goes last.
+    clip_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "job_id", _as_text(self.job_id))
@@ -476,6 +492,11 @@ class Engine_Context:
         )
         if not isinstance(self.deps, Mapping):
             object.__setattr__(self, "deps", {})
+        # Clip_Metadata is normalised exactly like ``deps``: an unusable value
+        # becomes the documented empty mapping, and a real mapping's keys and
+        # values are left untouched (Req 15.8).
+        if not isinstance(self.clip_metadata, Mapping):
+            object.__setattr__(self, "clip_metadata", {})
 
     def rng(self) -> "random.Random":
         """Return a seeded RNG; the ONLY permitted randomness source (Req 12.2).

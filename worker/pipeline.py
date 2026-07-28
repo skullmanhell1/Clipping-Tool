@@ -373,6 +373,12 @@ def run_pipeline(
                 Engine_Stage.COMPOSE, clip_id=clip_id, source=source, clip_path=geo,
                 clip_start=c.start, clip_end=c.end, duration=clip_duration,
                 words=words,
+                clip_metadata={
+                    "hook_text": md.hook_text,
+                    "clip_size": fu.ASPECT_PRESETS.get(
+                        options.aspect, fu.ASPECT_PRESETS["9:16"]
+                    ),
+                },
             )
         try:
             rendered = compositor.render_clip(

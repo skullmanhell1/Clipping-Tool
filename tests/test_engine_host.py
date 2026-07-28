@@ -43,6 +43,7 @@ example of one test), and every filesystem-touching property uses
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import socket
 import tempfile
@@ -1113,5 +1114,184 @@ def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
     assert disabled.run_count == 0
     # Only COMPOSE contributes inputs; every other stage keeps the default 0.
     assert post.last_context.first_input_index == 0
+
+    host.finish_clip("clip_a")
+
+
+# --------------------------------------------------------------------------- #
+# Task 15.3 — Clip_Metadata reaches every engine unchanged (Req 15.8)          #
+# --------------------------------------------------------------------------- #
+#: Hostile-ish Clip_Metadata: the two documented keys plus unknown keys carrying
+#: values a filtering/coercing implementation would visibly damage (a tuple that
+#: must not become a list, a numeric *string* that must not become an int, ``None``
+#: that must not be defaulted away, and a nested structure).
+CLIP_METADATA_PAYLOAD: Dict[str, Any] = {
+    "hook_text": "Wait for it...",
+    "clip_size": (1080, 1920),
+    "unknown_key": {"nested": [1, None, "2"]},
+    "numeric_string": "12",
+    "empty": None,
+    "": "blank key survives",
+}
+
+
+def run_compose_stage(
+    host: Engine_Host,
+    tmp_path: Path,
+    *,
+    clip_id: str = "clip_a",
+    **kwargs: Any,
+):
+    """Invoke the COMPOSE stage once for one clip, forwarding ``**kwargs`` verbatim.
+
+    ``clip_metadata`` is deliberately *not* given a default here: a call that omits
+    it must reach ``run_stage`` without the keyword at all, which is exactly what
+    the "omitted yields the empty default" assertion below needs.
+    """
+    return host.run_stage(
+        Engine_Stage.COMPOSE,
+        clip_id=clip_id,
+        source="/media/source.mp4",
+        clip_path=tmp_path / f"{clip_id}.mp4",
+        clip_start=0.0,
+        clip_end=6.0,
+        duration=6.0,
+        **kwargs,
+    )
+
+
+def compose_host(tmp_path: Path, engines: List[Any]) -> Engine_Host:
+    """A host over ``engines`` with every collaborator injected and a frozen clock.
+
+    The clock never advances on its own, so two stage runs of the same host build
+    contexts with identical ``deadline`` values — which is what makes the
+    field-by-field "otherwise unchanged" comparison below meaningful.
+    """
+    return build_host(
+        tmp_path,
+        registry_of(engines),
+        all_enabled(engine.engine_id for engine in engines),
+        capabilities=Capability_Report(StaticProber({})),
+        clock=FakeClock(),
+    )
+
+
+def test_clip_metadata_reaches_every_engine_of_the_stage_run(tmp_path):
+    """Validates: Requirements 15.8 — *every* engine sees exactly the supplied mapping.
+
+    The regression this guards is "merged into the first context only": three
+    engines are registered on the same stage, so a per-stage-run mapping that is
+    threaded through only the first ``Engine_Context`` fails here.
+    """
+    engines = [
+        FakeEngine("a_first", Engine_Stage.COMPOSE, priority=10),
+        FakeEngine("b_second", Engine_Stage.COMPOSE, priority=20),
+        FakeEngine("c_third", Engine_Stage.COMPOSE, priority=30),
+    ]
+    host = compose_host(tmp_path, engines)
+
+    run_compose_stage(host, tmp_path, clip_metadata=CLIP_METADATA_PAYLOAD)
+
+    for engine in engines:
+        assert engine.run_count == 1, engine.engine_id
+        seen = engine.last_context.clip_metadata
+        assert dict(seen) == CLIP_METADATA_PAYLOAD, engine.engine_id
+        # Same content, not the caller's object: no engine can reach the mapping
+        # the Pipeline still holds.
+        assert seen is not CLIP_METADATA_PAYLOAD
+
+    host.finish_clip("clip_a")
+
+
+def test_omitted_clip_metadata_is_empty_and_leaves_the_context_otherwise_unchanged(
+    tmp_path,
+):
+    """Validates: Requirements 15.8, 23.1 — the default is inert.
+
+    Omitting the keyword must yield the documented empty mapping *and* a context
+    that is field-by-field identical to the one built when Clip_Metadata is
+    supplied — i.e. the seam adds a field and changes nothing else, which is the
+    pre-change context the all-off parity gate (13.1/13.2) still measures.
+    """
+    engine = FakeEngine("metadata_probe", Engine_Stage.COMPOSE)
+    host = compose_host(tmp_path, [engine])
+
+    run_compose_stage(host, tmp_path)                                    # omitted
+    run_compose_stage(host, tmp_path, clip_metadata=CLIP_METADATA_PAYLOAD)
+    run_compose_stage(host, tmp_path, clip_metadata=None)                # explicit None
+
+    omitted, supplied, explicit_none = engine.contexts
+    assert omitted.clip_metadata == {}
+    assert explicit_none.clip_metadata == {}                             # None == empty
+    assert dict(supplied.clip_metadata) == CLIP_METADATA_PAYLOAD
+
+    # Every OTHER field is untouched by the presence or absence of Clip_Metadata.
+    for field_ in dataclasses.fields(omitted):
+        if field_.name == "clip_metadata":
+            continue
+        assert getattr(omitted, field_.name) == getattr(supplied, field_.name), field_.name
+        assert getattr(omitted, field_.name) == getattr(explicit_none, field_.name), (
+            field_.name
+        )
+
+    host.finish_clip("clip_a")
+
+
+def test_clip_metadata_unknown_keys_pass_through_untouched(tmp_path):
+    """Validates: Requirements 15.8 — no filtering, coercion, renaming or defaulting.
+
+    Value *identity* is asserted, not just equality: a tuple stays the same tuple
+    (never a list), a numeric string stays a string, ``None`` survives, and a key
+    the host has never heard of arrives under its own name.
+    """
+    engine = FakeEngine("passthrough_probe", Engine_Stage.COMPOSE)
+    host = compose_host(tmp_path, [engine])
+
+    run_compose_stage(host, tmp_path, clip_metadata=CLIP_METADATA_PAYLOAD)
+
+    seen = engine.last_context.clip_metadata
+    assert set(seen) == set(CLIP_METADATA_PAYLOAD)                       # no key dropped
+    for key, value in CLIP_METADATA_PAYLOAD.items():
+        assert seen[key] is value, key                                   # no coercion
+    assert isinstance(seen["clip_size"], tuple)
+    assert seen["numeric_string"] == "12" and isinstance(seen["numeric_string"], str)
+    assert seen["empty"] is None
+
+    host.finish_clip("clip_a")
+
+
+def test_clip_metadata_is_read_only_from_the_engine_point_of_view(tmp_path):
+    """Validates: Requirements 15.8 — an engine cannot rebind or reach out through it.
+
+    Three separate boundaries: the field cannot be rebound (frozen dataclass); the
+    caller's mapping is not the engine's mapping; and no two engines of one stage
+    run share a mapping, so one engine writing into its own copy cannot be observed
+    by the caller or by a sibling engine. The copy is shallow by design — a nested
+    mutable value is still shared — which is the documented cost of a read-only
+    planning channel and is why the assertions below use top-level keys.
+    """
+    first = FakeEngine("a_reader", Engine_Stage.COMPOSE, priority=10)
+    second = FakeEngine("b_reader", Engine_Stage.COMPOSE, priority=20)
+    host = compose_host(tmp_path, [first, second])
+    supplied = dict(CLIP_METADATA_PAYLOAD)
+
+    run_compose_stage(host, tmp_path, clip_metadata=supplied)
+
+    first_ctx, second_ctx = first.last_context, second.last_context
+
+    # 1 — the field cannot be rebound (Req 1.3: the context is frozen).
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        first_ctx.clip_metadata = {"hook_text": "hijacked"}
+
+    # 2/3 — three distinct mappings: caller, engine A, engine B.
+    assert first_ctx.clip_metadata is not supplied
+    assert second_ctx.clip_metadata is not supplied
+    assert first_ctx.clip_metadata is not second_ctx.clip_metadata
+
+    # Whatever an engine writes into its own copy stays there.
+    first_ctx.clip_metadata["hook_text"] = "hijacked"
+    first_ctx.clip_metadata["injected"] = True
+    assert supplied == CLIP_METADATA_PAYLOAD
+    assert dict(second_ctx.clip_metadata) == CLIP_METADATA_PAYLOAD
 
     host.finish_clip("clip_a")
