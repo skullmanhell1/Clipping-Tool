@@ -14,13 +14,35 @@ One new module ships:
 
 Everything else is an **additive delta on verified existing code**: a caption-ownership
 branch in `worker/effects/compositor.py` `render_clip` (Req 3), new Processing_Options
-fields (Req 17.1), API/UI plumbing (Reqs 17.2–17.6), and new tests. No foundation module
-changes _(Req 19.5)_.
+fields (Req 17.1), API/UI plumbing (Reqs 17.2–17.6), and new tests.
 
 The engine adds **no ffmpeg pass**: it runs in `Engine_Stage.COMPOSE`, plans and emits a
 single `.ass` file inside its `Engine_Workspace`, and returns it as the
 `Compose_Contribution.subtitle_path` that the compositor hands to its one existing libass
 `subtitles` filter slot _(Reqs 2.1–2.6, 16.1)_.
+
+### Prerequisite: the foundation's Clip_Metadata seam
+
+**This engine depends on `av-engines-foundation` task 15 (the Clip_Metadata seam) landing
+first.** It reads two per-clip values from `Engine_Context.clip_metadata`: `hook_text` (the
+LLM-generated hook title, Req 3.3) and `clip_size` (the target `(width, height)`, Req 7.1).
+
+That channel is owned by the foundation, not by this spec: foundation criterion 15.8 adds
+`clip_metadata` as the **last** field of `Engine_Context` — a read-only per-clip mapping
+defaulting to empty — plus a keyword-only `clip_metadata=` pass-through on
+`Engine_Host.run_stage`, and foundation task 15 implements it. Until it lands, neither value
+can reach a COMPOSE-stage engine at all: `Engine_Host` builds `deps` internally from only
+clock/logger/storage and `run_stage` had no pass-through, so `ctx.deps["hook_text"]` is
+always absent in production and the hook title would silently vanish on every clip this
+engine owns, breaking Req 3.3.
+
+**Qualifying Req 19.5 ("no modification to `av-engines-foundation`") honestly.** The
+*engine* still adds no foundation abstraction: no new contract, no new stage, no change to
+`AV_Engine`, `Engine_Result`, `Compose_Contribution`, the registry, or the host's
+invocation ladder. But the hook title cannot reach any COMPOSE-stage engine without the
+foundation's Clip_Metadata seam, so that one seam is a genuine foundation change — one the
+foundation spec now specifies and implements itself (criterion 15.8, task 15). This spec
+consumes it; it does not define it.
 
 ### The caption-ownership decision (the subtle part)
 
@@ -77,6 +99,7 @@ _(Req 4.3)_.
 | `CaptionColors(primary, highlight, outline, box)`, `CaptionPreset(name, animation, font, font_size, colors, position, highlight_keywords, highlight_scale, emoji_inline, border_style)` | `worker/effects/caption_presets.py:47,78` | Base_Preset look |
 | `resolve_preset(name) -> (CaptionPreset, bool)`, `FALLBACK_PRESET_NAME = "karaoke"`, `VALID_POSITIONS`, `VALID_ANIMATIONS`, `plan_keywords(words, use_ai, client)` | `worker/effects/caption_presets.py` | preset + keyword planning _(Reqs 5.9, 10.4, 19.2)_ |
 | `render_clip(base_clip, dest, options, words, temp_dir, hook_text="", llm_client=None, emoji_resolver=None, broll_resolver=None)`, `RenderResult(path, effects_applied, broll_records)`, the `caption_chain` / `look_chain` / emoji z-ordering | `worker/effects/compositor.py:41` | ownership handoff _(Req 3)_ |
+| `Engine_Context.clip_metadata` (read-only per-clip mapping, last field, defaults to empty) + keyword-only `Engine_Host.run_stage(..., clip_metadata=…)` | `worker/engines/base.py`, `worker/engines/host.py` — **`av-engines-foundation` criterion 15.8 / task 15, a prerequisite of this spec** | the only channel carrying `hook_text` _(Req 3.3)_ and `clip_size` _(Req 7.1)_ into a COMPOSE-stage engine |
 | `ProcessingOptions.captions`, `.hook_title`, `.caption_preset`, `.caption_animation`, `.caption_position`, `.caption_keyword_highlight`, `.caption_keyword_ai`, `.caption_emoji`, `.permissibility_mode`, `effective_options` | `worker/models.py` | flag + option projection _(Reqs 10.10, 17.1)_ |
 | `Word(start, end, text, probability)` | `worker/transcribe.py` | Word_Timeline element |
 | `make_video`, `requires_ffmpeg`, `probe_size`, `probe_duration`, `FakeWord`, `png_asset` | `tests/conftest.py` | tests _(Reqs 18.4, 18.5)_ |
@@ -102,7 +125,7 @@ flowchart TD
         RO --> GATE --> CAP --> PLAN --> EMIT --> WS
     end
 
-    HC -->|Engine_Context: words, Time_Base, seed, workspace, capabilities| eng
+    HC -->|"Engine_Context: words, Time_Base, seed, workspace, capabilities,<br/>clip_metadata (hook_text, clip_size)"| eng
     WS -->|"Engine_Result(applied)<br/>Compose_Contribution(subtitle_path, z_order=100)"| HC
 
     subgraph own["caption ownership in render_clip (Req 3)"]
@@ -178,6 +201,10 @@ FALLBACK_FONT = "Arial"                 # == captions._FALLBACK_FONT, Req 9.3
 KINETIC_Z_ORDER = 100                   # Req 2.3 — Caption_Layer band
 ASS_NAME = "kinetic.ass"                # Req 16.3 — at most one ASS per invocation
 
+# Req 7.1 — documented PlayResX/PlayResY fallback, used only when Clip_Metadata omits
+# "clip_size" (e.g. a host built without the foundation pass-through, or an older caller).
+DEFAULT_PLAY_RES: tuple[int, int] = (1080, 1920)   # the 9:16 default aspect
+
 MIN_WORD_S = 0.08                       # Req 6.2 — minimum on-screen duration
 SYNTHESISED_RATIO_LIMIT = 0.40          # Req 6.3 — cue-level fallback threshold
 CUE_FADE_MS = (120, 120)                # Req 6.4 — \fad(in,out) for cue-level animation
@@ -230,7 +257,10 @@ def plan(self, ctx: Engine_Context) -> Mapping[str, Any]:
         time_base=ctx.time_base,        # Reqs 5.4, 16.2
         opts=ctx.options,
         font=self._resolve_font(ctx),   # Req 9 ladder, decided before emission
-        hook_text=str(ctx.deps.get("hook_text", "")),   # Req 3.3
+        # Clip_Metadata is the foundation's per-clip channel (criterion 15.8); `deps`
+        # carries only the host's injected clock/logger/storage and never these values.
+        hook_text=str(ctx.clip_metadata.get("hook_text", "")),      # Req 3.3
+        clip_size=ctx.clip_metadata.get("clip_size"),               # Req 7.1, None => default
         keyword_planner=self._keyword_planner,          # Req 18.1
         remaining=ctx.remaining,                        # Req 14.4
     ).to_dict()                          # Reqs 11.2, 11.10
@@ -325,9 +355,14 @@ always a member of the ladder, which is the font-ladder invariant _(Req 9.7)_.
 ### The pure planner — `plan_kinetic` _(Reqs 5, 6, 7, 8)_
 
 ```python
-def plan_kinetic(words, duration, time_base, opts, font, hook_text,
+def plan_kinetic(words, duration, time_base, opts, font, hook_text, clip_size,
                  keyword_planner, remaining) -> Kinetic_Plan:
-    """Pure: Word_Timeline -> Kinetic_Plan. No I/O, no ffmpeg, no clock (Req 18.2)."""
+    """Pure: Word_Timeline -> Kinetic_Plan. No I/O, no ffmpeg, no clock (Req 18.2).
+
+    ``hook_text`` and ``clip_size`` both arrive from ``Engine_Context.clip_metadata``
+    (foundation criterion 15.8). ``clip_size`` may be ``None`` or malformed, in which case
+    the planner falls back to ``DEFAULT_PLAY_RES`` (Req 7.1).
+    """
 ```
 
 Pipeline, in order:
@@ -361,6 +396,21 @@ Pipeline, in order:
 9. **Style validation.** An unknown/empty/non-string style became `DEFAULT_STYLE` back in
    `resolve_options`, which also recorded `style_substituted` in `Kinetic_Options.notes`;
    the planner copies those notes into `Kinetic_Plan.markers` _(Req 4.8)_.
+
+**Frame size resolution** _(Req 7.1)_. `play_res_x` / `play_res_y` come from the
+Clip_Metadata `clip_size` pair; a missing, non-pair, or non-positive value falls back to the
+documented `DEFAULT_PLAY_RES = (1080, 1920)`:
+
+```python
+# Req 7.1 — Clip_Metadata "clip_size" is the target (width, height); total on bad input.
+size = clip_size if isinstance(clip_size, (tuple, list)) and len(clip_size) == 2 else ()
+try:
+    play_res_x, play_res_y = (int(size[0]), int(size[1])) if size else DEFAULT_PLAY_RES
+except (TypeError, ValueError):
+    play_res_x, play_res_y = DEFAULT_PLAY_RES
+if play_res_x <= 0 or play_res_y <= 0:
+    play_res_x, play_res_y = DEFAULT_PLAY_RES
+```
 
 Layout helpers (pure, separately testable):
 
@@ -417,8 +467,8 @@ _(Reqs 7.1, 7.5)_:
 ```
 [Script Info]
 ScriptType: v4.00+
-PlayResX: {play_res_x}          # Req 7.1 — the clip's probed width
-PlayResY: {play_res_y}          # Req 7.1 — the clip's probed height
+PlayResX: {play_res_x}          # Req 7.1 — clip_metadata["clip_size"][0], else the default
+PlayResY: {play_res_y}          # Req 7.1 — clip_metadata["clip_size"][1], else the default
 WrapStyle: 2                    # Req 7.5 — no libass auto-wrap; the engine emits \N
 ScaledBorderAndShadow: yes
 
@@ -430,6 +480,20 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 ```
+
+**Why `PlayResX`/`PlayResY` come from Clip_Metadata, not from a probe** _(Req 7.1)_. The
+engine runs in COMPOSE, and `render_clip` probes the clip only *after* the COMPOSE stage has
+already returned its contributions — so at emission time the engine cannot see the probed
+size. The **target** size, however, is deterministic from the aspect option, so the Pipeline
+already knows it and hands it over as Clip_Metadata `clip_size`; no extra `ffprobe` call is
+needed anywhere. When the key is absent the engine uses the documented
+`DEFAULT_PLAY_RES = (1080, 1920)`.
+
+This is load-bearing, not cosmetic: every Safe_Area margin and the effective font size are
+computed as fractions of `PlayResX`/`PlayResY`, and libass rescales the whole script by the
+ratio of the declared PlayRes to the real frame. Hard-coding 1080x1920 would therefore make
+every non-9:16 aspect (`1:1`, `16:9`, `4:5`) emit a header claiming 1080x1920, and libass
+would mis-scale every margin and font size on those clips.
 
 **`Style: Default` line** — the Base_Preset drives every look field exactly as
 `captions._preset_style_line` does (`primary`, `colors.highlight` as `SecondaryColour` so
@@ -509,8 +573,9 @@ already had `{`/`}` replaced by `(`/`)` by `_escape`, so no user text can unbala
 Every event names either `Default` or `Hook`.
 
 **Hook re-emission** _(Req 3.3)_: when `opts.hook_enabled` and the hook text (carried
-per-clip on `ctx.deps["hook_text"]`, which needs no foundation change) is non-empty, the
-first event is exactly what `build_ass` emits today:
+per-clip on `ctx.clip_metadata["hook_text"]`, the foundation's Clip_Metadata seam — see the
+prerequisite note in the Overview) is non-empty, the first event is exactly what `build_ass`
+emits today:
 
 ```
 Dialogue: 1,0:00:00.00,{hook_end},Hook,,0,0,0,,{\fad(250,350)}{ESCAPED UPPER-CASED HOOK}
@@ -687,8 +752,8 @@ class Kinetic_Plan:
     font_size: int
     position: str                # bottom | center | top
     align: int                   # 2 | 5 | 8 (Req 7.3)
-    play_res_x: int              # Req 7.1
-    play_res_y: int              # Req 7.1
+    play_res_x: int              # Req 7.1 — Clip_Metadata clip_size[0], else DEFAULT_PLAY_RES
+    play_res_y: int              # Req 7.1 — Clip_Metadata clip_size[1], else DEFAULT_PLAY_RES
     margin_l: int
     margin_r: int
     margin_v: int                # Safe_Area (Reqs 7.2, 7.10)
@@ -805,7 +870,9 @@ Added here for this engine: `st_kinetic_options` (valid `Kinetic_Options`),
 `st_kinetic_style` (the 7 styles), `st_reveal_mode` (the 2 modes),
 `st_i18n_word_timeline` (wide-script, RTL, combining-mark, emoji, and over-long tokens),
 `st_broken_word_timeline` (missing/non-numeric/inverted/zero-length/empty-text words),
-`st_font_availability` (font-ladder availability combinations).
+`st_font_availability` (font-ladder availability combinations), and `st_clip_metadata`
+(Clip_Metadata mappings: `hook_text` present/absent, `clip_size` present/absent/malformed
+across the supported aspects).
 
 The prework consolidated 190 acceptance criteria into 18 properties: the declaration
 criteria (1.1, 1.5, 1.6, 2.4, 15.2, 16.1) collapsed into one contract property; the four
@@ -979,12 +1046,15 @@ Generators: `st_word_timeline`, `st_kinetic_options`, `st_time_base`.
 
 ### Property 16: Style margins keep the caption box inside the Safe_Area
 
-*For every* Kinetic_Options value and probed clip size, the emitted `Style:` line's
+*For every* Kinetic_Options value and *every* Clip_Metadata `clip_size` value — including
+absent, malformed, and non-9:16 sizes, where the header must declare the supplied size (or
+`DEFAULT_PLAY_RES` when absent) rather than a fixed 1080x1920 — the emitted `Style:` line's
 `MarginL`, `MarginR`, and `MarginV` are each at least the corresponding Safe_Area inset in
 pixels, `MarginL + MarginR < PlayResX`, `2 * MarginV < PlayResY`, and `Alignment` is the
 value `_POSITION_ALIGN` gives for the resolved position (with the Base_Preset position used
 when the option is empty).
-Generators: `st_kinetic_options`, hypothesis integers for width/height.
+Generators: `st_kinetic_options`, `st_clip_metadata` (present / absent / malformed
+`clip_size`, all four supported aspects).
 
 **Validates: Requirements 7.2, 7.3, 7.4, 7.10**
 
@@ -1037,6 +1107,8 @@ Generators: `st_word_timeline`, `st_kinetic_options`, `st_time_base`.
 | Synthesised-timing ratio over threshold | planner step 7 | cue-level `\fad` animation | `degraded` + `degraded:word_timings` | 6.3, 6.4 |
 | `ctx.remaining() <= 0` during planning | planner budget check | planning stops | `degraded` + `degraded:budget` | 14.4 |
 | Unknown / non-string style, reveal, or position | `coerce_choice` | documented default applied | `applied` + `style_substituted` | 4.8, 10.3, 17.7 |
+| Clip_Metadata omits / malforms `clip_size` | planner frame-size resolution | `DEFAULT_PLAY_RES = (1080, 1920)` declared in the header | `applied` | 7.1 |
+| Clip_Metadata omits `hook_text` (or it is blank) | `run` / emitter hook gate | no `Hook` event emitted; caption events unaffected | `applied` | 3.3 |
 | Malformed / inverted / zero-length word timing | `_word_bounds`-style coercion | interval synthesised or widened to `MIN_WORD_S` | `applied` (or `degraded` past threshold) | 6.1, 6.2, 6.7 |
 | Empty-text word | planner step 1 | word omitted, cue retained | `applied` | 6.6 |
 | Emoji glyph unavailable in the active font | `caption_emoji_glyph` returns `""` | glyph dropped, neighbours retained | `applied` | 8.7 |
@@ -1063,7 +1135,11 @@ clip count matches a flag-disabled run _(Reqs 13.2, 13.5, 14.6)_.
 - `tests/strategies.py` (foundation generators): `st_word_timeline`, `st_options_mapping`,
   `st_time_base`, `st_availability_map`; this spec adds `st_kinetic_options`,
   `st_kinetic_style`, `st_reveal_mode`, `st_i18n_word_timeline`,
-  `st_broken_word_timeline`, `st_font_availability` to the same module.
+  `st_broken_word_timeline`, `st_font_availability`, `st_clip_metadata` to the same module.
+- Engine_Contexts under test carry `hook_text` and `clip_size` through the foundation's
+  `clip_metadata` field — supplied either directly on the context or via
+  `run_stage(..., clip_metadata=…)`, never through `deps`, so a test exercises the same
+  channel production uses _(foundation criterion 15.8)_.
 - Engine_Workspaces come from the foundation `allocate_workspace(tmp_path, …)`, so no test
   writes outside `tmp_path` _(Reqs 12.3, 18.3)_.
 
@@ -1152,7 +1228,7 @@ value still processes the job _(Reqs 17.4, 17.7)_.
 | 4 — Kinetic style vocabulary | style span table, `build_word_span` parity, reveal composition, `_escape`, `coerce_choice` fallback; P6, P7, P8, P9, P10 |
 | 5 — Per-word timing | `plan_kinetic` steps 1–6, `words_to_cues`, `Time_Base.snap`, `normalize_segments`, `rel_ms`, `plan_keywords`; P11, P13 |
 | 6 — Missing / degenerate / low-confidence timings | synthesised-timing ladder, `MIN_WORD_S`, `SYNTHESISED_RATIO_LIMIT`, cue-level `\fad`, confidence floor, empty-word drop; P12, P13 |
-| 7 — Layout, safe area, line breaking | header `PlayResX/Y` + `WrapStyle: 2`, Safe_Area margins, `_POSITION_ALIGN`, `pack_lines`, proportional re-split; P6, P14, P15, P16 |
+| 7 — Layout, safe area, line breaking | header `PlayResX/Y` from Clip_Metadata `clip_size` (else `DEFAULT_PLAY_RES`) + `WrapStyle: 2`, Safe_Area margins, `_POSITION_ALIGN`, `pack_lines`, proportional re-split; P6, P14, P15, P16 |
 | 8 — Wide scripts, bidi, emoji, long words | `display_width`, `is_space_free`, RTL passthrough, `caption_emoji_glyph`, single-word overflow line, UTF-8 write; P7, P14 |
 | 9 — Font ladder | `_resolve_font` ladder over injected `font_probe`, single marker, style preserved; P17 |
 | 10 — Options resolution and round-trip | `Kinetic_Options` dataclass, `parse`/`to_dict`, `from_processing_options` + `resolve_preset`; P18 |
@@ -1164,4 +1240,4 @@ value still processes the job _(Reqs 17.4, 17.7)_.
 | 16 — Bounded declared cost | `time_budget_s=5.0`, `max_media_passes=0`, one ASS per invocation, one event per cue + hook; P1, P2, P19 |
 | 17 — API and UI surface | Processing_Options / `OptionsModel` / `/api/upload` / `/api/info` / `App.jsx` / `SettingsPanel.jsx` deltas; P18 + smoke tests |
 | 18 — Testability offline | injected `font_probe` / `keyword_planner` / `ass_writer`, pure planner + emitter, foundation fakes and generators; whole property suite |
-| 19 — Backward compatibility | inert new branch, unchanged `captions` / `caption_presets` symbols, flag-off parity tests; P3 + parity unit tests |
+| 19 — Backward compatibility | inert new branch, unchanged `captions` / `caption_presets` symbols, flag-off parity tests; P3 + parity unit tests. **19.5 qualified**: the engine adds no foundation abstraction, but it consumes the foundation's Clip_Metadata seam (criterion 15.8 / task 15), which the foundation spec owns — see the prerequisite note in the Overview |
