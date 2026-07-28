@@ -665,7 +665,17 @@ _ST_HOOK_TEXT = st.text(max_size=40).filter(
 def test_p5_the_hook_title_survives_engine_ownership(
     timeline, option_data, style, hook_text
 ):
-    """Validates: Requirements 3.3, 3.7"""
+    """Validates: Requirements 3.3, 3.7
+
+    Deliberately **planner-level**: the hook text is driven straight into
+    ``plan_kinetic(..., hook_text=…)``, so no ``Engine_Context`` is built here and
+    this module hands the engine no per-clip mapping at all. That is a choice, not
+    an oversight — Property 5 is about what the *emitter* does with a hook text,
+    while *where* the hook text comes from (``ctx.clip_metadata["hook_text"]``, the
+    channel the Pipeline publishes at the COMPOSE hook — never ``ctx.deps``) is the
+    engine seam covered by ``tests/test_kinetic_engine.py`` and, end to end, by the
+    foundation's real-Pipeline Clip_Metadata test (task 12.4).
+    """
     words, duration = timeline
     opts, plan = _plan(
         words,
