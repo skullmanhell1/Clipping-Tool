@@ -31,6 +31,26 @@
     "6.9 Property test: cue re-splitting conserves the interval proportionally → `tests/test_kinetic_plan.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785202611247
+    },
+    "8.6 Property test: every emitted ASS document is well-formed → `tests/test_kinetic_ass.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785204180962
+    },
+    "8.7 Property test: visible text preserves every word in order → `tests/test_kinetic_ass.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785204183761
+    },
+    "8.8 Property test: shared styles reproduce `build_word_span` semantics → `tests/test_kinetic_ass.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785204186671
+    },
+    "8.9 Property test: Reveal_Mode is orthogonal to Kinetic_Style → `tests/test_kinetic_ass.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785204189620
+    },
+    "8.10 Property test: the hook title survives engine ownership → `tests/test_kinetic_ass.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785204192340
     }
   },
   "executionHistory": {}
