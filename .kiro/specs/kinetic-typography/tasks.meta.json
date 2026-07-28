@@ -51,6 +51,10 @@
     "8.10 Property test: the hook title survives engine ownership → `tests/test_kinetic_ass.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785204192340
+    },
+    "11.1 Property test: output is byte-identical, offline, and side-effect-free → `tests/test_kinetic_determinism.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785208898295
     }
   },
   "executionHistory": {}
