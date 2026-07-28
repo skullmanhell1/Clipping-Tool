@@ -1147,6 +1147,11 @@ _PINNED_FIELDS = {
         "time_base", "clip_start", "clip_end", "duration", "words", "options",
         "options_digest", "seed", "workspace", "capabilities", "permissibility",
         "deadline", "time_budget_s", "first_input_index", "notes", "deps",
+        # Clip_Metadata (Req 15.8) is pinned in its real, LAST position, after
+        # ``deps``: a designed addition always lands at the end, so this pin still
+        # fails on any undesigned reorder, rename or removal — and still fails if
+        # ``clip_metadata`` is ever inserted mid-list.
+        "clip_metadata",
     ],
     "Engine_Result": [
         "engine_id", "status", "markers", "artifacts", "contribution", "plan",
@@ -1315,6 +1320,21 @@ def test_engine_method_surface_is_pinned():
         assert list(signature.parameters) == params, name
     for name in ("path", "artifact", "exists"):
         assert callable(getattr(artifacts_mod.Engine_Workspace, name)), name
+
+    # Engine_Host.run_stage — the stage entry point the Pipeline and both sibling
+    # specs call. ``clip_metadata`` (Req 15.8) is pinned as the last parameter, in
+    # the same category as the earlier ``first_input_index`` / ``max_inputs``
+    # additions: a designed, reviewed growth of the contract, never a silent one.
+    from worker.engines.host import Engine_Host
+
+    run_stage_signature = inspect.signature(Engine_Host.run_stage)
+    assert list(run_stage_signature.parameters) == [
+        "self", "stage", "clip_id", "source", "clip_path", "clip_start",
+        "clip_end", "duration", "words", "clip_metadata",
+    ]
+    clip_metadata_param = run_stage_signature.parameters["clip_metadata"]
+    assert clip_metadata_param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert clip_metadata_param.default is None
 
 
 def test_shared_test_doubles_and_generators_are_pinned():

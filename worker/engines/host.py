@@ -422,6 +422,7 @@ class Engine_Host:
         clip_end: float,
         duration: float,
         words: Sequence[Any] = (),
+        clip_metadata: Optional[Mapping[str, Any]] = None,
     ) -> Stage_Outcome:
         """Invoke every enabled engine of ``stage`` for one clip.
 
@@ -434,6 +435,17 @@ class Engine_Host:
         Word_Timeline reaches every engine of every later stage (Req 15.2), and
         the bounds handed to engines are clip-relative ``[0, duration]``
         (Reqs 15.1, 15.7).
+
+        ``clip_metadata`` is the keyword-only Clip_Metadata pass-through (Req
+        15.8): per-clip values produced *upstream* of this stage run — today
+        ``hook_text`` and ``clip_size`` — merged into **every** Engine_Context
+        this stage run builds, one per invoked engine and not just the first.
+        ``None`` means the empty mapping, so a call that omits it builds contexts
+        identical to the pre-Clip_Metadata ones and the all-off parity gate is
+        untouched: Clip_Metadata is read-only planning input that never reaches
+        the ffmpeg argv (Reqs 15.8, 23.1). It is a separate channel from
+        :attr:`Engine_Context.deps`, which remains the host's own injected
+        clock/logger/storage seam.
         """
         return self._run(
             stage,
@@ -444,6 +456,7 @@ class Engine_Host:
             clip_end=clip_end,
             duration=duration,
             words=words,
+            clip_metadata=clip_metadata,
         )
 
     # --- lifecycle --------------------------------------------------------
@@ -540,6 +553,7 @@ class Engine_Host:
         clip_end: float,
         duration: float,
         words: Sequence[Any] = (),
+        clip_metadata: Optional[Mapping[str, Any]] = None,
     ) -> Stage_Outcome:
         """Shared body of :meth:`run_source` and :meth:`run_stage`."""
         coerced = _coerce_stage(stage)
@@ -551,6 +565,11 @@ class Engine_Host:
         # Reserved ffmpeg input indices for this stage run, computed BEFORE any
         # engine runs so every Engine_Context can carry its own block start.
         offsets = self._input_offsets(coerced)
+        # Clip_Metadata is snapshotted once per stage run: ``None`` becomes the
+        # documented empty mapping, and every engine's context gets its own copy,
+        # so no engine can reach the caller's mapping or another engine's context
+        # through it (Req 15.8). Keys and values are copied verbatim.
+        metadata = dict(clip_metadata) if isinstance(clip_metadata, Mapping) else {}
         for engine in self._registered_for(coerced):
             result = self._invoke(
                 engine,
@@ -565,6 +584,7 @@ class Engine_Host:
                     duration=duration,
                     words=words,
                     first_input_index=offsets.get(_engine_id_of(bound), 0),
+                    clip_metadata=metadata,
                 ),
             )
             outcome.results.append(result)
@@ -819,6 +839,7 @@ class Engine_Host:
         duration: float,
         words: Sequence[Any],
         first_input_index: int = 0,
+        clip_metadata: Optional[Mapping[str, Any]] = None,
     ) -> Engine_Context:
         """Allocate the workspace and build the frozen Engine_Context (step 4).
 
@@ -830,6 +851,10 @@ class Engine_Host:
         ``first_input_index`` is the ffmpeg input block :meth:`_input_offsets`
         reserved for this engine — ``0`` for every non-contributing engine and for
         every stage other than COMPOSE.
+
+        ``clip_metadata`` is this stage run's Clip_Metadata snapshot; it is copied
+        into the context so each engine holds its own mapping (Req 15.8), and
+        ``None`` yields the documented empty default.
         """
         engine_id = _engine_id_of(engine)
         resolved = engine.resolve_options(self._options)
@@ -871,6 +896,7 @@ class Engine_Host:
             first_input_index=first_input_index,
             notes=notes,
             deps=deps,
+            clip_metadata=dict(clip_metadata) if isinstance(clip_metadata, Mapping) else {},
         )
 
     # --- internals: bookkeeping ------------------------------------------
