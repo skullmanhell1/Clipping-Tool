@@ -165,6 +165,16 @@ flowchart LR
 - **Compose contributions instead of ffmpeg calls** keep the single-pass compositor
   intact; `render_clip` gains one optional keyword argument that defaults to `None`, so
   the all-off path is untouched _(Reqs 1.5, 23.3)_.
+- **Clip_Metadata exists because there was no third channel into an engine.**
+  `Engine_Host` builds `deps` internally from only clock/logger/storage, and `run_stage`
+  had no pass-through, so a per-clip value that is neither Processing_Options nor
+  Word_Timeline could not reach an engine *at all*. The kinetic-typography engine needs
+  two such values: `hook_text` (without it the hook title silently vanishes whenever that
+  engine owns the subtitle slot) and `clip_size` (without it its ASS `PlayResX/PlayResY`
+  header is wrong for any non-9:16 aspect). A single read-only mapping with
+  ignored-unknown-keys semantics covers both and every later case without another
+  contract change, and because it defaults to empty it is inert on the all-off path
+  _(Req 15.8)_.
 
 ## Components and Interfaces
 
@@ -289,6 +299,17 @@ class Engine_Context:
                                           # (Req 1.5); 0 == none reserved
     notes: tuple[str, ...] = ()           # e.g. "fps_fallback:0.0" (Req 13.3)
     deps: Mapping[str, Any] = field(default_factory=dict)   # injected fakes (Req 22.1)
+    clip_metadata: Mapping[str, Any] = field(default_factory=dict)   # Clip_Metadata (15.8)
+    # ^ read-only per-clip mapping of values produced UPSTREAM of this stage run,
+    #   supplied by the Pipeline at stage invocation. Appended at the END of the
+    #   field list on purpose: the contract-surface test (Req 23.6) pins the
+    #   existing field order, so new fields only ever go last.
+    #   Known keys today:
+    #     "hook_text"  -> str, the LLM-generated hook title for this clip
+    #     "clip_size"  -> tuple[int, int], the target (width, height)
+    #   Unknown keys are ignored, so a new consumer needs no contract change:
+    #   an engine reads the keys it understands and treats a missing key as absent.
+    #   Defaults to empty (Req 15.8), so a context built without it is unchanged.
 
     def rng(self) -> "random.Random":
         """Return a seeded RNG; the ONLY permitted randomness source (Req 12.2)."""
@@ -821,12 +842,22 @@ class Engine_Host:
 
     def run_stage(self, stage: Engine_Stage, *, clip_id: str, source: str | Path,
                   clip_path: Path, clip_start: float, clip_end: float, duration: float,
-                  words: Sequence[Any] = ()) -> Stage_Outcome:
+                  words: Sequence[Any] = (),
+                  clip_metadata: Mapping[str, Any] | None = None) -> Stage_Outcome:
         """Invoke every enabled engine of ``stage`` for one clip.
 
         Applies the gating ladder per engine, isolates failures and timeouts (Req 8),
         merges markers in registry order (Reqs 3.2, 3.3, 3.6), and returns replacement
         media only when an engine of ``produces_media`` succeeded (Req 8.3).
+
+        ``clip_metadata`` is the optional, keyword-only Clip_Metadata pass-through
+        (Req 15.8): the Pipeline hands over per-clip values produced *upstream* of this
+        stage run — today ``hook_text`` and ``clip_size`` — and the host merges the
+        mapping into every Engine_Context it builds for the stage. It defaults to
+        ``None`` ⇒ empty mapping, so a context built without it is unchanged and an
+        all-off run is byte-identical to v0.8.0: Clip_Metadata is read-only planning
+        input that never reaches the ffmpeg argv, so the Property 34 parity gate is
+        unaffected _(Reqs 15.8, 23.1)_.
         """
 
     def finish_clip(self, clip_id: str) -> list[str]:
@@ -1574,7 +1605,7 @@ Sibling engine specs import these rather than redefining them:
 | 12 — Reproducibility | `plan` purity, `derive_seed`, `ctx.rng()`, sorted iteration; P20 |
 | 13 — Time base | `timebase.Time_Base` from `MediaInfo`, fallback + conversions; P21, P22, P23 |
 | 14 — Segment invariants | `normalize_segments`/`parse_segments`/`dump_segments`; P24, P25, P26 |
-| 15 — No timeline drift | clip-relative context, rebased words, `snap`, confluence; P22, P24, P27, P28 |
+| 15 — No timeline drift | clip-relative context, rebased words, `snap`, confluence, `Engine_Context.clip_metadata` + `run_stage(clip_metadata=...)` pass-through; P22, P24, P27, P28, P34 |
 | 16 — Workspace allocation | `artifacts.allocate_workspace` + `sanitize_component`; P29 |
 | 17 — Cleanup & retention | `finish_clip`/`finish_job`, `cleanup_temp` + `auto_delete_temp`; P30, P32 |
 | 18 — Storage neutrality | `artifact_key` via `normalize_key`, `persist_artifact` on `BaseStorage`; P31, P32 |

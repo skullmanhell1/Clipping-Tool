@@ -354,9 +354,40 @@ backward-compatibility parity gate that is this spec's central guarantee).
 
 - [x] 14. Final checkpoint — Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 15. Clip_Metadata seam on `Engine_Context`
+  - [ ] 15.1 Carry `clip_metadata` on `Engine_Context` and accept it in `run_stage`
+    - In `worker/engines/base.py`, add `clip_metadata: Mapping[str, Any] = field(default_factory=dict)` as the **last** field of `Engine_Context` — never mid-list: the Task 13.3 contract-surface pin asserts the exact field order, so a new field only ever goes at the end (the same rule the design records for this field).
+    - In `worker/engines/host.py`, add the keyword-only `clip_metadata: Mapping[str, Any] | None = None` parameter to `Engine_Host.run_stage`, treat `None` as the empty mapping, and merge it into **every** `Engine_Context` the stage run builds — one per invoked engine, not just the first.
+    - Leave `deps` **exactly** as it is. Clip_Metadata is a separate channel for per-clip values produced upstream of the stage run (`hook_text`, `clip_size` today); `deps` remains the host's injected clock/logger/storage seam. Unknown keys pass through untouched, so a later consumer needs no further contract change.
+    - _Requirements: 15.8_
+
+  - [ ] 15.2 Update the Task 13.3 contract-surface pin for the new field and parameter
+    - In `tests/test_engines_base.py`, add `clip_metadata` to the pinned `Engine_Context` field order in its real (last) position — after `deps` — and add `clip_metadata` to the pinned `Engine_Host.run_stage` parameter list.
+    - This is a **deliberate, intentional contract edit**, exactly like the earlier `first_input_index` / `max_inputs` additions: the pin exists so contract changes are visible and reviewed, not so the contract can never grow. Updating it to match a designed and documented addition is **not** test weakening — the pin still fails on any *undesigned* reorder, rename, or removal, and still fails if `clip_metadata` is inserted mid-list.
+    - _Requirements: 15.8, 23.6_
+
+  - [ ]* 15.3 Unit tests: Clip_Metadata reaches every engine unchanged → `tests/test_engine_host.py`
+    - Every engine invoked by one stage run observes **exactly** the mapping the caller supplied — assert on the contexts recorded by `FakeEngine` for several engines registered on the same stage.
+    - Omitting the argument yields an **empty** mapping and an `Engine_Context` otherwise **equal to one built before this change** (field-by-field comparison against the pre-change context), so the default is inert.
+    - Unknown keys are passed through untouched: no filtering, no coercion, no renaming, no defaulting.
+    - The mapping is **read-only from the engine's point of view** — an engine cannot rebind `ctx.clip_metadata` (frozen dataclass) and cannot reach the caller's mapping or another engine's context through it.
+    - _Requirements: 15.8_
+
+  - [ ] 15.4 Integration test: the Pipeline actually supplies Clip_Metadata at the COMPOSE hook → `tests/test_pipeline_effects.py`
+    - Drive the **real Pipeline** (`make_video` + `requires_ffmpeg`, as in 10.5/10.6) with one recording COMPOSE-stage `FakeEngine`, and assert that engine's recorded `ctx.clip_metadata` carries a **non-empty `hook_text`** when the clip has a hook title (the Pipeline's `md.hook_text`) and a **`clip_size` matching the target aspect** (`fu.ASPECT_PRESETS[options.aspect]`).
+    - Motivation, recorded explicitly because it is the entire point of this sub-task: the kinetic-typography engine was written to read `ctx.deps["hook_text"]`, and its property tests passed because they constructed that mapping **by hand** — yet the Pipeline never populated it. The hook title would have silently vanished in production while the suite stayed green.
+    - A test that only exercises `run_stage` directly **cannot** catch that class of bug: it supplies the mapping itself, so it proves nothing about the caller. Only a test driving the real Pipeline closes the gap — which is why this test sub-task is **not** marked optional, the same documented exception as 1.3, 2.3/3.4, and 13.1/13.2.
+    - _Requirements: 15.8, 23.6_
+
+  - [ ] 15.5 Re-run the all-off parity gate and confirm it still passes
+    - Re-run Property 34 (`tests/test_pipeline_degradation.py`, task 13.1) and the 13.2 all-off ffmpeg parity check **unchanged** — neither test may be edited to accommodate this seam.
+    - Expected outcome: **both still pass, unmodified.** Clip_Metadata is read-only planning input that defaults to empty and never reaches the ffmpeg argv, so clip count, `effects_applied`, and ffmpeg invocation count are all unaffected. A failure here means the seam leaked into the render path and must be fixed in 15.1 — not absorbed into the gate.
+    - _Requirements: 15.8, 23.1, 23.3_
+
 ## Notes
 
-- Tasks marked with `*` are optional test sub-tasks (unit / property / integration) and can be skipped for a faster MVP; core implementation tasks are never optional. The exceptions are called out above: **1.3** (proves the CI/dependency fix actually works), **2.3** and **3.4** (the shared generators and doubles every later test task and both sibling specs import), and **13.1/13.2** (the all-off parity gate that is this spec's whole backward-compatibility promise).
+- Tasks marked with `*` are optional test sub-tasks (unit / property / integration) and can be skipped for a faster MVP; core implementation tasks are never optional. The exceptions are called out above: **1.3** (proves the CI/dependency fix actually works), **2.3** and **3.4** (the shared generators and doubles every later test task and both sibling specs import), **13.1/13.2** (the all-off parity gate that is this spec's whole backward-compatibility promise), and **15.4** (the only test that proves the *Pipeline* populates Clip_Metadata rather than the test doing it by hand).
+- Task 15 adds the Clip_Metadata channel (Req 15.8) on top of the landed foundation: a new **last** field on `Engine_Context` plus a keyword-only `clip_metadata=` pass-through on `run_stage`. It is additive and inert by default — `deps` is untouched, the mapping defaults to empty, and it never reaches the ffmpeg argv — so 15.5 re-runs the all-off parity gate to confirm exactly that. 15.2 is an **intentional** edit to the 13.3 contract pin, in the same category as the earlier `first_input_index` / `max_inputs` additions.
 - Each task references the specific requirement clauses it satisfies, and every property-test task cites the design property (P1–P35) it discharges.
 - Task 1 fixes a real two-part gap verified in the repo: `hypothesis` is **absent** from `requirements-dev.txt` even though nine test modules import it, **and** the CI `backend` job installs a hardcoded pip list rather than `-r requirements-dev.txt` — so both edits are needed for property tests to run in CI. `.github/workflows/ci.yml` must be landed via pull request, never pushed to the default branch.
 - Ordering is dependency-safe: tooling → pure primitives (`timebase`, `base`) and the shared test surface → registry → capabilities → artifacts → host → Pipeline/Compositor hooks → API/UI → parity. The shared generators land in two tranches (2.3 before the primitive property tests, 3.4 once `Engine_Stage`/`AV_Engine` exist) because test-first property tasks cannot run before their generators exist.
@@ -386,6 +417,7 @@ flowchart TD
     T12["12. /api/info + frontend"]
     T13["13. All-off parity + contract pin"]
     CP4{{"14. Final checkpoint"}}
+    T15["15. Clip_Metadata seam<br/>Engine_Context + run_stage"]
 
     T1 --> T2 --> T3 --> CP1
     CP1 --> T5
@@ -400,6 +432,7 @@ flowchart TD
     CP3 --> T13
     T12 --> T13
     T13 --> CP4
+    CP4 --> T15
 ```
 
 Leaf-task execution waves (tasks in the same wave are independent and never write the same
@@ -434,7 +467,10 @@ file; tasks in wave *N* require every wave below *N*):
     { "id": 23, "tasks": ["13.2", "9.13"] },
     { "id": 24, "tasks": ["13.3", "9.14"] },
     { "id": 25, "tasks": ["9.15"] },
-    { "id": 26, "tasks": ["9.16"] }
+    { "id": 26, "tasks": ["9.16"] },
+    { "id": 27, "tasks": ["15.1"] },
+    { "id": 28, "tasks": ["15.2", "15.3", "15.4"] },
+    { "id": 29, "tasks": ["15.5"] }
   ]
 }
 ```
