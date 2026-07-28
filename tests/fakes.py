@@ -800,3 +800,712 @@ class RecordingStorage(_BaseStorage):
     def path_for(self, key) -> _Path:
         """A pseudo-path for ``key``, for assertions that need a ``Path``."""
         return _Path("memory") / _normalize_key(key)
+
+
+
+# --------------------------------------------------------------------------- #
+# Audio stem-inpainting test doubles (audio-stem-inpainting, task 2.2)         #
+#                                                                              #
+# These follow the naming/pattern of ``FakeDiarizationBackend`` /               #
+# ``RaisingDiarizationBackend`` above: a canned "happy path" double that        #
+# records every call, plus narrow variants for each failure mode.               #
+#                                                                              #
+# Everything here is stdlib-only and offline by construction:                   #
+#                                                                              #
+#   * **No numeric stack** — WAVs are written with ``wave`` + ``struct`` only;  #
+#     no numpy, torch, scipy, soundfile or librosa is imported.                 #
+#   * **No ffmpeg, no network, no model file** — nothing is shelled out and no  #
+#     socket is opened, so the suite stays fast, offline and CPU-only           #
+#     (Req 19.5, 19.7).                                                        #
+#   * **No import of ``worker.engines.stems``** — that module lands in epic 4.  #
+#     These doubles must remain importable before it exists, so they never      #
+#     reference it, and the ``Backend_Stem`` names below are spelled locally.   #
+#                                                                              #
+# ``fmt`` is DUCK-TYPED on purpose. ``separate(..., fmt=...)`` is documented to #
+# receive a ``worker.engines.stems.Audio_Format``, which does not exist yet, so #
+# these doubles read ``fmt.sample_rate`` / ``fmt.channels`` defensively through #
+# :func:`read_audio_format` (``getattr`` with defaults, mappings also accepted, #
+# non-positive/non-numeric values falling back to the defaults). The very same  #
+# double therefore works today with an ad-hoc stub (``SimpleNamespace``, a      #
+# plain dict, or even ``None``) and unchanged once ``Audio_Format`` lands.      #
+# --------------------------------------------------------------------------- #
+import json as _json
+import struct as _struct
+import subprocess as _subprocess
+import wave as _wave
+from collections import namedtuple as _namedtuple
+from collections.abc import Mapping as _Mapping
+
+from worker.ffmpeg_utils import FFmpegError as _FFmpegError
+
+#: The ``Backend_Stem`` vocabulary a four-stem separator emits, sorted. These are
+#: the *backend* names (``htdemucs``' own), **not** the engine's ``STEM_NAMES``;
+#: the caller maps them through ``STEM_MAPPING`` (``drums``/``bass`` -> ``music``).
+BACKEND_STEM_NAMES = ("bass", "drums", "other", "vocals")
+
+#: Fallbacks used when ``fmt`` does not carry a usable value (see the note above).
+FAKE_SAMPLE_RATE = 48000
+FAKE_CHANNELS = 2
+#: 16-bit signed PCM: the only width these doubles write.
+FAKE_SAMPLE_WIDTH = 2
+#: Duration used when neither the double nor the source WAV implies one.
+FAKE_DURATION_S = 0.5
+#: Default and full-scale peaks for the synthetic waveform.
+FAKE_PEAK = 8000
+FAKE_FULL_SCALE_PEAK = 32767
+
+#: One recorded ``Separator_Backend.separate`` call. A ``namedtuple`` so tests can
+#: either unpack it positionally (``source, dest_dir, fmt, seed, timeout_s = call``)
+#: or read fields by name (``call.seed``).
+Separate_Call = _namedtuple("Separate_Call", "source dest_dir fmt seed timeout_s")
+
+#: One recorded command-runner invocation: the argv as a tuple of ``str`` and the
+#: explicit subprocess timeout it was given (``None`` when the caller omitted it).
+Command_Call = _namedtuple("Command_Call", "argv timeout_s")
+
+
+def read_audio_format(fmt, *, sample_rate=FAKE_SAMPLE_RATE, channels=FAKE_CHANNELS):
+    """Defensively read ``(sample_rate, channels)`` off a duck-typed ``fmt``.
+
+    Accepts anything: a future ``worker.engines.stems.Audio_Format``, a
+    ``SimpleNamespace``, a mapping, or ``None``. Attributes are read with
+    ``getattr`` (mapping keys with ``get``), and any value that is missing,
+    non-numeric, non-finite, zero or negative falls back to the supplied default —
+    ``wave`` refuses to write a stream with a non-positive rate or channel count,
+    and hostile ``st_audio_format`` draws include exactly those values.
+    """
+
+    def _read(name, default):
+        if isinstance(fmt, _Mapping):
+            value = fmt.get(name, None)
+        else:
+            value = getattr(fmt, name, None)
+        try:
+            number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            # ``OverflowError`` is not hypothetical: ``int(float("inf"))`` raises it, and
+            # ``st_audio_format`` draws exactly that for ``sample_rate``/``channels``.
+            return int(default)
+        return number if number > 0 else int(default)
+
+    return _read("sample_rate", sample_rate), _read("channels", channels)
+
+
+def _triangle_pcm(n_frames, channels, *, period, peak):
+    """A deterministic integer triangle wave as little-endian 16-bit PCM bytes.
+
+    Integer-only arithmetic (no ``math``, no floats), so the same bytes are
+    produced on every platform and run; identical for every channel of a frame.
+    """
+    n_frames = max(0, int(n_frames))
+    channels = max(1, int(channels))
+    period = max(2, int(period))
+    peak = max(0, min(FAKE_FULL_SCALE_PEAK, int(peak)))
+    half = max(1, period // 2)
+    samples = []
+    for i in range(n_frames):
+        pos = i % period
+        if pos < half:
+            value = -peak + (2 * peak * pos) // half
+        else:
+            value = peak - (2 * peak * (pos - half)) // half
+        value = max(-FAKE_FULL_SCALE_PEAK, min(FAKE_FULL_SCALE_PEAK, value))
+        samples.extend([value] * channels)
+    if not samples:
+        return b""
+    return _struct.pack("<%dh" % len(samples), *samples)
+
+
+def _silence_pcm(n_frames, channels):
+    """Digital silence: exactly zero-valued 16-bit frames (all-zero bytes)."""
+    return b"\x00" * (max(0, int(n_frames)) * max(1, int(channels)) * FAKE_SAMPLE_WIDTH)
+
+
+def write_pcm_wav(path, pcm, *, sample_rate, channels):
+    """Write ``pcm`` (little-endian 16-bit frames) to ``path`` with ``wave``."""
+    path = _Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _wave.open(str(path), "wb") as wf:
+        wf.setnchannels(max(1, int(channels)))
+        wf.setsampwidth(FAKE_SAMPLE_WIDTH)
+        wf.setframerate(max(1, int(sample_rate)))
+        wf.writeframes(pcm)
+    return path
+
+
+def read_pcm_wav(path):
+    """Read ``path`` with ``wave``, returning ``(sample_rate, channels, frames, pcm)``.
+
+    Returns ``None`` when the file is missing or is not a readable WAV, which is
+    how these doubles stay usable with non-audio and truncated inputs.
+    """
+    try:
+        with _wave.open(str(path), "rb") as wf:
+            return (
+                wf.getframerate(),
+                wf.getnchannels(),
+                wf.getnframes(),
+                wf.readframes(wf.getnframes()),
+            )
+    except Exception:
+        return None
+
+
+class Fake_Separator_Backend:
+    """A canned ``Separator_Backend`` writing synthetic per-stem WAVs offline.
+
+    Implements the protocol designed for the stem engine::
+
+        backend_id: str
+        requires_network: bool
+        separate(source, dest_dir, *, fmt, seed, timeout_s) -> Mapping[str, Path]
+
+    and returns ``{Backend_Stem name: wav path}`` (``vocals``/``drums``/``bass``/
+    ``other`` by default — the caller is what maps those through ``STEM_MAPPING``).
+    Every written WAV is 16-bit PCM at the *requested* ``fmt`` sample rate and
+    channel count (Req 4.6), so a test can reopen it with ``wave`` and assert the
+    format was preserved.
+
+    Recording surface — ``separate`` appends a :class:`Separate_Call` to ``calls``
+    before doing any work, so the ``source``, ``dest_dir``, the ``fmt`` object
+    itself, the ``seed`` drawn from ``ctx.rng()`` and the ``timeout_s`` derived from
+    ``ctx.remaining()`` can all be asserted; ``seeds``, ``timeouts``,
+    ``call_count`` and ``last_call`` are conveniences over it.
+
+    Constructor keywords:
+
+    * ``backend_id`` — the reported id (``"fake"``).
+    * ``stems`` — the Backend_Stem names to emit, in any order, including unknown
+      names (for the mapping's "unknown backend stem" case).
+    * ``requires_network`` — what the permissibility rung consults; see
+      :class:`Network_Separator_Backend` for the ``True`` variant.
+    * ``sum_to_input`` — when true the stems sum back to the input **exactly,
+      sample for sample**: the whole signal goes into ``sum_stem`` and every other
+      stem is digital silence (all-zero frames), so the additive-decomposition
+      invariant holds by construction with no arithmetic at all. When ``source``
+      is a readable WAV already at ``fmt``, its frames are copied verbatim, so the
+      sum equals the *input* byte for byte (``copied_source[-1]`` records that).
+    * ``duration_s`` — force the output length; by default the length is taken
+      from the source WAV (rescaled to the requested rate) and falls back to
+      ``FAKE_DURATION_S`` for a missing/non-audio source.
+    * ``peak`` — waveform amplitude (``FAKE_FULL_SCALE_PEAK`` for full scale,
+      ``0`` for silence).
+    * ``silent`` — write digital silence for every stem.
+    """
+
+    def __init__(
+        self,
+        backend_id="fake",
+        *,
+        stems=BACKEND_STEM_NAMES,
+        requires_network=False,
+        sum_to_input=False,
+        sum_stem="vocals",
+        duration_s=None,
+        peak=FAKE_PEAK,
+        silent=False,
+    ):
+        self.backend_id = str(backend_id)
+        self.requires_network = bool(requires_network)
+        self.stems = tuple(stems)
+        self.sum_to_input = bool(sum_to_input)
+        self.sum_stem = str(sum_stem)
+        self.duration_s = None if duration_s is None else float(duration_s)
+        self.peak = int(peak)
+        self.silent = bool(silent)
+        self.calls: list = []
+        #: Per call: whether the input WAV's frames were copied verbatim.
+        self.copied_source: list = []
+
+    # --- recording helpers ------------------------------------------------
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    @property
+    def last_call(self):
+        return self.calls[-1] if self.calls else None
+
+    @property
+    def seeds(self) -> list:
+        return [call.seed for call in self.calls]
+
+    @property
+    def timeouts(self) -> list:
+        return [call.timeout_s for call in self.calls]
+
+    # --- internals --------------------------------------------------------
+    def _frame_count(self, source, sample_rate):
+        """Frames to write: explicit duration, else the source's, else the default."""
+        if self.duration_s is not None:
+            return max(0, int(round(self.duration_s * sample_rate)))
+        info = read_pcm_wav(source)
+        if info is not None:
+            src_rate, _src_channels, src_frames, _pcm = info
+            if src_rate == sample_rate:
+                return src_frames
+            return max(0, int(round(src_frames * (sample_rate / float(src_rate or 1)))))
+        return max(0, int(round(FAKE_DURATION_S * sample_rate)))
+
+    def _scale_frames(self, n_frames):
+        """Hook for variants that deliberately write the wrong length."""
+        return n_frames
+
+    def _period_for(self, stem, seed):
+        """A per-stem, per-seed wave period, so stems are distinguishable."""
+        index = self.stems.index(stem) if stem in self.stems else 0
+        try:
+            seed_int = int(seed)
+        except (TypeError, ValueError):
+            seed_int = 0
+        return 16 + 4 * index + (abs(seed_int) % 8)
+
+    # --- Separator_Backend contract ---------------------------------------
+    def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
+        self.calls.append(Separate_Call(_Path(source), _Path(dest_dir), fmt, seed, timeout_s))
+        sample_rate, channels = read_audio_format(fmt)
+        n_frames = self._scale_frames(self._frame_count(source, sample_rate))
+        dest = _Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        source_pcm = None
+        if self.sum_to_input:
+            info = read_pcm_wav(source)
+            if info is not None:
+                src_rate, src_channels, src_frames, pcm = info
+                if (src_rate, src_channels, src_frames) == (sample_rate, channels, n_frames):
+                    source_pcm = pcm
+        self.copied_source.append(source_pcm is not None)
+
+        out: dict = {}
+        for stem in self.stems:
+            if self.silent:
+                pcm = _silence_pcm(n_frames, channels)
+            elif self.sum_to_input:
+                if stem == self.sum_stem:
+                    pcm = (
+                        source_pcm
+                        if source_pcm is not None
+                        else _triangle_pcm(
+                            n_frames, channels, period=self._period_for(stem, seed),
+                            peak=self.peak,
+                        )
+                    )
+                else:
+                    pcm = _silence_pcm(n_frames, channels)
+            else:
+                pcm = _triangle_pcm(
+                    n_frames, channels, period=self._period_for(stem, seed), peak=self.peak
+                )
+            out[stem] = write_pcm_wav(
+                dest / f"{stem}.wav", pcm, sample_rate=sample_rate, channels=channels
+            )
+        return out
+
+
+class Raising_Separator_Backend:
+    """A ``Separator_Backend`` whose ``separate`` always raises.
+
+    Mirrors :class:`RaisingDiarizationBackend`: the call is recorded *first* (so a
+    test can still assert the seed and timeout the engine passed), then ``exc`` is
+    raised — the engine must convert that into ``Engine_Status.failed`` and must
+    not leave a partial Stem_Set behind. ``after`` lets the first *N* calls succeed
+    via a delegate, so retry/degradation ladders can be exercised too.
+    """
+
+    def __init__(self, backend_id="raiser", exc=None, *, requires_network=False, after=0,
+                 delegate=None):
+        self.backend_id = str(backend_id)
+        self.requires_network = bool(requires_network)
+        self.exc = exc if exc is not None else RuntimeError("separator backend unavailable")
+        self.after = max(0, int(after))
+        self.delegate = delegate if delegate is not None else Fake_Separator_Backend()
+        self.calls: list = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    @property
+    def last_call(self):
+        return self.calls[-1] if self.calls else None
+
+    def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
+        self.calls.append(Separate_Call(_Path(source), _Path(dest_dir), fmt, seed, timeout_s))
+        if len(self.calls) <= self.after:
+            return self.delegate.separate(
+                source, dest_dir, fmt=fmt, seed=seed, timeout_s=timeout_s
+            )
+        raise self.exc
+
+
+class Truncating_Separator_Backend(Fake_Separator_Backend):
+    """A ``Separator_Backend`` whose stems have the **wrong duration**.
+
+    Everything else is honest — the WAVs are readable, at the requested
+    ``fmt.sample_rate`` / ``fmt.channels`` — only the length is wrong, which is
+    exactly the integrity failure the caller's verification must catch and report
+    as failed (Req 4.6, 14.2). ``scale`` multiplies the frame count (``0.5`` by
+    default, i.e. half the audio; use ``2.0`` for an over-long output) and
+    ``drop_frames`` subtracts a fixed number of frames on top. The result is
+    clamped to at least one frame so the file is still a valid WAV.
+    """
+
+    def __init__(self, backend_id="truncating", *, scale=0.5, drop_frames=0, **kwargs):
+        super().__init__(backend_id, **kwargs)
+        self.scale = float(scale)
+        self.drop_frames = int(drop_frames)
+
+    def _scale_frames(self, n_frames):
+        return max(1, int(round(n_frames * self.scale)) - self.drop_frames)
+
+
+class Missing_Stem_Backend(Fake_Separator_Backend):
+    """A ``Separator_Backend`` that omits one or more Backend_Stems.
+
+    The omitted names are simply absent from the returned mapping (no empty file,
+    no zero-length WAV), so the caller must synthesise digital silence for the
+    affected Stem_Name and report ``stem_missing:<stem_name>`` (Req 4.3).
+    ``missing=("bass", "drums")`` reproduces the ffmpeg adapter's two-stem shape;
+    ``missing=BACKEND_STEM_NAMES`` returns an empty mapping.
+    """
+
+    def __init__(self, backend_id="missing-stem", *, missing=("other",), **kwargs):
+        self.missing = tuple(missing)
+        stems = kwargs.pop("stems", BACKEND_STEM_NAMES)
+        kept = tuple(stem for stem in stems if stem not in self.missing)
+        super().__init__(backend_id, stems=kept, **kwargs)
+
+
+class Network_Separator_Backend(Fake_Separator_Backend):
+    """A ``Separator_Backend`` declaring ``requires_network = True``.
+
+    Nothing about it touches the network — it writes the same synthetic WAVs as
+    :class:`Fake_Separator_Backend`. It exists so the permissibility rung can be
+    tested: under a ``local_only``/network-forbidden policy the engine must refuse
+    or degrade *before* calling ``separate``, which is proved by ``calls`` staying
+    empty (Req 16.3).
+    """
+
+    def __init__(self, backend_id="network", **kwargs):
+        kwargs.pop("requires_network", None)
+        super().__init__(backend_id, requires_network=True, **kwargs)
+
+
+class Recording_Command_Runner:
+    """A recording ``Command_Runner`` — ``runner(argv, timeout_s) -> CompletedProcess``.
+
+    Matches the injectable runner the stem engine takes
+    (``Callable[[Sequence[str], float], subprocess.CompletedProcess]``) and never
+    executes anything, so no ffmpeg/ffprobe binary is needed.
+
+    Recording (Req 19.1): every invocation appends a :class:`Command_Call` holding
+    the argv as a tuple of ``str`` and the explicit subprocess timeout, so tests
+    can assert the filtergraph, the flags, the input ordering, that a timeout was
+    always passed (Req 15.4) and how many media passes were spent (Req 2.6).
+
+    Replay:
+
+    * ``ffprobe`` invocations (argv[0] basename contains ``ffprobe``, or the argv
+      carries ``-show_entries``) return canned JSON on ``stdout``. By default that
+      is one audio stream built from ``sample_rate``/``channels``/``codec``/
+      ``start_time``/``duration``; ``has_audio=False`` yields ``{"streams": []}``
+      (the "no audio stream" case, Req 4.8), and ``probe_json`` overrides it with a
+      mapping, a raw ``str``, or a sequence consumed one per probe call.
+    * every other invocation returns ``responses[i]`` when supplied, else a
+      ``CompletedProcess(returncode=returncode, stdout=stdout)``. A response entry
+      may be a ``CompletedProcess`` (returned as-is), a ``str``/``bytes``
+      (used as ``stdout``), or a mapping/list (JSON-encoded onto ``stdout``).
+
+    Failure injection at a chosen call index (0-based, counting *all* calls):
+
+    * ``fail_at=1`` raises ``exc`` — :class:`worker.ffmpeg_utils.FFmpegError` by
+      default — on the second call;
+    * ``timeout_at=0`` raises ``subprocess.TimeoutExpired(argv, timeout)`` on the
+      first call.
+
+    Both accept an ``int`` or any iterable of ints. The failing call is still
+    recorded (the attempt happened) before the exception is raised.
+    """
+
+    def __init__(
+        self,
+        *,
+        responses=None,
+        stdout="",
+        stderr="",
+        returncode=0,
+        probe_json=None,
+        sample_rate=FAKE_SAMPLE_RATE,
+        channels=FAKE_CHANNELS,
+        codec="pcm_s16le",
+        start_time=0.0,
+        duration=FAKE_DURATION_S,
+        has_audio=True,
+        fail_at=None,
+        exc=None,
+        timeout_at=None,
+    ):
+        self.responses = list(responses) if responses is not None else []
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = int(returncode)
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.codec = codec
+        self.start_time = start_time
+        self.duration = duration
+        self.has_audio = bool(has_audio)
+        self.probe_json = probe_json
+        self.fail_at = self._indices(fail_at)
+        self.timeout_at = self._indices(timeout_at)
+        self.exc = exc if exc is not None else _FFmpegError("recorded runner: forced failure")
+        self.calls: list = []
+
+    # --- internals --------------------------------------------------------
+    @staticmethod
+    def _indices(value):
+        if value is None:
+            return frozenset()
+        if isinstance(value, int) and not isinstance(value, bool):
+            return frozenset({int(value)})
+        return frozenset(int(v) for v in value)
+
+    def _default_probe_payload(self) -> dict:
+        if not self.has_audio:
+            return {"streams": [], "format": {"duration": str(self.duration)}}
+        return {
+            "streams": [
+                {
+                    "sample_rate": str(self.sample_rate),
+                    "channels": self.channels,
+                    "codec_name": self.codec,
+                    "start_time": str(self.start_time),
+                }
+            ],
+            "format": {"duration": str(self.duration)},
+        }
+
+    def _probe_stdout(self, probe_index) -> str:
+        payload = self.probe_json
+        if payload is None:
+            payload = self._default_probe_payload()
+        elif isinstance(payload, (list, tuple)) and payload:
+            payload = payload[min(probe_index, len(payload) - 1)]
+        if isinstance(payload, (str, bytes)):
+            return payload.decode() if isinstance(payload, bytes) else payload
+        return _json.dumps(payload)
+
+    @staticmethod
+    def _is_probe(argv) -> bool:
+        if not argv:
+            return False
+        return "ffprobe" in _Path(argv[0]).name or "-show_entries" in argv
+
+    def _completed(self, argv, entry):
+        if isinstance(entry, _subprocess.CompletedProcess):
+            return entry
+        if isinstance(entry, bytes):
+            entry = entry.decode()
+        if isinstance(entry, str):
+            return _subprocess.CompletedProcess(list(argv), 0, entry, "")
+        return _subprocess.CompletedProcess(list(argv), 0, _json.dumps(entry), "")
+
+    # --- Command_Runner contract ------------------------------------------
+    def __call__(self, cmd, timeout_s=None, *, timeout=None):
+        argv = tuple(str(part) for part in cmd)
+        effective_timeout = timeout_s if timeout_s is not None else timeout
+        index = len(self.calls)
+        self.calls.append(Command_Call(argv, effective_timeout))
+
+        if index in self.timeout_at:
+            raise _subprocess.TimeoutExpired(list(argv), effective_timeout or 0.0)
+        if index in self.fail_at:
+            raise self.exc
+
+        if self._is_probe(argv):
+            return _subprocess.CompletedProcess(
+                list(argv), 0, self._probe_stdout(len(self.probe_calls) - 1), ""
+            )
+        if index < len(self.responses):
+            return self._completed(argv, self.responses[index])
+        return _subprocess.CompletedProcess(
+            list(argv), self.returncode, self.stdout, self.stderr
+        )
+
+    # --- recording helpers ------------------------------------------------
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    @property
+    def argvs(self) -> list:
+        """Every recorded argv, in call order."""
+        return [call.argv for call in self.calls]
+
+    #: Alias of :attr:`argvs` — both spellings are part of the contract.
+    @property
+    def commands(self) -> list:
+        return self.argvs
+
+    @property
+    def timeouts(self) -> list:
+        return [call.timeout_s for call in self.calls]
+
+    @property
+    def last_call(self):
+        return self.calls[-1] if self.calls else None
+
+    @property
+    def probe_calls(self) -> list:
+        return [call for call in self.calls if self._is_probe(call.argv)]
+
+    @property
+    def ffmpeg_calls(self) -> list:
+        """The non-probe calls, i.e. the media passes (Req 2.6, 15.9)."""
+        return [call for call in self.calls if not self._is_probe(call.argv)]
+
+    def calls_matching(self, token) -> list:
+        """Recorded calls whose argv contains ``token`` as a whole part or substring."""
+        return [call for call in self.calls if any(token in part for part in call.argv)]
+
+    def saw(self, token) -> bool:
+        return bool(self.calls_matching(token))
+
+    def reset(self) -> None:
+        self.calls.clear()
+
+
+class Seam_Note_Fixtures:
+    """Named ``notes`` tuples for the Seam cases, valid and hostile (Req 6.4-6.6).
+
+    The engine reads Seams **only** from ``Engine_Context.notes``, as
+    ``"filler_seam:<float>"`` strings published by the host. Each attribute below
+    is a ready-made ``notes`` tuple; :attr:`DURATION` is the clip duration the
+    in/out-of-bounds cases are written against, and :attr:`EXPECTED` maps a
+    fixture name to the seam values that must survive parsing at that duration
+    (in note order), so a test can assert "these and nothing else".
+
+    Valid: :attr:`EMPTY`, :attr:`SINGLE`, :attr:`MANY`, :attr:`ADJACENT`,
+    :attr:`AT_ZERO`, :attr:`AT_DURATION`, :attr:`UNSORTED`.
+    Hostile: :attr:`MALFORMED_PREFIX`, :attr:`MALFORMED_VALUE`,
+    :attr:`NON_FINITE`, :attr:`NEGATIVE`, :attr:`OUT_OF_BOUNDS`,
+    :attr:`DUPLICATES`, :attr:`OTHER_ENGINE_NOTES`, and :attr:`MIXED` /
+    :attr:`ALL_HOSTILE` which interleave the two so the survivors must be picked
+    out individually rather than the whole tuple being rejected.
+    """
+
+    #: Clip duration the bounds cases assume.
+    DURATION = 10.0
+
+    # --- valid ------------------------------------------------------------
+    EMPTY: tuple = ()
+    SINGLE = ("filler_seam:1.234",)
+    MANY = ("filler_seam:1.000", "filler_seam:2.500", "filler_seam:7.750")
+    #: Two seams closer together than any repair window, so their windows merge.
+    ADJACENT = ("filler_seam:4.000", "filler_seam:4.010")
+    AT_ZERO = ("filler_seam:0.000",)
+    AT_DURATION = ("filler_seam:10.000",)
+    #: Valid but out of order — parsing must not assume sortedness.
+    UNSORTED = ("filler_seam:8.000", "filler_seam:0.500", "filler_seam:3.250")
+
+    # --- hostile ----------------------------------------------------------
+    #: Right-ish shape, wrong prefix / no value at all.
+    MALFORMED_PREFIX = (
+        "filler_seam",
+        "filler_seam:",
+        "filler_seams:1.000",
+        "fillerseam:1.000",
+        "seam:1.000",
+        ":1.000",
+        "FILLER_SEAM:1.000",
+        "filler_seam:1.000:2.000",
+    )
+    #: Correct prefix, unparsable value.
+    MALFORMED_VALUE = (
+        "filler_seam:abc",
+        "filler_seam:1,5",
+        "filler_seam: ",
+        "filler_seam:1.0s",
+        "filler_seam:0x10",
+    )
+    NON_FINITE = (
+        "filler_seam:nan",
+        "filler_seam:inf",
+        "filler_seam:-inf",
+        "filler_seam:NaN",
+        "filler_seam:Infinity",
+    )
+    NEGATIVE = ("filler_seam:-0.001", "filler_seam:-1.500")
+    #: Beyond ``DURATION``.
+    OUT_OF_BOUNDS = ("filler_seam:10.001", "filler_seam:99.000", "filler_seam:1e9")
+    DUPLICATES = ("filler_seam:2.000", "filler_seam:2.000", "filler_seam:2.000")
+    #: Another engine's notes — never read as Seams, never rejected wholesale.
+    OTHER_ENGINE_NOTES = (
+        "kinetic_word:1.000",
+        "filler_removed:3",
+        "broll:keyword=ocean",
+        "degraded:python_pkg:demucs",
+        "stem_missing:other",
+        "",
+    )
+    #: Valid seams interleaved with hostile notes: only the valid ones survive.
+    MIXED = (
+        "kinetic_word:0.500",
+        "filler_seam:1.500",
+        "filler_seam:nan",
+        "filler_seam:-2.000",
+        "filler_seams:3.000",
+        "filler_seam:3.000",
+        "filler_seam:99.000",
+        "filler_seam:abc",
+        "filler_seam:3.000",
+        "stem_missing:music",
+    )
+    #: Every hostile family at once, with no valid seam anywhere.
+    ALL_HOSTILE = (
+        MALFORMED_PREFIX + MALFORMED_VALUE + NON_FINITE + NEGATIVE + OUT_OF_BOUNDS
+        + OTHER_ENGINE_NOTES
+    )
+
+    #: fixture name -> the seam values that must survive at :attr:`DURATION`,
+    #: in the order the notes appear (duplicates included, so a test can assert
+    #: either the raw survivors or their de-duplicated/sorted form).
+    EXPECTED = {
+        "EMPTY": (),
+        "SINGLE": (1.234,),
+        "MANY": (1.0, 2.5, 7.75),
+        "ADJACENT": (4.0, 4.01),
+        "AT_ZERO": (0.0,),
+        "AT_DURATION": (10.0,),
+        "UNSORTED": (8.0, 0.5, 3.25),
+        "MALFORMED_PREFIX": (),
+        "MALFORMED_VALUE": (),
+        "NON_FINITE": (),
+        "NEGATIVE": (),
+        "OUT_OF_BOUNDS": (),
+        "DUPLICATES": (2.0, 2.0, 2.0),
+        "OTHER_ENGINE_NOTES": (),
+        "MIXED": (1.5, 3.0, 3.0),
+        "ALL_HOSTILE": (),
+    }
+
+    @classmethod
+    def cases(cls) -> dict:
+        """``{fixture name: notes tuple}`` for every fixture in :attr:`EXPECTED`."""
+        return {name: getattr(cls, name) for name in cls.EXPECTED}
+
+    @classmethod
+    def expected_for(cls, name) -> tuple:
+        """The surviving seam values for fixture ``name`` at :attr:`DURATION`."""
+        return cls.EXPECTED[name]
+
+    @staticmethod
+    def note(value) -> str:
+        """Build one well-formed note: ``note(1.5) == "filler_seam:1.500"``."""
+        return f"filler_seam:{float(value):.3f}"
+
+    @classmethod
+    def notes_for(cls, values) -> tuple:
+        """Build a well-formed ``notes`` tuple from an iterable of seam seconds."""
+        return tuple(cls.note(v) for v in values)
