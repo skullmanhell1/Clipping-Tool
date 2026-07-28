@@ -905,8 +905,11 @@ Generators: `st_word_timeline`, `st_kinetic_style`, `st_kinetic_options`.
 
 *For every* pair of Kinetic_Style and Reveal_Mode and *every* Word_Timeline, the emitted
 document's tag-stripped text and its cue count are identical across both Reveal_Modes for
-the same style, and switching Reveal_Mode changes only the presence of the per-word
-`\alpha` gate.
+the same style, and switching Reveal_Mode adds exactly the per-word `\alpha` gate and
+nothing else for every style whose own span is not itself that gate. For a style whose
+span already *is* that gate, the two Reveal_Modes may instead be byte-identical
+(`typewriter`, which the gate excludes) or differ only by the redundant duplicate gate
+(`slide_up`, which the gate does not exclude).
 Generators: `st_word_timeline`, `st_kinetic_style`.
 
 **Validates: Requirements 4.9**
