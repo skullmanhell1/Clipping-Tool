@@ -134,17 +134,39 @@ def _st_non_member_style():
     )
 
 
+def _attachable_noise_key(key):
+    """True when ``key`` names an *option* that can be attached as noise.
+
+    A drawn key is skipped only when ``setattr`` would not attach an option key at
+    all: dunder and private names address the instance's own machinery rather than
+    the option namespace ``from_processing_options`` reads, and some of them are
+    type-checked slots — ``setattr(options, "__dict__", None)`` raises
+    ``TypeError`` before resolution is ever reached, and ``__class__`` likewise.
+    (``st_options_mapping``'s ``st.text`` leg does draw such names; Hypothesis
+    mines string literals out of the codebase, so ``"__dict__"`` is reachable.)
+    Everything else the generator can produce — unknown names, the empty string,
+    whitespace, ``"🎬"``, an 80-character key — stays attached, which is what the
+    noise is for.
+    """
+    return (
+        isinstance(key, str)
+        and key != "kinetic_style"
+        and not key.startswith("_")
+    )
+
+
 def _carrier(hostile, style):
     """A Processing_Options carrying ``style`` plus the drawn hostile noise.
 
-    Every key of the hostile mapping is attached as an attribute, so resolution
-    is proved to ignore option keys it does not know while still reading the one
-    key it does (``kinetic_style``). ``kinetic_style`` is set last so the noise
-    can never shadow it.
+    Every hostile key that names an attachable option (see
+    :func:`_attachable_noise_key`) is attached as an attribute, so resolution is
+    proved to ignore option keys it does not know while still reading the one key
+    it does (``kinetic_style``). ``kinetic_style`` is set last so the noise can
+    never shadow it.
     """
     options = ProcessingOptions()
     for key, value in hostile.items():
-        if isinstance(key, str) and key != "kinetic_style":
+        if _attachable_noise_key(key):
             setattr(options, key, value)
     options.kinetic_style = style
     return options
@@ -301,7 +323,7 @@ def _context(
     words: Any = (),
     duration: float = 0.0,
     capabilities: Any = None,
-    deps: dict | None = None,
+    clip_metadata: dict | None = None,
     deadline: float = math.inf,
     clip_id: str = "clip-1",
     time_base: Time_Base = TIME_BASE,
@@ -312,6 +334,12 @@ def _context(
     :func:`~worker.engines.artifacts.allocate_workspace` (never a hand-rolled
     directory), so every file the engine writes lands under
     ``<temp_dir>/engines/<job>/<clip>/kinetic_typography__<digest>``.
+
+    Per-clip values reach the engine on ``clip_metadata`` — the channel the
+    Pipeline really publishes at the COMPOSE hook (``hook_text``, ``clip_size``) —
+    and never on ``deps``, which is the host's injected clock/logger/storage seam
+    and carries none of them. Supplying them on ``deps`` is what let these tests
+    pass while production read an always-empty mapping (task 12.4).
     """
     root = Path(temp_dir)
     workspace = allocate_workspace(root, JOB_ID, clip_id, ENGINE_ID, DIGEST)
@@ -332,7 +360,7 @@ def _context(
         workspace=workspace,
         capabilities=capabilities,
         deadline=deadline,
-        deps=dict(deps or {}),
+        clip_metadata=dict(clip_metadata or {}),
     )
 
 
@@ -574,7 +602,7 @@ def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
             words=words,
             duration=duration,
             capabilities=report,
-            deps={"hook_text": "watch this"},
+            clip_metadata={"hook_text": "watch this"},
         )
         result = engine.run(ctx)
 
@@ -635,7 +663,7 @@ def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
             words=REFERENCE_WORDS,
             duration=REFERENCE_DURATION,
             capabilities=report,
-            deps={"hook_text": "watch this"},
+            clip_metadata={"hook_text": "watch this"},
             clip_id="clip-reference",
         )
         ref = engine.run(ref_ctx)
