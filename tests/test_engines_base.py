@@ -1322,19 +1322,23 @@ def test_engine_method_surface_is_pinned():
         assert callable(getattr(artifacts_mod.Engine_Workspace, name)), name
 
     # Engine_Host.run_stage — the stage entry point the Pipeline and both sibling
-    # specs call. ``clip_metadata`` (Req 15.8) is pinned as the last parameter, in
-    # the same category as the earlier ``first_input_index`` / ``max_inputs``
-    # additions: a designed, reviewed growth of the contract, never a silent one.
+    # specs call. ``clip_metadata`` (Req 15.8) and ``filler_plan`` (the
+    # audio-stem-inpainting Seam-publication keyword, its task 7.2) are pinned as the
+    # last two parameters, in the same category as the earlier ``first_input_index`` /
+    # ``max_inputs`` additions: a designed, reviewed growth of the contract, never a
+    # silent one. Both are keyword-only with a ``None`` default, so every pre-existing
+    # call site builds byte-identical Engine_Contexts.
     from worker.engines.host import Engine_Host
 
     run_stage_signature = inspect.signature(Engine_Host.run_stage)
     assert list(run_stage_signature.parameters) == [
         "self", "stage", "clip_id", "source", "clip_path", "clip_start",
-        "clip_end", "duration", "words", "clip_metadata",
+        "clip_end", "duration", "words", "clip_metadata", "filler_plan",
     ]
-    clip_metadata_param = run_stage_signature.parameters["clip_metadata"]
-    assert clip_metadata_param.kind is inspect.Parameter.KEYWORD_ONLY
-    assert clip_metadata_param.default is None
+    for name in ("clip_metadata", "filler_plan"):
+        added = run_stage_signature.parameters[name]
+        assert added.kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert added.default is None, name
 
 
 def test_shared_test_doubles_and_generators_are_pinned():
