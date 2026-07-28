@@ -13,7 +13,25 @@ import StorageSettings from "./components/StorageSettings.jsx";
 // `<engine_id>_enabled` flag and option defaults *here only* — `toOptions`
 // forwards every key generically, and profiles persist them automatically
 // because they round-trip through the opaque settings blob.
-const DEFAULT_ENGINE_SETTINGS = {};
+//
+// Keys use the snake_case API spellings, because `engineOptions` forwards them
+// verbatim to the `/api/upload` Form fields and `OptionsModel` — a camelCase key
+// here would silently never reach the backend.
+const DEFAULT_ENGINE_SETTINGS = {
+  // Kinetic typography engine (kinetic-typography spec, Req 17.5). Defaults
+  // mirror `ProcessingOptions` / `Kinetic_Options` exactly; the flag is off, so
+  // a stock install still renders exactly as v0.8.0.
+  kinetic_typography_enabled: false,
+  kinetic_style: "karaoke_fill",
+  kinetic_reveal: "cumulative",
+  kinetic_font: "",
+  kinetic_max_lines: 2,
+  kinetic_max_line_width: 22,
+  kinetic_safe_area_x_pct: 6.0,
+  kinetic_safe_area_y_pct: 10.0,
+  kinetic_motion_ms: 120,
+  kinetic_confidence_floor: 0.0,
+};
 
 const engineOptions = (settings) =>
   Object.fromEntries(
@@ -173,6 +191,10 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [effects, setEffects] = useState(null);
   const [engines, setEngines] = useState([]);
+  // /api/info's `capabilities` block: probe results keyed by `<kind>:<name>`
+  // plus engine-specific option domains keyed by Engine_Id (e.g.
+  // capabilities.kinetic_typography.styles / .reveal_modes).
+  const [capabilities, setCapabilities] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
@@ -226,6 +248,7 @@ export default function App() {
         setVersion(info.version || "");
         setEffects(info.effects || null);
         setEngines(Array.isArray(info.engines) ? info.engines : []);
+        setCapabilities(info.capabilities || null);
       })
       .catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
@@ -477,6 +500,7 @@ export default function App() {
                 onToggleWatch={handleToggleWatch}
                 effects={effects}
                 engines={engines}
+                capabilities={capabilities}
               />
               <PublishingPanel
                 value={publishing}
