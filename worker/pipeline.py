@@ -32,6 +32,7 @@ from worker import metadata as meta_mod
 from worker import selection as sel
 from worker import visual_selection
 from worker.effects import broll, compositor, filler, reframe
+from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
 from worker.engines.host import Engine_Host
 from worker.llm_client import BaseLLMClient

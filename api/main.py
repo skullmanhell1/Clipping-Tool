@@ -51,6 +51,9 @@ from updates import get_update_checker
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.jobs import get_manager
 from worker.effects import broll, caption_presets
+# Side-effect import: populates the default engine registry so `/api/info`
+# advertises every AV engine (each still default-off). See worker/engines/loader.py.
+from worker.engines import loader  # noqa: F401
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import ProcessingOptions
 from worker.watch_folder import get_watcher

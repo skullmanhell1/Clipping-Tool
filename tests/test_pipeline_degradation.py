@@ -16,6 +16,8 @@ offline. Renders use tiny ``make_video`` clips gated on ``requires_ffmpeg``.
 """
 from __future__ import annotations
 
+import pytest
+
 try:  # module-level helpers (not fixtures) from the shared conftest
     from tests.conftest import FakeWord, requires_ffmpeg
 except ImportError:  # pragma: no cover - conftest always importable under pytest
@@ -1251,6 +1253,38 @@ def _build_unhooked_pipeline():
 UNHOOKED_PIPELINE = _build_unhooked_pipeline()
 
 
+@pytest.fixture
+def p34_default_registry_restored():
+    """Put the process-wide engine registry back exactly as it was found.
+
+    The parity property below resets the two default engine singletons **inside**
+    its body (a fixture runs once per *test*, not once per hypothesis *example*),
+    and that per-example reset is what makes its ``len(get_registry()) == 0``
+    assertion meaningful: whatever the registry held before, the three runs it
+    compares must add nothing to it.
+
+    What is no longer true is the assumption that empty is also the registry's
+    *resting* state. ``worker/pipeline.py`` and ``api/main.py`` now import
+    ``worker/engines/loader.py`` at module scope, so importing either one registers
+    the shipped AV engines — registered, Feature_Flag-off. Resetting and walking
+    away would therefore strip those production registrations from the rest of the
+    session (and ``reset_registry()`` + a later import will **not** re-register
+    them: the module is cached and its registration is guarded by
+    ``find(...) is None``). So the registrations found on the way in are replayed
+    verbatim on the way out. Nothing about the parity assertions changes: the
+    property still compares against explicitly built ``Engine_Registry`` instances
+    and still requires the default registry to be untouched by all three runs.
+    """
+    saved = list(get_registry().records())
+    try:
+        yield saved
+    finally:
+        reset_registry()
+        for record in saved:
+            get_registry().register(record.engine, priority=record.priority)
+        reset_report()
+
+
 class P34_Recorder:
     """Records every stubbed ffmpeg/ffprobe touch point in invocation order."""
 
@@ -1457,10 +1491,16 @@ def p34_run(module, source, options, root, tag, *, registry=None, report=None):
 
 
 # Feature: av-engines-foundation, Property 34: All engines off reproduces v0.8.0 exactly
+# ``function_scoped_fixture`` is suppressed deliberately: the fixture below is not
+# per-example state at all (the body still resets both singletons per example) — it
+# only restores the process-wide registrations the module import left behind, once,
+# after the whole test. Its not being reset between examples is exactly what is
+# wanted.
 @settings(max_examples=100, deadline=None,
-          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large,
+                                 HealthCheck.function_scoped_fixture])
 @given(data=st.data())
-def test_p34_all_engines_off_reproduces_v080_exactly(data):
+def test_p34_all_engines_off_reproduces_v080_exactly(p34_default_registry_restored, data):
     """Validates: Requirements 4.3, 9.4, 23.1, 23.2, 23.3
 
     For any ``ProcessingOptions`` with every engine Feature_Flag off and for any
@@ -1472,7 +1512,13 @@ def test_p34_all_engines_off_reproduces_v080_exactly(data):
     """
     import worker.pipeline as pl
 
-    # Per-example isolation of the two process-wide engine singletons.
+    # Per-example isolation of the two process-wide engine singletons. The default
+    # registry is no longer empty at rest — ``worker/pipeline.py`` imports
+    # ``worker/engines/loader.py``, which registers the shipped engines
+    # (Feature_Flag-off) — so this reset is what gives the "the default singletons
+    # were never touched" assertion below a known starting point, and the
+    # ``p34_default_registry_restored`` fixture replays whatever was found once the
+    # test is over.
     reset_registry()
     reset_report()
 
@@ -1556,7 +1602,9 @@ def test_p34_all_engines_off_reproduces_v080_exactly(data):
             for markers in run["effects"]:
                 assert not any(m.startswith("engine:") for m in markers)
 
-    # The default singletons were never touched by any of the three runs.
+    # The default singletons were never touched by any of the three runs: the
+    # emptied-at-example-start registry is still empty, so no run registered
+    # anything behind the explicitly built registries the parity used.
     assert len(get_registry()) == 0
     reset_registry()
     reset_report()
