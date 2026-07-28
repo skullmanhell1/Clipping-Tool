@@ -340,72 +340,72 @@ spec's central promise to an upgrading operator).
     411 passed / 0 failed — P12 is **latent, not fixed**, and can resurface on any run. It
     still belongs to its own bugfix spec; do not treat a green P12 as evidence.
 
-- [ ] 4. Module skeleton, constants, and data models
-  - [ ] 4.1 Create `worker/engines/stems.py` with its vocabularies and documented constants
+- [x] 4. Module skeleton, constants, and data models
+  - [x] 4.1 Create `worker/engines/stems.py` with its vocabularies and documented constants
     - New module with a docstring stating that it imports cleanly with no ffmpeg, no `demucs`, no `torch` and no model file present; stdlib + `worker.engines.*` imports only at module scope, every heavy dependency reached through a function-local lazy import.
     - Define `STEM_NAMES = ("music", "other", "vocals")` (sorted), `STEM_MAPPING` (`vocals`→`vocals`, `drums`/`bass`→`music`, `other`→`other`), `MIX_PRESETS` (`speech_focus`, `music_focus`, `clean_speech` bundles exactly as designed), `REPAIR_MODES`, `BACKEND_IDS`, `GAIN_MIN`/`GAIN_MAX`/`GAIN_DEFAULT`, `WINDOW_MIN_MS`/`WINDOW_MAX_MS`/`WINDOW_DEFAULT_MS`, `AMPLITUDE_TOLERANCE`, `DISK_BOUND_MULTIPLE`, `MAX_BRIDGE_WINDOWS`, `NOTCH_EXPR_CHUNK`, `ML_THREAD_COUNT`, `MODEL_DIR_ENV`, `MODEL_DIR_DEFAULT`, and the step reserve/threshold constants (`EXTRACT_RESERVE_S`, `SEPARATE_RESERVE_S`, `REPAIR_RESERVE_S`, `REMUX_RESERVE_S`, `MIN_STEP_TIMEOUT_S`, `SEPARATION_MIN_S` per backend, `REPAIR_MIN_S`, `REMUX_MIN_S`).
     - _Requirements: 1.4, 4.1, 4.2, 5.1, 5.4, 7.1, 7.6, 10.6, 11.7_
 
-  - [ ] 4.2 Implement the `Stem_Options` frozen dataclass with total `parse` and `to_dict`
+  - [x] 4.2 Implement the `Stem_Options` frozen dataclass with total `parse` and `to_dict`
     - Exactly the eleven-field surface designed: `mix_preset`, `gain_vocals`, `gain_music`, `gain_other`, `repair_mode`, `repair_window_ms`, `declick`, `backend`, `model`, `retain_stems` — every field a JSON-serialisable scalar so the foundation `Engine_Options` protocol is satisfied.
     - `parse` is total and never raises: `coerce_choice` against the declared value sets for `mix_preset`/`repair_mode`/`backend` with the documented default on an unrecognised value, `coerce_float` + finite + `[0.0, 4.0]` range check for the gains, `coerce_int` + clamp into `[2, 120]` for the window, `coerce_bool` for the flags, `coerce_str` for the model name; named keys only, so unknown keys are ignored. `to_dict` emits every field in sorted key order with JSON-native types.
     - _Requirements: 9.1, 9.2, 9.3, 9.5, 5.4, 7.6, 18.5_
 
-  - [ ] 4.3 Implement `Stem_Options.from_processing_options` and the engine's `resolve_options`
+  - [x] 4.3 Implement `Stem_Options.from_processing_options` and the engine's `resolve_options`
     - Read the `stem_*` attributes off the supplied Processing_Options (already normalised by `worker.models.effective_options`) and route each through `parse`, so resolution is pure, total and idempotent — coercing an already-valid value is the identity.
     - Read attributes only; never write to the supplied Processing_Options, so the host observes `dataclasses.asdict(options)` unchanged after every invocation.
     - _Requirements: 1.3, 9.6, 20.2_
 
-  - [ ] 4.4 Implement `Audio_Format`, `Repair_Window` and `Stem_Plan`
+  - [x] 4.4 Implement `Audio_Format`, `Repair_Window` and `Stem_Plan`
     - `Audio_Format(sample_rate, channels, codec, start_time)` frozen; `Repair_Window(start, end, seams)` frozen with `to_dict`.
     - `Stem_Plan` frozen with exactly the designed fields (`backend`, `model`, `gains`, `active_stems`, `repair_mode`, `repair_window_ms`, `seams`, `windows`, `sample_rate`, `channels`, `duration`, `declick`, `needs_separation`, `missing_capabilities`, `downgraded_from`, `bridged_windows`, `notched_windows`) and a `to_dict()` that emits sorted JSON-native keys so it can be compared field-by-field and returned in `Engine_Result.plan`.
     - _Requirements: 10.1, 10.7, 5.7, 6.8_
 
-  - [ ]* 4.5 Property test: options round-trip and digest separation → `tests/test_stems_options.py`
+  - [x]* 4.5 Property test: options round-trip and digest separation → `tests/test_stems_options.py`
     - **Property 3: Stem_Options round-trips and its digest separates exactly the distinct values** — for any valid `Stem_Options`, `parse(to_dict(o)).to_dict() == o.to_dict()`; for any pair, the Options_Digests are equal when the values are equal and differ when any field value differs. Generator: `st_stem_options`.
     - _Requirements: 9.4, 9.7_ · _Properties: P3_
 
-  - [ ]* 4.6 Property test: parsing is total under hostile input → `tests/test_stems_options.py`
+  - [x]* 4.6 Property test: parsing is total under hostile input → `tests/test_stems_options.py`
     - **Property 4: Parsing is total — hostile input yields documented defaults, never an exception** — for any mapping of arbitrary values, `Stem_Options.parse` returns a value without raising, with `mix_preset`/`repair_mode`/`backend` members of their declared sets, every gain finite and inside `[0.0, 4.0]`, and `repair_window_ms` inside `[2, 120]`. Generator: `st_options_mapping`.
     - _Requirements: 5.4, 7.6, 9.3, 9.5, 18.5_ · _Properties: P4_
 
-  - [ ]* 4.7 Property test: resolution is idempotent and survives the options round-trip → `tests/test_stems_options.py`
+  - [x]* 4.7 Property test: resolution is idempotent and survives the options round-trip → `tests/test_stems_options.py`
     - **Property 5: Option resolution is idempotent and survives the ProcessingOptions round-trip** — for any Processing_Options, `resolve_options` applied twice yields equal `Stem_Options`, and `ProcessingOptions.from_dict(dataclasses.asdict(o)) == o`. Generators: `st_options_mapping`, `st_stem_options`.
     - _Requirements: 9.6, 9.8, 20.2_ · _Properties: P5_
 
-- [ ] 5. The pure planner
-  - [ ] 5.1 Implement `resolve_gains`
+- [x] 5. The pure planner
+  - [x] 5.1 Implement `resolve_gains`
     - A non-`custom` Mix_Preset returns exactly its `MIX_PRESETS` bundle and ignores the individual gain fields; `custom` returns the validated fields; any non-numeric, negative, non-finite or over-maximum field is replaced by `GAIN_DEFAULT`. Return a mapping keyed by `STEM_NAMES` so iteration order is sorted.
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-  - [ ] 5.2 Implement `parse_seam_notes`
+  - [x] 5.2 Implement `parse_seam_notes`
     - Keep only well-formed `filler_seam:<float>` notes whose value is finite and inside `[0, duration]`; discard malformed, non-finite, negative and out-of-bounds notes individually while retaining the remaining valid ones; read no other note prefix and infer no Seam from the waveform or from Word_Timeline gaps. Return a sorted, de-duplicated list.
     - _Requirements: 6.4, 6.5, 6.6_
 
-  - [ ] 5.3 Implement `repair_windows`
+  - [x] 5.3 Implement `repair_windows`
     - Build a symmetric `repair_window_ms` window per Seam, snap the bounds to sample boundaries through `Time_Base`, clamp to `[0, duration]`, then run the list through the foundation `normalize_segments` so the result is sorted, pairwise disjoint and contained — which is what makes overlapping windows merge into one `Repair_Window` repaired exactly once, carrying every merged Seam in `Repair_Window.seams`.
     - _Requirements: 6.7, 6.8, 7.7_
 
-  - [ ] 5.4 Implement `resolve_backend` and `resolve_repair_mode`
+  - [x] 5.4 Implement `resolve_backend` and `resolve_repair_mode`
     - `resolve_backend(opts, caps, needs_separation) -> (backend_id, missing_capability_ids)`: `auto` resolves to `ml` only when both `python_pkg:demucs` and `model:<model>` are available, otherwise `ffmpeg`; an explicit `ml` request with a missing capability also resolves to `ffmpeg` and reports the missing ids so the caller can emit one `degraded:<capability_id>` marker each. A backend that would fetch a checkpoint over the network is treated as model-unavailable here.
     - `resolve_repair_mode(requested, backend) -> (mode, downgraded)`: `spectral` on a non-`ml` backend returns `("crossfade", True)`.
     - _Requirements: 12.4, 12.6, 13.1, 13.2, 7.3, 7.4_
 
-  - [ ] 5.5 Implement `plan_stems`, the `plan(ctx)` entry point and the no-op predicate
+  - [x] 5.5 Implement `plan_stems`, the `plan(ctx)` entry point and the no-op predicate
     - Compose the helpers above into a serialisable `Stem_Plan`: resolved gains, `active_stems` (gain > 0.0 only), resolved backend and model, Seam list, `Repair_Window` list, probed sample rate/channels/duration, `declick`, `needs_separation` (any gain != 1.0 or `repair_mode == "spectral"`), `missing_capabilities`, `downgraded_from`.
     - `plan(ctx)` is **pure**: no ffmpeg, no `demucs` import, no network, no model read, no clock, no filesystem; randomness only via `ctx.rng()`; it never reads `ctx.source_path`, and every timestamp is derived from `[0, ctx.duration]` and the rebased `ctx.words`, so no source-relative time can reach the audio processing.
     - Add the pure `plan_is_noop(plan)` predicate (all resolved gains `1.0` **and** `repair_mode == "off"`) that ladder rung 3 consumes before any probe or subprocess.
     - _Requirements: 1.9, 2.2, 2.3, 2.7, 2.8, 5.6, 5.7, 10.1, 10.2, 10.7, 12.5, 19.2_
 
-  - [ ]* 5.6 Property test: planning is pure and never mutates the caller → `tests/test_stems_plan.py`
+  - [x]* 5.6 Property test: planning is pure and never mutates the caller → `tests/test_stems_plan.py`
     - **Property 1: Planning is pure and never mutates the caller** — for any `Stem_Options`, Seam_Note tuple, Word_Timeline and Time_Base, `plan(ctx)` performs zero command-runner invocations, imports no separation package, opens no socket, reads no model file, leaves `dataclasses.asdict(ctx.options)` identical, and every attempted `Engine_Context` field assignment raises. Generators: `st_stem_options`, `st_seam_notes`, `st_word_timeline`, `st_time_base`.
     - _Requirements: 1.3, 1.9, 2.7, 10.2, 12.5_ · _Properties: P1_
 
-  - [ ]* 5.7 Property test: equal inputs produce equal plans that name their environment → `tests/test_stems_plan.py`
+  - [x]* 5.7 Property test: equal inputs produce equal plans that name their environment → `tests/test_stems_plan.py`
     - **Property 2: Equal inputs produce equal plans, and the plan names its environment** — for any two invocations with equal clip audio, Seam_Note tuple, Word_Timeline and `Stem_Options`, `plan(ctx).to_dict()` values are equal, every plan timestamp lies inside `[0, duration]`, and `backend` and `model` are non-empty. Generators: `st_stem_options`, `st_seam_notes`, `st_word_timeline`.
     - _Requirements: 2.3, 2.8, 10.1, 10.7_ · _Properties: P2_
 
-  - [ ]* 5.8 Property test: seam intake is robust and windows are always normalised → `tests/test_stems_plan.py`
+  - [x]* 5.8 Property test: seam intake is robust and windows are always normalised → `tests/test_stems_plan.py`
     - **Property 7: Seam intake is robust and windows are always normalised** — for any note tuple mixing arbitrary strings with valid `filler_seam:` notes, the planned Seam list is exactly the finite, in-bounds `filler_seam:` values with no inferred extras, and the planned `Repair_Window` list is sorted, pairwise non-overlapping and contained in `[0, duration]`. Generators: `st_seam_notes`, `st_repair_window_ms`.
     - _Requirements: 6.4, 6.5, 6.6, 6.7, 6.8_ · _Properties: P7_
 
@@ -419,44 +419,151 @@ spec's central promise to an upgrading operator).
     - Asserts ladder rungs 0 and 3, so schedule it after 13.2.
     - _Requirements: 5.6, 7.10, 15.8_ · _Properties: P8_
 
-- [ ] 6. Checkpoint — pure planner complete
+- [x] 6. Checkpoint — pure planner complete
   - Ensure all tests pass, ask the user if questions arise.
+  - **DONE.** `PATH=<static ffmpeg>:$PATH PYENV_VERSION=3.11.15 python3 -m pytest tests/ -q`
+    → **423 passed, 0 failed, 0 skipped** (85 s). `ruff check` is clean on all four new stem
+    files. The pure planner was additionally re-verified by hand against the **real** filler
+    code (not only against generators): `plan_keep_intervals` on a transcript with two
+    disfluencies produced keeps `[(0,0.78), (1.07,1.98), (2.32,3.4)]`, publication yielded
+    exactly `('filler_seam:0.780', 'filler_seam:1.690')` — one per interior join, each equal
+    to the running sum of keep durations — and each seam falls strictly between the
+    surrounding `rebase_words` output (`0.750 < 0.780 < 0.810`, `1.610 < 1.690 < 1.720`), so
+    no word straddles a repair window. Crossfade windows came out symmetric at
+    `(0.72, 0.84)` and `(1.63, 1.75)` for a 120 ms setting, and `spectral` with no `demucs`
+    downgraded to `crossfade` reporting `('python_pkg:demucs', 'model:htdemucs')`.
+  - **NOTE — a seam is not a word boundary.** `plan_keep_intervals` pads each keep past the
+    words it contains, so the join lands *inside* the padding: `0.780` is 30 ms after the
+    previous word ends and 30 ms before the next one starts. A first attempt to verify the
+    seam against the exact rebased word times failed for that reason — the oracle was wrong,
+    not the code. Any later assertion must compare a seam to the **running sum of keep
+    durations**, and only bracket it between the neighbouring word times.
 
-- [ ] 7. Seam publication — the one cross-spec touch point
-  - [ ] 7.1 Add the additive `filler_seam_notes(keeps)` helper to `worker/engines/host.py`
+  - **Epic 4-5 corrections (bind to these):**
+    1. **Gains out of range become `GAIN_DEFAULT`, they are not clamped.** Task 4.2 says
+       "range check", Req 5.4 says "substitute the documented default" — so `-1.0` and
+       `9.0` both resolve to `1.0`, not to `0.0`/`4.0`. `repair_window_ms` is the opposite:
+       it *is* clamped, per 7.6. The two rules are deliberately different.
+    2. **`resolve_model` was added** (not in the task list): `Stem_Options.model == ""` is
+       legal ("the resolver picks") but `Stem_Plan.model` must be non-empty for Req 10.7 /
+       P2 to mean anything, so the resolver substitutes `htdemucs`. Independent of the
+       resolved backend.
+    3. **`repair_windows` returns `list[Repair_Window]`, not `list[Timeline_Segment]`.** The
+       design says the latter, but task 5.3 requires each merged window to carry the Seams
+       it absorbed and `Stem_Plan.windows` is typed `tuple[Repair_Window, ...]`; the task
+       won.
+    4. **`normalize_segments` is called WITHOUT `time_base`.** Its optional snapping is to
+       the *frame* grid, and a 12 ms window inside a 33 ms frame snaps to zero length and is
+       dropped entirely. Sample snapping — the grid Req 6.7 actually names — is applied in
+       `repair_windows` via `seconds_to_sample`/`sample_to_seconds` **before**
+       normalisation. This is the epic-1 gate's correction 8 in practice.
+    5. **`plan(ctx)` cannot probe**, so a planned `Stem_Plan` carries `Time_Base.sample_rate`
+       and `_CHANNELS_DEFAULT = 2` as placeholders; `run` re-plans with the real
+       `Audio_Format` after pass 0, which is why `plan_stems` takes `fmt=` at all.
+    6. **Req 13.2 is capability-driven, not request-driven:** `resolve_backend` reports
+       missing ids for `auto` as well as for an explicit `ml`, but reports nothing for an
+       explicit `ffmpeg` request or for a plan that needs no separation — a capability
+       nobody wants is not a degradation, and emitting `degraded:` for it would mark a run
+       that lost no fidelity.
+    7. **The engine class does not exist yet** (it is 13.1), so 4.3's "the engine's
+       `resolve_options`" and 5.5's "`plan(ctx)` entry point" landed as the module-level
+       `resolve_stem_options(options)` and `plan_stems_from_context(ctx)`. Task 13.1's
+       methods are to be one-line delegations to them; the property tests already exercise
+       those bodies, so the hooks inherit the guarantees.
+    8. **Latent bug in the foundation, NOT fixed here:** `base.coerce_float(10**400, …)`
+       raises `OverflowError` (`float()` on an over-large int). Unreachable from
+       `st_options_mapping` (bounded at `10**30`), so `parse` is still total, but
+       `_coerce_gain` guards it locally. Worth a foundation follow-up.
+    9. **5.9 and 5.10 are deliberately still open** — their own task text defers them until
+       the mix filtergraph (11.3) and ladder rungs 0/3 (13.2) exist. They are the only epic-5
+       leaves not closed.
+
+- [x] 7. Seam publication — the one cross-spec touch point
+  - [x] 7.1 Add the additive `filler_seam_notes(keeps)` helper to `worker/engines/host.py`
     - **Additive only, and only after the foundation has shipped `worker/engines/host.py`.** Add one pure module-level helper; add, rename or widen **no** foundation dataclass, enum, protocol, method signature or field — `Engine_Context.notes: tuple[str, ...]` already exists with its free-form convention, so this contributes a note *value*, not a new field.
     - `filler_seam_notes(keeps)` accumulates `keep.duration` over `keeps[:-1]` and emits `f"filler_seam:{round(cursor, 3):.3f}"` per interior boundary, mirroring `filler.rebase_words` rounding exactly so seams and the rebased word times agree; the loop structure means no `0.0` clip-start note and no clip-end note is ever emitted, and `N` keeps yield exactly `N - 1` notes.
     - Do not call, re-plan or modify anything in `worker/effects/filler.py` — read `FillerPlan.keeps` only.
     - _Requirements: 6.1, 6.2, 6.3, 6.9, 8.2, 20.6_
 
-  - [ ] 7.2 Wire the notes into the AUDIO-stage Engine_Context at the existing call site
+  - [x] 7.2 Wire the notes into the AUDIO-stage Engine_Context at the existing call site
     - In `worker/pipeline.py run_pipeline`, pass the already-in-scope `FillerPlan` through the **one** extra keyword on the existing host AUDIO-hook call (using the parameter name recorded in 1.1), and in the host build `notes = base_notes + (filler_seam_notes(plan.keeps) if plan else ())`.
     - Add no Pipeline stage and change no stage order; when filler removal did not run or produced a single keep, zero notes are published and the engine plans an empty Seam list. Engines that do not understand `filler_seam:` ignore it, so `kinetic-typography` is unaffected.
     - _Requirements: 6.1, 6.5, 8.1, 8.5, 20.3, 20.6_
 
-  - [ ]* 7.3 Property test: seam publication is exactly the interior joins → `tests/test_stems_plan.py`
+  - [x]* 7.3 Property test: seam publication is exactly the interior joins → `tests/test_stems_plan.py`
     - **Property 6: Seam publication is exactly the interior joins, with `rebase_words` rounding** — for any `FillerPlan` keep list of length `N >= 1`, `filler_seam_notes(keeps)` yields exactly `N - 1` notes, the *i*-th value equals `round(sum of the preceding keep durations, 3)`, no note equals the clip start `0.0` and none equals the total tightened duration. Generator: `st_keep_plan`.
     - _Requirements: 6.1, 6.2, 6.3, 6.9_ · _Properties: P6_
 
-- [ ] 8. The `Separator_Backend` protocol and stem-set assembly
-  - [ ] 8.1 Define the protocol, the command runner seam, and the engine's exception types
+- [x] 8. The `Separator_Backend` protocol and stem-set assembly
+  - [x] 8.1 Define the protocol, the command runner seam, and the engine's exception types
     - `Separator_Backend` Protocol with `backend_id`, `requires_network` and `separate(source, dest_dir, *, fmt, seed, timeout_s) -> Mapping[str, Path]`; file-based on purpose so the ffmpeg adapter is a first-class implementation and fakes need no numeric stack. Backends raise on failure; the engine converts that to `failed`.
     - `Command_Runner = Callable[[Sequence[str], float], subprocess.CompletedProcess]` plus the `_run(runner, cmd, timeout_s)` wrapper that always passes an explicit subprocess timeout and re-raises failures as `worker.ffmpeg_utils.FFmpegError`.
     - Declare `Model_Unavailable`, `Invalid_Audio_Format` and `Integrity_Error`; accept an injected backend, runner, prober and Capability_Report through the constructor and `Engine_Context.deps`.
     - _Requirements: 4.5, 12.7, 14.2, 14.3, 15.4, 19.1_
 
-  - [ ] 8.2 Implement `assemble_stem_set`
+  - [x] 8.2 Implement `assemble_stem_set`
     - Map Backend_Stems onto the Stem_Set through `STEM_MAPPING`, summing collisions (`drums` + `bass` → `music`); iterate `sorted(raw)` and then `STEM_NAMES`, so the assembled output and every emitted filtergraph string are independent of the backend's dict iteration order.
     - A Stem_Name with no contributor is written as digital silence of the clip duration at the probed `Audio_Format` via `anullsrc` and reported as `stem_missing:<stem_name>`; verify every returned file's sample rate, channel count and duration against the `Audio_Format` and raise on mismatch (which the engine reports as `failed`).
     - _Requirements: 4.1, 4.2, 4.3, 4.6, 4.9, 14.2_
 
-  - [ ]* 8.3 Property test: the Stem_Set is always three stems in sorted order → `tests/test_stems_backends.py`
+  - [x]* 8.3 Property test: the Stem_Set is always three stems in sorted order → `tests/test_stems_backends.py`
     - **Property 9: The Stem_Set is always exactly three stems, assembled in sorted order** — for any backend stem mapping (four-stem, two-stem, unknown names, omissions, any dict order), the assembled keys are exactly `{music, other, vocals}`, `drums` and `bass` are summed into `music`, each omitted Stem_Name is a silent file of the clip's duration with exactly one `stem_missing:<name>` marker, and the emitted filtergraph string is identical across permutations of the backend's iteration order. Generator: `st_backend_stem_sets`.
     - _Requirements: 4.1, 4.2, 4.3, 4.9_ · _Properties: P9_
 
-  - [ ]* 8.4 Property test: stems decompose additively and preserve the Audio_Format → `tests/test_stems_backends.py`
+  - [x]* 8.4 Property test: stems decompose additively and preserve the Audio_Format → `tests/test_stems_backends.py`
     - **Property 10: Stems decompose additively and preserve the Audio_Format** — for any clip audio, summing all Stem_Set stems at unit gain reproduces the incoming audio within `AMPLITUDE_TOLERANCE` per sample, and every stem's duration, sample rate and channel count equal the probed `Audio_Format` values. Generators: `st_pcm_frames`, `st_audio_format`.
     - _Requirements: 4.6, 4.7, 5.5, 13.3_ · _Properties: P10_
+
+  - **Epic 7-8 outcome and corrections (bind to these):**
+    1. **DIVERGENCE FROM THE RECORDED DECISION — the new `run_stage` keyword is
+       `filler_plan`, not `notes`.** The handoff's decision (b) said to add a `notes`
+       parameter to the public `run_stage` and thread it into `_build_context`. What landed
+       is an additive keyword-only `filler_plan: Any = None` on `run_stage`/`_run`, threaded
+       into `_build_context` as `seam_notes=`, with the host calling `filler_seam_notes`
+       itself. Both are strictly additive and both satisfy task 7.2's "one extra keyword at
+       the existing call site"; this spelling keeps the *computation* in the host (where
+       task 7.1 puts the helper) instead of asking each call site to compute notes. It
+       accepts either a `FillerPlan` or a bare `keeps` sequence
+       (`getattr(filler_plan, "keeps", filler_plan)`). **Flagged for the user — a rename to
+       `notes=` is a two-line change if the original spelling is preferred.**
+    2. **`notes` are appended, never reordered:** `_build_context` keeps
+       `(f"fps_fallback:{…}",)` first and appends the seam notes, so an engine reading
+       `fps_fallback:` sees it in the same position and every existing caller (no
+       `filler_plan`) builds byte-identical contexts. Pinned by a unit test that runs the
+       real `Engine_Host` twice, with and without the keyword.
+    3. **A second foundation test pin had to be extended:**
+       `tests/test_engines_base.py::test_engine_method_surface_is_pinned` asserts
+       `run_stage`'s exact parameter list, so 7.2's mandated keyword makes it red. It now
+       pins `filler_plan` as the last keyword-only/`None`-default parameter — the same
+       "designed, reviewed growth" that pin's own comment describes for `clip_metadata` and
+       `first_input_index`. With the `strategies.__all__` pin from 2.1, these are the only
+       two foundation *test* edits this spec has made; no foundation production symbol was
+       renamed or widened, and `worker/effects/filler.py` is untouched.
+    4. **The `music` Backend_Stem gap is now settled in code** (the open question from 2.1
+       correction 3): `assemble_stem_set` resolves a Backend_Stem through `STEM_MAPPING`
+       first and then **falls back to identity when the name is already a Stem_Name**, so
+       the ffmpeg adapter's `music` output routes to `music` instead of being discarded and
+       replaced with silence. No `"music": "music"` self-entry was added — that would have
+       broken the byte-equality pin against `tests/strategies.py` and made the table no
+       longer the fixed Req 4.2 mapping.
+    5. **`_wav_format` parses the RIFF header with `struct`, not with `wave`.** ffmpeg emits
+       `WAVE_FORMAT_EXTENSIBLE` (tag `0xFFFE`) as soon as there are more than two channels,
+       and the stdlib `wave` module refuses that tag — a 5.1 stem would have been rejected
+       as "unreadable" and reported as an `Integrity_Error` despite being a valid file.
+    6. **Verification skips a file that does not exist.** The only way one is absent is an
+       injected recording runner that never executed the command (the Req 19.1 offline
+       seam); a real runner failure has already raised `FFmpegError` inside `_run`. This is
+       what lets P9 run with no ffmpeg binary at all while P10 still checks real output.
+    7. **`amix` is emitted with `normalize=0`** (and `dropout_transition=0`). The default
+       divides by the input count, which would silently halve `drums + bass` instead of
+       summing them and would break the additive decomposition of Req 4.7. P10 asserts the
+       sum at zero tolerance because `Fake_Separator_Backend(sum_to_input=True)` puts the
+       whole signal in one stem and digital silence in the others.
+    8. **P6's boundary clauses need non-degenerate keeps.** `st_keep_plan` can draw a
+       zero-length keep, which `plan_keep_intervals` never produces; with one, the last
+       interior join coincides with the clip end. The count and value clauses are asserted
+       on every draw; the Req 6.9 "no note at `0.0` or at the tightened duration" clauses
+       are asserted on a second `allow_zero_length=False` draw rather than weakened.
 
 - [ ] 9. The two backend adapters
   - [ ] 9.1 Implement `ML_Separator_Backend` and the model locator
