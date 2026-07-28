@@ -41,6 +41,35 @@ class RenderResult:
     broll_records: list[dict] = field(default_factory=list)
 
 
+#: Req 3.2 — the engine whose Compose_Contribution takes over the Subtitle_Slot.
+#: Spelled as a literal rather than imported from ``worker.engines.kinetic`` so the
+#: compositor keeps its v0.8.0 import surface (no engine module is imported here).
+KINETIC_ENGINE_ID = "kinetic_typography"
+
+
+def _kinetic_subtitle_path(
+    contributions: Sequence["Compose_Contribution"],
+) -> Optional[Path]:
+    """The ``kinetic_typography`` ASS path when that engine owns the captions.
+
+    ``None`` — the value that keeps the whole v0.8.0 caption ladder on its normal
+    path — unless a contribution from :data:`KINETIC_ENGINE_ID` carries a
+    non-``None`` ``subtitle_path``. That single check *is* the caption-ownership
+    decision (Reqs 3.2, 3.9): only an ``applied`` Engine_Result carries a
+    contribution at all, because the foundation's ``skipped``/``degraded``/
+    ``failed`` constructors leave ``contribution`` as ``None`` — so
+    ``skipped``/``degraded``/``failed``/``timeout`` all fall through to the
+    existing preset/legacy caption path (Reqs 3.5, 3.6, 13.2, 14.2).
+    """
+    for contribution in contributions:
+        if (
+            getattr(contribution, "engine_id", "") == KINETIC_ENGINE_ID
+            and getattr(contribution, "subtitle_path", None) is not None
+        ):
+            return Path(contribution.subtitle_path)
+    return None
+
+
 def _ordered_contributions(
     contributions: Optional[Sequence["Compose_Contribution"]],
 ) -> list["Compose_Contribution"]:
@@ -133,6 +162,13 @@ def render_clip(
     the caption layer so captions stay on top, and a contribution's
     ``subtitle_path`` is handed to the existing libass slot. It is still exactly
     **one** ffmpeg pass — an engine never invokes ffmpeg itself.
+
+    A ``kinetic_typography`` contribution carrying a ``subtitle_path`` additionally
+    takes **ownership** of the captions: the compositor then generates no ASS of
+    its own for that clip, so caption text is drawn by exactly one producer
+    (Reqs 3.2, 3.9). Every other outcome — flag off, ``skipped``, ``degraded``,
+    ``failed``, host-abandoned ``timeout`` — carries no contribution and therefore
+    leaves the v0.8.0 preset/legacy ladder untouched (Reqs 3.1, 3.5, 3.6).
     """
     contributions = _ordered_contributions(engine_contributions)
     # Inputs follow registry order, filters follow (z_order, engine_id): the two
@@ -156,7 +192,50 @@ def render_clip(
     subtitles_filter: Optional[str] = None
     need_caps = options.captions and bool(words)
     need_hook = options.hook_title and bool(hook_text.strip())
-    if need_caps or need_hook:
+
+    # Caption ownership (Reqs 3.2, 3.9). ``None`` on every v0.8.0 / all-off run,
+    # so this whole branch is inert and the ladder below is byte-for-byte the
+    # v0.8.0 one.
+    kinetic_ass = _kinetic_subtitle_path(contributions)
+    engine_owns_captions = kinetic_ass is not None
+
+    if engine_owns_captions:
+        # Req 3.2 — the compositor's own ASS generation is suppressed *entirely*:
+        # no ``words_to_cues``, no ``plan_keywords`` (hence no duplicate LLM
+        # call), no ``build_ass``. ``subtitles_filter`` stays ``None`` because the
+        # engine's ASS reaches the single Subtitle_Slot through the
+        # ``caption_chain`` loop below, which already appends
+        # ``cap.subtitles_filter(contribution.subtitle_path)`` for exactly this
+        # path — so the graph carries exactly one libass ``subtitles`` filter
+        # (Req 2.6) in exactly one ffmpeg pass (Req 2.5).
+        #
+        # The v0.8.0 marker spellings that apply are still recorded, unchanged in
+        # meaning (Reqs 3.7, 3.8): under-reporting versus an identical v0.8.0 run
+        # would be a behaviour change of its own. ``caption_preset:<name>`` is
+        # kept because the Base_Preset really did supply the caption look the
+        # engine inherited, and ``keyword_highlight`` / ``caption_emoji`` are
+        # recorded on exactly the condition under which the engine's planner
+        # performs them (``Kinetic_Options.from_processing_options``: the option
+        # is on *and* the preset enables the feature). The
+        # ``engine:kinetic_typography:*`` markers are appended by the Engine_Host,
+        # not here (Req 3.7). The emission order mirrors the v0.8.0 block below
+        # (look markers first, then ``captions`` / ``hook_title``), so a diff of
+        # ``effects_applied`` against an identical v0.8.0 run differs in no
+        # position either.
+        if need_caps:
+            preset, _substituted = caption_presets.resolve_preset(
+                options.caption_preset
+            )
+            applied.append(f"caption_preset:{preset.name}")
+            if options.caption_keyword_highlight and preset.highlight_keywords:
+                applied.append("keyword_highlight")
+            if options.caption_emoji and preset.emoji_inline:
+                applied.append("caption_emoji")
+            applied.append("captions")
+        if need_hook:
+            # Req 3.3 — the engine re-emitted the hook title into its own ASS.
+            applied.append("hook_title")
+    elif need_caps or need_hook:
         ass_path = temp_dir / f"{base_clip.stem}.ass"
         cues = cap.words_to_cues(words) if need_caps else []
 

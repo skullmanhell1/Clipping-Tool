@@ -190,6 +190,10 @@ def _context(
     Options_Digest of ``options`` — the same value Property 19's digest clause is
     about — so the file the engine writes is provably inside the Pipeline
     ``temp_dir`` this context was built against.
+
+    ``hook_text`` is handed over on ``clip_metadata`` — the channel the Pipeline
+    actually publishes at the COMPOSE hook — and never on ``deps``, which carries
+    only the host's injected clock/logger/storage seam (task 12.4).
     """
     root = Path(temp_dir)
     digest = options_digest(options)
@@ -212,7 +216,7 @@ def _context(
         workspace=workspace,
         capabilities=capabilities,
         deadline=math.inf,
-        deps={"hook_text": hook_text},
+        clip_metadata={"hook_text": hook_text},
     )
 
 
