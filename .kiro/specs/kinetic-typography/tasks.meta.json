@@ -15,6 +15,22 @@
     "5.5 Property test: style margins keep the caption box inside the Safe_Area → `tests/test_kinetic_layout.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785194329540
+    },
+    "6.6 Property test: cue timeline is sorted, disjoint, in-bounds, and word-consistent → `tests/test_kinetic_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785202594934
+    },
+    "6.7 Property test: malformed timings degrade instead of raising → `tests/test_kinetic_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785202597879
+    },
+    "6.8 Property test: low-confidence words lose emphasis but keep text and timing → `tests/test_kinetic_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785202602809
+    },
+    "6.9 Property test: cue re-splitting conserves the interval proportionally → `tests/test_kinetic_plan.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785202611247
     }
   },
   "executionHistory": {}
