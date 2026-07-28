@@ -162,6 +162,41 @@ const labelledOptions = (values, labels, fallback) =>
     ? values.map((value) => ({ value, label: labels[value] || value }))
     : fallback;
 
+// --- Kinetic typography (kinetic-typography spec, Req 17.6) ----------------
+// Known values used as fallbacks / friendly labels; the accepted values are
+// advertised by /api/info under capabilities.kinetic_typography.
+const KINETIC_ENGINE_ID = "kinetic_typography";
+
+const KINETIC_STYLES = [
+  { value: "bounce", label: "Bounce" },
+  { value: "highlight_sweep", label: "Highlight sweep" },
+  { value: "karaoke_fill", label: "Karaoke fill" },
+  { value: "none", label: "None" },
+  { value: "pop", label: "Pop" },
+  { value: "slide_up", label: "Slide up" },
+  { value: "typewriter", label: "Typewriter" },
+];
+
+const KINETIC_REVEALS = [
+  { value: "cumulative", label: "Cumulative (line builds up)" },
+  { value: "word_by_word", label: "Word by word" },
+];
+
+const KINETIC_STYLE_LABELS = {
+  bounce: "Bounce",
+  highlight_sweep: "Highlight sweep",
+  karaoke_fill: "Karaoke fill",
+  none: "None",
+  pop: "Pop",
+  slide_up: "Slide up",
+  typewriter: "Typewriter",
+};
+
+const KINETIC_REVEAL_LABELS = {
+  cumulative: "Cumulative (line builds up)",
+  word_by_word: "Word by word",
+};
+
 // --- Advanced AV engines (Reqs 20.1, 20.3, 20.4) ---------------------------
 // Engine ids are snake_case ("stem_separation"); show a friendly name.
 const engineLabel = (engine) =>
@@ -221,6 +256,7 @@ export default function SettingsPanel({
   onToggleWatch,
   effects,
   engines = [],
+  capabilities = null,
 }) {
   const reframeLayoutOptions = labelledOptions(
     effects?.reframe_layouts,
@@ -233,6 +269,23 @@ export default function SettingsPanel({
     REFRAME_INTENSITIES
   );
   const engineRows = Array.isArray(engines) ? engines : [];
+  // Kinetic typography: the option domains ride in /api/info's `capabilities`
+  // block under the Engine_Id, while availability is reported on the engine row
+  // (`available` / `missing`). An install that does not advertise the engine at
+  // all leaves the controls enabled on the known fallback values.
+  const kineticEngine = engineRows.find((engine) => engine?.id === KINETIC_ENGINE_ID);
+  const kineticAvailable = !kineticEngine || kineticEngine.available !== false;
+  const kineticDomains = capabilities?.[KINETIC_ENGINE_ID] || null;
+  const kineticStyleOptions = labelledOptions(
+    kineticDomains?.styles,
+    KINETIC_STYLE_LABELS,
+    KINETIC_STYLES
+  );
+  const kineticRevealOptions = labelledOptions(
+    kineticDomains?.reveal_modes,
+    KINETIC_REVEAL_LABELS,
+    KINETIC_REVEALS
+  );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showEffects, setShowEffects] = useState(false);
   const [showEngines, setShowEngines] = useState(false);
@@ -394,6 +447,51 @@ export default function SettingsPanel({
               />
             </div>
           </div>
+
+          {/* Kinetic typography (Req 17.6) — an unavailable engine disables the
+              whole group so a creator cannot enable a silent degradation. A
+              native <fieldset disabled> also disables every control inside it. */}
+          <fieldset
+            disabled={!kineticAvailable}
+            className={kineticAvailable ? "" : "opacity-60"}
+          >
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Kinetic typography
+            </div>
+            <div className="mb-3">
+              <Toggle
+                label="Kinetic typography captions"
+                hint={
+                  kineticAvailable
+                    ? "Animated word-level captions; replaces the standard caption render"
+                    : engineHint(kineticEngine)
+                }
+                checked={kineticAvailable && !!settings.kinetic_typography_enabled}
+                onChange={setFlag("kinetic_typography_enabled")}
+                disabled={!kineticAvailable}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Dropdown
+                label="Kinetic style"
+                value={settings.kinetic_style}
+                onChange={set("kinetic_style")}
+                options={kineticStyleOptions}
+              />
+              <Dropdown
+                label="Reveal mode"
+                value={settings.kinetic_reveal}
+                onChange={set("kinetic_reveal")}
+                options={kineticRevealOptions}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              {kineticAvailable
+                ? "Inherits the caption preset's font, colours, and position; off by default."
+                : engineHint(kineticEngine) ||
+                  "Unavailable on this install — captions render with the standard engine."}
+            </p>
+          </fieldset>
 
           {/* B-roll overlays */}
           <div>
