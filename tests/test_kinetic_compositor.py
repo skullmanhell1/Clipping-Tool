@@ -61,7 +61,12 @@ import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
-from tests.conftest import FakeWord
+from tests.conftest import (
+    FakeWord,
+    probe_duration,
+    probe_size,
+    requires_ffmpeg,
+)
 from tests.fakes import FakeClock, FakeEngine, StaticProber
 from tests.strategies import (
     st_engine_outcomes,
@@ -79,8 +84,15 @@ from worker.engines.base import (
 )
 from worker.engines.capabilities import Capability_Report
 from worker.engines.host import Engine_Host
-from worker.engines.kinetic import ASS_NAME, ENGINE_ID, KINETIC_Z_ORDER
+from worker.engines import kinetic as kinetic_module
+from worker.engines.kinetic import (
+    ASS_NAME,
+    ENGINE_ID,
+    KINETIC_Z_ORDER,
+    Kinetic_Options,
+)
 from worker.engines.registry import Engine_Registry
+from worker.engines.timebase import Time_Base
 from worker.ffmpeg_utils import MediaInfo
 from worker.models import ProcessingOptions
 
@@ -1762,4 +1774,105 @@ def test_subtitles_filter_escaping_is_unchanged():
     assert relative == f"subtitles='{Path('clip.ass').resolve()}'"
     assert cap_module.subtitles_filter(Path("/tmp/plain.ass")) == (
         cap_module.subtitles_filter("/tmp/plain.ass")
+    )
+
+
+
+# --------------------------------------------------------------------------- #
+# Task 16.2 — one end-to-end single-pass render through real ffmpeg + libass     #
+# --------------------------------------------------------------------------- #
+@requires_ffmpeg
+def test_end_to_end_single_pass_render_with_a_kinetic_contribution(
+    make_video, monkeypatch, tmp_path
+):
+    """Validates: Requirements 2.5, 2.6, 18.5
+
+    The one integration example for the ownership seam: a real ``render_clip`` run
+    with a kinetic contribution present, through **real ffmpeg and real libass**
+    (everything else in this module is offline). Asserted: exactly one ffmpeg
+    invocation, one ``subtitles=`` filter instance, and geometry/duration
+    conservation — ``probe_size(output) == probe_size(input)`` with
+    ``probe_duration`` unchanged.
+
+    The burned document is the **engine's own** output, produced end to end by
+    ``plan_kinetic`` -> ``emit_ass`` rather than hand-written, so libass parses
+    exactly the bytes the engine ships (the 7 x 3 style/position sweep lives in
+    ``tests/test_kinetic_ass.py``, task 16.1).
+    """
+    base = make_video("base.mp4", duration=1.0, w=240, h=240, audio=True)
+    words = [
+        FakeWord(0.0, 0.30, "THIS"),
+        FakeWord(0.30, 0.60, "CHANGED"),
+        FakeWord(0.62, 0.95, "EVERYTHING"),
+    ]
+
+    # The contribution the engine would have made: its real ASS document, in a
+    # workspace-like directory of its own, at the Caption_Layer z-order.
+    workspace = tmp_path / "engine"
+    workspace.mkdir()
+    plan = kinetic_module.plan_kinetic(
+        words,
+        1.0,
+        Time_Base(fps=30.0),
+        Kinetic_Options(
+            style="karaoke_fill",
+            reveal="cumulative",
+            preset_name="hormozi",
+            position="bottom",
+            highlight_keywords=True,
+            hook_enabled=True,
+        ),
+        "Arial",
+        "watch this",
+        keyword_planner=lambda flat, use_ai=False, client=None: {1},
+        play_res_x=240,
+        play_res_y=240,
+    )
+    engine_ass = workspace / ASS_NAME
+    engine_ass.write_text(kinetic_module.emit_ass(plan), encoding="utf-8")
+    assert plan.cues and "Dialogue:" in engine_ass.read_text(encoding="utf-8")
+    contribution = Compose_Contribution(
+        engine_id=ENGINE_ID, subtitle_path=engine_ass, z_order=KINETIC_Z_ORDER
+    )
+
+    # Count the ffmpeg invocations while letting every one of them really run.
+    commands: list = []
+    real_run = compositor._run
+
+    def counting_run(cmd):
+        commands.append([str(part) for part in cmd])
+        return real_run(cmd)
+
+    monkeypatch.setattr(compositor, "_run", counting_run)
+
+    dest = tmp_path / "out.mp4"
+    result = compositor.render_clip(
+        base,
+        dest,
+        _owned_options(),
+        words,
+        tmp_path,
+        hook_text="watch this",
+        engine_contributions=[contribution],
+    )
+
+    # --- the render happened, in exactly one pass (Req 2.5) -------------------
+    assert result is not None
+    assert result.path == dest and dest.exists() and dest.stat().st_size > 0
+    assert len(commands) == 1, f"expected one ffmpeg invocation, got {len(commands)}"
+
+    # --- exactly one libass instance, and it is the engine's document (Req 2.6)
+    graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert graph.count("subtitles=") == 1
+    assert compositor.cap.subtitles_filter(engine_ass) in graph
+    # the compositor produced no caption document of its own
+    assert not (tmp_path / f"{base.stem}.ass").exists()
+    assert "captions" in result.effects_applied
+    assert "hook_title" in result.effects_applied
+
+    # --- geometry and duration conserved (Req 18.5) ---------------------------
+    assert probe_size(dest) == probe_size(base) == (240, 240)
+    source_duration = probe_duration(base)
+    assert abs(probe_duration(dest) - source_duration) <= 0.15, (
+        f"duration changed: {probe_duration(dest)} vs {source_duration}"
     )

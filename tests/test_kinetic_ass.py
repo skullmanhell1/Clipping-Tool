@@ -73,12 +73,14 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import subprocess
 import unicodedata
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tests.conftest import FakeWord
+from tests.conftest import FFMPEG, FakeWord, probe_size, requires_ffmpeg
 from tests.strategies import (
     st_i18n_word_timeline,
     st_kinetic_options,
@@ -91,6 +93,7 @@ from worker.effects import caption_presets
 from worker.engines import kinetic
 from worker.engines.kinetic import (
     KINETIC_STYLES,
+    POSITIONS,
     REVEAL_MODES,
     SLIDE_UP_PX,
     Kinetic_Options,
@@ -827,3 +830,163 @@ def test_cue_level_degradation_collapses_the_worked_cue():
             assert "\\t(" not in events[0]
             assert "\\move(" not in events[0]
             assert "\\fscx" not in events[0]
+
+
+
+# --------------------------------------------------------------------------- #
+# Task 16.1 — libass integration: every Kinetic_Style x position parses          #
+# --------------------------------------------------------------------------- #
+#: A fully-timed cue that fits inside a **1-second** clip, so the burn exercises
+#: real on-screen events rather than a document whose cues sit past the end.
+#: ``EVERYTHING`` starts after a 20 ms gap so ``words_to_cues`` still groups all
+#: three into one cue, and its Display_Width forces the ``\N`` break.
+_BURN_WORDS = [
+    FakeWord(0.0, 0.30, "THIS"),
+    FakeWord(0.30, 0.60, "CHANGED"),
+    FakeWord(0.62, 0.95, "EVERYTHING"),
+]
+_BURN_DURATION = 1.0
+
+#: The tiny frame every burn uses. The plan declares the *same* size in its
+#: ``PlayResX``/``PlayResY`` header, so libass parses the Safe_Area margins that
+#: task 5.3's small-frame clamp produces (``MarginV`` clamped to 119 here, not the
+#: v0.8.0 default 220) rather than a 1080x1920 header libass would rescale.
+_BURN_SIZE = (240, 240)
+
+#: Substrings libass / ffmpeg use when a script (or a style/event line inside it)
+#: cannot be parsed, plus the font-selection failure spellings. The scan is
+#: restricted to lines carrying the ``subtitles`` filter's own log context, so a
+#: message from another filter or from the encoder cannot produce a false match.
+_LIBASS_PROBLEM_MARKERS = (
+    "parse error",
+    "error parsing",
+    "unable to parse",
+    "failed to parse",
+    "syntax error",
+    "malformed",
+    "unrecognized",
+    "unrecognised",
+    "unknown",
+    "invalid",
+    "bad ",
+    "failed",
+    "error",
+    "warning",
+)
+
+
+def _libass_lines(stderr):
+    """The stderr lines emitted by the ``subtitles`` filter's own log context.
+
+    libass routes every message through the filter instance, so its lines are
+    prefixed ``[Parsed_subtitles_0 @ 0x...]``. Selecting on that prefix is what
+    makes the scan below precise: nothing the demuxer, the encoder or another
+    filter says can be mistaken for a libass complaint, and a document that
+    libass never opened produces no lines at all (which the test rejects).
+    """
+    return [line for line in stderr.splitlines() if "Parsed_subtitles" in line]
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("position", list(POSITIONS))
+@pytest.mark.parametrize("style", list(KINETIC_STYLES))
+def test_every_kinetic_style_and_position_parses_under_libass(
+    style, position, make_video, tmp_path
+):
+    """Burning the emitted ASS exits 0 with no libass parse error (task 16.1).
+
+    Validates: Requirements 18.5, 18.6
+
+    One example per (Kinetic_Style, position) combination — 7 x 3 = 21 burns, no
+    property tests, because this verifies **libass and ffmpeg**, not this
+    engine's logic (which the pure property tests above already pin).
+
+    The Reveal_Mode is derived from the position index, so every style is burned
+    under both Reveal_Modes across its three positions without adding a single
+    extra ffmpeg invocation: ``bottom``/``top`` use ``cumulative`` and ``center``
+    uses ``word_by_word``, whose per-word ``\\alpha`` gate is therefore parsed by
+    libass for all seven styles.
+    """
+    reveal = REVEAL_MODES[POSITIONS.index(position) % len(REVEAL_MODES)]
+    play_res_x, play_res_y = _BURN_SIZE
+
+    opts = Kinetic_Options(
+        style=style,
+        reveal=reveal,
+        position=position,
+        preset_name="hormozi",        # box border style + a real highlight colour
+        highlight_keywords=True,      # exercises the emphasis wrap
+        emoji_inline=True,
+        hook_enabled=True,
+        max_lines=2,
+        max_line_width=22,
+        motion_duration_ms=120,
+    )
+    plan = kinetic.plan_kinetic(
+        _BURN_WORDS,
+        _BURN_DURATION,
+        TIME_BASE,
+        opts,
+        "Arial",
+        "watch this",                 # exercises the Hook style + event too
+        keyword_planner=lambda flat, use_ai=False, client=None: {1},
+        play_res_x=play_res_x,
+        play_res_y=play_res_y,
+    )
+
+    # The document under test really is the style/position combination claimed,
+    # and really does carry events — otherwise libass would parse nothing.
+    assert plan.style == style
+    assert plan.position == position
+    assert plan.align == captions._POSITION_ALIGN[position][0]
+    assert plan.cues
+    document = emit_ass(plan)
+    assert _default_texts(document)
+    assert [fields[3] for fields, _text in _events(document)].count("Hook") == 1
+
+    ass = tmp_path / f"{style}_{position}.ass"
+    ass.write_text(document, encoding="utf-8")
+
+    src = make_video(
+        "burn_src.mp4",
+        duration=_BURN_DURATION,
+        w=play_res_x,
+        h=play_res_y,
+        audio=True,
+    )
+    out = tmp_path / f"{style}_{position}.mp4"
+    proc = subprocess.run(
+        [
+            FFMPEG, "-y", "-i", str(src),
+            "-vf", captions.subtitles_filter(ass),
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "copy",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # --- the process exited 0 -------------------------------------------------
+    assert proc.returncode == 0, (
+        f"{style}/{position}/{reveal}: ffmpeg exited {proc.returncode}\n"
+        f"{proc.stderr[-2000:]}"
+    )
+
+    # --- libass actually opened and parsed the document (non-vacuity) ---------
+    libass_lines = _libass_lines(proc.stderr)
+    assert libass_lines, "libass never logged: the subtitles filter did not run"
+    assert any("libass API version" in line for line in libass_lines)
+    assert any("Using font provider" in line for line in libass_lines)
+
+    # --- and complained about nothing -----------------------------------------
+    for line in libass_lines:
+        lowered = line.lower()
+        for problem in _LIBASS_PROBLEM_MARKERS:
+            assert problem not in lowered, (
+                f"{style}/{position}/{reveal}: libass reported a problem: {line}"
+            )
+
+    # --- the burn produced a real, correctly-sized clip ------------------------
+    assert out.exists() and out.stat().st_size > 0
+    assert probe_size(out) == _BURN_SIZE
