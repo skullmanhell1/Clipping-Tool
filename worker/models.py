@@ -109,6 +109,26 @@ class ProcessingOptions:
     reframe_layout: str = "follow_active"  # follow_active | split_screen
     reframe_intensity: str = "standard"    # subtle | standard | heavy
 
+    # --- Kinetic typography engine (default OFF) --------------------------
+    # ``kinetic_typography_enabled`` is the Feature_Flag the engine's inherited
+    # ``flag_field()`` resolves to, so an all-off run still reproduces v0.8.0
+    # exactly. The flat ``kinetic_*`` fields mirror ``Kinetic_Options`` and are
+    # JSON scalars, so ``from_dict`` / ``dataclasses.asdict`` round-trip them
+    # losslessly. Values are *not* validated here: unknown/malformed values are
+    # coerced (and reported as substitutions) by the engine's ``resolve_options``,
+    # which is also what keeps this module free of a ``worker.engines`` import.
+    kinetic_typography_enabled: bool = False   # Feature_Flag (flag_field())
+    kinetic_style: str = "karaoke_fill"        # bounce|highlight_sweep|karaoke_fill|
+                                               # none|pop|slide_up|typewriter
+    kinetic_reveal: str = "cumulative"         # cumulative | word_by_word
+    kinetic_font: str = ""                     # "" = inherit the caption preset font
+    kinetic_max_lines: int = 2                 # 1..4 text lines per cue
+    kinetic_max_line_width: int = 22           # 6..80 display-width units per line
+    kinetic_safe_area_x_pct: float = 6.0       # 0..25 % horizontal safe-area inset
+    kinetic_safe_area_y_pct: float = 10.0      # 0..40 % vertical safe-area inset
+    kinetic_motion_ms: int = 120               # 20..1000 ms per-word motion duration
+    kinetic_confidence_floor: float = 0.0      # 0..1 word-confidence emphasis floor
+
     # Known value sets for enum-like string fields (used by ``from_dict``).
     _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
@@ -150,7 +170,13 @@ class ProcessingOptions:
                            "caption_emoji", "broll", "visual_selection",
                            "permissibility_mode",
                            # v0.8.0 boolean flags
-                           "diarization", "speaker_reframe"):
+                           "diarization", "speaker_reframe",
+                           # Kinetic typography Feature_Flag: normalised here so
+                           # a string payload ("false", "0") cannot read as
+                           # enabled, and so the flag survives both
+                           # ``from_dict`` and ``effective_options`` as a real
+                           # ``bool`` (Reqs 10.10, 17.1, 17.8)
+                           "kinetic_typography_enabled"):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
         if "music_volume" in valid:
