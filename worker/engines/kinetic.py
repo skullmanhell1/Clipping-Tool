@@ -35,13 +35,20 @@ from __future__ import annotations
 import dataclasses
 import math
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from worker.effects import caption_presets
+from worker.engines import registry as engine_registry
 from worker.engines.base import (
+    AV_Engine,
+    Compose_Contribution,
+    Engine_Context,
+    Engine_Result,
+    Engine_Stage,
+    Engine_Status,
     coerce_bool,
     coerce_choice,
     coerce_float,
@@ -55,6 +62,7 @@ __all__ = [
     "ASS_NAME",
     "BOUNCE_OVERSHOOT",
     "CUE_FADE_MS",
+    "DEFAULT_PLAY_RES",
     "DEFAULT_REVEAL",
     "DEFAULT_STYLE",
     "ENGINE_ID",
@@ -65,10 +73,12 @@ __all__ = [
     "POSITIONS",
     "REVEAL_MODES",
     "SLIDE_UP_PX",
+    "SUBTITLES_CAPABILITY",
     "SYNTHESISED_RATIO_LIMIT",
     "Kinetic_Cue",
     "Kinetic_Options",
     "Kinetic_Plan",
+    "Kinetic_Typography_Engine",
     "Kinetic_Word",
     "display_width",
     "emit_ass",
@@ -128,6 +138,18 @@ KINETIC_Z_ORDER = 100
 
 #: Req 16.3 — at most one ASS document per invocation, always this file name.
 ASS_NAME = "kinetic.ass"
+
+#: Req 1.5 / 13.1 — the single required Capability_Id: the engine hands libass an
+#: ASS file through the compositor's existing ``subtitles`` filter slot, so
+#: without that filter there is nothing for the contribution to plug into.
+SUBTITLES_CAPABILITY = "ffmpeg_filter:subtitles"
+
+#: Req 7.1 — ``PlayResX``/``PlayResY`` fallback: the pipeline's target vertical
+#: frame. The engine may not probe the clip (``run`` creates no subprocess), and
+#: the foundation ``Engine_Context`` carries no frame size, so the probed size is
+#: read from ``ctx.deps`` when the host publishes it (``play_res_x`` /
+#: ``play_res_y``, or a ``clip_size`` pair) and falls back to this value.
+DEFAULT_PLAY_RES: tuple[int, int] = (1080, 1920)
 
 #: Req 6.2 — minimum on-screen duration for a word, in seconds.
 MIN_WORD_S = 0.08
@@ -2122,3 +2144,381 @@ def emit_ass(plan: Any) -> str:
     ]
     lines.extend(events)
     return "\n".join(lines) + "\n"
+
+
+
+# ---------------------------------------------------------------------------
+# The engine class (tasks 9.1-9.3) — Reqs 1, 2, 3, 9, 12, 13.1, 14.4, 16
+# ---------------------------------------------------------------------------
+#
+# Everything above this line is pure. The class below is the only part of the
+# module that touches the outside world, and it touches it exactly twice per
+# invocation: it *reads* capability answers (cached by the foundation
+# ``Capability_Report``) and it *writes* one UTF-8 ASS document inside the
+# Engine_Workspace (Req 12.1). It never invokes ffmpeg, never spawns a
+# subprocess of its own, never opens a socket, and never downloads a model
+# (Reqs 1.5, 15.1, 15.2, 16.1); compose work is handed back declaratively as a
+# ``Compose_Contribution`` for the ONE compositor pass (Req 2.1).
+
+
+class Kinetic_Typography_Engine(AV_Engine):
+    """Word-level animated captions as a COMPOSE-stage :class:`AV_Engine` (Req 1.1).
+
+    The ClassVar block *is* the contract the Engine_Host reads: stage, ordering
+    priority, required capability, cost declarations, and the inherited
+    :meth:`~worker.engines.base.AV_Engine.flag_field` (``kinetic_typography_enabled``,
+    default OFF — Reqs 1.8, 15.5).
+
+    Collaborators are dependency-injected keyword-only (Req 18.1) so tests can
+    drive the engine with no fonts, no LLM and no filesystem:
+
+    * ``font_probe`` — ``captions.font_available``-shaped ``(family) -> bool``,
+      consulted **only** when the context carries no ``Capability_Report``; the
+      report is the primary oracle, and it resolves ``font:<family>`` through
+      ``captions.font_available`` itself (Reqs 9.1, 9.2);
+    * ``keyword_planner`` — ``caption_presets.plan_keywords``-shaped, called by the
+      pure planner for keyword emphasis (Reqs 5.9, 18.1);
+    * ``ass_writer`` — ``(path, text) -> None``, the single impure step (Req 12.1).
+
+    Import safety (Reqs 1.4, 1.7): ``font_probe`` defaults to ``None`` rather than
+    to ``captions.font_available`` **on purpose** — naming that default would
+    require importing :mod:`worker.captions` (hence ``config``, hence ``pydantic``)
+    at module scope, which the engine package's import-safety gate forbids. The
+    default is therefore resolved lazily through :func:`_captions` at the moment a
+    font is probed, which is behaviourally identical and keeps
+    ``import worker.engines.kinetic`` free of every heavy dependency.
+    """
+
+    engine_id: ClassVar[str] = ENGINE_ID                    # Req 1.1
+    stage: ClassVar[Engine_Stage] = Engine_Stage.COMPOSE    # Req 1.1
+    priority: ClassVar[int] = 50                            # Req 1.1
+    required_capabilities: ClassVar[tuple[str, ...]] = (SUBTITLES_CAPABILITY,)  # 1.5
+    #: ``font:<family>`` is *not* declared here: the family is only known after
+    #: options resolution, so it is probed per clip by :meth:`_resolve_font` and a
+    #: missing font degrades rather than gating the engine (Reqs 1.5, 9.4).
+    optional_capabilities: ClassVar[tuple[str, ...]] = ()
+    requires_network: ClassVar[bool] = False                # Reqs 1.5, 15.1
+    requires_model_download: ClassVar[bool] = False         # Reqs 1.5, 15.2
+    time_budget_s: ClassVar[float] = 5.0                    # Reqs 1.6, 16.1
+    max_media_passes: ClassVar[int] = 0                     # Reqs 1.6, 2.2
+    max_inputs: ClassVar[int] = 0                           # Req 2.4 — subtitle only
+    produces_media: ClassVar[bool] = False                  # Req 1.6
+
+    def __init__(
+        self,
+        *,
+        font_probe: Callable[[str], bool] | None = None,
+        keyword_planner: Callable[..., Any] | None = None,
+        ass_writer: Callable[[Any, str], None] | None = None,
+    ) -> None:
+        self._font_probe = font_probe
+        self._keyword_planner = (
+            keyword_planner if keyword_planner is not None else caption_presets.plan_keywords
+        )
+        self._ass_writer = ass_writer if ass_writer is not None else _write_text_utf8
+
+    # -- contract methods ---------------------------------------------------
+
+    def resolve_options(self, options: Any) -> Kinetic_Options:
+        """Project Processing_Options onto :class:`Kinetic_Options` (Reqs 10.3, 10.4).
+
+        Pure, total and idempotent, and it never writes to ``options`` — the whole
+        projection is :meth:`Kinetic_Options.from_processing_options`, which reads
+        attributes only (Reqs 1.3, 10.8, 10.9, 10.10).
+        """
+        return Kinetic_Options.from_processing_options(options)
+
+    def plan(self, ctx: Engine_Context) -> Mapping[str, Any]:
+        """Return the serialised :class:`Kinetic_Plan` — **pure** (Reqs 11.1, 11.2).
+
+        No ffmpeg, no network, no subprocess of its own, no clock and no
+        randomness: the result is a function of ``ctx.words``, ``ctx.duration``,
+        ``ctx.time_base``, ``ctx.options``, the resolved font, the hook text on
+        ``ctx.deps``, the injected keyword planner and ``ctx.remaining``
+        (Reqs 11.5, 15.6, 18.2). The mapping round-trips back through
+        :meth:`Kinetic_Plan.from_dict`, so ``emit_ass(plan(ctx))`` is valid
+        (Req 11.10).
+        """
+        font, _font_markers = self._resolve_font(ctx)
+        return self._plan_for(ctx, font).to_dict()
+
+    def run(self, ctx: Engine_Context) -> Engine_Result:
+        """Plan, emit, and write one ASS document inside the Engine_Workspace.
+
+        The gate ladder, in order — each rung returns, and the compositor
+        consequently keeps rendering captions through its own v0.8.0 path:
+
+        1. captions disabled -> ``skipped``, no markers (Req 3.4);
+        2. no non-whitespace word in the rebased timeline -> ``skipped`` (Req 3.5);
+        3. :data:`SUBTITLES_CAPABILITY` unavailable -> ``degraded`` +
+           ``unavailable:ffmpeg_filter:subtitles`` (Reqs 13.1, 13.3);
+        4. ``ctx.remaining() <= 0`` -> ``degraded`` + ``degraded:budget`` (Req 14.4).
+
+        Otherwise the font ladder is descended (Req 9), the pure planner and pure
+        emitter run, and the text is written **once** through
+        ``ctx.workspace.path(ASS_NAME)`` — the only impure step, and the only file
+        this engine ever creates (Reqs 12.1, 12.3, 16.3, 16.4). An ``OSError`` from
+        the writer is reported as ``failed`` with a ``"<Type>: <msg>"`` detail and
+        no contribution (Req 12.5).
+
+        Ownership of the Subtitle_Slot is expressed by **one** signal: a
+        ``degraded`` result carries ``contribution=None``, so
+        ``contribution is not None`` <=> ``applied`` <=> the engine owns the slot
+        and the compositor must not render captions itself (Reqs 3.6, 3.9).
+        """
+        opts = self._resolved_options(ctx)
+
+        # --- rung 1: captions disabled (Req 3.4) --------------------------
+        if not opts.captions_enabled:
+            return Engine_Result.skipped(ENGINE_ID)
+
+        # --- rung 2: nothing to animate (Reqs 3.5, 6.6) -------------------
+        words = tuple(getattr(ctx, "words", ()) or ())
+        if not any(_word_text(word).strip() for word in words):
+            return Engine_Result.skipped(ENGINE_ID)
+
+        # --- rung 3: the required capability (Reqs 13.1, 13.3) ------------
+        if not self._capability_available(ctx, SUBTITLES_CAPABILITY):
+            return Engine_Result.degraded(
+                ENGINE_ID,
+                "subtitles filter unavailable",
+                markers=(marker(ENGINE_ID, f"unavailable:{SUBTITLES_CAPABILITY}"),),
+            )
+
+        # --- rung 4: the time budget (Req 14.4) ---------------------------
+        if self._remaining(ctx) <= 0.0:
+            return Engine_Result.degraded(
+                ENGINE_ID,
+                "budget exhausted before planning",
+                markers=(marker(ENGINE_ID, "degraded:budget"),),
+            )
+
+        # --- plan and emit: both pure (Reqs 11.1, 11.5) -------------------
+        font, font_markers = self._resolve_font(ctx)
+        kplan = self._plan_for(ctx, font)
+        text = emit_ass(kplan)
+
+        # --- the single impure step (Reqs 12.1, 12.3, 12.5) ---------------
+        workspace = getattr(ctx, "workspace", None)
+        if workspace is None:
+            return Engine_Result.failed(
+                ENGINE_ID, "RuntimeError: no Engine_Workspace was allocated"
+            )
+        try:
+            dest = workspace.path(ASS_NAME)
+            self._ass_writer(dest, text)
+        except OSError as exc:
+            return Engine_Result.failed(ENGINE_ID, f"{type(exc).__name__}: {exc}")
+
+        artifact = workspace.artifact(                      # Reqs 12.2, 12.4, 12.7
+            ASS_NAME, media_type="subtitle", durable=opts.durable_subtitle
+        )
+
+        markers = _str_tuple(
+            (
+                *font_markers,                              # <=1 degraded:font: (Req 9.8)
+                *kplan.markers,                             # style_substituted / degraded:*
+                marker(ENGINE_ID, f"style:{kplan.style}"),  # Req 3.7
+                marker(ENGINE_ID, "supersedes_captions"),   # Reqs 3.7, 3.9
+            )
+        )
+
+        # Font substitution degrades too: Req 9.4/9.5 hand such a clip back to the
+        # v0.8.0 caption path, which performs the same substitution through
+        # ``_preset_header_styles``. The planner cannot see the font ladder (it is
+        # given the resolved family), so the two degradation sources are OR-ed here.
+        degraded = bool(kplan.degraded or font_markers)
+        status = Engine_Status.DEGRADED if degraded else Engine_Status.APPLIED
+
+        result = Engine_Result(
+            engine_id=ENGINE_ID,
+            status=status,
+            markers=markers,
+            artifacts=(artifact,),
+            plan=kplan.to_dict(),
+            contribution=Compose_Contribution(              # Reqs 2.1, 2.3, 2.4
+                engine_id=ENGINE_ID,
+                inputs=(),
+                video_filters=(),
+                audio_filters=(),
+                subtitle_path=dest,
+                z_order=KINETIC_Z_ORDER,
+            ),
+            detail=kplan.detail,
+        )
+        if status is Engine_Status.DEGRADED:                # Reqs 3.6, 3.9
+            return dataclasses.replace(result, contribution=None)
+        return result
+
+    # -- the font ladder (task 9.2) — Reqs 9.1-9.8 -------------------------
+
+    def _resolve_font(self, ctx: Any) -> tuple[str, tuple[str, ...]]:
+        """Descend ``font_override`` -> Base_Preset font -> :data:`FALLBACK_FONT`.
+
+        Returns ``(family, markers)`` where ``family`` is **always** a member of
+        the ladder (Req 9.7) and ``markers`` holds **at most one**
+        ``engine:kinetic_typography:degraded:font:<requested_family>`` — recorded
+        exactly when the family used is not the one requested (Reqs 9.4, 9.8).
+        Empty rungs are dropped before the descent, so the requested family is the
+        first non-empty rung.
+
+        Nothing is downloaded and no network is touched: each rung is a cached
+        ``font:<family>`` capability answer (Reqs 9.6, 15.1). The requested
+        Kinetic_Style and Reveal_Mode are untouched by substitution — only the
+        font name changes (Req 9.5).
+        """
+        opts = self._resolved_options(ctx)
+        ladder = tuple(
+            family
+            for family in (opts.font_override, opts.preset_font, FALLBACK_FONT)
+            if family
+        ) or (FALLBACK_FONT,)
+        requested = ladder[0]
+
+        for family in ladder:
+            if self._font_available(ctx, family):
+                if family == requested:
+                    return family, ()
+                return family, (marker(ENGINE_ID, f"degraded:font:{requested}"),)
+        # Nothing probed available: use the documented last rung anyway (Req 9.7).
+        return FALLBACK_FONT, (marker(ENGINE_ID, f"degraded:font:{requested}"),)
+
+    # -- internal helpers ---------------------------------------------------
+
+    def _resolved_options(self, ctx: Any) -> Kinetic_Options:
+        """The :class:`Kinetic_Options` for this invocation, however ``ctx`` carries it.
+
+        The host resolves options before building the context, so ``ctx.options``
+        is normally already a :class:`Kinetic_Options`; a mapping (a serialised
+        record) is parsed and anything else is projected, so the engine is total
+        even against a hand-built context.
+        """
+        value = getattr(ctx, "options", None)
+        if isinstance(value, Kinetic_Options):
+            return value
+        if value is None:
+            return Kinetic_Options()
+        if isinstance(value, Mapping):
+            return Kinetic_Options.parse(value)
+        return Kinetic_Options.from_processing_options(value)
+
+    def _plan_for(self, ctx: Any, font: str) -> Kinetic_Plan:
+        """Run the pure planner for ``ctx`` with an already-resolved ``font``."""
+        opts = self._resolved_options(ctx)
+        play_res_x, play_res_y = self._play_res(ctx)
+        return plan_kinetic(
+            words=getattr(ctx, "words", ()),          # rebased, clip-relative (Req 5.1)
+            duration=getattr(ctx, "duration", 0.0),   # Reqs 5.6, 5.7
+            time_base=getattr(ctx, "time_base", None),  # Reqs 5.4, 16.2
+            opts=opts,
+            font=font,
+            hook_text=self._hook_text(ctx, opts),     # Req 3.3
+            keyword_planner=self._keyword_planner,    # Req 18.1
+            remaining=getattr(ctx, "remaining", None),  # Req 14.4
+            play_res_x=play_res_x,
+            play_res_y=play_res_y,
+        )
+
+    def _hook_text(self, ctx: Any, opts: Kinetic_Options) -> str:
+        """The hook title to plan with — ``""`` when hook titles are off (Req 3.3).
+
+        ``emit_ass`` gates the hook event on a non-empty ``plan.hook_text`` alone
+        (the plan carries no ``hook_enabled`` flag), so enablement is enforced
+        here: a disabled hook plans as no hook at all.
+        """
+        if not opts.hook_enabled:
+            return ""
+        deps = getattr(ctx, "deps", None)
+        if not isinstance(deps, Mapping):
+            return ""
+        return _text(_get(deps, "hook_text", ""))
+
+    def _play_res(self, ctx: Any) -> tuple[int, int]:
+        """``(PlayResX, PlayResY)`` for the emitted header (Req 7.1).
+
+        The engine may not probe the clip itself (``run`` creates no subprocess),
+        and the foundation context carries no frame size, so the probed size is
+        read from ``ctx.deps`` — ``play_res_x`` / ``play_res_y``, or a
+        ``clip_size`` ``(width, height)`` pair — and falls back to
+        :data:`DEFAULT_PLAY_RES`, the pipeline's target vertical frame.
+        """
+        deps = getattr(ctx, "deps", None)
+        deps = deps if isinstance(deps, Mapping) else {}
+        width: Any = None
+        height: Any = None
+        size = _get(deps, "clip_size", None)
+        if isinstance(size, (list, tuple)) and len(size) >= 2:
+            width, height = size[0], size[1]
+        width = _get(deps, "play_res_x", width)
+        height = _get(deps, "play_res_y", height)
+        return (
+            coerce_int(width, DEFAULT_PLAY_RES[0], lo=1),
+            coerce_int(height, DEFAULT_PLAY_RES[1], lo=1),
+        )
+
+    def _capability_available(self, ctx: Any, capability_id: str) -> bool:
+        """Whether ``capability_id`` is available, per the context's report (Req 13.1).
+
+        A context carrying no ``Capability_Report`` reports *unknown*, not
+        *missing*, and unknown reads as available — the same conservative choice
+        ``captions.font_available`` makes for an unenumerable host font list, so a
+        capability is never falsely reported absent.
+        """
+        report = getattr(ctx, "capabilities", None)
+        if report is None:
+            return True
+        try:
+            return bool(report.available(capability_id))
+        except Exception:  # pragma: no cover - Capability_Report never raises
+            return True
+
+    def _font_available(self, ctx: Any, family: str) -> bool:
+        """Whether ``font:<family>`` is available (Reqs 9.1, 9.2, 9.6).
+
+        The context's ``Capability_Report`` is the oracle — it resolves
+        ``font:<family>`` through ``captions.font_available`` and caches the
+        answer, so each family is probed at most once per process. The injected
+        ``font_probe`` is used only when the context carries no report at all
+        (a hand-built context), and ``captions.font_available`` is reached lazily
+        so module import needs no font machinery.
+        """
+        report = getattr(ctx, "capabilities", None)
+        if report is not None:
+            try:
+                return bool(report.available(f"font:{family}"))
+            except Exception:  # pragma: no cover - Capability_Report never raises
+                return True
+        probe = self._font_probe
+        if probe is None:
+            probe = _captions().font_available
+        try:
+            return bool(probe(family))
+        except Exception:  # pragma: no cover - a probe failure must not gate
+            return True
+
+    def _remaining(self, ctx: Any) -> float:
+        """Seconds of budget left, ``inf`` when the context declares none (Req 14.4)."""
+        reader = getattr(ctx, "remaining", None)
+        if not callable(reader):
+            return math.inf
+        try:
+            value = reader()
+        except Exception:  # pragma: no cover - Engine_Context.remaining never raises
+            return math.inf
+        if value is None or isinstance(value, bool):
+            return math.inf
+        try:
+            number = float(value)
+        except Exception:  # pragma: no cover - hostile budget reader
+            return math.inf
+        return number if math.isfinite(number) else math.inf
+
+
+# Registration happens once, at import (Req 2.1). The foundation ships a
+# module-level ``register(engine, *, priority=None)`` *function* taking an engine
+# **instance** — there is no registration decorator — so the call site is an
+# expression, not a class annotation. The guard keeps a module *reload* (and a
+# double import through two names) from raising ``Engine_Registration_Error``:
+# registration stays exactly once per registry.
+if engine_registry.get_registry().find(ENGINE_ID) is None:
+    engine_registry.register(Kinetic_Typography_Engine())
