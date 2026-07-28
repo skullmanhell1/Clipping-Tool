@@ -1371,15 +1371,27 @@ def test_shared_test_doubles_and_generators_are_pinned():
     # removed. The ``KINETIC_*`` / ``REVEAL_MODES`` constants and the six ``st_kinetic*``
     # / ``st_i18n*`` / ``st_broken*`` / ``st_font_availability`` generators are the
     # kinetic-typography spec's tranche (its task 2.1) added to the same shared module.
+    # The ``STEM_*`` / ``MIX_*`` / ``REPAIR_MODES`` / ``BACKEND_IDS`` / ``GAIN_*`` /
+    # ``WINDOW_*`` constants and the thirteen ``st_stem*`` / ``st_seam_notes`` /
+    # ``st_keep_plan`` / ``st_audio_format`` / ``st_pcm_frames`` /
+    # ``st_backend_stem_sets`` / ``st_gate_scenarios`` / ``st_failure_points`` /
+    # ``st_mix_preset`` / ``st_repair_*`` / ``st_tiny_clip`` generators are the
+    # audio-stem-inpainting spec's tranche (its task 2.1) in the same shared module.
     assert list(strategies.__all__) == [
-        "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "KINETIC_STYLES",
-        "LLM_CAPABILITY", "REVEAL_MODES", "SAMPLE_RATES", "st_availability_map",
-        "st_broken_word_timeline", "st_capability_id", "st_engine_id",
-        "st_engine_outcomes", "st_font_availability", "st_hostile_component",
-        "st_hostile_value", "st_i18n_word_timeline", "st_invalid_fps",
+        "BACKEND_IDS", "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "GAIN_DEFAULT",
+        "GAIN_MAX", "GAIN_MIN", "KINETIC_STYLES", "LLM_CAPABILITY", "MIX_PRESETS",
+        "MIX_PRESET_CHOICES", "REPAIR_MODES", "REVEAL_MODES", "SAMPLE_RATES",
+        "STEM_MAPPING", "STEM_NAMES", "WINDOW_DEFAULT_MS", "WINDOW_MAX_MS",
+        "WINDOW_MIN_MS", "st_audio_format", "st_availability_map",
+        "st_backend_stem_sets", "st_broken_word_timeline", "st_capability_id",
+        "st_engine_id", "st_engine_outcomes", "st_failure_points",
+        "st_font_availability", "st_gate_scenarios", "st_hostile_component",
+        "st_hostile_value", "st_i18n_word_timeline", "st_invalid_fps", "st_keep_plan",
         "st_kinetic_options", "st_kinetic_style", "st_malformed_capability_id",
-        "st_options_mapping", "st_priority", "st_registrations", "st_reveal_mode",
-        "st_segment_records", "st_stage", "st_time_base",
+        "st_mix_preset", "st_options_mapping", "st_pcm_frames", "st_priority",
+        "st_registrations", "st_repair_mode", "st_repair_window_ms", "st_reveal_mode",
+        "st_seam_notes", "st_segment_records", "st_stage", "st_stem_gains",
+        "st_stem_options", "st_time_base", "st_tiny_clip",
         "st_well_formed_capability_id", "st_word_timeline",
     ]
     assert list(strategies.__all__) == sorted(strategies.__all__)
