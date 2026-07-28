@@ -1184,6 +1184,17 @@ def st_font_availability(
         ``True`` when ``expected_font`` differs from the requested family
         (``ladder[0]``), i.e. exactly one ``degraded:font:<requested>`` marker is owed.
 
+        One documented blind spot (found by kinetic task 9.7, Property 17): when
+        **no** ladder rung is available (``available_families == ()``) the engine
+        uses the documented last rung ``"Arial"`` anyway *and still records the
+        substitution marker*, because the resolved family is not actually
+        installed. If ``ladder[0]`` happens to be ``"Arial"`` itself (an empty
+        ``font_override`` with ``preset_font == "Arial"``), ``expected_font ==
+        ladder[0]`` and this flag reads ``False`` while the engine records one
+        marker. Consumers should therefore read the marker verdict as
+        ``expected_marked or not available_families``. The flag is left as-is
+        because it is a stability contract for the sibling specs.
+
     ``allow_none_available=False`` forces at least one rung available, for tests that
     need the non-degraded path.
 
