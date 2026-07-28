@@ -71,6 +71,7 @@ __all__ = [
     "Kinetic_Plan",
     "Kinetic_Word",
     "display_width",
+    "emit_ass",
     "is_space_free",
     "join_separator",
     "join_width",
@@ -703,6 +704,10 @@ class Kinetic_Plan:
     hook_style: str              # Style: Hook, verbatim shape (Req 3.3)
     hook_text: str = ""
     hook_duration_s: float = 2.5
+    # ``d`` in the design's span table (Reqs 4.4-4.6). Carried on the plan — not
+    # threaded into the emitter as a second argument — so ``emit_ass(plan)``
+    # depends on nothing but ``plan`` (design determinism rule 4, Req 11.5).
+    motion_duration_ms: int = 120
     cues: tuple[Kinetic_Cue, ...] = ()
     cue_level: bool = False      # Req 6.4
     degraded: bool = False
@@ -733,6 +738,11 @@ class Kinetic_Plan:
             self,
             "hook_duration_s",
             coerce_float(self.hook_duration_s, 2.5, lo=0.0, hi=30.0),
+        )
+        set_(
+            self,
+            "motion_duration_ms",
+            coerce_int(self.motion_duration_ms, 120, lo=20, hi=1000),
         )
         cues: list[Kinetic_Cue] = []
         try:
@@ -771,6 +781,7 @@ class Kinetic_Plan:
             "margin_l": int(self.margin_l),
             "margin_r": int(self.margin_r),
             "margin_v": int(self.margin_v),
+            "motion_duration_ms": int(self.motion_duration_ms),
             "play_res_x": int(self.play_res_x),
             "play_res_y": int(self.play_res_y),
             "position": self.position,
@@ -811,6 +822,7 @@ class Kinetic_Plan:
             hook_style=_get(data, "hook_style", ""),
             hook_text=_get(data, "hook_text", ""),
             hook_duration_s=_get(data, "hook_duration_s", 2.5),
+            motion_duration_ms=_get(data, "motion_duration_ms", 120),
             cues=cues,
             cue_level=_get(data, "cue_level", False),
             degraded=_get(data, "degraded", False),
@@ -1505,6 +1517,7 @@ def plan_kinetic(
             hook_style=_hook_style_line(family, options.hook_font_size),
             hook_text=_text(hook_text),
             hook_duration_s=options.hook_duration_s,
+            motion_duration_ms=options.motion_duration_ms,
             cues=cues,
             cue_level=cue_level,
             degraded=degraded,
@@ -1743,3 +1756,369 @@ def _inline_emoji(word: Any, preset: Any, options: Kinetic_Options) -> str:
         )
     except Exception:  # pragma: no cover - the helper never raises
         return ""
+
+
+
+# ---------------------------------------------------------------------------
+# The pure ASS emitter — ``emit_ass`` (tasks 8.1-8.5) — Reqs 3.3, 4, 7.1-7.5,
+# 8.3-8.8, 11.5, 11.6
+# ---------------------------------------------------------------------------
+#
+# ``emit_ass(plan)`` is a **pure function of the plan**: no I/O, no clock, no
+# subprocess, no locale-sensitive formatting, no randomness (Reqs 11.5, 11.7).
+# The only external symbols it reaches for are ``captions._ass_timestamp`` (the
+# single timestamp formatter, Req 11.6) and ``captions._escape`` (for the hook
+# title only — cue word text was already escaped by the planner, Req 4.7), both
+# through the lazy :func:`_captions` accessor so module import stays free of
+# ``pydantic`` (Reqs 1.4, 18.2).
+#
+# Everything the emitter needs about the look is *already on the plan*:
+# ``style_line`` / ``hook_style`` were built by the planner from the Base_Preset
+# (Reqs 7.2, 10.4, 3.3), ``colors`` / ``highlight_scale`` carry the emphasis
+# palette, ``motion_duration_ms`` is the span table's ``d``, and each
+# :class:`Kinetic_Word` already carries its escaped text, its ``rel_ms`` onset,
+# its emphasis flag and its inline emoji glyph. Nothing is re-derived here.
+
+#: The ``[V4+ Styles]`` ``Format:`` line — byte-identical to ``captions.build_ass``
+#: so libass parses the 23 style columns the same way (Req 7.5).
+_ASS_STYLE_FORMAT = (
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+    "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+    "MarginR, MarginV, Encoding"
+)
+
+#: The ``[Events]`` ``Format:`` line — byte-identical to ``captions.build_ass``:
+#: nine comma-separated fields before the free-form ``Text`` field (Req 4.10).
+_ASS_EVENT_FORMAT = (
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+    "Effect, Text"
+)
+
+#: ``build_word_span``'s own defaults, used when a plan carries no palette.
+_DEFAULT_PRIMARY = "&H00FFFFFF"
+_DEFAULT_HIGHLIGHT = "&H0000E5FF"
+
+#: The ASS text-field spelling of a Text_Line break (Req 7.5 — ``WrapStyle: 2``
+#: disables libass auto-wrapping, so the engine emits every break itself).
+_LINE_BREAK = "\\N"
+
+
+def _plan_palette(plan: Kinetic_Plan) -> tuple[str, str]:
+    """Return ``(primary, highlight)`` from the plan's Base_Preset palette."""
+    colors = plan.colors if isinstance(plan.colors, Mapping) else {}
+    primary = _text(_get(colors, "primary", "")) or _DEFAULT_PRIMARY
+    highlight = _text(_get(colors, "highlight", "")) or _DEFAULT_HIGHLIGHT
+    return primary, highlight
+
+
+def _caption_anchor(plan: Kinetic_Plan) -> tuple[int, int]:
+    """The resolved caption position in script coordinates, for ``\\move``.
+
+    All three :data:`POSITIONS` are horizontally centred (ASS alignments 2/5/8),
+    so ``x`` is the script mid-point; ``y`` follows the resolved alignment and the
+    Safe_Area ``MarginV`` (Reqs 4.5, 7.2, 7.3).
+    """
+    anchor_x = int(plan.play_res_x) // 2
+    if plan.align == 8:
+        anchor_y = int(plan.margin_v)
+    elif plan.align == 5:
+        anchor_y = int(plan.play_res_y) // 2
+    else:
+        anchor_y = int(plan.play_res_y) - int(plan.margin_v)
+    return anchor_x, max(0, anchor_y)
+
+
+def _style_span(
+    style: str,
+    word: Kinetic_Word,
+    motion_ms: int,
+    primary: str,
+    highlight: str,
+) -> str:
+    """The per-word animation span for one Kinetic_Style (Reqs 4.2-4.6).
+
+    The four shared styles reproduce ``captions.build_word_span`` **byte for
+    byte** for the same word — including its hard-coded ``+120`` (``pop``) and
+    ``+30`` (``typewriter``) ramps, which are deliberately *not* ``motion_ms`` —
+    so a Kinetic_Plan at ``reveal="cumulative"`` renders the v0.8.0 look exactly
+    (Req 4.3). The three new styles use ``d = motion_ms`` as the design's span
+    table specifies. ``rel`` is the word's onset relative to its **cue** start in
+    milliseconds, which is the offset libass ``\\t`` expects (Req 5.3).
+
+    Well-formed by construction (Req 4.10): every ``{`` opened below is closed in
+    the same f-string, and ``word.text`` was already ``_escape``-d by the planner,
+    so no transcript text can unbalance the braces.
+    """
+    escaped = word.text
+    rel = int(word.rel_ms)
+    duration_ms = int(motion_ms)
+    half = duration_ms // 2
+
+    if style == "karaoke_fill":
+        dur_cs = max(1, int(round((word.end - word.start) * 100)))
+        return f"{{\\kf{dur_cs}}}{escaped}"
+    if style == "pop":
+        return (
+            f"{{\\fscx60\\fscy60\\t({rel},{rel + 120},"
+            f"\\fscx100\\fscy100)}}{escaped}"
+        )
+    if style in ("typewriter", "slide_up"):
+        # ``slide_up`` carries the event-level ``\move`` (added in
+        # :func:`_cue_event`) plus this per-word alpha gate, so its words still
+        # appear on beat rather than all at once (Req 4.5).
+        return f"{{\\alpha&HFF&\\t({rel},{rel + 30},\\alpha&H00&)}}{escaped}"
+    if style == "bounce":
+        return (
+            f"{{\\fscx55\\fscy55"
+            f"\\t({rel},{rel + half},"
+            f"\\fscx{BOUNCE_OVERSHOOT}\\fscy{BOUNCE_OVERSHOOT})"
+            f"\\t({rel + half},{rel + duration_ms},\\fscx100\\fscy100)}}{escaped}"
+        )
+    if style == "highlight_sweep":
+        return (
+            f"{{\\c{highlight}&\\t({rel},{rel + duration_ms},"
+            f"\\c{primary}&)}}{escaped}"
+        )
+    return escaped  # "none" — the plain escaped word (Req 4.3)
+
+
+def _word_span(
+    plan: Kinetic_Plan, word: Kinetic_Word, primary: str, highlight: str
+) -> str:
+    """Compose one word's span: style, inline emoji, Reveal_Mode gate, emphasis.
+
+    The composition is a **product**, so the 7 x 2 style/Reveal_Mode matrix needs
+    no special cases (Req 4.9):
+
+    1. the Kinetic_Style span (:func:`_style_span`);
+    2. the inline emoji glyph, appended *inside* the word's span so emphasis and
+       the reveal gate cover it too — an empty glyph is simply dropped, keeping
+       every surrounding word (Reqs 8.6, 8.7);
+    3. the ``word_by_word`` alpha gate, wrapped *around* the style span so words
+       before their onset are fully transparent. ``typewriter`` is excluded
+       because its own tag set already **is** that gate — double-gating would emit
+       two ``\\alpha`` overrides for one word (Req 4.9);
+    4. emphasis, outermost, in ``build_word_span``'s composition order so both
+       tag sets apply and the word's spoken timing is untouched (Reqs 5.9, 6.5).
+    """
+    span = _style_span(plan.style, word, plan.motion_duration_ms, primary, highlight)
+
+    if word.emoji:
+        span = f"{span} {word.emoji}"
+
+    if plan.reveal == "word_by_word" and plan.style != "typewriter":
+        rel = int(word.rel_ms)
+        span = f"{{\\alpha&HFF&\\t({rel},{rel + 1},\\alpha&H00&)}}{span}"
+
+    if word.emphasis:
+        scale = int(plan.highlight_scale)
+        span = (
+            f"{{\\c{highlight}&\\fscx{scale}\\fscy{scale}}}"
+            f"{span}"
+            f"{{\\c{primary}&\\fscx100\\fscy100}}"
+        )
+    return span
+
+
+def _text_lines(cue: Kinetic_Cue) -> list[list[int]]:
+    """The cue's Text_Lines as word-index lists, each index appearing once.
+
+    ``Kinetic_Cue.lines`` is authoritative (the planner's ``_finalise_lines``
+    already guarantees full coverage); this guard only drops out-of-range and
+    duplicate indices and appends anything unplaced, so no word can be emitted
+    twice or lost however the plan was constructed (Reqs 7.5, 7.8, 8.10).
+    """
+    count = len(cue.words)
+    if not count:
+        return []
+    groups: list[list[int]] = []
+    used: set[int] = set()
+    for line in cue.lines:
+        indices = [
+            index for index in line if 0 <= index < count and index not in used
+        ]
+        used.update(indices)
+        if indices:
+            groups.append(indices)
+    missing = [index for index in range(count) if index not in used]
+    if missing:
+        if groups:
+            groups[-1].extend(missing)
+        else:
+            groups.append(missing)
+    return groups
+
+
+def _cue_text(
+    plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str
+) -> str:
+    """The ASS text field for one cue: joined spans, ``\\N`` between Text_Lines.
+
+    Within a Text_Line neighbours are joined by :func:`join_separator` — the very
+    helper :func:`pack_lines` measured the line with — so the width that was
+    packed and the text that is emitted can never disagree (Reqs 8.4, 8.5).
+    Text_Lines are joined with the literal ``\\N`` (Req 7.5). Words are emitted in
+    Word_Timeline order with **no** directional override characters inserted, so
+    right-to-left text is left to libass' own bidi handling (Reqs 4.11, 8.3).
+
+    Under ``plan.cue_level`` all per-word tags are dropped and the plain joined
+    text is emitted; the single ``\\fad`` prefix is added by :func:`_cue_event`
+    (Req 6.4).
+    """
+    rendered: list[str] = []
+    for group in _text_lines(cue):
+        parts: list[str] = []
+        previous = ""
+        for position, index in enumerate(group):
+            word = cue.words[index]
+            if position:
+                parts.append(join_separator(previous, word.text))
+            parts.append(
+                word.text
+                if plan.cue_level
+                else _word_span(plan, word, primary, highlight)
+            )
+            previous = word.text
+        rendered.append("".join(parts))
+    return _LINE_BREAK.join(rendered)
+
+
+def _cue_event(
+    plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str
+) -> str | None:
+    """One ``Dialogue:`` line for a cue, or ``None`` when it has nothing to say.
+
+    Both timestamps are clamped to ``[0, plan.duration]`` and formatted **only**
+    through ``captions._ass_timestamp`` (Reqs 5.6, 11.6). The event names the
+    ``Default`` style declared in the header (Req 4.10) and carries at most one
+    event-level prefix: ``{\\fad(120,120)}`` under cue-level degradation
+    (Req 6.4), or the ``slide_up`` entry ``\\move`` — the one tag that cannot be
+    expressed per word because it is event-scoped (Req 4.5).
+    """
+    text = _cue_text(plan, cue, primary, highlight)
+    if not text:
+        return None
+
+    limit = max(0.0, float(plan.duration))
+    start = min(max(0.0, cue.start), limit)
+    end = min(max(0.0, cue.end), limit)
+    if end < start:
+        end = start
+    stamp = _captions()._ass_timestamp
+
+    if plan.cue_level:
+        prefix = f"{{\\fad({CUE_FADE_MS[0]},{CUE_FADE_MS[1]})}}"
+    elif plan.style == "slide_up":
+        anchor_x, anchor_y = _caption_anchor(plan)
+        prefix = (
+            f"{{\\move({anchor_x},{anchor_y + SLIDE_UP_PX},"
+            f"{anchor_x},{anchor_y},0,{int(plan.motion_duration_ms)})}}"
+        )
+    else:
+        prefix = ""
+
+    return (
+        f"Dialogue: 0,{stamp(start)},{stamp(end)},Default,,0,0,0,,{prefix}{text}"
+    )
+
+
+def _hook_event(plan: Kinetic_Plan) -> str | None:
+    """The hook title event, byte-identical to ``build_ass``'s (Reqs 3.3, 3.7).
+
+    Emitted as the **first** event when the plan carries a non-empty hook text, so
+    no hook title is lost when the engine owns the Subtitle_Slot. ``run`` passes
+    an empty hook text whenever ``opts.hook_enabled`` is off, which is what gates
+    this on the option without the emitter needing the options value.
+    """
+    hook = _text(plan.hook_text).strip()
+    if not hook:
+        return None
+    captions = _captions()
+    start = captions._ass_timestamp(0.0)
+    end = captions._ass_timestamp(max(0.5, float(plan.hook_duration_s)))
+    escaped = captions._escape(hook.upper())
+    return f"Dialogue: 1,{start},{end},Hook,,0,0,0,,{{\\fad(250,350)}}{escaped}"
+
+
+def _fallback_style_line(plan: Kinetic_Plan) -> str:
+    """A minimal ``Style: Default`` line for a plan that carries none.
+
+    The planner always builds ``style_line`` from the Base_Preset, so this is
+    reached only by a hand-built or truncated plan; it exists so that every
+    ``Dialogue:`` line still names a style declared in ``[V4+ Styles]`` (Req 4.10).
+    """
+    primary, highlight = _plan_palette(plan)
+    return (
+        f"Style: Default,{plan.font},{int(plan.font_size)},{primary},{highlight},"
+        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,1,{int(plan.align)},"
+        f"{int(plan.margin_l)},{int(plan.margin_r)},{int(plan.margin_v)},1"
+    )
+
+
+def emit_ass(plan: Any) -> str:
+    """Render a :class:`Kinetic_Plan` as an ASS document — **pure, locale-free**.
+
+    Deterministic by construction (Req 11.5): the result depends on nothing but
+    ``plan``. No filesystem, no clock, no subprocess, no network, no randomness,
+    no locale-sensitive formatting; every timestamp is produced by
+    ``captions._ass_timestamp`` after clamping to ``[0, plan.duration]``
+    (Reqs 5.6, 11.6). Writing the returned text is the engine's separate, single
+    impure step (:func:`_write_text_utf8`, Req 12.1).
+
+    Document shape — identical to ``captions.build_ass`` so libass parses it the
+    same way (Reqs 7.1, 7.5, 3.3)::
+
+        [Script Info]           ScriptType, PlayResX/Y (probed size), WrapStyle: 2,
+                                ScaledBorderAndShadow: yes
+        [V4+ Styles]            the 23-column Format: line, then Style: Default
+                                (Base_Preset look + Safe_Area margins) and
+                                Style: Hook — both already built by the planner
+        [Events]                the 10-field Format: line, then the hook event
+                                (first, when present) and one event per cue
+
+    Every ``Dialogue:`` line names ``Default`` or ``Hook``, carries the nine
+    comma-separated fields the ``Format:`` line declares before its text, and has
+    balanced braces: spans come only from the closed style table in
+    :func:`_style_span`, each ``{`` is closed inside the same f-string, and word
+    text was ``_escape``-d by the planner (Reqs 4.7, 4.10).
+
+    Args:
+        plan: A :class:`Kinetic_Plan`, or any mapping :meth:`Kinetic_Plan.from_dict`
+            can rebuild one from (so ``plan(ctx)``'s serialised output round-trips
+            straight back into the emitter).
+
+    Returns:
+        The complete ASS document, joined with ``"\\n"`` and ending in exactly one
+        trailing newline (Req 8.8). Never raises.
+    """
+    record = plan if isinstance(plan, Kinetic_Plan) else Kinetic_Plan.from_dict(plan)
+    primary, highlight = _plan_palette(record)
+
+    events: list[str] = []
+    hook = _hook_event(record)
+    if hook:
+        events.append(hook)
+    for cue in record.cues:
+        event = _cue_event(record, cue, primary, highlight)
+        if event:
+            events.append(event)
+
+    lines: list[str] = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {int(record.play_res_x)}",
+        f"PlayResY: {int(record.play_res_y)}",
+        "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        _ASS_STYLE_FORMAT,
+        record.style_line or _fallback_style_line(record),
+        record.hook_style or _hook_style_line(record.font, 110),
+        "",
+        "[Events]",
+        _ASS_EVENT_FORMAT,
+    ]
+    lines.extend(events)
+    return "\n".join(lines) + "\n"
