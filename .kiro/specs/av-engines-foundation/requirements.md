@@ -83,6 +83,7 @@ are existing code this foundation must integrate with.
 - **Engine_Registry**: **(NEW)** The registry in `worker/engines/registry.py` that maps Engine_Ids to AV_Engine instances and yields them in a deterministic order.
 - **Engine_Stage**: The Pipeline point at which an AV_Engine runs. Allowed values: `source` (once per source), `audio` (per clip, before geometry), `geometry`, `compose` (Compositor filter contribution), `post` (after the clip is written).
 - **Engine_Context**: **(NEW)** The immutable per-invocation record handed to an AV_Engine: source/clip media paths, `Time_Base`, clip-relative `[start, end)` bounds, Word_Timeline, resolved Engine_Options, `Engine_Workspace`, `Capability_Report`, and injected dependencies.
+- **Clip_Metadata**: **(NEW)** The read-only per-clip mapping, carried on the Engine_Context, of values produced upstream of a stage run (for example the generated hook title text and the target frame size), supplied by the Pipeline at stage invocation and defaulting to empty.
 - **Engine_Result**: **(NEW)** The immutable record an AV_Engine returns: `engine_id`, `Engine_Status`, produced Engine_Artifacts, Compositor contributions, and Effects_Applied markers.
 - **Engine_Status**: One of `applied`, `skipped`, `degraded`, `failed`.
 - **Capability_Id**: A stable string naming one optional dependency (e.g. `ffmpeg_filter:atempo`, `python_pkg:demucs`, `binary:ffprobe`, `font:Impact`, `llm`).
@@ -313,6 +314,7 @@ are existing code this foundation must integrate with.
 5. FOR every Segment_List produced by any two AV_Engines for the same clip, THE Engine_Host SHALL observe segment bounds within `[0, end - start]` (invariant under composition).
 6. FOR any two AV_Engines whose contributions do not overlap in time, THE Engine_Host SHALL produce identical merged Effects_Applied markers and identical produced-artifact sets regardless of the order in which those two engines run (confluence property).
 7. THE Engine_Host SHALL express every engine timestamp in seconds as a float so no engine converts through a private frame convention.
+8. THE Engine_Context SHALL carry a read-only Clip_Metadata mapping of per-clip values produced upstream of the stage run (for example the generated hook title text and the target frame size), THE Engine_Host SHALL accept that mapping from the Pipeline at stage invocation, and THE Clip_Metadata mapping SHALL default to empty so an Engine_Context built without it is unchanged.
 
 ---
 
