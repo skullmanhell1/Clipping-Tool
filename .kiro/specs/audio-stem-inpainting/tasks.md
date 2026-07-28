@@ -197,20 +197,148 @@ spec's central promise to an upgrading operator).
          treat this test as a known-red baseline owned by `kinetic-typography`, or ask the user
          to route it to that spec first.
 
-- [ ] 2. Stem-specific generators and test doubles
-  - [ ] 2.1 Add the stem generators to the existing `tests/strategies.py`
+- [x] 2. Stem-specific generators and test doubles
+  - [x] 2.1 Add the stem generators to the existing `tests/strategies.py`
     - Extend the existing shared module (do not create a parallel one) with `st_stem_options` (valid `Stem_Options` field mappings across the declared bounds), `st_stem_gains` (per-`STEM_NAMES` gains over `[0.0, 4.0]` including `0.0`, `1.0` and boost values), `st_mix_preset` (`custom`, `speech_focus`, `music_focus`, `clean_speech`), `st_repair_mode` (`off`, `crossfade`, `spectral`), `st_repair_window_ms` (in-range and out-of-range integers and non-numerics).
     - Add `st_keep_plan` (`FillerPlan` keep lists of `Interval`s, including single-keep, adjacent, zero-length and many-keep cases), `st_seam_notes` (valid `filler_seam:<float>` tuples mixed with hostile notes: malformed prefixes, non-finite, negative, out-of-bounds, duplicates, other engines' notes), `st_audio_format` (valid sample rate/channel/codec/`start_time` combinations plus missing, zero and negative values), `st_pcm_frames` (tiny float frame buffers including silence, anti-phase and full-scale content), `st_backend_stem_sets` (four-stem, two-stem, unknown-name and omission mappings in arbitrary dict order), `st_gate_scenarios` (capability availability × remaining budget × forced failure, composable with the foundation `st_availability_map`), `st_failure_points` (backend raising / truncating / non-audio, `FFmpegError`, timeout, integrity failure, `OSError`), and `st_tiny_clip` (tiny-clip parameters for `make_video`).
     - Generators emit `FakeWord` instances and `Interval`s from the existing helpers so they compose with the foundation's `st_word_timeline`; this sub-task is **not optional** because every later property task imports these names.
     - _Requirements: 19.1, 19.2, 19.6_
+    - **DONE** — all thirteen generators added as tranche 4 of the existing `tests/strategies.py`
+      (never a parallel module): `st_stem_options`, `st_stem_gains`, `st_mix_preset`,
+      `st_repair_mode`, `st_repair_window_ms`, `st_keep_plan`, `st_seam_notes`,
+      `st_audio_format`, `st_pcm_frames`, `st_backend_stem_sets`, `st_gate_scenarios`,
+      `st_failure_points`, `st_tiny_clip`. Each was drawn 25–120 times in a throwaway
+      harness (since deleted) and asserted to produce the documented shapes, not merely to
+      import: all four presets / three repair modes / three backends appear, gains reach
+      `0.0`, `1.0` and `4.0` exactly, keep plans include the single-keep, adjacent and
+      zero-length cases, 19 distinct malformed seam spellings are rejected while their
+      well-formed neighbours survive, all eight PCM kinds appear (anti-phase cancels,
+      full-scale peaks at exactly 1.0), `drums` + `bass` sum into `music`, and the budget
+      draws land in all four gate buckets.
+    - **BINDINGS FOR LATER EPICS — read before starting 4.1:**
+      1. `st_stem_options` and `st_audio_format` emit **plain dicts** (field mappings), not
+         `Stem_Options` / `Audio_Format` instances: those dataclasses land in 4.2/4.4, and a
+         mapping is exactly what `parse` consumes. After 4.2, callers write
+         `Stem_Options.parse(draw(st_stem_options()))`. `st_keep_plan` is the one exception —
+         it emits real `worker.effects.filler.FillerPlan`/`Interval` objects, which already exist.
+      2. The vocabularies (`STEM_NAMES`, `STEM_MAPPING`, `MIX_PRESETS`, `MIX_PRESET_CHOICES`,
+         `REPAIR_MODES`, `BACKEND_IDS`, `GAIN_*`, `WINDOW_*`) are **mirrored** as literal
+         constants in `tests/strategies.py`, exactly as `CAPABILITY_KINDS` mirrors
+         `Capability_Kind`, because `worker/engines/stems.py` does not exist yet. **Task 4.1
+         must define exactly these values** and 4.x's first test must pin
+         `tuple(stems.STEM_NAMES) == strategies.STEM_NAMES` and its siblings so the
+         duplication cannot drift.
+      3. `st_tiny_clip` yields only the `make_video` **kwargs** (`name`/`duration`/`w`/`h`/
+         `audio`), never a file, so the module stays pure and offline; call
+         `make_video(**draw(st_tiny_clip()))` inside a `requires_ffmpeg` test.
+      4. `st_seam_notes`, `st_backend_stem_sets`, `st_gate_scenarios`, `st_failure_points`,
+         `st_pcm_frames` and `st_audio_format` return **dicts with oracle keys**
+         (`expected_seams`, `expected_contributors`, `expected_missing`, `expected_status`,
+         `peak`, …), so the properties assert against a generator-side oracle rather than
+         re-deriving the answer from the code under test.
+    - **CORRECTIONS to the checklist's wording:**
+      1. **The pinned `__all__` list had to be extended.**
+         `tests/test_engines_base.py::test_shared_test_doubles_and_generators_are_pinned`
+         asserts `list(strategies.__all__) == [...]` by **exact equality**, so "add the
+         generators to the shared module" and "the suite stays green" cannot both hold
+         without editing that list. It was extended additively (25 new names, list still
+         sorted, nothing renamed or removed) — the same thing the kinetic tranche did, per
+         that test's own comment. `tests/test_engines_base.py` is a test file, not part of
+         `.kiro/specs/av-engines-foundation/`, so Req 20.6 is untouched; no foundation
+         production symbol was added, renamed or widened.
+      2. **`Stem_Options` is a ten-field surface, not eleven.** Task 4.2's own enumeration
+         and design.md both list ten fields; the "eleventh" is the Feature_Flag
+         `stem_inpainting_enabled`, which lives on Processing_Options, not on
+         `Stem_Options`. `st_stem_options` emits the ten and adds the flag only under
+         `include_enabled=True`.
+      3. **`STEM_MAPPING` has no `music` key, but the ffmpeg adapter emits a `music`
+         Backend_Stem** (`music := clip − vocals`, design ~line 402). Left for **8.2**:
+         `assemble_stem_set` must resolve a Backend_Stem name through `STEM_MAPPING`
+         *first* and then fall back to **identity when the name is already a Stem_Name**,
+         or 4.1 must add `"music": "music"` to `STEM_MAPPING`. Without one of the two the
+         ffmpeg backend's entire music stem is silently discarded and replaced with
+         silence. `st_backend_stem_sets` draws both two-stem spellings — `(music, vocals)`
+         and `(other, vocals)` — so no property is blind to either.
+      4. "Generators emit `FakeWord` instances" is satisfied by **composing** the
+         foundation's `st_word_timeline` (whose `FakeWord` is `(start, end, text)`); no stem
+         generator constructs one directly, because the Seam source is the `FillerPlan`
+         keep list, not the Word_Timeline.
 
-  - [ ] 2.2 Add the stem test doubles to the existing `tests/fakes.py`
+  - [x] 2.2 Add the stem test doubles to the existing `tests/fakes.py`
     - Extend the existing module with `Fake_Separator_Backend` (writes synthetic per-stem WAVs at the requested `Audio_Format`, records `separate` calls, seed and timeout, and can be configured to sum back to the input exactly), `Raising_Separator_Backend`, `Truncating_Separator_Backend` (wrong-duration output), `Missing_Stem_Backend` (omits one or more Backend_Stems), `Network_Separator_Backend` (`requires_network = True`, for the permissibility rung), `Recording_Command_Runner` (records every argv and timeout, replays canned `CompletedProcess`/`ffprobe` JSON, and can raise `FFmpegError` or `subprocess.TimeoutExpired` at a chosen call index), and `Seam_Note_Fixtures` (named `notes` tuples for the seam cases).
     - Follow the established naming/pattern of the existing `FakeDiarizationBackend` / `RaisingDiarizationBackend` doubles; require no numeric stack, no model file and no network so the suite stays fast, offline and CPU-only. This sub-task is **not optional** because every later property task imports these names.
     - _Requirements: 19.1, 19.3, 19.5, 19.7_
+    - **DONE** — all seven doubles added to the existing `tests/fakes.py`:
+      `Fake_Separator_Backend`, `Raising_Separator_Backend`, `Truncating_Separator_Backend`,
+      `Missing_Stem_Backend`, `Network_Separator_Backend`, `Recording_Command_Runner`,
+      `Seam_Note_Fixtures`, plus the support surface `BACKEND_STEM_NAMES`,
+      `Separate_Call`/`Command_Call` namedtuples, `read_audio_format`, `write_pcm_wav`,
+      `read_pcm_wav` and the `FAKE_*` defaults. Stdlib only — WAVs are written with `wave`
+      + `struct` and the waveform is integer arithmetic, so there is **no numpy/torch/
+      scipy/soundfile import, no ffmpeg subprocess, no model file and no socket**; verified
+      by a throwaway harness (since deleted) that reopened every emitted WAV with `wave`.
+    - **BINDINGS FOR LATER EPICS:**
+      1. `separate(source, dest_dir, *, fmt, seed, timeout_s) -> dict[str, Path]` on every
+         backend, matching the designed protocol; `Fake_Separator_Backend.calls` records
+         `Separate_Call(source, dest_dir, fmt, seed, timeout_s)` **before** doing any work,
+         so a raising backend's seed and timeout are still assertable.
+      2. `fmt` is **duck-typed** through `read_audio_format(fmt)` (`Audio_Format`,
+         `SimpleNamespace`, a mapping or even `None` all work; missing / non-numeric /
+         zero / negative / non-finite values fall back to `FAKE_SAMPLE_RATE` /
+         `FAKE_CHANNELS`, because `wave` refuses a non-positive rate or channel count).
+         This is what lets the doubles predate `Audio_Format` (4.4) and keep working after
+         it lands, unchanged.
+      3. `sum_to_input=True` makes the stems sum back to the input **exactly, sample for
+         sample**, by putting the whole signal in one stem and digital silence in the rest —
+         no arithmetic, so Property 10's additive-decomposition claim is testable at zero
+         tolerance. When `source` is already a WAV at `fmt`, its frames are copied verbatim
+         and `copied_source[-1]` records it.
+      4. `Recording_Command_Runner` is the single evidence source for the cost invariants:
+         `ffmpeg_calls` (non-probe invocations) is what Req 15.9's "at most 2 media passes,
+         constant in the Seam count" is asserted on, `probe_calls` covers the ffprobe reads,
+         `timeouts` records `None` when a caller **forgot** an explicit timeout (which is what
+         Req 15.4 needs to catch), and `fail_at=` / `timeout_at=` inject `FFmpegError` /
+         `subprocess.TimeoutExpired` at a chosen 0-based call index, recording the failing
+         call before raising.
+      5. It accepts **both** timeout spellings — `runner(argv, timeout_s=…)` and
+         `runner(argv, timeout=…)` — because the design's `Command_Runner` alias is
+         positional-only (`Callable[[Sequence[str], float], CompletedProcess]`) and names
+         nothing. Epic 11 should pick one spelling and stay with it.
+      6. Its canned ffprobe JSON follows the `streams[0].sample_rate/channels/codec_name/
+         start_time` + `format.duration` shape, which is the query 11.1's private ffprobe
+         read must use — `worker/ffmpeg_utils.MediaInfo` genuinely carries no sample rate or
+         channel count, as the epic-1 gate recorded.
+    - **CORRECTIONS to the checklist's wording:**
+      1. The task asks for both the `FakeDiarizationBackend` naming *pattern* and the
+         `Fake_Separator_Backend` Snake_Case spellings. The design's spellings won for the
+         names; the diarisation pair's **structure** (canned double + narrow raising
+         variant, a `calls` list, a docstring naming the protocol) was copied.
+      2. `Fake_Separator_Backend` has **no non-audio switch** — it writes real WAVs by
+         design. `st_failure_points`' `backend_non_audio` row therefore means "install the
+         plain fake, then overwrite the stem file it returned with a non-audio payload";
+         corrupting the output is the test's job, and the generator documents that.
+      3. `Missing_Stem_Backend`'s docstring originally called `missing=("bass", "drums")`
+         "the ffmpeg adapter's two-stem shape", which is the `(other, vocals)` spelling and
+         contradicts the design's `(vocals, music)`. This is the same `music`-key gap
+         recorded under 2.1 correction 3 and is settled at 8.2.
+      4. **Bug found and fixed during review:** `read_audio_format` caught only
+         `(TypeError, ValueError)`, but `int(float("inf"))` raises `OverflowError`, so it
+         crashed on roughly one in sixty hostile `st_audio_format` draws. `OverflowError` was
+         added to the except clause and the totality re-verified over 300 hostile draws.
 
-- [ ] 3. Checkpoint — foundation gate and test scaffolding complete
+- [x] 3. Checkpoint — foundation gate and test scaffolding complete
   - Ensure all tests pass, ask the user if questions arise.
+  - **DONE.** `PATH=<static ffmpeg>:$PATH PYENV_VERSION=3.11.15 python3 -m pytest tests/ -q`
+    → **411 passed, 0 failed, 0 skipped** (81 s) with `ffmpeg`/`ffprobe` on `PATH`, i.e. the
+    75 `requires_ffmpeg` tests really ran rather than skipping. Two open questions were
+    recorded rather than guessed: the `music` Backend_Stem mapping gap (2.1 correction 3,
+    settled at 8.2) and the ten-vs-eleven `Stem_Options` field count (2.1 correction 2).
+  - **NOTE on the P12 baseline:** the handoff's "410 passed / 1 failed" assumed the
+    `kinetic-typography` P12 counterexample cached in a local `.hypothesis` example
+    database. In a fresh sandbox that database is empty and `hypothesis` does **not**
+    rediscover the counterexample within `max_examples=100`, so the honest baseline here is
+    411 passed / 0 failed — P12 is **latent, not fixed**, and can resurface on any run. It
+    still belongs to its own bugfix spec; do not treat a green P12 as evidence.
 
 - [ ] 4. Module skeleton, constants, and data models
   - [ ] 4.1 Create `worker/engines/stems.py` with its vocabularies and documented constants
