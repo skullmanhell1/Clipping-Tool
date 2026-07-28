@@ -161,6 +161,19 @@ class OptionsModel(BaseModel):
     speaker_reframe: bool = False
     reframe_layout: str = "follow_active"
     reframe_intensity: str = "standard"
+    # Kinetic typography engine (default OFF). Same fields and same defaults as
+    # ``ProcessingOptions``; unrecognised *choice* values are not rejected here
+    # but coerced by the engine's ``resolve_options`` (Reqs 17.4, 17.7).
+    kinetic_typography_enabled: bool = False
+    kinetic_style: str = "karaoke_fill"
+    kinetic_reveal: str = "cumulative"
+    kinetic_font: str = ""
+    kinetic_max_lines: int = 2
+    kinetic_max_line_width: int = 22
+    kinetic_safe_area_x_pct: float = 6.0
+    kinetic_safe_area_y_pct: float = 10.0
+    kinetic_motion_ms: int = 120
+    kinetic_confidence_floor: float = 0.0
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -341,7 +354,40 @@ def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
             )
         except Exception:
             continue
-    return rows, report.to_dict()
+    capabilities = report.to_dict()
+    _add_engine_option_domains(rows, capabilities)
+    return rows, capabilities
+
+
+def _add_engine_option_domains(
+    rows: list[dict[str, object]], capabilities: dict[str, object]
+) -> None:
+    """Advertise engine-specific option domains inside the ``capabilities`` block.
+
+    The per-engine row stays generic (`id`/`stage`/`priority`/`flag`/
+    `enabled_by_default`/`available`/`missing`/`requires_network`/
+    `time_budget_s`), so a new engine never changes that schema. Engine-specific
+    option vocabularies therefore ride in ``capabilities`` under an
+    Engine_Id-namespaced key — capability ids are always ``<kind>:<name>``, so a
+    bare engine id can never collide with one.
+
+    Kinetic typography advertises its supported Kinetic_Style and Reveal_Mode
+    values (Reqs 17.2, 17.3), **imported** from ``worker.engines.kinetic`` so the
+    endpoint cannot drift from the module. Emitted only when the engine is
+    actually registered, so the no-engine-registered payload stays empty. Never
+    raises: a missing engine module must not take ``/api/info`` down.
+    """
+    if not any(row.get("id") == "kinetic_typography" for row in rows):
+        return
+    try:
+        from worker.engines.kinetic import ENGINE_ID, KINETIC_STYLES, REVEAL_MODES
+
+        capabilities[ENGINE_ID] = {
+            "styles": list(KINETIC_STYLES),
+            "reveal_modes": list(REVEAL_MODES),
+        }
+    except Exception:
+        return
 
 
 def _available_broll_providers() -> list[str]:
@@ -462,6 +508,25 @@ async def upload(
     speaker_reframe: bool = Form(False),
     reframe_layout: str = Form("follow_active"),
     reframe_intensity: str = Form("standard"),
+    # Kinetic typography engine (default OFF; Reqs 17.4, 17.7).
+    #
+    # Declared as loose optional strings on purpose: form values arrive as text,
+    # and a typed ``bool``/``int``/``float`` parameter would make FastAPI reject
+    # an unrecognised payload with 422 — but an unrecognised value must never
+    # fail the job, it must fall back to the documented default. ``None`` means
+    # "not supplied", so the field keeps its ``ProcessingOptions`` default;
+    # anything else is normalised by ``ProcessingOptions.from_dict`` (the flag)
+    # or coerced by the engine's ``resolve_options`` (every other field).
+    kinetic_typography_enabled: Optional[str] = Form(None),
+    kinetic_style: Optional[str] = Form(None),
+    kinetic_reveal: Optional[str] = Form(None),
+    kinetic_font: Optional[str] = Form(None),
+    kinetic_max_lines: Optional[str] = Form(None),
+    kinetic_max_line_width: Optional[str] = Form(None),
+    kinetic_safe_area_x_pct: Optional[str] = Form(None),
+    kinetic_safe_area_y_pct: Optional[str] = Form(None),
+    kinetic_motion_ms: Optional[str] = Form(None),
+    kinetic_confidence_floor: Optional[str] = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -470,6 +535,21 @@ async def upload(
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
+
+    # Kinetic typography fields, forwarded only when actually supplied so an
+    # omitted field keeps its documented ProcessingOptions default (Req 17.4).
+    kinetic_form: dict[str, Optional[str]] = {
+        "kinetic_typography_enabled": kinetic_typography_enabled,
+        "kinetic_style": kinetic_style,
+        "kinetic_reveal": kinetic_reveal,
+        "kinetic_font": kinetic_font,
+        "kinetic_max_lines": kinetic_max_lines,
+        "kinetic_max_line_width": kinetic_max_line_width,
+        "kinetic_safe_area_x_pct": kinetic_safe_area_x_pct,
+        "kinetic_safe_area_y_pct": kinetic_safe_area_y_pct,
+        "kinetic_motion_ms": kinetic_motion_ms,
+        "kinetic_confidence_floor": kinetic_confidence_floor,
+    }
 
     options = ProcessingOptions.from_dict(
         {
@@ -522,6 +602,7 @@ async def upload(
             "speaker_reframe": speaker_reframe,
             "reframe_layout": reframe_layout,
             "reframe_intensity": reframe_intensity,
+            **{key: value for key, value in kinetic_form.items() if value is not None},
         }
     )
 
