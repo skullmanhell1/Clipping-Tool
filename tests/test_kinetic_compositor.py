@@ -44,8 +44,13 @@ examples additionally assert a positive fact (the engine's ASS path is in the gr
 """
 from __future__ import annotations
 
+import ast
+import dataclasses
+import importlib.util
+import inspect
+import sys
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -63,7 +68,8 @@ from tests.strategies import (
     st_options_mapping,
     st_word_timeline,
 )
-from worker.effects import caption_presets, compositor
+from worker import captions as cap_module
+from worker.effects import caption_presets, compositor, overlays
 from worker.engines.base import (
     Compose_Contribution,
     Engine_Result,
@@ -674,3 +680,1086 @@ def test_engine_markers_are_appended_by_the_host_not_the_compositor(tmp_path):
     assert list(outcome.markers) == list(engine_markers)
     assert [c.engine_id for c in outcome.contributions] == [ENGINE_ID]
     assert set(outcome.markers).isdisjoint(leg.effects_applied)
+
+
+
+# =========================================================================== #
+# Epic 15 — the flag-off backward-compatibility parity gate (tasks 15.1, 15.2) #
+# =========================================================================== #
+# This is the spec's central guarantee (Req 19): with ``kinetic_typography_enabled``
+# off and no compose contributions, nothing about a render may differ from v0.8.0.
+# Neither sub-task is optional, and neither derives its expectation from the engine.
+#
+# How the baseline avoids being circular
+# --------------------------------------
+# "Compare ``render_clip`` against ``render_clip``" would prove nothing, so the
+# expectation is triangulated from three *independent* sources, and every case in the
+# matrix is checked against all three:
+#
+#   A. an **independent reference oracle** (:func:`_v080_expectation`) that recomputes
+#      the expected ``effects_applied``, ``-filter_complex`` and caption ASS from the
+#      v0.8.0 primitives this spec never touched — ``worker.captions`` (``words_to_cues``,
+#      ``build_ass``, ``subtitles_filter``), ``worker.effects.caption_presets``
+#      (``resolve_preset``, ``plan_keywords``) and ``worker.effects.overlays``
+#      (``build_video_chain``, ``progress_bar_filter``) — plus the documented v0.8.0
+#      assembly rule. It never calls the one file this spec changed
+#      (``worker/effects/compositor.py``), so agreement is a genuine cross-check rather
+#      than a tautology. Task 15.2 pins those primitives against drift with fixed
+#      expected outputs, which is what keeps this oracle trustworthy over time.
+#   B. a **reconstructed v0.8.0 compositor** (:func:`_v080_module`) in which the feature
+#      is *physically absent*: the shipped module's AST is rewritten to delete
+#      ``KINETIC_ENGINE_ID``, ``_kinetic_subtitle_path``, the ``kinetic_ass`` /
+#      ``engine_owns_captions`` bindings and the whole ownership branch (turning its
+#      ``elif`` back into the v0.8.0 ``if``), and the result is executed as its own
+#      module. Every removal is asserted to have actually matched, the rewritten tree is
+#      asserted to contain none of those identifiers, and
+#      :func:`test_the_reconstructed_v080_baseline_really_lacks_the_engine` proves the
+#      reconstruction genuinely lost the behaviour (handed a kinetic contribution it
+#      still builds its own ASS). Because both legs render into the **same** working
+#      directory, the comparison is over the complete ffmpeg **argv**, not just the
+#      filter graph.
+#   C. **frozen literal goldens** for four canonical cases — the exact
+#      ``effects_applied`` list and the exact ``-filter_complex`` string (with only the
+#      absolute ASS path normalised to ``<ASS>``), written out in full and generated
+#      from source B, i.e. from code with the kinetic feature deleted. These are what
+#      catch a drift that happened to move oracle and compositor together.
+#
+# Everything stays offline: ``probe`` is stubbed, ``_run`` is a recording spy, and no
+# ffmpeg process is created.
+
+_V080_IDENTIFIERS = (
+    "KINETIC_ENGINE_ID",
+    "_kinetic_subtitle_path",
+    "kinetic_ass",
+    "engine_owns_captions",
+)
+
+#: What :func:`_v080_source` must remove — asserted, so a silent no-op transform (which
+#: would make the whole of source B a comparison of the shipped module with itself) fails
+#: loudly instead of passing vacuously.
+_EXPECTED_REMOVALS = (
+    "KINETIC_ENGINE_ID",
+    "_kinetic_subtitle_path",
+    "kinetic_ass",
+    "engine_owns_captions",
+    "if engine_owns_captions:",
+)
+
+
+def _strip_kinetic_statements(statements: list, removed: list) -> list:
+    """Drop the kinetic ownership statements from a ``render_clip`` body.
+
+    The ownership branch is an ``if engine_owns_captions: ... elif need_caps or
+    need_hook: ...`` chain, so replacing the outer ``If`` with its ``orelse`` restores
+    the v0.8.0 ``if need_caps or need_hook:`` ladder exactly.
+    """
+    out: list = []
+    for node in statements:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id in ("kinetic_ass", "engine_owns_captions")
+            for t in node.targets
+        ):
+            removed.append(node.targets[0].id)
+            continue
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "engine_owns_captions"
+        ):
+            removed.append("if engine_owns_captions:")
+            out.extend(node.orelse)
+            continue
+        out.append(node)
+    return out
+
+
+def _v080_source() -> str:
+    """The shipped compositor with this spec's caption-ownership feature deleted.
+
+    A source-level reconstruction of the v0.8.0 file: task 12.1 is the *only* edit this
+    spec made to ``worker/effects/compositor.py``, so removing exactly what it added
+    yields the pre-feature module. Raises if any expected removal does not match, so the
+    reconstruction can never silently degrade into "the shipped module again".
+    """
+    tree = ast.parse(Path(compositor.__file__).read_text(encoding="utf-8"))
+    removed: list = []
+    kept: list = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "KINETIC_ENGINE_ID" for t in node.targets
+        ):
+            removed.append("KINETIC_ENGINE_ID")
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name == "_kinetic_subtitle_path":
+            removed.append("_kinetic_subtitle_path")
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name == "render_clip":
+            node.body = _strip_kinetic_statements(node.body, removed)
+        kept.append(node)
+    tree.body = kept
+
+    assert sorted(removed) == sorted(_EXPECTED_REMOVALS), removed
+    source = ast.unparse(ast.fix_missing_locations(tree))
+    # Identifier-level absence (docstrings may still discuss the feature; code may not).
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            assert node.id not in _V080_IDENTIFIERS, node.id
+        if isinstance(node, ast.FunctionDef):
+            assert node.name not in _V080_IDENTIFIERS, node.name
+    return source
+
+
+_V080_MODULE: list = []
+
+
+def _v080_module():
+    """The executed v0.8.0-shaped compositor module (built once, then cached)."""
+    if not _V080_MODULE:
+        source = _v080_source()
+        spec = importlib.util.spec_from_loader("tests._v080_compositor", loader=None)
+        module = importlib.util.module_from_spec(spec)
+        module.__file__ = compositor.__file__
+        sys.modules["tests._v080_compositor"] = module
+        exec(compile(source, "<v080-compositor>", "exec"), module.__dict__)
+        assert hasattr(module, "render_clip")
+        assert not hasattr(module, "KINETIC_ENGINE_ID")
+        assert not hasattr(module, "_kinetic_subtitle_path")
+        _V080_MODULE.append(module)
+    return _V080_MODULE[0]
+
+
+@dataclass
+class Render:
+    """One ``render_clip`` invocation, observed without running ffmpeg."""
+
+    work: Path
+    result: Any = None
+    commands: list = field(default_factory=list)
+
+    @property
+    def passes(self) -> int:
+        return len(self.commands)
+
+    @property
+    def argv(self) -> list:
+        return list(self.commands[0]) if self.commands else []
+
+    @property
+    def graph(self) -> str:
+        for cmd in self.commands:
+            if "-filter_complex" in cmd:
+                return cmd[cmd.index("-filter_complex") + 1]
+        return ""
+
+    @property
+    def effects_applied(self) -> list:
+        return list(self.result.effects_applied) if self.result is not None else []
+
+    @property
+    def ass_path(self) -> Path:
+        return self.work / "base.ass"
+
+    @property
+    def ass_text(self) -> Optional[str]:
+        path = self.ass_path
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+
+def _parity_render(module, work: Path, *, options, words, hook_text, contributions) -> Render:
+    """Render ``work/base.mp4`` -> ``work/out.mp4`` through ``module``, offline."""
+    work.mkdir(parents=True, exist_ok=True)
+    base = work / "base.mp4"
+    if not base.exists():
+        base.write_bytes(b"stub-clip")
+
+    record = Render(work=work)
+
+    def spy_run(cmd):
+        record.commands.append([str(part) for part in cmd])
+        Path(str(cmd[-1])).write_bytes(b"stub-render")
+        return None
+
+    with ExitStack() as stack:
+        stack.enter_context(mock.patch.object(module, "probe", lambda path: MEDIA_INFO))
+        stack.enter_context(mock.patch.object(module, "_run", spy_run))
+        record.result = module.render_clip(
+            base,
+            work / "out.mp4",
+            options,
+            list(words),
+            work,
+            hook_text=hook_text,
+            engine_contributions=contributions,
+        )
+    return record
+
+
+def _normalised_graph(graph: str, ass_path: Path) -> str:
+    """``graph`` with the absolute caption-ASS path replaced by ``<ASS>``."""
+    return graph.replace(compositor.cap.subtitles_filter(ass_path), "subtitles='<ASS>'")
+
+
+# --------------------------------------------------------------------------- #
+# Source A — the independent v0.8.0 reference oracle                            #
+# --------------------------------------------------------------------------- #
+def _v080_expectation(*, options, words, hook_text, ass_path: Path, oracle_ass: Path) -> dict:
+    """Recompute the v0.8.0 outcome from the untouched primitives.
+
+    Deliberately written against ``worker.captions`` / ``worker.effects.caption_presets``
+    / ``worker.effects.overlays`` and the documented v0.8.0 assembly rule — **not** by
+    calling ``worker.effects.compositor``, the one file this spec changed. ``ass_path`` is
+    where the compositor is expected to have written its document (so the expected filter
+    string carries the right path); ``oracle_ass`` is where this oracle writes its own
+    copy for the content comparison.
+    """
+    info = MEDIA_INFO
+    applied: list = []
+    subtitles: Optional[str] = None
+    ass_text: Optional[str] = None
+
+    need_caps = bool(options.captions) and bool(words)
+    need_hook = bool(options.hook_title) and bool(hook_text.strip())
+
+    if need_caps or need_hook:
+        cues = cap_module.words_to_cues(words) if need_caps else []
+        use_preset = need_caps and (
+            options.caption_preset != "karaoke"
+            or bool(options.caption_animation)
+            or options.caption_keyword_highlight
+            or options.caption_emoji
+        )
+        if use_preset:
+            preset, substituted = caption_presets.resolve_preset(options.caption_preset)
+            if options.caption_animation:
+                preset = replace(preset, animation=options.caption_animation)
+            preset = replace(preset, emoji_inline=bool(options.caption_emoji))
+            keyword_indices = None
+            if options.caption_keyword_highlight:
+                flat_words = [w for cue in cues for w in cue.words]
+                keyword_indices = caption_presets.plan_keywords(
+                    flat_words, use_ai=options.caption_keyword_ai, client=None
+                )
+            notes: list = []
+            cap_module.build_ass(
+                cues, oracle_ass,
+                video_width=info.width, video_height=info.height,
+                preset=preset,
+                keyword_indices=keyword_indices,
+                position=options.caption_position or None,
+                hook_text=hook_text if need_hook else "",
+                clip_duration=info.duration,
+                permissibility=options.permissibility_mode,
+                notes=notes,
+            )
+            applied.append(f"caption_preset:{preset.name}")
+            if substituted:
+                applied.append("caption_preset_substituted")
+            if keyword_indices is not None:
+                applied.append("keyword_highlight")
+            if options.caption_emoji:
+                applied.append("caption_emoji")
+            for note in notes:
+                if note not in applied:
+                    applied.append(note)
+        else:
+            cap_module.build_ass(
+                cues, oracle_ass,
+                video_width=info.width, video_height=info.height,
+                template=options.caption_template,
+                position=options.caption_position,
+                hook_text=hook_text if need_hook else "",
+            )
+        subtitles = cap_module.subtitles_filter(ass_path)
+        if need_caps:
+            applied.append("captions")
+        if need_hook:
+            applied.append("hook_title")
+        ass_text = oracle_ass.read_text(encoding="utf-8")
+
+    look_chain = overlays.build_video_chain(
+        duration=info.duration, fps=info.fps or 30.0,
+        width=info.width, height=info.height,
+        color=options.color, zoom=options.zoom, transitions=options.transitions,
+        fades=options.fades, progress_bar=False, subtitles=None,
+    )
+    caption_chain: list = []
+    if subtitles:
+        caption_chain.append(subtitles)
+    if options.progress_bar:
+        caption_chain.append(
+            overlays.progress_bar_filter(info.duration, info.width, info.height)
+        )
+
+    if options.color:
+        applied.append(f"color:{options.color}")
+    if options.zoom:
+        applied.append("zoom")
+    if options.transitions:
+        applied.append("transitions")
+    if options.fades:
+        applied.append("fades")
+    if options.progress_bar:
+        applied.append("progress_bar")
+
+    graph_parts: list = []
+    full_chain = look_chain + caption_chain
+    if full_chain:
+        graph_parts.append(f"[0:v]{','.join(full_chain)}[vbase]")
+
+    audio_changed = False
+    if options.fades and info.has_audio:
+        out_start = max(0.0, info.duration - 0.4)
+        graph_parts.append(
+            f"[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st={out_start:.3f}:d=0.400[aout]"
+        )
+        audio_changed = True
+
+    video_changed = bool(full_chain)
+    return {
+        "effects_applied": applied,
+        "graph": ";".join(graph_parts),
+        "ass_text": ass_text,
+        "passes": 1 if (video_changed or audio_changed) else 0,
+        "renders": video_changed or audio_changed,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# The options matrix                                                            #
+# --------------------------------------------------------------------------- #
+#: Six words: five fit one cue (``max_words=5``), the sixth opens a second one, and
+#: ``money`` / ``fire`` are in ``captions._CAPTION_EMOJI`` so the inline-emoji path really
+#: emits glyphs. Every word carries ``probability == 1.0``, so ``plan_keywords`` selects a
+#: non-trivial subset (``THIS`` is a stopword and is not selected).
+MATRIX_WORDS = [
+    FakeWord(0.10, 0.50, "THIS"),
+    FakeWord(0.60, 1.00, "money"),
+    FakeWord(1.10, 1.60, "changed"),
+    FakeWord(1.70, 2.20, "everything"),
+    FakeWord(2.30, 2.70, "fire"),
+    FakeWord(2.80, 2.95, "wow"),
+]
+
+MATRIX_HOOK = "you won't believe this"
+
+
+def _matrix_options(**overrides) -> ProcessingOptions:
+    """A flag-off ``ProcessingOptions`` for the parity matrix.
+
+    Built through the constructor rather than ``from_dict`` so an unknown
+    ``caption_preset`` survives to the compositor (``from_dict`` coerces it to the known
+    default, which would make the ``caption_preset_substituted`` case unreachable). The
+    resolver-driven effects are pinned off so every render is offline; the look flags are
+    exercised by their own cases below.
+    """
+    data = dict(
+        captions=True,
+        hook_title=False,
+        caption_template="karaoke",
+        caption_position="bottom",
+        caption_preset="karaoke",
+        caption_animation="",
+        caption_keyword_highlight=False,
+        caption_keyword_ai=False,
+        caption_emoji=False,
+        permissibility_mode=False,
+        color="",
+        zoom=False,
+        transitions=False,
+        fades=False,
+        progress_bar=False,
+        music="",
+        emoji="off",
+        broll=False,
+        kinetic_typography_enabled=False,
+    )
+    data.update(overrides)
+    return ProcessingOptions(**data)
+
+
+def _parity_cases() -> list:
+    """A representative flag-off matrix: ``(name, options, words, hook_text)``."""
+    cases: list = []
+
+    # captions on/off x hook on/off (legacy default caption path)
+    for caps in (True, False):
+        for hook in (True, False):
+            cases.append((
+                f"caps{int(caps)}-hook{int(hook)}",
+                _matrix_options(captions=caps, hook_title=hook),
+                MATRIX_WORDS,
+                MATRIX_HOOK,
+            ))
+
+    # every Caption_Preset x keyword highlight on/off x caption emoji on/off
+    for name in sorted(caption_presets.BUILTIN_PRESETS):
+        for keyword in (False, True):
+            for glyphs in (False, True):
+                cases.append((
+                    f"preset-{name}-kw{int(keyword)}-emoji{int(glyphs)}",
+                    _matrix_options(
+                        hook_title=True, caption_preset=name,
+                        caption_keyword_highlight=keyword, caption_emoji=glyphs,
+                    ),
+                    MATRIX_WORDS,
+                    MATRIX_HOOK,
+                ))
+
+    # every caption position, on both the legacy and the preset path
+    for position in ("", "bottom", "center", "top"):
+        label = position or "default"
+        cases.append((
+            f"position-{label}-legacy",
+            _matrix_options(hook_title=True, caption_position=position),
+            MATRIX_WORDS, MATRIX_HOOK,
+        ))
+        cases.append((
+            f"position-{label}-preset",
+            _matrix_options(
+                hook_title=True, caption_preset="hormozi", caption_position=position,
+            ),
+            MATRIX_WORDS, MATRIX_HOOK,
+        ))
+
+    # the legacy ``caption_template`` path, every template, hook on/off
+    for template in ("karaoke", "boxed", "minimal"):
+        for hook in (False, True):
+            cases.append((
+                f"template-{template}-hook{int(hook)}",
+                _matrix_options(caption_template=template, hook_title=hook),
+                MATRIX_WORDS, MATRIX_HOOK,
+            ))
+
+    # explicit animation overrides (each engages the preset path)
+    for animation in ("", "none", "pop", "typewriter", "karaoke_fill"):
+        cases.append((
+            f"animation-{animation or 'default'}",
+            _matrix_options(hook_title=True, caption_animation=animation),
+            MATRIX_WORDS, MATRIX_HOOK,
+        ))
+
+    # an unknown preset name -> ``caption_preset_substituted``
+    cases.append((
+        "preset-unknown",
+        _matrix_options(
+            hook_title=True, caption_preset="not-a-preset",
+            caption_keyword_highlight=True,
+        ),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+
+    # look-effect combinations, so the caption filter is asserted inside a real chain
+    cases.append((
+        "look-everything",
+        _matrix_options(
+            hook_title=True, caption_preset="hormozi",
+            caption_keyword_highlight=True, caption_emoji=True,
+            color="vivid", zoom=True, transitions=True, fades=True, progress_bar=True,
+        ),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+    cases.append((
+        "look-audio-fades-only",
+        _matrix_options(captions=False, hook_title=False, fades=True),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+    cases.append((
+        "look-progress-only",
+        _matrix_options(captions=False, hook_title=False, progress_bar=True),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+    cases.append((
+        "permissibility-mode",
+        _matrix_options(
+            hook_title=True, caption_preset="hormozi", caption_emoji=True,
+            permissibility_mode=True,
+        ),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+
+    # degenerate inputs: an empty timeline, a blank hook, and nothing enabled at all
+    cases.append((
+        "empty-timeline",
+        _matrix_options(hook_title=True, caption_preset="pop"),
+        [], MATRIX_HOOK,
+    ))
+    cases.append((
+        "blank-hook",
+        _matrix_options(captions=False, hook_title=True),
+        MATRIX_WORDS, "   ",
+    ))
+    cases.append((
+        "all-off",
+        _matrix_options(captions=False, hook_title=False),
+        MATRIX_WORDS, MATRIX_HOOK,
+    ))
+    return cases
+
+
+# --------------------------------------------------------------------------- #
+# Task 15.1 — flag-off parity of ``effects_applied`` and the ffmpeg filter graph #
+# --------------------------------------------------------------------------- #
+def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path):
+    """Validates: Requirements 19.1, 19.4, 19.6
+
+    With ``kinetic_typography_enabled`` off and no compose contributions, every case in
+    the matrix must reproduce v0.8.0 exactly: the same ``effects_applied`` list (order
+    included), the same ``-filter_complex`` string, the same caption ASS content, the same
+    ffmpeg invocation count, and — against the reconstructed module, which renders from
+    the same directory so all paths coincide — the same complete ffmpeg argv.
+
+    The two baselines are independent of the shipped compositor (see the module header):
+    source A recomputes the expectation from the untouched v0.8.0 primitives, source B is
+    the shipped module with the feature deleted from its AST. The flag-off caller shape is
+    checked in both of its spellings — ``engine_contributions=None`` (every v0.8.0 caller)
+    and ``engine_contributions=[]`` (an enabled host whose engine skipped).
+    """
+    baseline_module = _v080_module()
+    cases = _parity_cases()
+    assert len(cases) >= 50                       # a representative matrix, not a token one
+    oracle_dir = tmp_path / "oracle"
+    oracle_dir.mkdir()
+    checked_with_captions = 0
+
+    for name, options, words, hook_text in cases:
+        assert options.kinetic_typography_enabled is False
+        work = tmp_path / "case" / name
+        work.mkdir(parents=True, exist_ok=True)
+
+        # --- the shipped compositor, flag off, no contributions ---------------
+        shipped = _parity_render(
+            compositor, work, options=options, words=words,
+            hook_text=hook_text, contributions=None,
+        )
+        shipped_ass = shipped.ass_text
+        shipped_argv = shipped.argv
+
+        # An empty contribution list is the other flag-off caller shape (an enabled host
+        # whose engine returned ``skipped``): it must be indistinguishable from ``None``.
+        if shipped.ass_path.exists():
+            shipped.ass_path.unlink()
+        empty = _parity_render(
+            compositor, work, options=options, words=words,
+            hook_text=hook_text, contributions=[],
+        )
+        assert empty.argv == shipped_argv, name
+        assert empty.effects_applied == shipped.effects_applied, name
+        assert empty.ass_text == shipped_ass, name
+
+        # --- source B: the same code with the feature physically removed ------
+        if shipped.ass_path.exists():
+            shipped.ass_path.unlink()
+        baseline = _parity_render(
+            baseline_module, work, options=options, words=words,
+            hook_text=hook_text, contributions=None,
+        )
+        assert baseline.argv == shipped_argv, f"{name}: argv drifted from v0.8.0"
+        assert baseline.graph == shipped.graph, name
+        assert baseline.effects_applied == shipped.effects_applied, name
+        assert baseline.ass_text == shipped_ass, name
+        assert baseline.passes == shipped.passes, name
+        assert (baseline.result is None) == (shipped.result is None), name
+
+        # --- source A: the independent reference oracle -----------------------
+        expected = _v080_expectation(
+            options=options, words=words, hook_text=hook_text,
+            ass_path=shipped.ass_path, oracle_ass=oracle_dir / f"{name}.ass",
+        )
+        assert shipped.effects_applied == expected["effects_applied"], name
+        assert shipped.graph == expected["graph"], name
+        assert shipped.passes == expected["passes"], name
+        assert (shipped.result is not None) is expected["renders"], name
+        assert shipped_ass == expected["ass_text"], f"{name}: caption ASS drifted"
+        # Exactly one libass instance whenever caption text is wanted (Req 2.6), and the
+        # invocation count is anchored absolutely so the parity is never a vacuous 0 == 0.
+        assert shipped.graph.count("subtitles=") == (1 if expected["ass_text"] else 0), name
+        assert shipped.passes == (1 if expected["renders"] else 0), name
+        if expected["ass_text"]:
+            checked_with_captions += 1
+
+    # Non-vacuity: the great majority of the matrix really did produce a caption document.
+    assert checked_with_captions >= 40
+
+
+#: Source C — literal v0.8.0 goldens, generated from the **reconstructed** module (the one
+#: with the caption-ownership feature deleted from its AST) and frozen here verbatim. Only
+#: the absolute ASS path is normalised, to ``<ASS>``. ``font_available`` is pinned per case
+#: because font substitution is a property of the host, not of the compositor: an absent
+#: family appends ``font_substituted:<name>``, so both answers are frozen and both are
+#: asserted.
+_V080_GOLDENS: dict = {
+    "legacy-karaoke-captions-hook": {
+        "options": dict(hook_title=True),
+        "effects_applied": ["captions", "hook_title"],
+        "font_substituted_effects": ["captions", "hook_title"],
+        "graph": "[0:v]subtitles='<ASS>'[vbase]",
+    },
+    "legacy-boxed-captions-only": {
+        "options": dict(caption_template="boxed"),
+        "effects_applied": ["captions"],
+        "font_substituted_effects": ["captions"],
+        "graph": "[0:v]subtitles='<ASS>'[vbase]",
+    },
+    "preset-hormozi-keywords-emoji": {
+        "options": dict(
+            hook_title=True, caption_preset="hormozi", caption_position="",
+            caption_keyword_highlight=True, caption_emoji=True,
+        ),
+        "effects_applied": [
+            "caption_preset:hormozi", "keyword_highlight", "caption_emoji",
+            "captions", "hook_title",
+        ],
+        "font_substituted_effects": [
+            "caption_preset:hormozi", "keyword_highlight", "caption_emoji",
+            "font_substituted:Arial", "captions", "hook_title",
+        ],
+        "graph": "[0:v]subtitles='<ASS>'[vbase]",
+    },
+    "everything-on": {
+        "options": dict(
+            hook_title=True, caption_preset="pop", caption_keyword_highlight=True,
+            color="vivid", zoom=True, transitions=True, fades=True, progress_bar=True,
+        ),
+        "effects_applied": [
+            "caption_preset:pop", "keyword_highlight", "captions", "hook_title",
+            "color:vivid", "zoom", "transitions", "fades", "progress_bar",
+        ],
+        "font_substituted_effects": [
+            "caption_preset:pop", "keyword_highlight", "font_substituted:Arial",
+            "captions", "hook_title", "color:vivid", "zoom", "transitions", "fades",
+            "progress_bar",
+        ],
+        "graph": (
+            "[0:v]eq=contrast=1.12:saturation=1.35:brightness=0.02,"
+            "zoompan=z='if(lt(on,15),1.18-(1.18-(1+0.12*on/90))*on/15,"
+            "(1+0.12*on/90))':d=1:fps=30:s=1080x1920:x='iw/2-(iw/zoom/2)':"
+            "y='ih/2-(ih/zoom/2)',fade=t=in:st=0:d=0.400,"
+            "fade=t=out:st=2.600:d=0.400,subtitles='<ASS>',"
+            "drawbox=x=0:y=ih-12:w='iw*t/3.000':h=12:color=0x22D3EE@0.9:t=fill[vbase];"
+            "[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st=2.600:d=0.400[aout]"
+        ),
+    },
+}
+
+
+def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path):
+    """Validates: Requirements 19.1, 19.4, 19.6
+
+    Source C of the parity gate: four canonical flag-off renders asserted against
+    ``effects_applied`` lists and ``-filter_complex`` strings frozen in this file, so any
+    future drift in the flag-off output is a one-line diff — including a drift that moved
+    the reference oracle and the compositor together. Both host font answers are pinned,
+    so the goldens hold with or without the preset font installed.
+    """
+    for name, golden in sorted(_V080_GOLDENS.items()):
+        options = _matrix_options(**golden["options"])
+        for available, key in ((True, "effects_applied"), (False, "font_substituted_effects")):
+            work = tmp_path / f"{name}-font{int(available)}"
+            with mock.patch.object(cap_module, "font_available", lambda _n: available):
+                record = _parity_render(
+                    compositor, work, options=options, words=MATRIX_WORDS,
+                    hook_text=MATRIX_HOOK, contributions=None,
+                )
+            assert record.effects_applied == golden[key], name
+            assert _normalised_graph(record.graph, record.ass_path) == golden["graph"], name
+            assert record.passes == 1, name
+            assert record.graph.count("subtitles=") == 1, name
+
+
+def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
+    """Validates: Requirements 19.1, 19.6
+
+    Non-vacuity for source B: the reconstruction must have genuinely *lost* the
+    caption-ownership feature, not merely been rebuilt. Handed the very contribution that
+    makes the shipped compositor stand down, the reconstructed module still builds its own
+    caption ASS and still routes it into the graph — which is precisely v0.8.0 behaviour,
+    and proves the removal was real. The shipped module, on the same input, stands down.
+    """
+    baseline_module = _v080_module()
+    options = _matrix_options(hook_title=True, caption_preset="hormozi")
+    contribution = [_kinetic_contribution(tmp_path)]
+
+    baseline = _parity_render(
+        baseline_module, tmp_path / "v080", options=options, words=MATRIX_WORDS,
+        hook_text=MATRIX_HOOK, contributions=contribution,
+    )
+    shipped = _parity_render(
+        compositor, tmp_path / "shipped", options=options, words=MATRIX_WORDS,
+        hook_text=MATRIX_HOOK, contributions=contribution,
+    )
+
+    # The v0.8.0-shaped module knows nothing about caption ownership.
+    assert baseline.ass_text is not None
+    assert baseline.graph.count("subtitles=") == 2       # its own ASS + the contribution's
+    assert "captions" in baseline.effects_applied
+    # The shipped module stands down for the same contribution (task 12.1's branch).
+    assert shipped.ass_text is None
+    assert shipped.graph.count("subtitles=") == 1
+    # ...and the two therefore differ, which is what makes the flag-off parity above a
+    # statement about behaviour rather than about two copies of the same code.
+    assert baseline.graph != shipped.graph
+
+
+
+# --------------------------------------------------------------------------- #
+# Task 15.2 — pin the existing caption symbols against drift                    #
+# --------------------------------------------------------------------------- #
+# Reqs 19.2/19.3: every ``worker.effects.caption_presets`` value and the behaviour of
+# ``captions.build_ass`` / ``build_word_span`` / ``words_to_cues`` / ``subtitles_filter``
+# must survive this engine unchanged **for callers that do not use it**. Every expectation
+# below is therefore a **fixed literal** — no expectation is computed from
+# ``worker.engines.kinetic``, from ``worker.effects.compositor``, or from the symbol it is
+# pinning. The engine reuses several of these helpers, so this is also what keeps the
+# reference oracle in task 15.1 trustworthy as the engine evolves.
+
+#: Every built-in preset, field by field (``CaptionPreset.to_dict()`` output).
+_EXPECTED_BUILTIN_PRESETS: dict = {
+    "boxed": {
+        "name": "boxed", "animation": "none", "font": "Arial", "font_size": 84,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
+        "emoji_inline": False, "border_style": 3,
+    },
+    "hormozi": {
+        "name": "hormozi", "animation": "pop", "font": "Arial", "font_size": 96,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "center", "highlight_keywords": True, "highlight_scale": 1.18,
+        "emoji_inline": True, "border_style": 1,
+    },
+    "karaoke": {
+        "name": "karaoke", "animation": "karaoke_fill", "font": "Arial", "font_size": 84,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
+        "emoji_inline": False, "border_style": 1,
+    },
+    "minimal": {
+        "name": "minimal", "animation": "none", "font": "Arial", "font_size": 76,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
+        "emoji_inline": False, "border_style": 1,
+    },
+    "pop": {
+        "name": "pop", "animation": "pop", "font": "Arial", "font_size": 84,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "bottom", "highlight_keywords": True, "highlight_scale": 1.18,
+        "emoji_inline": False, "border_style": 1,
+    },
+    "typewriter": {
+        "name": "typewriter", "animation": "typewriter", "font": "Arial", "font_size": 84,
+        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
+                   "outline": "&H00000000", "box": "&H80000000"},
+        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
+        "emoji_inline": False, "border_style": 1,
+    },
+}
+
+#: The three fixed words every pin below uses (``money`` is in the inline-emoji map).
+_PIN_WORDS = [
+    FakeWord(0.20, 0.60, "THIS"),
+    FakeWord(0.70, 1.10, "changed"),
+    FakeWord(1.20, 1.70, "money"),
+]
+
+#: ``build_word_span(_PIN_WORDS[1], karaoke-with-animation, highlighted, cue_start=0.2)``
+#: for the whole 4 x 2 matrix — the v0.8.0 tag shapes, spelled out.
+_EXPECTED_WORD_SPANS: dict = {
+    ("none", False): "changed",
+    ("none", True): (
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}changed"
+        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+    ),
+    ("pop", False): "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed",
+    ("pop", True): (
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}"
+        "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed"
+        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+    ),
+    ("typewriter", False): "{\\alpha&HFF&\\t(500,530,\\alpha&H00&)}changed",
+    ("typewriter", True): (
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}"
+        "{\\alpha&HFF&\\t(500,530,\\alpha&H00&)}changed"
+        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+    ),
+    ("karaoke_fill", False): "{\\kf40}changed",
+    ("karaoke_fill", True): (
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}{\\kf40}changed"
+        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+    ),
+}
+
+_ASS_HEADER = (
+    "[Script Info]\n"
+    "ScriptType: v4.00+\n"
+    "PlayResX: 1080\n"
+    "PlayResY: 1920\n"
+    "WrapStyle: 2\n"
+    "ScaledBorderAndShadow: yes\n"
+    "\n"
+    "[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,"
+    " BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle,"
+    " BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+)
+_ASS_HOOK_STYLE = (
+    "Style: Hook,Arial,110,&H0000E5FF,&H0000E5FF,&H00000000,&H64000000,"
+    "-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
+)
+_ASS_EVENTS_HEADER = (
+    "\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    "\n"
+)
+
+#: The full legacy documents ``build_ass`` writes for the three templates (bottom
+#: position, 1080x1920, the three fixed words; the karaoke case also carries a hook).
+_EXPECTED_LEGACY_DOCUMENTS: dict = {
+    "karaoke": (
+        _ASS_HEADER
+        + "Style: Default,Arial,84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+          "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
+        + _ASS_HOOK_STYLE
+        + _ASS_EVENTS_HEADER
+        + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
+        + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
+          "{\\kf40}THIS {\\kf40}changed {\\kf50}money\n"
+    ),
+    "boxed": (
+        _ASS_HEADER
+        + "Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H80000000,&H80000000,"
+          "-1,0,0,0,100,100,0,0,3,0,0,2,80,80,220,1\n"
+        + _ASS_HOOK_STYLE
+        + _ASS_EVENTS_HEADER
+        + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
+    ),
+    "minimal": (
+        _ASS_HEADER
+        + "Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
+          "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1\n"
+        + _ASS_HOOK_STYLE
+        + _ASS_EVENTS_HEADER
+        + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
+    ),
+}
+
+#: The full preset-driven document for ``hormozi`` (inline emoji on, one highlighted
+#: keyword index, hook title, preset position ``center`` inherited).
+_EXPECTED_HORMOZI_DOCUMENT = (
+    _ASS_HEADER
+    + "Style: Default,Arial,96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
+      "-1,0,0,0,100,100,0,0,1,2,1,5,80,80,0,1\n"
+    + _ASS_HOOK_STYLE
+    + _ASS_EVENTS_HEADER
+    + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
+    + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
+      "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}THIS "
+      "{\\c&H0000E5FF&\\fscx118\\fscy118}"
+      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed"
+      "{\\c&H00FFFFFF&\\fscx100\\fscy100} "
+      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}money \U0001f4b0\n"
+)
+
+
+def test_caption_preset_values_are_unchanged():
+    """Validates: Requirements 19.2, 19.5
+
+    ``BUILTIN_PRESETS`` (names **and** every field value), ``VALID_ANIMATIONS``,
+    ``VALID_POSITIONS`` and ``FALLBACK_PRESET_NAME``, pinned as literals. The dataclass
+    field sets are pinned too, so an added field — which would silently widen every
+    preset — fails here rather than surfacing as a rendering change.
+    """
+    assert sorted(caption_presets.BUILTIN_PRESETS) == [
+        "boxed", "hormozi", "karaoke", "minimal", "pop", "typewriter",
+    ]
+    for name, expected in sorted(_EXPECTED_BUILTIN_PRESETS.items()):
+        preset = caption_presets.BUILTIN_PRESETS[name]
+        assert preset.to_dict() == expected, name
+        assert preset.name == name
+
+    assert caption_presets.VALID_ANIMATIONS == frozenset(
+        {"none", "pop", "typewriter", "karaoke_fill"}
+    )
+    assert caption_presets.VALID_POSITIONS == frozenset({"bottom", "center", "top"})
+    assert caption_presets.FALLBACK_PRESET_NAME == "karaoke"
+
+    assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
+        "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
+        "highlight_keywords", "highlight_scale", "name", "position",
+    ]
+    assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
+        "box", "highlight", "outline", "primary",
+    ]
+
+    # Resolution is unchanged for callers that do not use this engine: a known name is
+    # returned as-is, anything else falls back to ``karaoke`` and reports it.
+    for name in sorted(_EXPECTED_BUILTIN_PRESETS):
+        assert caption_presets.resolve_preset(name) == (
+            caption_presets.BUILTIN_PRESETS[name], False
+        )
+    for bad in ("", "not-a-preset", "KARAOKE", None, 3, [], {}):
+        preset, substituted = caption_presets.resolve_preset(bad)
+        assert (preset.name, substituted) == ("karaoke", True), bad
+
+
+def test_build_word_span_behaviour_is_unchanged():
+    """Validates: Requirements 19.3
+
+    The 4 animations x highlighted/not matrix, asserted against literal v0.8.0 spans, plus
+    the two documented edge behaviours: an unknown animation renders the plain escaped
+    word, and ``\\kf`` never emits a zero duration.
+    """
+    word = _PIN_WORDS[1]
+    karaoke = caption_presets.BUILTIN_PRESETS["karaoke"]
+    for (animation, highlighted), expected in sorted(_EXPECTED_WORD_SPANS.items()):
+        preset = replace(karaoke, animation=animation)
+        span = cap_module.build_word_span(word, preset, highlighted, cue_start=0.2)
+        assert span == expected, (animation, highlighted)
+
+    # An unrecognised animation is the plain escaped word (the ``none`` branch).
+    assert cap_module.build_word_span(
+        word, replace(karaoke, animation="wobble"), False, cue_start=0.2
+    ) == "changed"
+    # Braces/backslashes in word text are neutralised, and a zero-length word still gets
+    # a one-centisecond fill.
+    assert cap_module.build_word_span(
+        FakeWord(1.0, 1.0, "a{b}c\\d"), karaoke, False, cue_start=1.0
+    ) == "{\\kf1}a(b)c\\\\d"
+    # ``cue_start`` past the word clamps the offset at zero rather than going negative.
+    assert cap_module.build_word_span(
+        word, replace(karaoke, animation="pop"), False, cue_start=5.0
+    ) == "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}changed"
+
+
+def test_words_to_cues_grouping_is_unchanged():
+    """Validates: Requirements 19.3
+
+    The three v0.8.0 split rules (``max_words=5``, ``max_gap=0.6``, ``max_duration=3.0``)
+    and the empty-text skip, pinned as a literal grouping.
+    """
+    timeline = [
+        FakeWord(0.00, 0.30, "one"), FakeWord(0.35, 0.60, "two"),
+        FakeWord(0.65, 0.90, ""),                 # empty text: skipped entirely
+        FakeWord(0.95, 1.20, "three"), FakeWord(1.25, 1.50, "four"),
+        FakeWord(1.55, 1.80, "five"),
+        FakeWord(1.85, 2.10, "six"),              # 6th survivor: max_words split
+        FakeWord(3.00, 3.40, "gap"),              # 0.90 s gap: max_gap split
+        FakeWord(3.45, 6.90, "loooong"),          # span > 3.0 s: max_duration split
+        FakeWord(6.95, 7.20, "tail"),
+    ]
+    expected = [
+        (0.00, 1.80, ["one", "two", "three", "four", "five"]),
+        (1.85, 2.10, ["six"]),
+        (3.00, 3.40, ["gap"]),
+        (3.45, 6.90, ["loooong"]),
+        (6.95, 7.20, ["tail"]),
+    ]
+    cues = cap_module.words_to_cues(timeline)
+    assert [(c.start, c.end, [w.text for w in c.words]) for c in cues] == expected
+    # An empty timeline yields no cues and never raises.
+    assert cap_module.words_to_cues([]) == []
+    # The documented defaults are still the defaults.
+    signature = inspect.signature(cap_module.words_to_cues)
+    assert signature.parameters["max_words"].default == 5
+    assert signature.parameters["max_gap"].default == 0.6
+    assert signature.parameters["max_duration"].default == 3.0
+
+
+def test_build_ass_documents_are_unchanged(tmp_path):
+    """Validates: Requirements 19.3
+
+    Full ASS documents, byte for byte, for the legacy ``caption_template`` path (all three
+    templates) and for the preset path (``hormozi`` with inline emoji, one highlighted
+    keyword and a hook title). The legacy path is additionally proven not to consult the
+    host font list at all — ``font_available`` is patched to raise — and the preset path's
+    font-substitution note is pinned on both answers.
+    """
+    cues = [cap_module.Cue(0.20, 1.70, list(_PIN_WORDS))]
+
+    def _explode(_name):                    # pragma: no cover - must never be reached
+        raise AssertionError("the legacy caption path must not probe host fonts")
+
+    for template, expected in sorted(_EXPECTED_LEGACY_DOCUMENTS.items()):
+        dest = tmp_path / f"legacy-{template}.ass"
+        with mock.patch.object(cap_module, "font_available", _explode):
+            cap_module.build_ass(
+                cues, dest, video_width=1080, video_height=1920,
+                template=template, position="bottom",
+                hook_text="  watch this  " if template == "karaoke" else "",
+            )
+        assert dest.read_text(encoding="utf-8") == expected, template
+
+    # Preset path, font present: the document is exactly the v0.8.0 one and no note.
+    notes: list = []
+    dest = tmp_path / "hormozi.ass"
+    with mock.patch.object(cap_module, "font_available", lambda _n: True):
+        cap_module.build_ass(
+            cues, dest, video_width=1080, video_height=1920,
+            preset=caption_presets.BUILTIN_PRESETS["hormozi"],
+            keyword_indices={1}, position=None, hook_text="watch this",
+            clip_duration=3.0, notes=notes,
+        )
+    assert dest.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT
+    assert notes == []
+
+    # Preset path, font absent: same document (the preset font *is* the fallback family)
+    # plus exactly the v0.8.0 substitution note.
+    notes = []
+    substituted = tmp_path / "hormozi-substituted.ass"
+    with mock.patch.object(cap_module, "font_available", lambda _n: False):
+        cap_module.build_ass(
+            cues, substituted, video_width=1080, video_height=1920,
+            preset=caption_presets.BUILTIN_PRESETS["hormozi"],
+            keyword_indices={1}, position=None, hook_text="watch this",
+            clip_duration=3.0, notes=notes,
+        )
+    assert notes == ["font_substituted:Arial"]
+    assert substituted.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT
+
+    # An explicit position still overrides the preset default (Alignment 2, MarginV 220),
+    # and an empty cue list with no hook yields a header-only document with no events.
+    overridden = tmp_path / "hormozi-bottom.ass"
+    with mock.patch.object(cap_module, "font_available", lambda _n: True):
+        cap_module.build_ass(
+            cues, overridden, video_width=1080, video_height=1920,
+            preset=caption_presets.BUILTIN_PRESETS["hormozi"],
+            position="bottom", clip_duration=3.0,
+        )
+    text = overridden.read_text(encoding="utf-8")
+    assert (
+        "Style: Default,Arial,96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
+        "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1" in text
+    )
+    empty = tmp_path / "empty.ass"
+    cap_module.build_ass([], empty, video_width=1080, video_height=1920)
+    assert empty.read_text(encoding="utf-8") == (
+        _ASS_HEADER
+        + "Style: Default,Arial,84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+          "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
+        + _ASS_HOOK_STYLE
+        # No events at all: the document is exactly the header plus ``build_ass``'s own
+        # trailing newline (the blank line before the first ``Dialogue:`` is v0.8.0's).
+        + _ASS_EVENTS_HEADER
+    )
+
+
+def test_subtitles_filter_escaping_is_unchanged():
+    """Validates: Requirements 19.3
+
+    The libass filter string and its ffmpeg argument escaping, pinned literally.
+    """
+    assert cap_module.subtitles_filter("/tmp/plain.ass") == "subtitles='/tmp/plain.ass'"
+    # ``:`` and ``'`` are the two characters ffmpeg's filter syntax needs escaped.
+    assert cap_module.subtitles_filter("/tmp/a:b/it's.ass") == (
+        "subtitles='/tmp/a\\:b/it\\'s.ass'"
+    )
+    # A relative path is resolved against the cwd, and a ``Path`` behaves like a string.
+    relative = cap_module.subtitles_filter("clip.ass")
+    assert relative == f"subtitles='{Path('clip.ass').resolve()}'"
+    assert cap_module.subtitles_filter(Path("/tmp/plain.ass")) == (
+        cap_module.subtitles_filter("/tmp/plain.ass")
+    )
