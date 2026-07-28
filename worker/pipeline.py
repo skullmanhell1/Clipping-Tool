@@ -296,6 +296,11 @@ def run_pipeline(
                 Engine_Stage.AUDIO, clip_id=clip_id, source=source, clip_path=raw,
                 clip_start=c.start, clip_end=c.end, duration=clip_duration,
                 words=words,
+                # Seam publication (audio-stem-inpainting Reqs 6.1, 8.1): the keeps
+                # already in scope, read-only. ``None`` (no filler removal, or removal
+                # that changed nothing) publishes no note and leaves every context
+                # exactly as it was.
+                filler_plan=keep_plan,
             )
             raw = out.media or raw
             applied.extend(out.markers)

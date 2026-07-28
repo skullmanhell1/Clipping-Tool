@@ -80,8 +80,10 @@ __all__ = [
     "SOURCE_CLIP_ID",
     "MIN_WALL_TIMEOUT_S",
     "DEGRADED_DETAIL_PREFIX",
+    "SEAM_NOTE_PREFIX",
     "Stage_Outcome",
     "Engine_Host",
+    "filler_seam_notes",
 ]
 
 SOURCE_CLIP_ID = "source"
@@ -95,6 +97,16 @@ The authoritative budget check is the injected-clock comparison against
 from blocking the job forever. Flooring it keeps a sub-second budget from being
 mistaken for a timeout on a slow machine, and keeps the check meaningful when
 the clock is a fake whose units are not seconds.
+"""
+
+SEAM_NOTE_PREFIX = "filler_seam:"
+"""Prefix of the Seam notes :func:`filler_seam_notes` publishes on
+:attr:`Engine_Context.notes`.
+
+An *additive* note kind, not a new contract: :attr:`Engine_Context.notes` already exists
+with its documented free-form convention, so this contributes a note **value**. Engines
+that do not understand the prefix ignore it exactly as they ignore ``fps_fallback:``
+(audio-stem-inpainting Reqs 6.1-6.3, 8.5, 20.6).
 """
 
 DEGRADED_DETAIL_PREFIX = "degraded:"
@@ -203,6 +215,55 @@ def _cap_degradation(engine_id: str, markers: Sequence[str]) -> list[str]:
             seen = True
         capped.append(entry)
     return capped
+
+
+def filler_seam_notes(keeps: Any) -> tuple[str, ...]:
+    """Publish one ``filler_seam:<seconds>`` note per **interior** filler-removal join.
+
+    The audio-stem-inpainting spec's one cross-spec touch point (its Reqs 6.1-6.3, 6.9,
+    8.2), and deliberately **additive**: no dataclass, enum, protocol, signature or field
+    changes here — :attr:`Engine_Context.notes` already carries free-form host annotations,
+    so this contributes note *values*. Nothing in ``worker/effects/filler.py`` is called,
+    re-planned or modified: ``FillerPlan.keeps`` is *read*, never recomputed (Req 8.2).
+
+    A Seam is a join in the tightened output, i.e. the boundary between two kept intervals.
+    The cursor accumulates ``keep.duration`` over ``keeps[:-1]``, so ``N`` keeps yield
+    exactly ``N - 1`` notes: no note for the clip start (the loop emits *after* adding a
+    duration, and the first addition already lands past ``0.0`` for any non-degenerate
+    keep) and none for the clip end (the last keep's duration is never added) — Req 6.9.
+
+    The value is ``round(cursor, 3)`` rendered with three decimals, mirroring
+    ``filler.rebase_words``'s own ``round(..., 3)`` exactly, so a Seam time and the rebased
+    word times it sits between agree to the millisecond rather than drifting apart (Req
+    6.2, 6.3).
+
+    Pure and total: attributes only, no clock, no filesystem; a ``None`` plan list, a
+    non-iterable, a single keep or a keep whose ``duration`` is unusable yields ``()`` or a
+    correspondingly shorter tuple rather than an exception — publication must never be able
+    to break the Pipeline.
+
+    Args:
+        keeps: The ``FillerPlan.keeps`` sequence (anything exposing ``duration`` per item).
+
+    Returns:
+        The Seam notes in ascending time order, ``()`` when there is no interior join.
+    """
+    if keeps is None or isinstance(keeps, (str, bytes)) or not isinstance(keeps, Iterable):
+        return ()
+    try:
+        items = list(keeps)
+    except Exception:  # noqa: BLE001 - a hostile plan must not break publication
+        return ()
+    if len(items) < 2:
+        return ()
+
+    notes: list[str] = []
+    cursor = 0.0
+    for keep in items[:-1]:
+        length = coerce_float(getattr(keep, "duration", None), 0.0)
+        cursor += length
+        notes.append(f"{SEAM_NOTE_PREFIX}{round(cursor, 3):.3f}")
+    return tuple(notes)
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +484,7 @@ class Engine_Host:
         duration: float,
         words: Sequence[Any] = (),
         clip_metadata: Optional[Mapping[str, Any]] = None,
+        filler_plan: Any = None,
     ) -> Stage_Outcome:
         """Invoke every enabled engine of ``stage`` for one clip.
 
@@ -446,6 +508,15 @@ class Engine_Host:
         the ffmpeg argv (Reqs 15.8, 23.1). It is a separate channel from
         :attr:`Engine_Context.deps`, which remains the host's own injected
         clock/logger/storage seam.
+
+        ``filler_plan`` is the optional ``FillerPlan`` for this clip — or, equivalently,
+        its bare ``keeps`` sequence, which is what the Pipeline keeps in scope — read
+        **only** to
+        publish :func:`filler_seam_notes` on every context this stage run builds
+        (audio-stem-inpainting Reqs 6.1, 8.1, 8.5). It adds no Pipeline stage and changes no
+        stage order; omitting it — or passing a plan with a single keep, or one whose
+        removal did nothing — publishes zero notes, so contexts are identical to the
+        pre-Seam ones and the all-off parity gate is untouched.
         """
         return self._run(
             stage,
@@ -457,6 +528,7 @@ class Engine_Host:
             duration=duration,
             words=words,
             clip_metadata=clip_metadata,
+            filler_plan=filler_plan,
         )
 
     # --- lifecycle --------------------------------------------------------
@@ -554,6 +626,7 @@ class Engine_Host:
         duration: float,
         words: Sequence[Any] = (),
         clip_metadata: Optional[Mapping[str, Any]] = None,
+        filler_plan: Any = None,
     ) -> Stage_Outcome:
         """Shared body of :meth:`run_source` and :meth:`run_stage`."""
         coerced = _coerce_stage(stage)
@@ -570,6 +643,11 @@ class Engine_Host:
         # so no engine can reach the caller's mapping or another engine's context
         # through it (Req 15.8). Keys and values are copied verbatim.
         metadata = dict(clip_metadata) if isinstance(clip_metadata, Mapping) else {}
+        # Seam notes are computed once per stage run, from the already-planned keeps, and
+        # merged into every context this run builds — one publication, N readers.
+        # A ``FillerPlan`` or, equivalently, its bare ``keeps`` sequence — the Pipeline
+        # keeps the latter in scope for the whole clip, so both spellings are accepted.
+        seams = filler_seam_notes(getattr(filler_plan, "keeps", filler_plan))
         for engine in self._registered_for(coerced):
             result = self._invoke(
                 engine,
@@ -585,6 +663,7 @@ class Engine_Host:
                     words=words,
                     first_input_index=offsets.get(_engine_id_of(bound), 0),
                     clip_metadata=metadata,
+                    seam_notes=seams,
                 ),
             )
             outcome.results.append(result)
@@ -840,6 +919,7 @@ class Engine_Host:
         words: Sequence[Any],
         first_input_index: int = 0,
         clip_metadata: Optional[Mapping[str, Any]] = None,
+        seam_notes: Sequence[str] = (),
     ) -> Engine_Context:
         """Allocate the workspace and build the frozen Engine_Context (step 4).
 
@@ -855,6 +935,12 @@ class Engine_Host:
         ``clip_metadata`` is this stage run's Clip_Metadata snapshot; it is copied
         into the context so each engine holds its own mapping (Req 15.8), and
         ``None`` yields the documented empty default.
+
+        ``seam_notes`` is this stage run's already-computed
+        :func:`filler_seam_notes` tuple. It is **appended** to the host's own notes,
+        so ``fps_fallback:`` keeps its position and spelling and an engine that reads
+        neither prefix is unaffected (audio-stem-inpainting Reqs 8.5, 20.6). Empty by
+        default, so every existing caller builds byte-identical contexts.
         """
         engine_id = _engine_id_of(engine)
         resolved = engine.resolve_options(self._options)
@@ -866,6 +952,7 @@ class Engine_Host:
 
         base = self.time_base()
         notes = (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
+        notes = notes + tuple(_as_text(note) for note in (seam_notes or ()))
         budget = coerce_float(getattr(engine, "time_budget_s", 0.0), 0.0, lo=0.0)
         deadline = self._now() + budget if budget > 0.0 else math.inf
 
