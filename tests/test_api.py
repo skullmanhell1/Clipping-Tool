@@ -311,17 +311,32 @@ PREEXISTING_INFO_KEYS = frozenset(
 
 @pytest.fixture
 def engine_registry():
-    """The **default** engine registry, emptied before and after the test.
+    """The **default** engine registry, emptied for the test and then *restored*.
 
     `/api/info` reads the process-wide default registry via `get_registry()`, so
     a test that needs a registered engine visible to the endpoint must register
-    it there rather than into an isolated instance. Teardown resets the registry
-    *and* the capability report and asserts the registry is empty again, so no
-    other test in the suite (in particular the all-off parity gate) ever sees a
-    registered engine.
+    it there rather than into an isolated instance.
+
+    Teardown used to assert the registry was **empty** afterwards, on the
+    assumption that nothing populates the default registry unless a test does.
+    That assumption no longer holds: `worker/engines/loader.py` is imported at
+    module scope by `api.main` (and by `worker.pipeline`), so importing the app
+    registers the shipped AV engines — registered but Feature_Flag-off. Emptying
+    the registry and walking away would therefore *remove* the production
+    registration for the remainder of the process, which is a leak in the other
+    direction.
+
+    So the fixture snapshots the registrations it found, empties the registry for
+    the duration of the test (the endpoint's no-engine-registered case is still a
+    case worth covering), and replays the snapshot verbatim on the way out —
+    "leave it exactly as found", whatever that was. The leak assertion keeps the
+    same strength, restated against the snapshot instead of against zero.
     """
     from worker.engines.capabilities import reset_report
     from worker.engines.registry import get_registry, reset_registry
+
+    saved = list(get_registry().records())
+    saved_ids = [record.engine_id for record in saved]
 
     reset_registry()
     reset_report()
@@ -329,16 +344,28 @@ def engine_registry():
         yield get_registry()
     finally:
         reset_registry()
+        for record in saved:
+            get_registry().register(record.engine, priority=record.priority)
         reset_report()
-        assert len(get_registry()) == 0, "default engine registry leaked out of the test"
+        assert [record.engine_id for record in get_registry().records()] == saved_ids, (
+            "default engine registry leaked out of the test"
+        )
 
 
 def test_info_exposes_engine_keys_and_retains_preexisting_keys(client, engine_registry):
     """Validates: Requirements 20.1, 20.2, 20.6
 
-    `engines` / `capabilities` are additive: with nothing registered the list is
-    empty and the capability mapping is empty (no probe performed), while every
+    `engines` / `capabilities` are additive: with **no engine registered** the list
+    is empty and the capability mapping is empty (no probe performed), while every
     pre-existing v0.8.0 top-level key is still present.
+
+    The empty registry is created by the `engine_registry` fixture and is no longer
+    the state of a stock install: `api.main` imports `worker/engines/loader.py` at
+    module scope, so the shipped AV engines are registered (Feature_Flag-off) as
+    soon as the app is imported. This test therefore covers the *no engine
+    registered* case — inert additive keys, zero capability probes — not "what a
+    fresh install returns". The advertisement of a registered engine is covered by
+    `test_info_advertises_registered_engine_flag_and_default_off` below.
     """
     body = client.get("/api/info").json()
 
