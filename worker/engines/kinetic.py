@@ -145,10 +145,10 @@ ASS_NAME = "kinetic.ass"
 SUBTITLES_CAPABILITY = "ffmpeg_filter:subtitles"
 
 #: Req 7.1 — ``PlayResX``/``PlayResY`` fallback: the pipeline's target vertical
-#: frame. The engine may not probe the clip (``run`` creates no subprocess), and
-#: the foundation ``Engine_Context`` carries no frame size, so the probed size is
-#: read from ``ctx.deps`` when the host publishes it (``play_res_x`` /
-#: ``play_res_y``, or a ``clip_size`` pair) and falls back to this value.
+#: frame. The engine may not probe the clip (``run`` creates no subprocess), so the
+#: target size is read from the Clip_Metadata channel the Pipeline publishes at the
+#: COMPOSE hook — ``ctx.clip_metadata["clip_size"]``, a ``(width, height)`` pair —
+#: and falls back to this value whenever that key is absent or malformed.
 DEFAULT_PLAY_RES: tuple[int, int] = (1080, 1920)
 
 #: Req 6.2 — minimum on-screen duration for a word, in seconds.
@@ -178,6 +178,15 @@ _KNOWN_NOTES: tuple[str, ...] = ("position_substituted", "style_substituted")
 #: Upper bound for free-text fields, generous enough for an over-long token or a
 #: full ASS ``Style:`` line while still bounding the output size (Req 16.4).
 _TEXT_LIMIT = 4096
+
+#: Slack, in **milliseconds**, allowed when quantising a second-valued timestamp
+#: onto the whole-millisecond grid ``\t`` offsets live on (Req 5.3). One
+#: nanosecond: far below anything a transcript or a frame grid can express, but
+#: comfortably above the binary-float error of a frame-snapped subtraction (a
+#: difference such as ``32/30 - 26/30`` evaluates to ``0.19999999999999996``, i.e.
+#: ~4e-14 ms short of 200 ms), so a mathematically whole millisecond floors onto
+#: itself rather than onto the millisecond below.
+_MS_EPSILON = 1e-6
 
 
 def _write_text_utf8(path: Any, text: Any) -> None:
@@ -1456,7 +1465,8 @@ def plan_kinetic(
         opts: The resolved :class:`Kinetic_Options` (a mapping is parsed).
         font: The already-resolved font ladder rung (Req 9.7) — injected, because
             probing the host font list is impure.
-        hook_text: The hook title carried on ``ctx.deps["hook_text"]`` (Req 3.3).
+        hook_text: The hook title carried on ``ctx.clip_metadata["hook_text"]``
+            (Req 3.3).
         keyword_planner: ``caption_presets.plan_keywords``-shaped callable (Req 18.1).
         remaining: ``Engine_Context.remaining``-shaped callable (Req 14.4).
         play_res_x: Probed clip width for ``PlayResX`` (Req 7.1).
@@ -1705,8 +1715,24 @@ def plan_kinetic(
             if word.synthesised and word_end - word_start < MIN_WORD_S:
                 word_end = min(end, word_start + MIN_WORD_S)
                 word_start = max(start, word_end - MIN_WORD_S)
-            rel_ms = int(round((word_start - start) * 1000))
-            rel_ms = max(0, min(rel_ms, int(math.floor((word_end - start) * 1000))))
+            # The motion onset lives on the whole-millisecond grid — the only one
+            # libass' ``\t`` can express — so the planned word start is quantised
+            # *down* onto that grid and ``rel_ms`` is read straight off the same
+            # integer. That single derivation is what keeps both halves of the
+            # contract true at once: ``rel_ms == round((word.start - cue.start) *
+            # 1000)``, which is ``build_word_span``'s own arithmetic and hence the
+            # Req 4.3 byte-for-byte parity, *and* ``cue.start + rel_ms / 1000 <=
+            # word.end`` (Reqs 5.3, 5.8), because the onset now **is** the word's
+            # own start. Quantising down never moves a bound outward, so words
+            # stay inside their cue and a synthesised word keeps its MIN_WORD_S
+            # span (Req 6.2). ``_MS_EPSILON`` absorbs binary-float error, so an
+            # offset that is mathematically a whole millisecond (e.g. 32/30 s -
+            # 26/30 s, which evaluates to 0.19999999999999996) floors onto that
+            # millisecond instead of the one below it.
+            rel_ms = max(
+                0, int(math.floor((word_start - start) * 1000.0 + _MS_EPSILON))
+            )
+            word_start = start + rel_ms / 1000.0
             if word.synthesised:
                 synthesised_count += 1
             planned.append(
@@ -2233,11 +2259,11 @@ class Kinetic_Typography_Engine(AV_Engine):
 
         No ffmpeg, no network, no subprocess of its own, no clock and no
         randomness: the result is a function of ``ctx.words``, ``ctx.duration``,
-        ``ctx.time_base``, ``ctx.options``, the resolved font, the hook text on
-        ``ctx.deps``, the injected keyword planner and ``ctx.remaining``
-        (Reqs 11.5, 15.6, 18.2). The mapping round-trips back through
-        :meth:`Kinetic_Plan.from_dict`, so ``emit_ass(plan(ctx))`` is valid
-        (Req 11.10).
+        ``ctx.time_base``, ``ctx.options``, the resolved font, the hook text and
+        clip size on ``ctx.clip_metadata``, the injected keyword planner and
+        ``ctx.remaining`` (Reqs 11.5, 15.6, 18.2). The mapping round-trips back
+        through :meth:`Kinetic_Plan.from_dict`, so ``emit_ass(plan(ctx))`` is
+        valid (Req 11.10).
         """
         font, _font_markers = self._resolve_font(ctx)
         return self._plan_for(ctx, font).to_dict()
@@ -2422,35 +2448,51 @@ class Kinetic_Typography_Engine(AV_Engine):
     def _hook_text(self, ctx: Any, opts: Kinetic_Options) -> str:
         """The hook title to plan with — ``""`` when hook titles are off (Req 3.3).
 
+        Read from the Clip_Metadata channel the Pipeline publishes at the COMPOSE
+        hook: ``ctx.clip_metadata["hook_text"]``. Total — a non-mapping
+        ``clip_metadata``, an absent key or a ``None`` value all read as no hook.
+
         ``emit_ass`` gates the hook event on a non-empty ``plan.hook_text`` alone
         (the plan carries no ``hook_enabled`` flag), so enablement is enforced
         here: a disabled hook plans as no hook at all.
         """
         if not opts.hook_enabled:
             return ""
-        deps = getattr(ctx, "deps", None)
-        if not isinstance(deps, Mapping):
+        metadata = getattr(ctx, "clip_metadata", None)
+        if not isinstance(metadata, Mapping):
             return ""
-        return _text(_get(deps, "hook_text", ""))
+        value = _get(metadata, "hook_text", "")
+        # An explicit ``None`` reads as "no hook", not as the text ``"None"``.
+        return "" if value is None else _text(value)
 
     def _play_res(self, ctx: Any) -> tuple[int, int]:
         """``(PlayResX, PlayResY)`` for the emitted header (Req 7.1).
 
         The engine may not probe the clip itself (``run`` creates no subprocess),
-        and the foundation context carries no frame size, so the probed size is
-        read from ``ctx.deps`` — ``play_res_x`` / ``play_res_y``, or a
-        ``clip_size`` ``(width, height)`` pair — and falls back to
-        :data:`DEFAULT_PLAY_RES`, the pipeline's target vertical frame.
+        so the target size comes from the Clip_Metadata channel the Pipeline
+        publishes at the COMPOSE hook: ``ctx.clip_metadata["clip_size"]``, a
+        ``(width, height)`` pair. Total by construction — a non-mapping
+        ``clip_metadata``, an absent key, a value that is not a two-element
+        sequence, and non-numeric or non-positive elements all land on
+        :data:`DEFAULT_PLAY_RES`, the pipeline's target vertical frame, rather
+        than raise. Both elements still pass through ``coerce_int(..., lo=1)``,
+        which is the identity for an already-valid size; a **non-positive**
+        element is treated as malformed (so the pair falls back whole) instead of
+        being clamped to a degenerate ``1`` — a 1-pixel ``PlayRes`` is not a size
+        the Pipeline can ever publish.
         """
-        deps = getattr(ctx, "deps", None)
-        deps = deps if isinstance(deps, Mapping) else {}
+        metadata = getattr(ctx, "clip_metadata", None)
+        metadata = metadata if isinstance(metadata, Mapping) else {}
         width: Any = None
         height: Any = None
-        size = _get(deps, "clip_size", None)
-        if isinstance(size, (list, tuple)) and len(size) >= 2:
-            width, height = size[0], size[1]
-        width = _get(deps, "play_res_x", width)
-        height = _get(deps, "play_res_y", height)
+        size = _get(metadata, "clip_size", None)
+        if isinstance(size, (list, tuple)) and len(size) == 2:
+            # ``0`` is the "malformed" sentinel here: ``coerce_int`` already maps
+            # every non-numeric value (including ``bool``) onto the default.
+            candidate_w = coerce_int(size[0], 0)
+            candidate_h = coerce_int(size[1], 0)
+            if candidate_w >= 1 and candidate_h >= 1:
+                width, height = candidate_w, candidate_h
         return (
             coerce_int(width, DEFAULT_PLAY_RES[0], lo=1),
             coerce_int(height, DEFAULT_PLAY_RES[1], lo=1),
