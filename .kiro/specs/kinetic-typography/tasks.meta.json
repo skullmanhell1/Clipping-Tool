@@ -55,6 +55,10 @@
     "11.1 Property test: output is byte-identical, offline, and side-effect-free → `tests/test_kinetic_determinism.py`": {
       "status": "passed",
       "lastRunTimestamp": 1785208898295
+    },
+    "12.2 Property test: caption text is rendered by exactly one producer → `tests/test_kinetic_compositor.py`": {
+      "status": "passed",
+      "lastRunTimestamp": 1785234342737
     }
   },
   "executionHistory": {}
