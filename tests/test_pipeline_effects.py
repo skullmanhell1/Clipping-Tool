@@ -323,3 +323,82 @@ def test_audio_stage_engine_may_replace_clip_media(make_video, tmp_path, monkeyp
     assert abs(probe_duration(out_b) - clip_length) < 0.5
 
     assert len(get_registry()) == 0
+
+
+
+# ===========================================================================
+# Clip_Metadata seam (av-engines-foundation) — Task 15.4
+# ---------------------------------------------------------------------------
+# The ONLY test that proves the *Pipeline* populates Clip_Metadata rather than a
+# test doing it by hand. The kinetic-typography engine read its hook title out of
+# ``ctx.deps["hook_text"]`` and its property tests passed because they built that
+# mapping themselves — while the Pipeline never populated it, so the hook title
+# would have silently vanished in production with the suite green. A test that
+# calls ``run_stage`` directly cannot catch that class of bug: it supplies the
+# mapping, so it proves nothing about the caller. Hence this test drives the real
+# ``run_pipeline`` and passes NO ``clip_metadata`` of its own.
+#
+# The metadata path is real too: ``options.metadata`` is ON and a ``MockLLMClient``
+# is injected into ``run_pipeline``, so ``md.hook_text`` is produced by the
+# Pipeline's own ``meta_mod.generate_metadata`` call rather than stubbed in.
+# ``aspect`` is deliberately NOT the ``9:16`` default, so a ``clip_size`` that was
+# hardcoded to the fallback preset fails here.
+# ===========================================================================
+@requires_ffmpeg
+def test_pipeline_supplies_clip_metadata_to_compose_stage_engines(
+    make_video, tmp_path, monkeypatch
+):
+    """Validates: Requirements 15.8, 23.6
+
+    A recording COMPOSE-stage engine driven by the real Pipeline observes a
+    Clip_Metadata mapping carrying the clip's non-empty ``hook_text`` (the
+    Pipeline's ``md.hook_text``) and a ``clip_size`` equal to
+    ``fu.ASPECT_PRESETS[options.aspect]`` for the requested aspect.
+    """
+    import worker.ffmpeg_utils as fu
+    import worker.pipeline as pl
+    from worker.llm_client import MockLLMClient
+
+    reset_registry()
+    reset_report()
+
+    span = (0.0, 2.5)
+    aspect = "4:5"                       # NOT the 9:16 fallback preset
+    src = make_video("engine_metadata_src.mp4", duration=3.0, w=640, h=360)
+    _stub_source_transcript(monkeypatch, pl, span)
+
+    hook = "Wait for it..."
+    llm = MockLLMClient(responses=[
+        '{"title": "Metadata clip", "description": "d", "hashtags": ["#a"], '
+        f'"hook_text": "{hook}", "cta": "Follow", "mentions": [], '
+        '"thumbnail_text": "WOW"}'
+    ])
+
+    engine = FakeEngine("compose_probe", Engine_Stage.COMPOSE, markers=("saw_metadata",))
+    _inject_isolated_host(monkeypatch, pl, [engine])
+
+    opts = Engine_Processing_Options(
+        captions=False, metadata=True, aspect=aspect, compose_probe_enabled=True,
+    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips",
+                            temp_dir=tmp_path / "tmp", llm_client=llm)
+
+    assert len(clips) == 1
+    clip = clips[0]
+    assert engine.run_count == 1
+
+    # The Pipeline — not this test — populated the mapping.
+    seen = engine.last_context.clip_metadata
+    assert seen, "the Pipeline supplied no Clip_Metadata at the COMPOSE hook"
+    assert seen["hook_text"] == hook != ""
+    assert seen["hook_text"] == clip.hook_text          # same value the clip records
+    assert seen["clip_size"] == fu.ASPECT_PRESETS[aspect]
+    assert seen["clip_size"] != fu.ASPECT_PRESETS["9:16"]   # not the hardcoded fallback
+
+    # The clip itself still lands at that same target size.
+    out = tmp_path / "clips" / clip.filename
+    assert out.exists()
+    assert probe_size(out) == fu.ASPECT_PRESETS[aspect]
+    assert "engine:compose_probe:saw_metadata" in clip.effects_applied
+
+    assert len(get_registry()) == 0
