@@ -51,19 +51,151 @@ spec's central promise to an upgrading operator).
 
 ## Tasks
 
-- [ ] 1. Prerequisite gate on the AV engines foundation
-  - [ ] 1.1 Verify the foundation modules and contracts this engine binds to exist
+- [x] 1. Prerequisite gate on the AV engines foundation
+  - [x] 1.1 Verify the foundation modules and contracts this engine binds to exist
     - Confirm `worker/engines/base.py` exports `AV_Engine` (with `resolve_options`/`plan`/`run`, `flag_field()`, `FLAG_SUFFIX`), `Engine_Stage.AUDIO`, `Engine_Status` (`applied`/`skipped`/`degraded`/`failed`), `Engine_Context` (`source_path`, `clip_path`, `duration`, `time_base`, `words`, `options`, `options_digest`, `seed`/`rng()`, `workspace`, `capabilities`, `permissibility`, `deadline`/`remaining()`, `notes`, `deps`), `Engine_Result` (+ `skipped`/`degraded`/`failed` constructors, `markers`, `artifacts`, `media`, `plan`, `detail`, `elapsed_s`), `Engine_Artifact`, `marker`, the `Engine_Options` protocol, the `coerce_bool`/`coerce_int`/`coerce_float`/`coerce_choice`/`coerce_str` helpers, `dump_options`, `options_digest`, and `derive_seed`.
     - Confirm `worker/engines/timebase.py` exports `Time_Base` (`snap`, `seconds_to_sample`, `sample_to_seconds`, `seconds_to_frame`, `frame_to_seconds`), `Timeline_Segment` and `normalize_segments`; `worker/engines/capabilities.py` exports `Capability_Report` (`status`, `available`, `first_missing`, `missing`) with the `python_pkg:`/`binary:`/`ffmpeg_filter:`/`model:` kinds and the `MODEL_LOCATORS` registry; `worker/engines/artifacts.py` exports `Engine_Workspace` (`path`, `artifact(name, media_type=…, durable=…)`) and the `<temp_dir>/engines/<job>/<clip>/<engine>__<digest>` allocation; `worker/engines/registry.py` exports the registry and its registration entry point; `worker/engines/host.py` exports the stage runner, the AUDIO-stage `raw = out.media or raw` handoff, and the clip finaliser.
     - Confirm the AUDIO-stage hook is already invoked from `worker/pipeline.py run_pipeline` after `filler.apply_keep_intervals` and before geometry, and record the exact hook/`notes` parameter names — epic 7 adds one keyword at that existing call site and must use the foundation's spelling, not a second one.
     - Do **not** add, rename, or widen any foundation symbol; if one is missing, stop and finish the foundation task that owns it.
     - _Requirements: 1.1, 1.2, 1.5, 1.6, 2.1, 3.3, 20.3, 20.6_
+    - **VERIFIED** (every symbol imported and exercised, not grepped). Present as written:
+      all of `base.py` (`AV_Engine` with `resolve_options`/`plan`/`run` + `flag_field()` classmethod
+      + `FLAG_SUFFIX == "_enabled"` and the ten ClassVars, `Engine_Stage.AUDIO`, `Engine_Status`
+      `applied`/`skipped`/`degraded`/`failed`, every named `Engine_Context` field **including
+      `source_path`, `clip_path`, `deadline`, `notes`** with exactly those spellings plus
+      `rng()`/`remaining()`, `Engine_Result` with `markers`/`artifacts`/`media`/`plan`/`detail`/
+      `elapsed_s` and the `skipped`/`degraded`/`failed` constructors, `Engine_Artifact`, `marker`,
+      the `Engine_Options` Protocol (`parse`, `to_dict`), all five `coerce_*` helpers,
+      `dump_options`, `options_digest` (16-hex, stable, separating), `derive_seed`);
+      `timebase.py` (`Time_Base.snap`/`seconds_to_sample`/`sample_to_seconds`/`seconds_to_frame`/
+      `frame_to_seconds` — sample round-trip exact at 48 kHz — plus `Timeline_Segment` and
+      `normalize_segments`); `capabilities.py` (`Capability_Report.status`/`available`/
+      `first_missing`/`missing`, the `python_pkg:`/`binary:`/`ffmpeg_filter:`/`model:` kinds, and
+      **`MODEL_LOCATORS` does exist** — an empty mutable `dict[str, Callable[[], Optional[Path]]]`
+      exported in `__all__`, and `model:<name>` was confirmed to resolve through it, reporting
+      unavailable for an unregistered name and for a registered-but-absent file);
+      `artifacts.py` (`Engine_Workspace.artifact(name, *, media_type="data", durable=False)` and
+      the `<temp_dir>/engines/<job>/<clip>/<engine>__<digest>` allocation, confirmed exactly);
+      `registry.py` (`Engine_Registry`, `Engine_Record`, `get_registry`, `register`,
+      `reset_registry`).
+    - **CORRECTIONS — bind to these shipped names, do not add the checklist's spellings:**
+      1. `Engine_Workspace.path` is a **method** `path(*parts) -> Path` (sanitising, traversal-safe);
+         the directory attribute is `Engine_Workspace.root`. Its dataclass fields are
+         `root, temp_dir, job_id, clip_id, engine_id, options_digest`. Epics 11/15 must write
+         `ws.path("in.wav")`, `ws.path("stems", "vocals.wav")`, never `ws.path / "in.wav"`.
+      2. `allocate_workspace(temp_dir, job_id, clip_id, engine_id, options_digest, *, create=True)`
+         — the fifth parameter is `options_digest`, not `digest`.
+      3. `Engine_Artifact` has a fifth field `storage_key: str = ""` (host-written on persistence).
+      4. There is **no** `Engine_Result.applied()` constructor — an applied outcome is built with
+         `Engine_Result(engine_id=…, status=Engine_Status.APPLIED, media=…, …)` directly.
+      5. `host.py` exports `SOURCE_CLIP_ID`, `MIN_WALL_TIMEOUT_S`, `DEGRADED_DETAIL_PREFIX`,
+         `Stage_Outcome`, `Engine_Host`. The stage runner is the **single generic**
+         `Engine_Host.run_stage(stage, *, clip_id, source, clip_path, clip_start, clip_end,
+         duration, words=(), clip_metadata=None)` — there is no `run_audio_stage`. The clip
+         finaliser is `Engine_Host.finish_clip(clip_id) -> list[str]` (**not** `finalize_clip`);
+         `finish_job()` and `run_source(source, info)` complete the surface.
+      6. The `raw = out.media or raw` handoff line lives in **`worker/pipeline.py` `run_pipeline`**
+         (AUDIO block), not in `host.py`. What `host.py` owns is the adoption gate at
+         `Engine_Host.run_stage`: `outcome.media = result.media` only when
+         `result.media is not None and result.status is Engine_Status.APPLIED and
+         engine.produces_media`.
+      7. **BLOCKER for epic 13.3/13.7 — Degraded_With_Media does not work on the shipped host.**
+         Verified live: an AUDIO engine returning `status=degraded` **with** media has that media
+         **dropped** (`Stage_Outcome.media is None`), because the gate above admits `APPLIED`
+         only. `applied` + media and `skipped`/`failed` + no-media all behave as designed, and a
+         `failed` result's media is discarded too. Since this gate forbids widening the
+         foundation, epics 13.3/13.5/13.7 must either return `Engine_Status.APPLIED` for rungs
+         7-9 while still emitting their `degraded:<capability_id>` markers, or the change must be
+         raised as a foundation task — **ask the user before choosing.**
+      8. `normalize_segments(segments, duration, *, time_base=None, min_duration=0.0)` accepts only
+         `Mapping`s with numeric `start`/`end` keys or `Timeline_Segment`s — plain `(start, end)`
+         tuples are silently **dropped**. Task 5.3 must feed it mappings/`Timeline_Segment`s.
+      9. `Engine_Context` has three fields the checklist does not name: `time_budget_s`,
+         `first_input_index`, `clip_metadata` (the last is appended last by contract).
+    - **AUDIO hook, recorded for epic 7** (verified by index order in `worker/pipeline.py`): the
+      hook is invoked in the `if host.active:` block **after** `filler.apply_keep_intervals` /
+      `filler.rebase_words` and **before** the geometry ladder, as
+      `host.run_stage(Engine_Stage.AUDIO, clip_id=clip_id, source=source, clip_path=raw,
+      clip_start=c.start, clip_end=c.end, duration=clip_duration, words=words)` followed by
+      `raw = out.media or raw` and `applied.extend(out.markers)`. **There is no `notes=` keyword
+      anywhere on the host's public surface**: notes are assembled inside the private
+      `Engine_Host._build_context(engine, coerced, *, clip_id, source, clip_path, clip_start,
+      clip_end, duration, words, first_input_index=0, clip_metadata=None)` as a local
+      `notes = (f"fps_fallback:{…}",) if base.fps_substituted else ()`. So epic 7's "one extra
+      keyword at the existing call site" means adding a new keyword parameter to the public
+      `run_stage` **and** threading it into `_build_context` — i.e. an additive signature change
+      to a foundation method, which the plan's preamble claims not to make. `filler_seam_notes`
+      is confirmed absent today. Epic 7 must reconcile this with the user first.
+    - **RE-VERIFIED** on a second pass by re-importing every symbol and re-exercising the live
+      host handoff: 154 checks pass, and correction 7 reproduces exactly (an AUDIO engine
+      returning `degraded` **with** media still yields `Stage_Outcome.media is None`). The AUDIO
+      call site in `worker/pipeline.py` is unchanged from the record above (lines ~294–301,
+      `if host.active:` → `host.run_stage(Engine_Stage.AUDIO, clip_id=…, source=…, clip_path=raw,
+      clip_start=c.start, clip_end=c.end, duration=clip_duration, words=words)` → `raw =
+      out.media or raw` → `applied.extend(out.markers)`), and the host gate is literally
+      `result.media is not None and result.status is Engine_Status.APPLIED and
+      bool(getattr(engine, "produces_media", False))` (`worker/engines/host.py` ~596–601).
+      No foundation symbol was added, renamed or widened by this gate.
 
-  - [ ] 1.2 Verify the foundation suite and property toolchain are green before binding to them
+  - [x] 1.2 Verify the foundation suite and property toolchain are green before binding to them
     - Run `pytest tests/test_engines_base.py tests/test_engine_registry.py tests/test_engine_capabilities.py tests/test_engine_timebase.py tests/test_engine_artifacts.py tests/test_engine_host.py -q` and confirm it passes.
     - Confirm `tests/fakes.py` provides the foundation doubles (prober/storage/clock/engine fakes) and that `tests/strategies.py` provides `st_options_mapping`, `st_word_timeline`, `st_time_base`, `st_segment_records`, `st_availability_map`, `st_engine_outcomes`; confirm `hypothesis` imports (the foundation already declares it in `requirements-dev.txt` — do **not** re-add it, and do **not** touch `.github/workflows/ci.yml`).
     - Confirm the existing `tests/conftest.py` helpers `requires_ffmpeg`, `make_video`, `probe_duration`, `FakeWord` are importable, and that `worker/ffmpeg_utils.py` exports `probe`, `MediaInfo`, `FFmpegError` (`MediaInfo` carries no sample rate or channel count — this engine adds its own private `ffprobe` read rather than widening it).
     - _Requirements: 19.1, 19.3, 19.4, 19.7, 20.6_
+    - **VERIFIED** (every name imported and drawn/called, not grepped). `requirements-dev.txt`
+      and `.github/workflows/ci.yml` were read only and left untouched.
+      - **Foundation subset green:** `pytest tests/test_engines_base.py tests/test_engine_registry.py
+        tests/test_engine_capabilities.py tests/test_engine_timebase.py tests/test_engine_artifacts.py
+        tests/test_engine_host.py -q` → **76 passed, 0 failed** (14.4 s).
+      - **Full suite:** `pytest -q` → **336 passed, 75 skipped, 0 failed** (35.6 s) with ffmpeg off
+        `PATH`; all 75 skips are the `requires_ffmpeg` marker. With ffmpeg/ffprobe on `PATH`:
+        **410 passed, 1 failed** (127 s) — see the pre-existing failure below.
+      - **`tests/strategies.py`** provides all six 1.2 names, each drawing successfully:
+        `st_options_mapping(*, max_size=6)`, `st_word_timeline(*, min_words=1, max_words=8)`,
+        `st_time_base(*, sample_rates=(8000…96000))`, `st_segment_records(*, duration=30.0,
+        min_size=0, max_size=8)`, `st_availability_map(*, max_size=8)`,
+        `st_engine_outcomes(*, engine_id=None, max_markers=3, max_artifacts=2,
+        allow_exception=True)`. None of the epic-2.1 stem generators exist yet, as expected.
+      - **`tests/fakes.py`** provides the foundation doubles under these exact names — prober:
+        `StaticProber`, `CountingProber`, `RaisingProber`; storage: `RecordingStorage`; clock:
+        `FakeClock`; engine: `FakeEngine`, `RaisingEngine`, `SlowEngine`; plus the
+        `FakeDiarizationBackend` / `RaisingDiarizationBackend` naming pattern epic 2.2 must follow.
+        None of the epic-2.2 stem doubles exist yet, as expected.
+      - **`hypothesis` imports** (6.163.0) and `settings(max_examples=100, deadline=None)` is
+        usable; it is already declared in `requirements-dev.txt` (line 8,
+        `hypothesis>=6.100,<7.0`) and was **not** re-added. `.hypothesis/` is gitignored.
+      - **`worker/ffmpeg_utils.py`**: `probe(path: str | Path) -> MediaInfo`, `MediaInfo`,
+        `FFmpegError` all present; `MediaInfo` fields are exactly
+        `duration, width, height, fps, has_audio` — **no** `sample_rate`/`channels`, confirming
+        task 11.1's private `ffprobe` read instead of widening it.
+    - **CORRECTIONS — bind to these shipped shapes, do not add the checklist's spellings:**
+      1. `FakeWord.__init__(self, start, end, text)` — the order is **(start, end, text)**, not
+         `(text, start, end)`. Epic 2.1's `st_keep_plan`/`st_word_timeline`-composing generators
+         and every later test must construct `FakeWord(0.0, 0.5, "hi")`. It also sets
+         `.probability = 1.0`.
+      2. `make_video` is a **pytest fixture** (a factory), not an importable function: request it
+         as a test argument and call `make_video(name="src.mp4", duration=3.0, w=1280, h=720,
+         audio=True) -> Path`, writing under the test's `tmp_path`. `probe_duration(path) ->
+         float` and `requires_ffmpeg` are module-level and importable from `tests.conftest`.
+         `conftest.py` also offers `probe_size(path) -> (w, h)` and the `png_asset` fixture.
+      3. `requires_ffmpeg` is `pytest.mark.skipif` driven by `shutil.which(settings.ffmpeg_binary)`.
+         In this sandbox ffmpeg/ffprobe are **not** on the default `PATH` (binaries live at
+         `/projects/sandbox/.ffbin`), so every ffmpeg-dependent test in epics 11/12/15/19 will
+         **skip** unless `PATH` is extended for the run — a skip is not a pass; run those epics'
+         integration tests with ffmpeg on `PATH` before claiming them green.
+      4. Run tests with **Python 3.11** (matching `ci.yml`'s `python-version: "3.11"`); the
+         sandbox default `python3` is 3.9 and has no `hypothesis`/`pytest` installed.
+      5. **Pre-existing sibling-spec failure, not ours and not to be fixed here:**
+         `tests/test_kinetic_plan.py::test_p12_malformed_timings_degrade_instead_of_raising`
+         fails when ffmpeg is on `PATH` with counterexample `Time_Base(fps=14.0,
+         sample_rate=8000)` + `st_broken_word_timeline()` — a synthesised word of
+         `3.357142857142857 - 3.2857142857142856 = 0.0714 s` violates `MIN_WORD_S = 0.08`
+         (frame-snapping at 14 fps shrinks the invented interval below the documented minimum).
+         It is a `kinetic-typography` property, which Req 20.6 forbids this spec from touching,
+         and it is now cached in the local `.hypothesis` example database so it will replay.
+         Epic 18.1's parity assertions must not be built on a "whole suite green" premise:
+         treat this test as a known-red baseline owned by `kinetic-typography`, or ask the user
+         to route it to that spec first.
 
 - [ ] 2. Stem-specific generators and test doubles
   - [ ] 2.1 Add the stem generators to the existing `tests/strategies.py`
