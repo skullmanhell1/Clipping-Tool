@@ -444,3 +444,161 @@ def test_upload_with_unrecognised_engine_options_still_creates_job(client):
     assert not hasattr(job.options, "stem_separation_enabled")
     assert job.options.aspect == "9:16"
     assert job.options.captions is True
+
+
+
+# ---------------------------------------------------------------------------
+# Kinetic typography engine (task 13.6): `/api/info` advertisement and
+# `/api/upload` acceptance (Reqs 17.2, 17.3, 17.4, 17.7).
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def kinetic_registry(engine_registry):
+    """The default registry holding **exactly** the real kinetic engine.
+
+    Registration is explicit rather than inherited from
+    ``worker/engines/loader.py``'s import-time side effect: several tests in the
+    suite call ``reset_registry()`` without restoring, and a later import cannot
+    re-register (the module is cached and the loader guards on
+    ``find(ENGINE_ID) is None``), so whether the production registration is still
+    live depends on test ordering. The `engine_registry` fixture empties the
+    registry and replays whatever it found on the way out, so registering here is
+    both deterministic and leak-free.
+    """
+    from worker.engines.kinetic import Kinetic_Typography_Engine
+
+    engine_registry.register(Kinetic_Typography_Engine())
+    return engine_registry
+
+
+def test_info_advertises_kinetic_typography_domains(client, kinetic_registry):
+    """Validates: Requirements 17.2, 17.3
+
+    `/api/info` advertises the engine row (flag, default-off, availability) plus
+    its Kinetic_Style / Reveal_Mode domains under
+    `capabilities["kinetic_typography"]`, and every v0.8.0 caption option value is
+    still advertised alongside it (additive, never replaced).
+    """
+    from worker.effects.caption_presets import VALID_ANIMATIONS
+    from worker.engines.kinetic import KINETIC_STYLES, REVEAL_MODES
+
+    body = client.get("/api/info").json()
+
+    rows = [row for row in body["engines"] if row["id"] == "kinetic_typography"]
+    assert len(rows) == 1, body["engines"]
+    row = rows[0]
+    assert row["flag"] == "kinetic_typography_enabled"
+    assert row["enabled_by_default"] is False
+    assert row["stage"] == "compose"
+    assert row["requires_network"] is False
+    # Availability is host-dependent (it needs ffmpeg's subtitles filter), so
+    # assert the pair is self-consistent rather than pinning one outcome.
+    assert isinstance(row["available"], bool)
+    assert isinstance(row["missing"], list)
+    assert row["available"] is (row["missing"] == [])
+
+    # The option domains ride in the generic capabilities block, keyed by the
+    # Engine_Id — this is the key the UI reads.
+    domains = body["capabilities"]["kinetic_typography"]
+    assert domains["styles"] == list(KINETIC_STYLES)
+    assert domains["reveal_modes"] == list(REVEAL_MODES)
+    assert domains["reveal_modes"] == ["cumulative", "word_by_word"]
+    assert len(domains["styles"]) == 7
+
+    # Additive: every v0.8.0 caption preset and animation value is still there.
+    effects = body["effects"]
+    for name in ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi"):
+        assert name in effects["caption_presets"]
+    assert set(effects["caption_animations"]) == set(VALID_ANIMATIONS)
+    assert effects["caption_templates"] == ["karaoke", "boxed", "minimal"]
+    assert effects["caption_positions"] == ["bottom", "center", "top"]
+    assert PREEXISTING_INFO_KEYS <= set(body)
+
+
+def test_upload_accepts_every_kinetic_field(client):
+    """Validates: Requirements 17.4
+
+    Every kinetic Form field is accepted by `/api/upload` and reaches the stored
+    job's options.
+    """
+    resp = client.post(
+        "/api/upload",
+        files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")},
+        data={
+            "kinetic_typography_enabled": "true",
+            "kinetic_style": "bounce",
+            "kinetic_reveal": "word_by_word",
+            "kinetic_font": "Impact",
+            "kinetic_max_lines": "3",
+            "kinetic_max_line_width": "30",
+            "kinetic_safe_area_x_pct": "8",
+            "kinetic_safe_area_y_pct": "12",
+            "kinetic_motion_ms": "250",
+            "kinetic_confidence_floor": "0.4",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["jobs"][0]["id"]
+
+    job = get_manager().store.get(job_id)
+    assert job is not None
+    assert job.options.kinetic_typography_enabled is True
+    assert job.options.kinetic_style == "bounce"
+    assert job.options.kinetic_reveal == "word_by_word"
+    assert job.options.kinetic_font == "Impact"
+    # Form values arrive as text and are coerced by the engine's resolve_options,
+    # so assert the submitted value survived rather than pinning a numeric type.
+    assert str(job.options.kinetic_max_lines) == "3"
+    assert str(job.options.kinetic_max_line_width) == "30"
+    assert str(job.options.kinetic_safe_area_x_pct) == "8"
+    assert str(job.options.kinetic_safe_area_y_pct) == "12"
+    assert str(job.options.kinetic_motion_ms) == "250"
+    assert str(job.options.kinetic_confidence_floor) == "0.4"
+
+    # Omitting every field keeps the documented defaults (Req 17.1).
+    plain = client.post(
+        "/api/upload", files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")}
+    )
+    assert plain.status_code == 200, plain.text
+    default_job = get_manager().store.get(plain.json()["jobs"][0]["id"])
+    assert default_job is not None
+    assert default_job.options.kinetic_typography_enabled is False
+    assert default_job.options.kinetic_style == "karaoke_fill"
+    assert default_job.options.kinetic_reveal == "cumulative"
+    assert default_job.options.kinetic_font == ""
+    assert default_job.options.kinetic_max_lines == 2
+    assert default_job.options.kinetic_max_line_width == 22
+    assert default_job.options.kinetic_safe_area_x_pct == 6.0
+    assert default_job.options.kinetic_safe_area_y_pct == 10.0
+    assert default_job.options.kinetic_motion_ms == 120
+    assert default_job.options.kinetic_confidence_floor == 0.0
+
+
+def test_upload_unrecognised_kinetic_style_still_creates_job(client):
+    """Validates: Requirements 17.7
+
+    An unrecognised `kinetic_style` is never rejected: the job is accepted, the
+    raw value is stored, and the engine's own resolution applies the documented
+    default while recording the substitution.
+    """
+    resp = client.post(
+        "/api/upload",
+        files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")},
+        data={
+            "kinetic_typography_enabled": "true",
+            "kinetic_style": "wobble",
+            "kinetic_reveal": "sideways",
+            "kinetic_max_lines": "abc",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    job = get_manager().store.get(resp.json()["jobs"][0]["id"])
+    assert job is not None
+    assert job.options.kinetic_style == "wobble"
+
+    from worker.engines.kinetic import DEFAULT_REVEAL, DEFAULT_STYLE, Kinetic_Options
+
+    resolved = Kinetic_Options.from_processing_options(job.options)
+    assert resolved.style == DEFAULT_STYLE
+    assert resolved.reveal == DEFAULT_REVEAL
+    assert resolved.max_lines == 2
+    assert "style_substituted" in resolved.notes
