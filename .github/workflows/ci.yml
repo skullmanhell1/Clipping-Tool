@@ -1,9 +1,22 @@
 name: CI
 
 on:
+  # `push` is restricted to main rather than "**". With every branch included, a push
+  # to a branch that has an open PR fired *both* the push and pull_request events, so
+  # the whole suite ran twice in parallel for identical code -- visible as separate
+  # "Backend (push)" and "Backend (pull_request)" checks. Branch changes are covered
+  # by pull_request; main still needs push because the deploy job below requires
+  # `github.event_name == 'push'`.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+# Cancel a run that a newer push has superseded. Previously each push left the
+# earlier run grinding to completion, which on a ~7 minute backend job meant several
+# obsolete runs competing for runners at once.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
