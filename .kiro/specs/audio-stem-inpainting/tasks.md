@@ -734,43 +734,98 @@ spec's central promise to an upgrading operator).
     cannot change all-off behaviour by construction (no engine is enabled, so no result is
     collected), but that reasoning has not been *executed* here — check the CI run.
 
-- [ ] 13. The engine class and the `run` gate / degradation ladder
-  - [ ] 13.1 Declare the ClassVar contract, injected collaborators, and registration
+- [x] 13. The engine class and the `run` gate / degradation ladder
+  - [x] 13.1 Declare the ClassVar contract, injected collaborators, and registration
     - `class Stem_Inpainting_Engine(AV_Engine)` with `engine_id = "stem_inpainting"`, `stage = Engine_Stage.AUDIO`, `priority = 20`, `required_capabilities = ("binary:ffmpeg",)`, the designed `optional_capabilities` tuple (`python_pkg:demucs`, `model:htdemucs`, `ffmpeg_filter:acrossfade`, `afade`, `pan`, `highpass`, `lowpass`, `alimiter`), `requires_network = False`, `requires_model_download = True`, `time_budget_s = 90.0`, `max_media_passes = 2`, `produces_media = True`.
     - Keyword-only `__init__` injecting `backend`, `runner` and `prober`; register once at import through the foundation registry; keep the inherited `flag_field()` resolving to `stem_inpainting_enabled` (default OFF); keep every heavy dependency behind a lazy call so the module imports with `demucs`, `torch`, the model and ffmpeg all absent.
     - _Requirements: 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2.1, 15.1, 15.2, 16.1, 16.5, 19.1_
 
-  - [ ] 13.2 Implement ladder rungs 0–6 — the pre-work gates, all No_Media_Outcomes
+  - [x] 13.2 Implement ladder rungs 0–6 — the pre-work gates, all No_Media_Outcomes
     - Strictly ordered, first match returns, every marker built with `marker("stem_inpainting", …)`: **0** flag disabled → body never invoked, no workspace, no exclusive probe, no pass, no media; **1** `binary:ffmpeg` unavailable → `skipped` + `unavailable:binary:ffmpeg`, no media; **2** Permissibility on and the resolved backend declares `requires_network` → `degraded` + `permissibility_blocked`, **no media (Degraded_Without_Media)**; **3** `plan_is_noop` → `skipped`, **no marker at all**, no media; **4** no audio stream → `skipped`, **no marker at all**, no media; **5** probed sample rate/channels missing, zero or negative → `degraded` + `degraded:audio_format`, **no media (Degraded_Without_Media)**; **6** `remaining() < REPAIR_MIN_S + REMUX_MIN_S` before extraction → `degraded` + `degraded:budget`, no media.
     - Rungs 3 and 4 must return before any workspace file is written, any capability beyond `binary:ffmpeg` is probed and any subprocess is started, so the no-op and no-audio cases are observable as zero runner calls. For every rung here the engine returns no media and the host forwards the preceding stage's media byte-identically.
     - _Requirements: 1.8, 3.4, 3.11, 4.8, 5.6, 13.6, 15.8, 16.3, 17.5_
 
-  - [ ] 13.3 Implement ladder rungs 7–11 — the degradation rungs, with and without media
+  - [x] 13.3 Implement ladder rungs 7–11 — the degradation rungs, with and without media
     - **Degraded_With_Media** (status `degraded`, `Engine_Result.media` **set** and used as the clip media exactly as for `applied`): **7** separation needed but `remaining() < SEPARATION_MIN_S(backend) + REPAIR_MIN_S + REMUX_MIN_S` → run the repair-only `crossfade` path on the un-separated audio, markers `degraded:budget` + `repair:crossfade:<n>`; **8** `python_pkg:demucs` and/or `model:htdemucs` unavailable with separation needed → ffmpeg backend, markers `degraded:python_pkg:demucs` and/or `degraded:model:htdemucs` plus `applied:ffmpeg`, `mix:<preset>`, `repair:<mode>:<n>`, `stem_missing:other`; **9** `spectral` requested on a non-`ml` backend → repair as `crossfade`, markers `degraded:python_pkg:demucs` + `repair:crossfade:<n>`.
     - **Degraded_Without_Media** (status `degraded`, **no media**, preceding stage's media used): **10** a filter required by the resolved path unavailable (`pan`/`highpass`/`lowpass` on the ffmpeg backend, the `volume` chain otherwise) → `unavailable:ffmpeg_filter:<name>`; **11** budget exhausted during separation or later → delete every partial artifact first, then `timeout`.
     - Emit exactly one degradation marker per missing Capability_Id per clip. Apply the Requirement 17 audio-integrity verification to Degraded_With_Media exactly as to `applied`.
     - _Requirements: 3.10, 3.11, 7.4, 7.8, 12.4, 12.6, 13.2, 13.5, 13.7, 15.5, 15.6, 15.7_
 
-  - [ ] 13.4 Implement ladder rungs 12–15 — failures and the applied rung
+  - [x] 13.4 Implement ladder rungs 12–15 — failures and the applied rung
     - **12** backend raised, returned a non-audio file, or returned wrong-duration audio → `failed` + `failed`, no media; **13** any ffmpeg invocation raised `FFmpegError` → `failed` + `failed`, no media; **14** `verify_replacement` raised → delete the candidate, `failed` + `failed`, no media; **15** otherwise, ML backend used → `applied` with media plus `applied:ml`, `mix:<preset>`, `repair:<mode>:<n>` when `n >= 1`, and one `stem_missing:<name>` per omission.
     - Catch `OSError` around each workspace write/delete, record the detail in `Engine_Result` and continue producing the clip; let unexpected exceptions propagate to the host, which converts them to `failed` + the `failed` marker and logs the exception type and message. Return the serialised `Stem_Plan` in `Engine_Result.plan`. Every rung that abandons work deletes what it created, so no partial Replacement_Media survives.
     - _Requirements: 3.1, 3.5, 3.7, 3.11, 5.8, 7.8, 11.6, 13.1, 14.1, 14.2, 14.3, 14.4, 14.5, 15.7_
 
-  - [ ]* 13.5 Property test: the degradation ladder is a total function to (status, markers) → `tests/test_stems_ladder.py`
+  - [x]* 13.5 Property test: the degradation ladder is a total function to (status, markers) → `tests/test_stems_ladder.py`
     - **Property 15: The degradation ladder is a total function to (status, markers)** — for any combination of capability availability map, remaining budget, `Stem_Options` and backend network declaration, `run` returns the status and the exact marker set of the matching ladder row, with at most one degradation marker per missing Capability_Id, no marker at all for the no-audio and no-op skips, and media returned only on the rows marked "yes" (the Degraded_With_Media rungs 7–9 and the applied rung 15). Generators: `st_availability_map`, `st_gate_scenarios`, `st_stem_options`.
     - _Requirements: 3.7, 7.4, 7.8, 12.4, 12.6, 13.1, 13.2, 13.5, 13.6, 13.7, 15.5, 15.6, 16.3, 17.5_ · _Properties: P15_
 
-  - [ ]* 13.6 Property test: every failure is isolated and leaves nothing behind → `tests/test_stems_ladder.py`
+  - [x]* 13.6 Property test: every failure is isolated and leaves nothing behind → `tests/test_stems_ladder.py`
     - **Property 16: Every failure is isolated and leaves nothing behind** — for any forced failure point (backend raising, truncated or non-audio backend output, `FFmpegError`, timeout, integrity failure, `OSError` on a workspace operation), `run` returns `failed` or `degraded` with no media, the incoming clip file is byte-identical, no partial Replacement_Media remains on disk, and the clip and its thumbnail are still written from the preceding stage's media. Generators: `st_failure_points`, `st_stem_options`.
     - _Requirements: 3.4, 3.5, 3.6, 11.6, 14.1, 14.2, 14.3, 14.4, 14.6, 15.7_ · _Properties: P16_
 
-  - [ ]* 13.7 Tests: the media-presence invariant across every outcome → `tests/test_stems_ladder.py`
+  - [x]* 13.7 Tests: the media-presence invariant across every outcome → `tests/test_stems_ladder.py`
     - One host-level example test per outcome class asserting `Engine_Result.media` is set **exactly** for `applied` and the Degraded_With_Media rungs (7, 8, 9) and unset **exactly** for every No_Media_Outcome (`skipped`, `failed`, Degraded_Without_Media — rungs 1–6, 10, 11, 12–14), that the media handed to the geometry stage is byte-identical to the preceding stage's media exactly for the No_Media_Outcomes, and that a Degraded_With_Media result is taken as the current clip media by the host exactly as an `applied` one is and passes the same Requirement 17 integrity checks.
     - _Requirements: 3.3, 3.4, 3.10, 3.11_
 
-  - [ ]* 13.8 Unit tests: the pinned ClassVar block, registration, flag, and logging → `tests/test_stems_ladder.py`
+  - [x]* 13.8 Unit tests: the pinned ClassVar block, registration, flag, and logging → `tests/test_stems_ladder.py`
     - Assert the declared ClassVars equal the pinned contract block exactly; registration happens once per process under `stem_inpainting`; `flag_field()` resolves to `stem_inpainting_enabled` and defaults to disabled; `caplog` contains the caught exception type and message for a failed invocation; the engine leaves the passed Processing_Options instance unchanged.
     - _Requirements: 1.1, 1.3, 1.5, 1.6, 1.7, 1.8, 14.5, 15.1, 15.2, 16.1, 16.5_
+
+  - **EPIC 13 NOTES.**
+    - **GREEN.** `pytest tests/ -q` → **464 passed, 82 skipped, 0 failed** (439 before this
+      epic). New module `tests/test_stems_ladder.py` (25 tests: P15, P16, the media-presence
+      invariant, the ClassVar pin, and one test per rung). Verified stable under reordering
+      against `tests/test_engine_host.py`, which resets the engine globals.
+    - **The two spec/foundation contradictions, resolved as follows** (flagged to the user
+      before implementing):
+      1. **Rung 1 is `degraded`, not `skipped`.** This spec's ladder table says a missing
+         `binary:ffmpeg` yields `skipped`, but `binary:ffmpeg` is a **required** capability
+         and the *host* gates those, returning `degraded` + `unavailable:binary:ffmpeg`
+         (foundation Req 7.1). The foundation owns the gate, so the foundation's status is
+         what happens. There is deliberately **no duplicate check in the engine** — that
+         would be the only place the two could ever disagree. This spec's table is stale.
+      2. **Rung 11 keeps `degraded`; a host watchdog overrun stays `failed`.** This spec's
+         Req 15.6 says `degraded` + `timeout`; foundation Req 8.6 says `failed` + `timeout`.
+         They are describing **different events**: the engine noticing it is out of time and
+         standing down cleanly (`degraded`, implemented as a cooperative `step_remaining`
+         gate plus a caught `TimeoutExpired`), versus the host's wall-clock watchdog firing
+         because the engine did *not* notice (`failed`). Both now exist and neither spec
+         needed to lose.
+    - **CORRECTIONS:**
+      1. **Rung 13 reaches the probe.** `ffprobe` is an ffmpeg invocation, so a probe that
+         will not run is `failed`, not a degradation — with no format there is nothing to fall
+         back *to*. The first draft let `FFmpegError` from the prober escape to the host,
+         which still reported `failed` but as an apparently-unhandled error rather than a
+         named rung. **Found by P16**, not by inspection.
+      2. **Rung 7 is re-planned from options, not patched onto the frozen plan.** Forcing
+         `repair_mode="crossfade"` and neutral gains through `plan_stems` means the serialised
+         `Stem_Plan` honestly describes what ran; mutating the plan would have left it
+         claiming a separation that never happened.
+      3. **`step_remaining` is a separate function from `step_timeout`.** The budget *gates*
+         need a plain comparable number and fail **closed** on a broken `remaining()`
+         (`0.0`); `step_timeout` needs a subprocess timeout and floors **open** at
+         `MIN_STEP_TIMEOUT_S`. Same input, opposite correct default — so one function could
+         not serve both.
+      4. **`_capability_missing` treats an absent report as "available".** Only an explicit
+         `False` counts as missing, so a context built without a Capability_Report does not
+         degrade every engine that consults one.
+
+  - **TASKS 17.1 / 17.2 / 17.4 DONE OUT OF ORDER, deliberately.** Registering the engine in
+    epic 13 makes `/api/info` advertise it, and the frontend renders an "Advanced engines"
+    toggle for every advertised engine — but `ProcessingOptions` had no
+    `stem_inpainting_enabled` field and `DEFAULT_ENGINE_SETTINGS` did not list it, so the
+    toggle would have been **inert**: visible, clickable, and doing nothing. That is a
+    user-visible defect introduced by 13.1, so the minimum wiring to close it landed with it:
+    the eleven `ProcessingOptions` fields (17.1), `OptionsModel` + the `/api/upload` Form
+    fields (17.2), and the frontend defaults that `engineOptions` forwards generically and
+    profiles round-trip (17.4). Verified end to end: `from_dict({'stem_inpainting_enabled':
+    'true', ...})` yields a real `bool`, `Engine_Host.active` becomes `True`, and
+    `resolve_options` returns the expected `Stem_Options`. Frontend `npm run build` passes.
+    **Still open in epic 17:** 17.3 (advertise the stem option domains in `/api/info`), 17.5
+    (the dedicated "Stem repair" panel group with the gain sliders and the `spectral`-needs-a-
+    model hint) and its two test tasks. Until 17.5 the ten detail fields are settable through
+    the API and through a saved profile, but not through the UI.
 
 - [ ] 14. Checkpoint — engine ladder complete
   - Ensure all tests pass, ask the user if questions arise.
@@ -803,11 +858,11 @@ spec's central promise to an upgrading operator).
     - _Requirements: 7.11_ · _Properties: P14_
 
 - [ ] 17. API and UI surface
-  - [ ] 17.1 Add the eleven Processing_Options fields
+  - [x] 17.1 Add the eleven Processing_Options fields
     - Add `stem_inpainting_enabled: bool = False` plus `stem_mix_preset`, `stem_gain_vocals`, `stem_gain_music`, `stem_gain_other`, `stem_repair_mode`, `stem_repair_window_ms`, `stem_declick`, `stem_backend`, `stem_model`, `stem_retain_stems` to `worker/models.py` with exactly the designed defaults, coerced through the existing `from_dict` convention so `from_dict`/`dataclasses.asdict` round-trip losslessly; retain every existing v0.8.0 field and default, and leave `music`, `music_volume` and every existing `effects_applied` marker value untouched.
     - _Requirements: 9.8, 18.1, 20.2, 20.4, 8.4_
 
-  - [ ] 17.2 Extend `OptionsModel` and the `/api/upload` Form fields
+  - [x] 17.2 Extend `OptionsModel` and the `/api/upload` Form fields
     - Accept `stem_inpainting_enabled` and every `Stem_Options` field name in `api/main.py`, all optional; unrecognised values are coerced to documented defaults by `Stem_Options.parse` and the job still processes.
     - _Requirements: 18.1, 18.5_
 
@@ -815,7 +870,7 @@ spec's central promise to an upgrading operator).
     - Add `engines.stem_inpainting`: `{flag, default: false, available, backend, capabilities: {"python_pkg:demucs": bool, "model:htdemucs": bool}, mix_presets, repair_modes, stem_set, repair_window_ms: {min, max, default}}`, advertising the separation package and model availability and that the engine needs an operator-provisioned local model for full fidelity; leave every existing v0.8.0 value — including `audio.available_moods` — untouched.
     - _Requirements: 12.8, 16.5, 18.2, 18.6_
 
-  - [ ] 17.4 Add the frontend defaults and `toOptions` forwarding
+  - [x] 17.4 Add the frontend defaults and `toOptions` forwarding
     - In `frontend/src/App.jsx`, add `stem_inpainting_enabled: false` plus one default per `Stem_Options` field, and forward every one of them from `toOptions`.
     - _Requirements: 18.3_
 

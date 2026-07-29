@@ -129,6 +129,28 @@ class ProcessingOptions:
     kinetic_motion_ms: int = 120               # 20..1000 ms per-word motion duration
     kinetic_confidence_floor: float = 0.0      # 0..1 word-confidence emphasis floor
 
+    # --- Stem inpainting engine (default OFF) -----------------------------
+    # Same arrangement as the kinetic block above, for the same reasons:
+    # ``stem_inpainting_enabled`` is the Feature_Flag the engine's inherited
+    # ``flag_field()`` resolves to, and the ten flat ``stem_*`` fields mirror
+    # ``Stem_Options`` one-for-one so ``from_dict`` / ``dataclasses.asdict``
+    # round-trip them losslessly. Values are deliberately *not* validated here —
+    # the engine's ``resolve_options`` coerces every one of them against its
+    # documented bounds, which is what keeps this module free of a
+    # ``worker.engines`` import and keeps an unrecognised value from failing a job.
+    stem_inpainting_enabled: bool = False      # Feature_Flag (flag_field())
+    stem_mix_preset: str = "custom"            # custom|speech_focus|music_focus|
+                                               # clean_speech
+    stem_gain_vocals: float = 1.0              # 0.0..4.0 (0.0 mutes, >1.0 boosts)
+    stem_gain_music: float = 1.0               # 0.0..4.0
+    stem_gain_other: float = 1.0               # 0.0..4.0
+    stem_repair_mode: str = "crossfade"        # off | crossfade | spectral
+    stem_repair_window_ms: int = 12            # 2..120 ms symmetric seam window
+    stem_declick: bool = False                 # 1 ms fade at clip head/tail
+    stem_backend: str = "auto"                 # auto | ml | ffmpeg
+    stem_model: str = "htdemucs"               # separation checkpoint name
+    stem_retain_stems: bool = False            # keep per-stem WAVs as durable artifacts
+
     # Known value sets for enum-like string fields (used by ``from_dict``).
     _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
@@ -176,7 +198,15 @@ class ProcessingOptions:
                            # enabled, and so the flag survives both
                            # ``from_dict`` and ``effective_options`` as a real
                            # ``bool`` (Reqs 10.10, 17.1, 17.8)
-                           "kinetic_typography_enabled"):
+                           "kinetic_typography_enabled",
+                           # The stem engine's Feature_Flag and its two booleans, for the
+                           # same reason: the host reads the flag through ``coerce_bool``,
+                           # but ``effective_options`` and the parity gate compare options
+                           # by value, so ``"false"`` from a form field must become ``False``
+                           # here rather than a truthy string.
+                           "stem_inpainting_enabled",
+                           "stem_declick",
+                           "stem_retain_stems"):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
         if "music_volume" in valid:
