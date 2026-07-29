@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -30,10 +31,23 @@ class HistoryStore:
         self._lock = threading.RLock()
         self._init()
 
+    @contextmanager
     def _connect(self):
+        """Yield a connection, committing on success and **closing** either way.
+
+        ``with sqlite3.connect(...)`` manages the *transaction*, not the connection: it
+        commits or rolls back but never closes. Every call site here uses ``with``, so
+        connections were left for the garbage collector and descriptors accumulated in
+        the meantime. The inner ``with conn`` keeps the commit/rollback behaviour the
+        call sites depend on, so none of them change.
+        """
         conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init(self) -> None:
         with self._connect() as db:
