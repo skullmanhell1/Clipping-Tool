@@ -2530,9 +2530,9 @@ def extract_clip_audio(
 
 
 def notch_filters(
-    windows: Sequence[Repair_Window], *, scale: float = 1.0
+    windows: Sequence[Repair_Window], *, scale: float = 1.0, channels: int = 2
 ) -> tuple[str, ...]:
-    """The chunked ``volume`` filters implementing equal-power V-notch seam repair.
+    """The chunked ``aeval`` filters implementing equal-power V-notch seam repair.
 
     Per merged :class:`Repair_Window` ``[s, e]`` with centre ``c`` and half-width ``h``, the
     gain is ``sin(PI/2*abs(t-c)/h)`` — an **equal-power V-notch**: unity at both window
@@ -2549,9 +2549,24 @@ def notch_filters(
       nowhere else.
     * a chained ``afade=t=out`` sets the gain to zero for *everything after* the fade, so it
       cannot express an interior window at all.
-    * one ``volume`` filter with ``eval=frame`` and a piecewise expression is duration-exact,
-      touches only samples inside the planned windows, and costs a constant number of nodes
-      in the Seam count.
+    * **``volume`` with ``eval=frame`` — which the design specifies — does not work.**
+      Verified empirically against ffmpeg 7.0.2: with ``eval=frame`` the ``t`` variable does
+      not take the values a per-frame evaluation implies, so ``gt(t,1.0)`` is false for every
+      frame of a 3-second input and a ``between(t,…)``-gated expression never fires. The
+      filter silently applies unity gain — no error, no warning, output byte-identical to the
+      input. A constant expression (``volume='0.5'``) *does* apply, which is exactly why this
+      is so easy to miss: the filter looks like it is working. Even had ``t`` behaved,
+      ``eval=frame`` evaluates once per 1024-sample block (~21 ms at 48 kHz), which cannot
+      express the 12 ms default window at all.
+    * ``aeval`` evaluates its expression **per sample**, so the taper is exact rather than
+      stepped, it is duration-exact, and it costs a constant number of nodes in the Seam
+      count. Measured cost is ~1.8 s for 24 windows over 30 s of stereo — comfortably inside
+      the engine's declared budget.
+
+    One expression is emitted per channel (``val(0)*g|val(1)*g``) with ``c=same``, so the
+    channel layout is preserved and the same gain is applied to every channel. A single
+    expression does appear to be reused across channels in practice, but that is undocumented
+    behaviour and the explicit form costs nothing.
 
     Because ``repair_windows`` already merged overlaps through ``normalize_segments``, each
     merged window contributes **exactly one** notch, so no sample is ever faded twice
@@ -2582,6 +2597,7 @@ def notch_filters(
     if not usable:
         return ()
 
+    lanes = max(coerce_int(channels, _CHANNELS_DEFAULT, lo=1), 1)
     filters: list[str] = []
     for offset in range(0, len(usable), NOTCH_EXPR_CHUNK):
         chunk = usable[offset : offset + NOTCH_EXPR_CHUNK]
@@ -2593,7 +2609,8 @@ def notch_filters(
                 f"sin(PI/2*abs(t-{_fixed(centre)})/{_fixed(half)}),"
                 f"{expression})"
             )
-        filters.append(f"volume=eval=frame:precision=float:volume='{expression}'")
+        exprs = "|".join(f"val({lane})*{expression}" for lane in range(lanes))
+        filters.append(f"aeval=exprs='{exprs}':c=same")
     return tuple(filters)
 
 
@@ -2702,7 +2719,9 @@ def build_mix_graph(
             windows = overrides.get(name, plan.windows)
             chain.extend(
                 notch_filters(
-                    windows, scale=SPECTRAL_HALF_WIDTH_SCALE.get(name, 1.0)
+                    windows,
+                    scale=SPECTRAL_HALF_WIDTH_SCALE.get(name, 1.0),
+                    channels=plan.channels,
                 )
             )
         if chain:
@@ -2734,7 +2753,7 @@ def build_mix_graph(
 
     tail: list[str] = []
     if plan.repair_mode == "crossfade":
-        tail.extend(notch_filters(plan.windows))
+        tail.extend(notch_filters(plan.windows, channels=plan.channels))
     if plan.declick and plan.duration > 2 * _DECLICK_S:
         tail.append(f"afade=t=in:st=0:d={_fixed(_DECLICK_S)}")
         tail.append(
@@ -3043,24 +3062,34 @@ def remux_codec(fmt: Audio_Format) -> str:
 
 
 def remux_command(
-    clip: Any, mixed: Path, dest: Path, *, fmt: Audio_Format
+    clip: Any, mixed: Path, dest: Path, *, fmt: Audio_Format, duration: float = 0.0
 ) -> list[str]:
     """The argv for media pass 2 — the repaired audio back onto the original video.
 
-    Three deliberate choices, each protecting an integrity requirement:
+    Four deliberate choices, each protecting an integrity requirement:
 
     * ``-c:v copy`` bit-copies the video stream, so the picture is provably untouched and the
       pass costs no video encode (Req 3.2, 17.3).
-    * ``-shortest`` is **deliberately absent**. It would truncate whichever stream is longer,
-      silently changing the clip duration — exactly the invariant Req 17.1 pins.
+    * ``-t <duration>`` bounds the output to the **original clip's audio duration**, and it is
+      what makes duration preservation actually hold (Req 17.1). It is needed because a lossy
+      audio stream carries encoder priming/padding: decoding 2.000 s of AAC yields ~2.020 s of
+      PCM, and re-encoding that grows the stream again — so without an explicit bound every
+      pass through this engine would lengthen the clip by ~20 ms. Measured, not assumed.
+    * ``-shortest`` remains **deliberately absent**, and the distinction from ``-t`` is the
+      whole point: ``-shortest`` truncates to whichever stream *happens* to be shorter, which
+      is a silent, input-dependent duration change. ``-t`` is an explicit bound taken from the
+      original clip, so the output length is a measured property of the input rather than an
+      accident of which stream won.
     * ``-itsoffset`` is emitted **only** when the probed audio ``start_time`` is non-zero, so
       a container whose audio legitimately starts late keeps that relationship instead of
       being silently re-based to zero (Req 17.4).
 
     ``-map 0:v:0 -map 1:a:0`` pins exactly one video and one audio stream, which is what
-    ``verify_replacement`` (task 12.1) then asserts.
+    :func:`verify_replacement` then asserts. A non-positive ``duration`` omits ``-t``, which is
+    the pre-measurement behaviour and is what the unit tests that do not probe rely on.
     """
     offset = coerce_float(getattr(fmt, "start_time", 0.0), 0.0)
+    bound = coerce_float(duration, 0.0)
     argv = [
         _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(clip),
@@ -3074,9 +3103,10 @@ def remux_command(
         "-c:a", remux_codec(fmt), "-b:a", _REMUX_BITRATE,
         "-ar", str(int(fmt.sample_rate)),
         "-ac", str(max(int(fmt.channels), 1)),
-        "-movflags", "+faststart",
-        str(dest),
     ]
+    if bound > 0.0:
+        argv += ["-t", _fixed(bound)]
+    argv += ["-movflags", "+faststart", str(dest)]
     return argv
 
 
@@ -3088,6 +3118,7 @@ def remux_replacement(
     fmt: Audio_Format,
     runner: Any = None,
     timeout_s: float,
+    duration: float = 0.0,
 ) -> Path:
     """Run media pass 2, producing the candidate Replacement_Media (Req 3.1, 3.2, 9.1).
 
@@ -3104,7 +3135,7 @@ def remux_replacement(
     target = _prepared(Path(str(dest)))
     _run(
         runner if runner is not None else _default_runner(),
-        remux_command(clip, mixed, target, fmt=fmt),
+        remux_command(clip, mixed, target, fmt=fmt, duration=duration),
         timeout_s,
     )
     return target
@@ -3247,6 +3278,7 @@ def verify_replacement(
     runner: Any = None,
     timeout_s: float = MIN_STEP_TIMEOUT_S,
     probe: Any = None,
+    baseline: Media_Probe | None = None,
 ) -> Media_Probe:
     """Promote a remux candidate to Replacement_Media, or raise (Req 3.5, 17.1-17.4, 17.7).
 
@@ -3284,7 +3316,10 @@ def verify_replacement(
 
     reader = probe if probe is not None else probe_media
     produced = reader(candidate, runner, timeout_s)
-    original = reader(clip, runner, timeout_s)
+    # ``baseline`` lets a caller that has already probed the clip hand its answer in, saving a
+    # redundant ``ffprobe``. The engine does exactly that: it needs the clip's audio duration
+    # *before* the remux (to bound it with ``-t``), so the probe has already happened.
+    original = baseline if baseline is not None else reader(clip, runner, timeout_s)
 
     # 1. Stream inventory (Req 17.2).
     if produced.audio_streams != 1:
@@ -3679,6 +3714,18 @@ class Stem_Inpainting_Engine(AV_Engine):
                 details.append(detail)
 
         try:
+            # One full stream probe of the incoming clip, used twice: to bound the remux with
+            # ``-t`` (so encoder padding cannot lengthen the clip) and as the baseline
+            # ``verify_replacement`` compares against. An ``ffprobe``, not a media pass.
+            #
+            # It lives **inside** this try on purpose: a probe that fails or times out has to
+            # become a named rung like any other invocation, not escape to the host as an
+            # apparently-unhandled error. Placing it above the try is a mistake the ladder
+            # tests catch immediately.
+            baseline = probe_media(
+                ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S)
+            )
+
             # ---- media pass 1: extract ----------------------------------
             extracted = extract_clip_audio(
                 ctx.clip_path,
@@ -3688,6 +3735,19 @@ class Stem_Inpainting_Engine(AV_Engine):
                 timeout_s=step_timeout(ctx, EXTRACT_RESERVE_S),
             )
             created.append(extracted)
+
+            # The **decoded audio length**, which is not the same number as the clip's
+            # container duration and must not be conflated with it. A lossy audio stream
+            # carries encoder priming/padding, so decoding 2.000 s of AAC legitimately yields
+            # ~2.020 s of PCM. Every stem is derived from this WAV, so this is the length they
+            # must match (Req 4.6) — verifying them against the *clip* duration instead
+            # rejects perfectly good output, which is exactly what it did before this was
+            # measured against a real encode.
+            #
+            # The Repair_Windows deliberately keep using ``ctx.duration``: they are
+            # clip-relative positions published by filler removal, not a property of the
+            # decoded stream.
+            audio_duration = self._audio_duration(extracted, fmt, plan.duration)
 
             stem_set: dict[str, Path]
             applied_backend = ""
@@ -3750,7 +3810,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                         raw or {},
                         dest_dir=self._workspace_path(workspace, "stems"),
                         fmt=fmt,
-                        duration=plan.duration,
+                        duration=audio_duration,
                         runner=runner,
                         timeout_s=step_timeout(ctx, SEPARATE_RESERVE_S),
                     )
@@ -3772,7 +3832,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                     self._workspace_path(workspace, "stems", "music_bridged.wav"),
                     plan.windows,
                     fmt=fmt,
-                    duration=plan.duration,
+                    duration=audio_duration,
                     runner=runner,
                     timeout_s=step_timeout(ctx, REPAIR_RESERVE_S),
                 )
@@ -3811,6 +3871,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                 fmt=fmt,
                 runner=runner,
                 timeout_s=step_timeout(ctx, REMUX_RESERVE_S),
+                duration=baseline.audio_duration,
             )
             created.append(candidate)
 
@@ -3824,6 +3885,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                     fmt=fmt,
                     runner=runner,
                     timeout_s=step_timeout(ctx, REMUX_RESERVE_S),
+                    baseline=baseline,
                 )
             except Integrity_Error as exc:
                 self._discard(created)
@@ -3882,6 +3944,21 @@ class Stem_Inpainting_Engine(AV_Engine):
         )
 
     # -- workspace lifecycle ------------------------------------------------
+
+    @staticmethod
+    def _audio_duration(extracted: Any, fmt: Audio_Format, fallback: float) -> float:
+        """The extracted WAV's true length in seconds, or ``fallback`` when unreadable.
+
+        Read straight from the RIFF header — no subprocess, no budget. ``fallback`` is the
+        planned clip duration, which is what an injected recording runner leaves us with
+        (it writes no file), so the offline tests keep working while the real path uses the
+        measured length.
+        """
+        probed = _wav_format(extracted)
+        if probed is None:
+            return max(coerce_float(fallback, 0.0), 0.0)
+        rate, _channels, frames = probed
+        return frames / max(rate, 1)
 
     @staticmethod
     def _replacement_name(ctx: Any) -> str:

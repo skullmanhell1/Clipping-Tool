@@ -409,12 +409,12 @@ spec's central promise to an upgrading operator).
     - **Property 7: Seam intake is robust and windows are always normalised** — for any note tuple mixing arbitrary strings with valid `filler_seam:` notes, the planned Seam list is exactly the finite, in-bounds `filler_seam:` values with no inferred extras, and the planned `Repair_Window` list is sorted, pairwise non-overlapping and contained in `[0, duration]`. Generators: `st_seam_notes`, `st_repair_window_ms`.
     - _Requirements: 6.4, 6.5, 6.6, 6.7, 6.8_ · _Properties: P7_
 
-  - [ ]* 5.9 Property test: gain resolution follows the preset rules and zero means excluded → `tests/test_stems_backends.py`
+  - [x]* 5.9 Property test: gain resolution follows the preset rules and zero means excluded → `tests/test_stems_backends.py`
     - **Property 11: Gain resolution follows the preset rules, and zero means excluded** — for any Mix_Preset and gain-field combination, a non-`custom` preset yields exactly its documented bundle and ignores the fields, `custom` yields the validated fields, every stem whose resolved gain is `0.0` appears in neither `active_stems` nor the emitted filtergraph, and the marker set contains `mix:<mix_preset>` exactly once. Generators: `st_mix_preset`, `st_stem_gains`.
     - Depends on the mix filtergraph emitter (11.3) and the applied rung (13.4) for the marker assertion; schedule it after those land.
     - _Requirements: 5.1, 5.2, 5.3, 5.7, 5.8_ · _Properties: P11_
 
-  - [ ]* 5.10 Property test: the no-op configuration costs nothing → `tests/test_stems_plan.py`
+  - [x]* 5.10 Property test: the no-op configuration costs nothing → `tests/test_stems_plan.py`
     - **Property 8: The no-op configuration costs nothing** — for any `Stem_Options` whose resolved gains are all `1.0` and whose Repair_Mode is `off`, `run` returns `skipped` with no media, zero command-runner invocations, zero backend calls and no file created in the workspace; the same holds for any options while the Feature_Flag is disabled (no workspace allocated, no exclusive capability probed, no media pass). Generators: `st_stem_options`, `st_options_mapping`.
     - Asserts ladder rungs 0 and 3, so schedule it after 13.2.
     - _Requirements: 5.6, 7.10, 15.8_ · _Properties: P8_
@@ -968,28 +968,86 @@ spec's central promise to an upgrading operator).
       the engine returns `degraded` (no local model → ffmpeg backend) **with** media and the
       host adopts it, which the old `APPLIED`-only gate would have discarded.
 
-- [ ] 18. Backward-compatibility parity and dependency gate
-  - [ ] 18.1 Property test: the Pipeline is unchanged except when the engine applies → `tests/test_stems_ladder.py`
+- [x] 18. Backward-compatibility parity and dependency gate
+  - [x] 18.1 Property test: the Pipeline is unchanged except when the engine applies → `tests/test_stems_ladder.py`
     - **Property 17: The Pipeline is unchanged except when the engine applies** — for any input and option mapping, a run with the engine registered-but-disabled produces byte-identical clips, identical `effects_applied` and identical metadata to a run with the engine unregistered; and for any availability map or forced failure, an enabled run produces the same clip count and the same clip durations, with the existing `filler_removal` and `music:<mood>` markers unchanged alongside any `engine:stem_inpainting:*` markers. Generators: `st_options_mapping`, `st_availability_map`, `st_gate_scenarios`.
     - **Not optional** — this is the spec's central promise to an upgrading operator.
     - _Requirements: 3.8, 3.9, 8.2, 8.4, 8.7, 13.8, 20.1, 20.4_ · _Properties: P17_
 
-  - [ ] 18.2 Static gate: stage order, dependencies, and sibling specs untouched
+  - [x] 18.2 Static gate: stage order, dependencies, and sibling specs untouched
     - Assert the `worker/pipeline.py run_pipeline` stage list is unchanged and no new stage was added; assert `requirements.txt` mentions neither `demucs` nor `torch` (both stay optional) and that this plan added nothing to `requirements-dev.txt` and nothing to `.github/workflows/ci.yml`; assert nothing under `.kiro/specs/av-engines-foundation/` or `.kiro/specs/kinetic-typography/` changed.
     - **Not optional** — it is what keeps the "no new mandatory dependency" and "no foundation change" claims honest.
     - _Requirements: 20.3, 20.5, 20.6_
 
-- [ ] 19. ffmpeg integration on tiny clips
-  - [ ]* 19.1 Integration test: the module imports with every heavy dependency absent → `tests/test_stems_backends.py`
+- [x] 19. ffmpeg integration on tiny clips
+  - [x]* 19.1 Integration test: the module imports with every heavy dependency absent → `tests/test_stems_backends.py`
     - Import `worker.engines.stems` in a subprocess with `demucs`, `torch` and `ffmpeg` all unavailable and assert it succeeds and that the pure planner still runs there; assert planning performs no socket call and no model read.
     - _Requirements: 1.4, 1.9, 19.2, 19.7_
 
-  - [ ]* 19.2 Integration tests: tiny-clip end-to-end behaviour → `tests/test_stems_ffmpeg.py`
+  - [x]* 19.2 Integration tests: tiny-clip end-to-end behaviour → `tests/test_stems_ffmpeg.py`
     - With `requires_ffmpeg`, `make_video` and `probe_duration`: one `applied` run through a `Fake_Separator_Backend` producing a valid Replacement_Media; one run with filler removal disabled and non-unit gains applying with an empty Seam list; one assertion that the Compositor performs the same number of ffmpeg passes per clip with the engine enabled as disabled; one invalid-probed-format run degrading with no media.
     - _Requirements: 8.5, 8.6, 17.5, 19.4, 19.5_
 
-- [ ] 20. Final checkpoint
+- [x] 20. Final checkpoint
   - Ensure all tests pass, ask the user if questions arise.
+  - **GREEN, AND FOR THE FIRST TIME ACTUALLY EXECUTED.** A static ffmpeg 7.0.2 was installed
+    into the sandbox, so the previously-skipped integration tests **ran** rather than being
+    reported as skips:
+    - with ffmpeg on `PATH`: **598 passed, 0 failed, 0 skipped**
+    - without ffmpeg (the developer default): **509 passed, 89 skipped, 0 failed**
+    - `ruff check --select F,E9` clean on every file this branch touches; `npm run build` passes.
+
+  - **THIS IS THE IMPORTANT ENTRY IN THIS FILE.** Running the suite against a real ffmpeg
+    found **three defects that every offline run had reported as green**, two of them in the
+    core repair mechanism this whole spec exists to provide:
+
+    1. **The design's repair filter does not work at all.** `design.md:529` specifies a
+       `volume` filter with `eval=frame` and a `t`-dependent piecewise expression, and that was
+       implemented faithfully. Against ffmpeg 7.0.2 it is a **silent no-op**: with `eval=frame`
+       the `t` variable does not take the values a per-frame evaluation implies, so
+       `gt(t,1.0)` is false for every frame of a 3-second input and a `between(t,…)`-gated
+       expression never fires. No error, no warning, output byte-identical to the input. A
+       *constant* expression (`volume='0.5'`) does apply, which is exactly why this survives
+       inspection — the filter looks like it is working. Even with `t` behaving, `eval=frame`
+       evaluates once per 1024-sample block (~21 ms at 48 kHz) and could not express the 12 ms
+       default window anyway. **Replaced with `aeval`**, which evaluates per sample: the taper
+       is exact rather than stepped, duration is preserved, and measured cost is ~1.8 s for 24
+       windows over 30 s of stereo. One expression per channel with `c=same`.
+    2. **Stems were verified against the wrong length.** A lossy audio stream carries encoder
+       priming/padding, so decoding 2.000 s of AAC yields ~2.020 s of PCM — 888 frames more.
+       Verification compared each stem against the *clip container* duration, so every real
+       separation failed its own integrity check with `stem music is 89088 frames, expected
+       88200`. Stems must be checked against the **decoded audio they were separated from**;
+       the Repair_Windows still use `ctx.duration`, because those are clip-relative positions
+       published by filler removal, not a property of the decoded stream.
+    3. **Every pass through the engine lengthened the clip by ~20 ms.** The same padding, now
+       compounding: extract decodes the padding into PCM, and re-encoding adds its own on top,
+       so the Replacement_Media's audio ran 2.020 s against the original's 2.000 s and failed
+       Req 17.1. Fixed by bounding the remux with `-t <original audio stream duration>`, taken
+       from a `probe_media` of the incoming clip. Note the distinction from `-shortest`, which
+       Req 17.1 rules out: `-shortest` truncates to whichever stream *happens* to be shorter
+       (a silent, input-dependent change), whereas `-t` is an explicit bound measured from the
+       original. That one probe is now reused as `verify_replacement`'s baseline, so it costs
+       nothing extra.
+
+    A fourth was found by the ladder tests rather than by ffmpeg: the baseline probe was
+    initially placed **outside** `_execute`'s `try`, so a failing or timing-out probe escaped
+    to the host instead of becoming a named rung.
+
+  - **The deferred epic-5 tests are now closed.** 5.9 (P11) and 5.10 (P8) were parked because
+    their last clauses assert against the mix filtergraph (11.3) and ladder rungs 0/3 (13.2).
+    Both landed with those in place. P8 asserts "costs nothing" as **observable absence of
+    work** — zero runner invocations, zero backend calls, not one file in the workspace —
+    because only that distinguishes "skipped before doing anything" from "did the work and
+    threw it away"; and its rung-0 half goes through the real `Engine_Host`, since whether a
+    workspace was allocated is not something the engine can observe about itself.
+
+  - **NOT DONE, deliberately — no version bump or CHANGELOG entry.** The sibling specs
+    (`tier1-creator-output-upgrade`, `speaker-diarization-reframe`) each ended with an explicit
+    "Version/changelog/README for 0.x.0" epic. **This spec has no such task**, so `VERSION`
+    remains `0.8.0` and `CHANGELOG.md` is untouched. That is a real gap in the plan rather
+    than an oversight in the work, and it is left for the user to decide: shipping a new
+    default-off engine plus a widened foundation gate is arguably a `0.9.0`.
 
 ## Notes
 

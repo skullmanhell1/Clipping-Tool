@@ -34,6 +34,7 @@ from tests.conftest import requires_ffmpeg
 from tests.fakes import Recording_Command_Runner
 from tests.strategies import st_repair_mode, st_seam_notes, st_stem_gains
 from worker.engines import stems
+from worker.engines.base import Engine_Status
 from worker.engines.timebase import Time_Base
 from worker.ffmpeg_utils import FFmpegError
 
@@ -77,16 +78,28 @@ def _stem_set(root: Path) -> dict:
     return {name: root / "stems" / f"{name}.wav" for name in stems.STEM_NAMES}
 
 
-_EXPR_RE = re.compile(r"volume='([^']*)'")
+_EXPR_RE = re.compile(r"exprs='([^']*)'")
 
 
 def _expressions(filters) -> list[str]:
-    """The quoted expression bodies of a sequence of ``volume`` filter strings."""
+    """The per-chunk gain expression of a sequence of ``aeval`` filter strings.
+
+    ``aeval`` carries one expression per channel, each of the form ``val(<ch>)*<gain>``. The
+    gain factor is identical across channels, so the first lane is taken and its ``val(0)*``
+    prefix stripped — leaving exactly the piecewise gain :func:`_gain_at` evaluates.
+    """
     out = []
     for item in filters:
         found = _EXPR_RE.search(item)
-        assert found is not None, f"no quoted expression in {item!r}"
-        out.append(found.group(1))
+        assert found is not None, f"no quoted exprs in {item!r}"
+        lanes = found.group(1).split("|")
+        first = lanes[0]
+        assert first.startswith("val(0)*"), f"unexpected aeval lane: {first!r}"
+        gain = first[len("val(0)*"):]
+        # Every channel must get the same gain, or the notch would pan the audio.
+        for lane, other in enumerate(lanes):
+            assert other == f"val({lane})*{gain}", other
+        out.append(gain)
     return out
 
 
@@ -194,7 +207,7 @@ def test_p12_repair_touches_only_planned_windows_once_without_clipping(
     # `off` asks for no repair at all.
     if mode == "off":
         graph = stems.build_mix_graph(plan, _stem_set(root))[1]
-        assert "eval=frame" not in graph
+        assert "aeval" not in graph
         return
 
     usable = [w for w in windows if w.end > w.start]
@@ -545,8 +558,8 @@ def test_spectral_notches_each_stem_before_the_mix(tmp_path) -> None:
     # One notch inside each per-stem chain, and none on the summed stream.
     for name in stems.STEM_NAMES:
         chain = graph.split(f"[g_{name}]")[0].split(";")[-1]
-        assert "eval=frame" in chain
-    assert graph.count("eval=frame") == len(stems.STEM_NAMES)
+        assert "aeval" in chain
+    assert graph.count("aeval") == len(stems.STEM_NAMES)
 
     # Narrower for vocals than for music, per SPECTRAL_HALF_WIDTH_SCALE.
     vocals = stems.notch_filters(windows, scale=stems.SPECTRAL_HALF_WIDTH_SCALE["vocals"])
@@ -560,7 +573,7 @@ def test_crossfade_notches_once_post_mix(tmp_path) -> None:
     """``crossfade`` repairs the summed stream once, not per stem (Req 7.2, 7.7)."""
     plan = _plan(windows=_windows(((1.0, 1.012),)), repair_mode="crossfade")
     graph = stems.build_mix_graph(plan, _stem_set(tmp_path))[1]
-    assert graph.count("eval=frame") == 1
+    assert graph.count("aeval") == 1
 
 
 def test_a_zero_width_window_contributes_no_notch() -> None:
@@ -663,7 +676,9 @@ def test_a_bridged_window_is_not_also_notched(tmp_path) -> None:
     )[1]
 
     music_chain = graph.split("[g_music]")[0].split(";")[-1]
-    found = _EXPR_RE.findall(music_chain)
+    found = [e for e in _expressions(
+        [f"aeval=exprs='{m}'" for m in _EXPR_RE.findall(music_chain)]
+    )]
     assert len(found) == 1, "the music stem should carry exactly one notch chunk"
 
     # The residual window IS notched (gain 0 at its join)...
@@ -1008,11 +1023,22 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
     extracted = stems.extract_clip_audio(
         source, tmp_path / "in.wav", fmt=fmt, runner=_real_runner, timeout_s=60.0
     )
+    # The **decoded** audio length, not the container duration. A lossy stream carries encoder
+    # priming/padding, so 2.000 s of AAC decodes to ~2.020 s of PCM — and the stems are
+    # derived from that PCM, so that is the length they must match. Using the clip duration
+    # here is precisely the mistake the engine used to make.
+    probed_wav = stems._wav_format(extracted)
+    assert probed_wav is not None
+    audio_duration = probed_wav[2] / probed_wav[0]
+    assert audio_duration != pytest.approx(2.0, abs=1e-4), (
+        "expected encoder padding to make the decoded audio longer than the container"
+    )
+
     raw = stems.Ffmpeg_Separator_Backend(runner=_real_runner).separate(
         extracted, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=60.0
     )
     stem_set, _missing = stems.assemble_stem_set(
-        raw, dest_dir=tmp_path / "stems", fmt=fmt, duration=2.0,
+        raw, dest_dir=tmp_path / "stems", fmt=fmt, duration=audio_duration,
         runner=_real_runner, timeout_s=60.0,
     )
 
@@ -1024,14 +1050,19 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
     mixed, _details = stems.render_mix(
         plan, stem_set, tmp_path / "mixed.wav", runner=_real_runner, timeout_s=60.0
     )
+    # ``-t`` bounded to the original audio stream duration is what stops the ~20 ms of
+    # re-encode padding from lengthening the clip on every pass.
+    baseline = stems.probe_media(source, _real_runner, 60.0)
     candidate = stems.remux_replacement(
         source, mixed, tmp_path / "repaired.mp4",
         fmt=fmt, runner=_real_runner, timeout_s=60.0,
+        duration=baseline.audio_duration,
     )
 
     # The whole integrity gate, on real output.
     produced = stems.verify_replacement(
-        candidate, source, fmt=fmt, runner=_real_runner, timeout_s=60.0
+        candidate, source, fmt=fmt, runner=_real_runner, timeout_s=60.0,
+        baseline=baseline,
     )
     assert produced.audio_streams == 1 and produced.video_streams == 1
 
@@ -1049,3 +1080,250 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
 
     # The incoming clip was never edited in place.
     assert source.read_bytes() == before
+
+
+
+# =========================================================================== #
+# Task 19.2 — tiny-clip end-to-end behaviour                                  #
+# =========================================================================== #
+# These run the **whole engine** against real ffmpeg on a 2-second clip: probe, extract,
+# separate, assemble, mix + repair, remux, verify. Nothing is stubbed except the separator,
+# which is a fake precisely so no model is needed — the ffmpeg work is all real.
+
+
+def _e2e_ctx(tmp_path, source, *, options, notes=(), remaining=120.0):
+    """A real ``Engine_Context`` pointing at a real clip."""
+    import time
+
+    from worker.engines.artifacts import allocate_workspace
+    from worker.engines.base import Engine_Context, Engine_Stage
+    from worker.engines.capabilities import Capability_Report
+    from worker.engines.timebase import Time_Base
+    from tests.fakes import StaticProber
+
+    return Engine_Context(
+        job_id="job",
+        clip_id="clip_a",
+        engine_id=stems.ENGINE_ID,
+        stage=Engine_Stage.AUDIO,
+        source_path=source,
+        clip_path=source,
+        time_base=Time_Base(sample_rate=48000),
+        clip_start=0.0,
+        clip_end=2.0,
+        duration=2.0,
+        options=options,
+        options_digest="e2edigest",
+        seed=7,
+        workspace=allocate_workspace(
+            tmp_path / "ws", "job", "clip_a", stems.ENGINE_ID, "e2edigest"
+        ),
+        capabilities=Capability_Report(prober=StaticProber({}, default=True)),
+        permissibility=False,
+        deadline=time.monotonic() + remaining,
+        time_budget_s=120.0,
+        notes=tuple(notes),
+    )
+
+
+def _e2e_options(**overrides):
+    return stems.resolve_stem_options(
+        type("O", (), {f"stem_{k}": v for k, v in overrides.items()})()
+    )
+
+
+@requires_ffmpeg
+def test_e2e_an_applied_run_produces_a_valid_replacement(tmp_path, make_video) -> None:
+    """A full ``applied`` run through a fake separator yields real, verified media.
+
+    The separator is a fake so no model is needed, but every ffmpeg invocation is real — so
+    this is the test that would catch a filtergraph that does not parse, an argv in the wrong
+    order, or a Replacement_Media that fails its own integrity gate.
+    """
+    from tests.fakes import Fake_Separator_Backend
+
+    source = make_video(name="tiny.mp4", duration=2.0, w=320, h=240, audio=True)
+    engine = stems.Stem_Inpainting_Engine(
+        # ``sum_to_input`` copies the source frames verbatim, so the stems are exactly the
+        # length of the extracted audio and the additive invariant holds by construction.
+        backend=Fake_Separator_Backend(sum_to_input=True),
+        runner=_real_runner,
+    )
+    ctx = _e2e_ctx(
+        tmp_path, source,
+        options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
+        notes=("filler_seam:1.000",),
+    )
+
+    result = engine.run(ctx)
+
+    assert result.status is Engine_Status.APPLIED, result.detail
+    assert result.media is not None and Path(result.media).exists()
+
+    details = [m.split(":", 2)[2] for m in result.markers]
+    assert "mix:speech_focus" in details
+    assert "repair:crossfade:1" in details
+
+    # The Replacement_Media passes the integrity gate on its own terms.
+    baseline = stems.probe_media(source, _real_runner, 60.0)
+    produced = stems.verify_replacement(
+        result.media, source, fmt=stems.probe_audio_format(source, _real_runner, 60.0),
+        runner=_real_runner, timeout_s=60.0, baseline=baseline,
+    )
+    assert produced.audio_streams == 1 and produced.video_streams == 1
+    assert produced.video_frames == baseline.video_frames
+
+
+@requires_ffmpeg
+def test_e2e_non_unit_gains_apply_with_an_empty_seam_list(tmp_path, make_video) -> None:
+    """Filler removal off means no Seams — but a gain change is still real work (Req 8.5).
+
+    The complement of the idempotence guard: `plan_has_work` must let this through, because
+    the operator asked for a mix change even though there is nothing to repair.
+    """
+    from tests.fakes import Fake_Separator_Backend
+
+    source = make_video(name="tiny.mp4", duration=2.0, w=320, h=240, audio=True)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=Fake_Separator_Backend(sum_to_input=True), runner=_real_runner
+    )
+    ctx = _e2e_ctx(
+        tmp_path, source,
+        options=_e2e_options(mix_preset="clean_speech", repair_mode="crossfade"),
+        notes=(),                              # no filler removal -> no Seams
+    )
+
+    result = engine.run(ctx)
+
+    assert result.status is Engine_Status.APPLIED, result.detail
+    assert result.media is not None and Path(result.media).exists()
+    details = [m.split(":", 2)[2] for m in result.markers]
+    assert "mix:clean_speech" in details
+    assert not any(item.startswith("repair:") for item in details)   # nothing to repair
+    assert result.plan["windows"] == []
+
+
+@requires_ffmpeg
+def test_e2e_an_unusable_probed_format_degrades_with_no_media(tmp_path, make_video) -> None:
+    """A present-but-broken audio format degrades and hands back nothing (Req 17.5)."""
+    from tests.fakes import Fake_Separator_Backend
+
+    source = make_video(name="tiny.mp4", duration=2.0, w=320, h=240, audio=True)
+
+    def broken_prober(_path, _runner=None, _timeout=None):
+        raise stems.Invalid_Audio_Format("sample_rate=0")
+
+    engine = stems.Stem_Inpainting_Engine(
+        backend=Fake_Separator_Backend(sum_to_input=True),
+        runner=_real_runner,
+        prober=broken_prober,
+    )
+    ctx = _e2e_ctx(
+        tmp_path, source,
+        options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
+        notes=("filler_seam:1.000",),
+    )
+
+    result = engine.run(ctx)
+
+    assert result.status is Engine_Status.DEGRADED
+    assert result.media is None
+    assert [m.split(":", 2)[2] for m in result.markers] == ["degraded:audio_format"]
+
+
+@requires_ffmpeg
+def test_e2e_a_clip_with_no_audio_is_skipped(tmp_path, make_video) -> None:
+    """No audio stream is not a degradation, and costs no media pass (Req 4.8)."""
+    from tests.fakes import Fake_Separator_Backend
+
+    silent = make_video(name="mute.mp4", duration=2.0, w=320, h=240, audio=False)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=Fake_Separator_Backend(sum_to_input=True), runner=_real_runner
+    )
+    ctx = _e2e_ctx(
+        tmp_path, silent,
+        options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
+        notes=("filler_seam:1.000",),
+    )
+
+    result = engine.run(ctx)
+
+    assert result.status is Engine_Status.SKIPPED
+    assert result.media is None
+    assert result.markers == ()
+
+
+@requires_ffmpeg
+def test_e2e_the_compositor_spends_the_same_passes_either_way(
+    tmp_path, make_video, monkeypatch
+) -> None:
+    """The engine adds audio passes of its own but changes the **compositor** not at all.
+
+    This is the cost claim that matters for the single-pass guarantee (Reqs 2.6, 19.5): whatever
+    the stem engine does at the AUDIO stage, the compositor still renders each clip in exactly
+    the same number of ffmpeg invocations as it would with the engine disabled.
+    """
+    import worker.effects.compositor as comp
+    import worker.pipeline as pl
+    from worker.engines.kinetic import Kinetic_Typography_Engine
+    from worker.engines.registry import Engine_Registry
+    from worker.engines.stems import Stem_Inpainting_Engine
+    from worker.models import ProcessingOptions
+    from worker.selection import ClipCandidate
+    from worker.transcribe import Transcript, TranscriptSegment, Word
+
+    source = make_video(name="src.mp4", duration=4.0, w=640, h=360, audio=True)
+
+    def _counted(options, tag):
+        calls = []
+        real_run = comp._run
+        monkeypatch.setattr(comp, "_run", lambda cmd: (calls.append(tuple(cmd)), real_run(cmd))[1])
+
+        monkeypatch.setattr(
+            pl, "transcribe",
+            lambda *a, **k: Transcript(
+                language="en",
+                segments=[TranscriptSegment(0.0, 4.0, "hello there my friend today", [
+                    Word(0.2, 0.6, "hello"), Word(0.7, 1.1, "there"),
+                    Word(1.2, 1.6, "my"), Word(1.7, 2.3, "friend"),
+                    Word(2.4, 3.0, "today"),
+                ])],
+            ),
+        )
+        monkeypatch.setattr(
+            pl.sel, "select_moments",
+            lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=50.0, text="hi")],
+        )
+
+        registry = Engine_Registry()
+        registry.register(Kinetic_Typography_Engine())
+        registry.register(Stem_Inpainting_Engine(runner=_real_runner))
+        real_host = pl.Engine_Host
+        monkeypatch.setattr(
+            pl, "Engine_Host",
+            lambda opts, **kw: real_host(opts, **{**kw, "registry": registry}),
+        )
+
+        clips = pl.run_pipeline(
+            source, options,
+            clips_dir=tmp_path / f"clips_{tag}", temp_dir=tmp_path / f"tmp_{tag}",
+        )
+        return len(clips), len(calls)
+
+    with monkeypatch.context():
+        off_clips, off_passes = _counted(
+            ProcessingOptions(captions=True, metadata=False, aspect="9:16"), "off"
+        )
+    with monkeypatch.context():
+        on_clips, on_passes = _counted(
+            ProcessingOptions(
+                captions=True, metadata=False, aspect="9:16",
+                stem_inpainting_enabled=True, stem_mix_preset="speech_focus",
+            ),
+            "on",
+        )
+
+    assert on_clips == off_clips
+    assert on_passes == off_passes, (
+        f"compositor spent {on_passes} passes enabled vs {off_passes} disabled"
+    )
