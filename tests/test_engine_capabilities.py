@@ -44,6 +44,7 @@ from hypothesis import strategies as st
 from config import settings as app_settings
 from tests.fakes import CountingProber, RaisingProber, StaticProber
 from tests.strategies import st_availability_map, st_capability_id
+from worker.engines import capabilities as capabilities_module
 from worker.engines.capabilities import (
     LLM_CAPABILITY,
     MAX_DETAIL_LENGTH,
@@ -88,6 +89,13 @@ FFMPEG_FILTER_LISTING = "\n".join(
         "  ... loudnorm          A->A       EBUR128 loudness normalization.",
         "  ..C scale             V->V       Scale the input video size.",
         "  T.. drawtext          V->V       Draw text on top of video frames.",
+        # Every-flag-set rows print a dot-free flags group. Real ffmpeg emits these
+        # for 124 of its 486 filters, so the canned listing must contain them or the
+        # parser's hardest case goes unexercised (see ALL_FLAGS_FILTER).
+        "  TSC highpass          A->A       Apply a high-pass filter with 3dB point frequency.",
+        "  TSC lowpass           A->A       Apply a low-pass filter with 3dB point frequency.",
+        # A variadic-input pad spec ("N->A"), so pad parsing is not tied to "A->A".
+        "  ..C amix              N->A       Audio mixing.",
         "",
     ]
 )
@@ -95,6 +103,14 @@ FFMPEG_FILTER_LISTING = "\n".join(
 #: Filter names the canned listing contains / cannot contain.
 LISTED_FILTER = "atempo"
 UNLISTED_FILTER = "definitely_not_a_real_filter"
+
+#: A filter the canned listing reports with *every* flag set (``TSC``) — the case an
+#: ``isalnum()``-based flags test misparses, recording ``"TSC"`` as the filter name and
+#: losing ``highpass`` entirely.
+ALL_FLAGS_FILTER = "highpass"
+
+#: The flags group of :data:`ALL_FLAGS_FILTER`, which must never be mistaken for a name.
+ALL_FLAGS_GROUP = "TSC"
 
 
 class Network_Guard_Error(RuntimeError):
@@ -412,6 +428,72 @@ def test_ffmpeg_filter_kind_invokes_the_configured_binary(monkeypatch):
         assert command[0] == sentinel
         assert command[0] != "ffmpeg"
         assert "-filters" in command
+
+
+def test_ffmpeg_filter_kind_parses_rows_whose_flags_group_has_no_dot(monkeypatch):
+    """A filter listed with *every* flag set (``TSC highpass``) is found, and its flags
+    group is never mistaken for a filter name.
+
+    Regression: the parser previously identified the flags column with
+    ``not parts[0].isalnum()``. That holds for ``T..``/``..C`` but *fails* for a
+    dot-free group like ``TSC``, so the row fell through to a bare-name branch which
+    recorded ``"TSC"`` and dropped ``highpass``. On real ffmpeg 7.0 this hid 124 of
+    486 filters — including ``highpass``/``lowpass``, both required by the stem
+    inpainting ffmpeg backend, which therefore reported ``unavailable`` on every host
+    no matter how ffmpeg was built. No canned listing exercised an all-flags row, so
+    the whole suite passed while the feature could not run in production.
+
+    Validates: Requirements 5.1, 5.4
+    """
+    monkeypatch.setattr(app_settings, "ffmpeg_binary", "/opt/sentinel/ffmpeg")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, *a, **k: subprocess.CompletedProcess(
+            args=command, returncode=0, stdout=FFMPEG_FILTER_LISTING, stderr=""
+        ),
+    )
+
+    found = default_prober(f"ffmpeg_filter:{ALL_FLAGS_FILTER}")
+    assert found.available is True, (
+        f"{ALL_FLAGS_FILTER!r} is listed with flags {ALL_FLAGS_GROUP!r} and must be found"
+    )
+    assert ALL_FLAGS_FILTER in found.detail
+
+    # The flags group itself is not a filter, so it must not be probeable as one.
+    flags_as_name = default_prober(f"ffmpeg_filter:{ALL_FLAGS_GROUP}")
+    assert flags_as_name.available is False, (
+        f"{ALL_FLAGS_GROUP!r} is a flags column, not a filter name"
+    )
+
+
+def test_ffmpeg_filter_parser_keeps_every_listed_name_and_only_those(monkeypatch):
+    """The parser returns exactly the listing's filter names — no flags groups, no
+    banner text, and nothing dropped.
+
+    Guards the parser as a whole rather than one filter: an off-by-one in the column
+    logic shows up here as a set difference, whichever row it affects.
+
+    Validates: Requirements 5.4
+    """
+    monkeypatch.setattr(app_settings, "ffmpeg_binary", "/opt/sentinel/ffmpeg")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, *a, **k: subprocess.CompletedProcess(
+            args=command, returncode=0, stdout=FFMPEG_FILTER_LISTING, stderr=""
+        ),
+    )
+
+    assert capabilities_module._ffmpeg_filter_names() == {
+        "atempo",
+        "loudnorm",
+        "scale",
+        "drawtext",
+        "highpass",
+        "lowpass",
+        "amix",
+    }
 
 
 def test_font_kind_dispatches_to_captions_font_available(monkeypatch):
