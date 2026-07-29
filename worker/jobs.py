@@ -253,7 +253,13 @@ class JobManager:
                     job_info = probe(source_path)
                     self.store.update(job_id, duration=job_info.duration)
                 except Exception:
-                    pass
+                    # Duration only feeds the preview card, so a probe failure must not
+                    # fail the job — but an unreadable source usually means the pipeline
+                    # is about to fail too, and that is worth seeing in the log.
+                    logger.warning(
+                        "could not probe duration for job %s (%s)",
+                        job_id, source_path, exc_info=True,
+                    )
 
             clips_dir = Path(settings.clips_dir) / job_id
             temp_dir = Path(settings.temp_dir) / job_id
@@ -344,7 +350,16 @@ class JobManager:
                 if thumb_name:
                     clip.thumbnail_url = storage.url(f"{prefix}/{thumb_name}")
         except Exception:
-            pass
+            # Mirroring is best-effort: the clip already exists locally, so a storage
+            # failure must not fail the job. But it is *logged* rather than swallowed.
+            # Silently, an operator running STORAGE_BACKEND=s3 would see clips finish
+            # normally with local URLs while nothing ever reached the bucket — they
+            # would believe the clips were backed up when they were not.
+            logger.exception(
+                "failed to mirror clip %s of job %s to the %s storage backend",
+                getattr(clip, "filename", "?"), job_id,
+                getattr(storage, "name", "unknown"),
+            )
 
     @staticmethod
     def _cleanup_temp(job_id: str) -> None:
