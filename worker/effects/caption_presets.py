@@ -250,7 +250,21 @@ DEFAULT_STOPWORDS: frozenset[str] = frozenset(
     }
 )
 
-# High-confidence Whisper probability threshold for emphasis.
+# C11: the share of a cue's words that may be emphasised at once.
+#
+# Emphasis used to include an *absolute* rule — "Whisper probability >= 0.9" — which on
+# clean audio nearly every word clears, so highlighting fired on almost everything, which
+# is visually the same as highlighting nothing. It was worse than that in practice:
+# ``_word_probability`` returns 1.0 when a word carries no probability at all, so any
+# transcript without per-word confidence highlighted *every* non-stopword.
+#
+# Emphasis is inherently relative — it means "these words, not those" — so the rule is now
+# a ranking with a budget rather than a threshold. A quarter of the words is enough for one
+# or two emphases in a typical 3-5 word cue.
+_HIGHLIGHT_RATIO = 0.25
+
+# Confidence is no longer a reason to emphasise a word, but it is still a sensible
+# tie-break between two equally salient ones: prefer the word we heard more clearly.
 _HIGH_PROBABILITY = 0.9
 # Minimum token length (normalized) for length-based emphasis.
 _MIN_KEYWORD_LEN = 6
@@ -285,33 +299,77 @@ def _word_probability(word: Any) -> float:
         return 1.0
 
 
-def _is_deterministic_keyword(word: Any) -> bool:
-    """Apply the deterministic emphasis rule set to a single word."""
+def _keyword_salience(word: Any) -> int:
+    """How emphasis-worthy ``word`` is, ``0`` meaning "not a candidate" (pure).
+
+    A rank, not a verdict (C11). The signals are the same ones the old rule set used,
+    ordered by how strongly each marks a word as the point of a sentence:
+
+    * ``3`` — a number or currency amount ("$5", "42", "100%"). Concrete and quotable.
+    * ``3`` — an ALL-CAPS run, which the speaker or transcriber already marked as emphatic.
+    * ``2`` — a long content word (>= 6 characters), the usual carrier of meaning.
+    * ``1`` — a mid-length content word (>= 4), a candidate only if nothing better exists.
+
+    Stopwords and empty tokens score ``0`` and can never be emphasised.
+    """
     raw = _word_text(word)
     token = _normalize_token(raw)
-    if not token:
-        return False
-    if token in DEFAULT_STOPWORDS:
-        return False
+    if not token or token in DEFAULT_STOPWORDS:
+        return 0
     # Numeric / currency (checked on the raw text so "$5" counts).
     if _NUMERIC_RE.search(raw):
-        return True
+        return 3
     # ALL-CAPS acronym / emphasis (use the raw alphabetic core).
     alpha_core = re.sub(r"[^A-Za-z]", "", raw)
     if len(alpha_core) >= 2 and alpha_core.isupper():
-        return True
-    # Long content word.
+        return 3
     if len(token) >= _MIN_KEYWORD_LEN:
-        return True
-    # High Whisper confidence.
-    if _word_probability(word) >= _HIGH_PROBABILITY:
-        return True
-    return False
+        return 2
+    if len(token) >= 4:
+        return 1
+    return 0
+
+
+def _is_deterministic_keyword(word: Any) -> bool:
+    """Whether ``word`` is *eligible* for emphasis at all (pure).
+
+    Eligibility is not selection: :func:`_deterministic_indices` then ranks the eligible
+    words and emphasises only the strongest few. Kept as a named predicate because it is
+    the readable half of the rule, and because the old absolute-threshold version is what
+    C11 replaced.
+    """
+    return _keyword_salience(word) > 0
+
+
+def _highlight_budget(count: int) -> int:
+    """How many of ``count`` words may be emphasised (C11).
+
+    At least one whenever there is anything to emphasise, so a short cue with a single
+    strong word still gets it, and a quarter of the words otherwise.
+    """
+    if count <= 0:
+        return 0
+    return max(1, int(count * _HIGHLIGHT_RATIO))
 
 
 def _deterministic_indices(words: list) -> set[int]:
-    """Deterministic highlighted-index set for ``words`` (pure)."""
-    return {i for i, w in enumerate(words) if _is_deterministic_keyword(w)}
+    """Deterministic highlighted-index set for ``words`` (pure).
+
+    Ranks the eligible words by salience and keeps the top few, rather than returning
+    everything above a threshold (C11). Ties break on Whisper confidence and then on
+    position, so the result is a pure function of the input — the same words in, the same
+    emphasis out, which the determinism properties depend on.
+    """
+    scored = [
+        (index, score, _word_probability(word))
+        for index, word in enumerate(words)
+        for score in (_keyword_salience(word),)
+        if score > 0
+    ]
+    if not scored:
+        return set()
+    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+    return {index for index, _score, _prob in scored[: _highlight_budget(len(words))]}
 
 
 def _ai_indices(words: list, client: Any) -> set[int]:
