@@ -36,7 +36,10 @@ def parse_version(value: str) -> tuple[int, ...]:
     if not value:
         return (0,)
     cleaned = value.strip().lstrip("vV")
-    core = re.split(r"[-+]", cleaned, 1)[0]
+    # maxsplit passed by keyword: Python 3.13 deprecates giving it positionally, and
+    # since the suite treats warnings as errors that would fail every run after a
+    # Python upgrade rather than at the point the code was written.
+    core = re.split(r"[-+]", cleaned, maxsplit=1)[0]
     parts: list[int] = []
     for piece in core.split("."):
         m = re.match(r"\d+", piece)
