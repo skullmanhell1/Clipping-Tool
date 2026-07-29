@@ -4,6 +4,24 @@ Rewritten after the reliability and tooling pass that followed the specs complet
 previous version described the work that is now merged as "what is left", so it has been
 replaced rather than amended.
 
+## Start here
+
+**If you are picking this up fresh, read `docs/IMPROVEMENT_PLAN.md` before anything else.**
+It is the prioritised backlog: 154 numbered items across captions, assets, selection,
+transcription, reframe, audio, encoding, publishing, UX, infrastructure and measurement,
+each with a priority and effort estimate, and every current value quoted from the code.
+
+The one-line diagnosis it reaches: **the rendering capability is well ahead of the assets
+and defaults feeding it.** Captions request a font that is not installed and whose fallback
+resolves to the same missing font; emoji request images that are not shipped and are
+upscaled 2.1x; "background music" is two synthesised sine waves; and thirteen features that
+make short-form video look modern are default-off. Of the 29 P0 items, only four are new
+capability — the rest are bugs, missing assets or defaults.
+
+**Phase 1 of that document is the highest-value work available** and is mostly a few days
+of small changes. Do not start on clip-selection quality (§3) before building the
+evaluation harness (item **S1**), or the results cannot be judged.
+
 ## 1. Status
 
 **All five specs are complete — 388/388 tasks, nothing open.** Version `0.10.0`.
