@@ -230,7 +230,9 @@ DEFAULT_STOPWORDS: frozenset[str] = frozenset(
         "should", "can", "could", "may", "might", "must", "get", "got",
         # Common fillers
         "just", "like", "really", "very", "too", "also", "even", "well",
-        "okay", "ok", "yeah", "yes", "no", "not", "now", "here", "there",
+        # "no" is deliberately not repeated here; it is already listed above with the
+        # quantifiers. 136 literals were written for 135 distinct words.
+        "okay", "ok", "yeah", "yes", "not", "now", "here", "there",
         "um", "uh", "oh", "hey", "gonna", "wanna", "kinda", "sorta",
     }
 )
