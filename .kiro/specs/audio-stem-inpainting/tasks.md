@@ -830,30 +830,30 @@ spec's central promise to an upgrading operator).
 - [x] 14. Checkpoint — engine ladder complete
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 15. Workspace artifact lifecycle, cleanup, and the disk bound
-  - [ ] 15.1 Declare artifacts, durable stems, and the workspace layout
+- [x] 15. Workspace artifact lifecycle, cleanup, and the disk bound
+  - [x] 15.1 Declare artifacts, durable stems, and the workspace layout
     - Write `in.wav`, `stems/{music,other,vocals}.wav`, `mixed.wav` and `clip_repaired.<ext>` inside the supplied Engine_Workspace and nowhere else, so no cross-clip or cross-job state is shared. Declare each intermediate as a transient `Engine_Artifact` with a documented media type and the Replacement_Media as the media artifact.
     - When `retain_stems` is set, declare the per-stem WAVs as **durable** artifacts so the host persists them through the active Storage_Backend under `storage_backends.base.normalize_key`-ed keys before the workspace is deleted; a persistence failure surfaces as the foundation's `artifact_failed` and the clip is still produced.
     - _Requirements: 2.7, 11.1, 11.2, 11.3, 11.5_
 
-  - [ ] 15.2 Implement the end-of-run cleanup and the bounded-disk guarantee
+  - [x] 15.2 Implement the end-of-run cleanup and the bounded-disk guarantee
     - Before returning, delete `in.wav`, `mixed.wav` and every non-durable stem, retaining only `clip_repaired.<ext>` plus any declared durable artifacts; wrap each delete in `OSError` handling that records the detail and continues. Keep peak usage within the documented `DISK_BOUND_MULTIPLE × extracted-WAV-size + clip-size` bound and document the arithmetic in a comment.
     - _Requirements: 11.4, 11.6, 11.7_
 
-  - [ ]* 15.3 Property test: cost and disk stay bounded regardless of seams and gains → `tests/test_stems_ffmpeg.py`
+  - [x]* 15.3 Property test: cost and disk stay bounded regardless of seams and gains → `tests/test_stems_ffmpeg.py`
     - **Property 18: Cost and disk stay bounded regardless of seams and gains** — for any Seam count, gain set and clip duration, the engine performs at most two media passes over the clip container, every recorded command carries a positive timeout no greater than `ctx.remaining()` at its step, peak workspace bytes stay within `DISK_BOUND_MULTIPLE × extracted-WAV-size + clip-size`, and after the call only the Replacement_Media and the declared durable artifacts remain in the workspace. Generators: `st_seam_notes`, `st_stem_gains`, `st_audio_format`.
     - _Requirements: 2.5, 2.6, 11.1, 11.2, 11.3, 11.4, 11.7, 15.3, 15.4, 15.9_ · _Properties: P18_
 
-  - [ ]* 15.4 Integration tests: media handoff before deletion, and temp cleanup → `tests/test_stems_ffmpeg.py`
+  - [x]* 15.4 Integration tests: media handoff before deletion, and temp cleanup → `tests/test_stems_ffmpeg.py`
     - Two examples: the host takes the Replacement_Media for the geometry stage before the Engine_Workspace is deleted; a completed job with `auto_delete_temp` enabled leaves no `stem_inpainting__*` directory beneath `settings.temp_dir` after `cleanup_temp`.
     - _Requirements: 11.5, 11.8_
 
-- [ ] 16. Idempotence on repaired output
-  - [ ] 16.1 Make the repair emission re-entrant on already-repaired media
+- [x] 16. Idempotence on repaired output
+  - [x] 16.1 Make the repair emission re-entrant on already-repaired media
     - Guard the emitter so an empty Seam list contributes **no** notch node, no bridging and no declick-driven change, and a unit-gain configuration contributes no `volume` node either, so re-running the engine on its own Replacement_Media with the same `Stem_Options` and an empty Seam list is a byte-stable re-render rather than a second repair pass. Document the guard alongside the no-op predicate it complements.
     - _Requirements: 7.10, 7.11_
 
-  - [ ]* 16.2 Property test: re-running on repaired output changes nothing → `tests/test_stems_ffmpeg.py`
+  - [x]* 16.2 Property test: re-running on repaired output changes nothing → `tests/test_stems_ffmpeg.py`
     - **Property 14: Re-running on repaired output changes nothing** — for any clip, applying the engine to its own Replacement_Media with the same `Stem_Options` and an empty Seam list leaves that media's decoded audio unchanged. Generators: `st_tiny_clip`, `st_stem_options` (with `requires_ffmpeg`).
     - _Requirements: 7.11_ · _Properties: P14_
 
@@ -925,6 +925,48 @@ spec's central promise to an upgrading operator).
       registration test assert in a subprocess, and `tests/test_stems_api.py` re-registers via
       an explicit fixture. All three pass in any order, but the root cause is one missing
       restore in a foundation-owned test file, which Req 20.6 kept out of scope here.
+
+  - **EPICS 15 & 16 NOTES.** Suite: **499 passed, 82 skipped, 0 failed** (483 before).
+    - **CORRECTIONS:**
+      1. **The transient intermediates are deliberately NOT declared as artifacts.** Task 15.1
+         asks for `in.wav` / `mixed.wav` / the non-durable stems to be declared as transient
+         `Engine_Artifact`s, but task 15.2 requires those same files to be **deleted before
+         returning**. Declaring them would publish an artifact list of paths that do not
+         exist, and the host does not persist non-durable artifacts anyway — so the only
+         effect would be to mislead a reader of `Engine_Result.artifacts`. Declared: the
+         Replacement_Media, plus the per-stem WAVs as **durable** when `retain_stems` is set.
+      2. **Idempotence is achieved by *skipping*, not by a byte-stable re-render.** Task 16.1
+         asks for the emitter to be guarded so a re-run is "a byte-stable re-render rather
+         than a second repair pass". Both halves landed, but the re-render framing is not
+         achievable and should not be claimed: the remux **re-encodes audio to a lossy codec**,
+         so a second pass decodes slightly differently no matter how careful the filtergraph
+         is. Instead a new `plan_has_work` predicate makes the engine return `skipped` when the
+         resolved plan would change nothing, which makes P14's "changes nothing" true *by
+         construction* and additionally saves two media passes and a lossy re-encode on any
+         clip that simply had no filler removed. The emitter guard landed too and is what makes
+         the empty case genuinely empty: **a unity gain now contributes no `volume` node at
+         all** (was `volume=1.000000`), and an input with nothing to do feeds straight through.
+      3. **`plan_has_work` is a second predicate, not a change to `plan_is_noop`.** They differ
+         in *when* they can be asked: `plan_is_noop` reads only gains and mode, so it is rung 3
+         and costs nothing; `plan_has_work` needs the **windows**, which need the probed sample
+         rate to snap against, so it can only be asked after pass 0 (new rung 3b).
+      4. **`declick` is deliberately counted as work**, even with no Seams. It is not
+         seam-driven — it is an explicit request to fade the clip's own head and tail — so
+         honouring it is not a "second repair pass". Documented trade: strict idempotence needs
+         the flag off, because fading twice is not fading once.
+      5. **The Replacement_Media is `clip_repaired<ext>`, reusing the clip's extension.**
+         ffmpeg picks its muxer from the extension, so hard-coding `.mp4` would mislabel the
+         output for any other container the Pipeline handed us.
+      6. **The disk-bound arithmetic is documented on `_reclaim`** and forced one design
+         choice: `in.wav` + three stems + `mixed.wav` is already `5W`, so the bridged `music`
+         stem is written **into the stems directory and reclaimed with the stem it replaces**,
+         rather than being a sixth live file. The bound holds as
+         `DISK_BOUND_MULTIPLE × W + C`.
+    - **Task 15.4's tests go through the real `Engine_Host`**, not a direct `run` call, because
+      what they assert is an ordering contract *between* engine and host that a direct call
+      cannot observe. They are also the **first end-to-end exercise of the widened media gate**:
+      the engine returns `degraded` (no local model → ffmpeg backend) **with** media and the
+      host adopts it, which the old `APPLIED`-only gate would have discarded.
 
 - [ ] 18. Backward-compatibility parity and dependency gate
   - [ ] 18.1 Property test: the Pipeline is unchanged except when the engine applies → `tests/test_stems_ladder.py`

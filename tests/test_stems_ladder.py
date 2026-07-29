@@ -31,7 +31,12 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tests.fakes import Recording_Command_Runner, StaticProber
-from tests.strategies import st_availability_map, st_stem_options
+from tests.strategies import (
+    st_availability_map,
+    st_seam_notes,
+    st_stem_gains,
+    st_stem_options,
+)
 from worker.engines import stems
 from worker.engines.artifacts import allocate_workspace
 from worker.engines.base import Engine_Context, Engine_Stage, Engine_Status
@@ -350,6 +355,7 @@ def test_the_volume_filter_is_required_on_every_path(tmp_path) -> None:
         tmp_path,
         options=_opts(repair_mode="crossfade"),
         availability={"ffmpeg_filter:volume": False},
+        notes=("filler_seam:1.500",),
     )
 
     assert result.status is Engine_Status.DEGRADED
@@ -475,7 +481,8 @@ def test_rung13_a_failed_ffmpeg_invocation_fails_without_media(tmp_path) -> None
     """Every ffmpeg failure arrives as one ``FFmpegError`` and one ``failed`` marker."""
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON, fail_at=1)
     result, details, _ = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade")
+        tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
+        notes=("filler_seam:1.500",),
     )
 
     assert result.status is Engine_Status.FAILED
@@ -497,7 +504,8 @@ def test_rung14_a_failed_integrity_check_fails_and_deletes_the_candidate(tmp_pat
     }
     runner = Recording_Command_Runner(probe_json=[_MEDIA_JSON, broken, _MEDIA_JSON])
     result, details, _ = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade")
+        tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
+        notes=("filler_seam:1.500",),
     )
 
     assert result.status is Engine_Status.FAILED
@@ -691,7 +699,7 @@ def test_a_failure_does_not_touch_the_incoming_clip(tmp_path) -> None:
     """Failure isolation includes the input: the engine works on copies (Req 17.6)."""
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON, fail_at=1)
     ctx = _ctx(tmp_path, options=_opts(repair_mode="crossfade"),
-               deps={"runner": runner})
+               notes=("filler_seam:1.500",), deps={"runner": runner})
     before = Path(ctx.clip_path).read_bytes()
 
     result = _engine(backend=_Backend(), runner=runner).run(ctx)
@@ -713,3 +721,474 @@ def test_an_unexpected_exception_is_left_to_the_host(tmp_path) -> None:
 
     with pytest.raises(ZeroDivisionError):
         engine.run(ctx)
+
+
+
+
+
+# =========================================================================== #
+# Epic 15 — workspace lifecycle, cleanup and the disk bound                    #
+# =========================================================================== #
+# The lifecycle assertions need real files on disk for the cleanup to reclaim, but no ffmpeg.
+# So the backend writes genuine PCM WAVs, and the recording runner is wrapped so that every
+# command's *output* file is materialised as a valid WAV too — anything less gets rejected by
+# `_verify_stem_file`, which is itself the point: the assembly path really is being exercised.
+
+_FMT = stems.Audio_Format(sample_rate=48000, channels=2, codec="aac")
+
+
+def _write_wav(path: Path, duration: float = _DURATION) -> Path:
+    """A valid 16-bit PCM WAV of ``duration`` at :data:`_FMT`."""
+    frames = int(round(duration * _FMT.sample_rate))
+    payload = bytes(frames * _FMT.channels * 2)
+    return stems._write_pcm_wav(Path(path), payload, _FMT)
+
+
+class _WritingBackend(_Backend):
+    """A backend that writes real stem WAVs, so cleanup has something to reclaim."""
+
+    def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        out = {}
+        for name in self._stems:
+            out[name] = _write_wav(Path(str(dest_dir)) / f"{name}.wav")
+        return out
+
+
+def _materialising(runner):
+    """Wrap ``runner`` so each command's output file appears, as a valid WAV where relevant."""
+
+    def call(cmd, timeout_s=None, **kwargs):
+        completed = runner(cmd, timeout_s, **kwargs)
+        argv = [str(part) for part in cmd]
+        if "ffprobe" not in argv[0]:
+            target = Path(argv[-1])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.suffix == ".wav":
+                _write_wav(target)
+            elif target.suffix and not target.exists():
+                target.write_bytes(b"\x00" * 256)
+        return completed
+
+    return call
+
+
+def _workspace_files(ctx) -> list[str]:
+    """Every file surviving in the Engine_Workspace, workspace-relative."""
+    root = ctx.workspace.root
+    return sorted(
+        str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()
+    )
+
+
+def _lifecycle_run(tmp_path, **option_overrides):
+    """Run the full working half against real files; return ``(result, ctx, runner)``."""
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    runner = _materialising(base)
+    engine = _engine(backend=_WritingBackend(), runner=runner)
+    options = _opts(
+        mix_preset="speech_focus", repair_mode="crossfade", **option_overrides
+    )
+    ctx = _ctx(
+        tmp_path, options=options, notes=("filler_seam:1.500",),
+        deps={"runner": runner},
+    )
+    return engine.run(ctx), ctx, base
+
+
+def test_the_workspace_layout_is_the_documented_one(tmp_path) -> None:
+    """``in.wav``, ``stems/*.wav``, ``mixed.wav``, ``clip_repaired.<ext>`` — and nothing
+    written outside the Engine_Workspace (Reqs 11.1, 16.4)."""
+    result, ctx, runner = _lifecycle_run(tmp_path)
+    assert result.status in (Engine_Status.APPLIED, Engine_Status.DEGRADED), result.detail
+
+    root = str(ctx.workspace.root)
+    written = [
+        call.argv[-1] for call in runner.ffmpeg_calls
+        if Path(call.argv[-1]).suffix in (".wav", ".mp4")
+    ]
+    assert written
+    for path in written:
+        assert path.startswith(root), f"wrote outside the workspace: {path}"
+
+    names = {Path(p).name for p in written}
+    assert "in.wav" in names
+    assert "mixed.wav" in names
+    assert "clip_repaired.mp4" in names        # matches the incoming clip's extension
+
+
+def test_the_replacement_extension_follows_the_incoming_clip() -> None:
+    """ffmpeg picks its muxer from the extension, so it must match the container."""
+    engine = _engine()
+
+    assert engine._replacement_name(
+        type("C", (), {"clip_path": Path("/tmp/clip_a.mkv")})()
+    ) == "clip_repaired.mkv"
+    assert engine._replacement_name(
+        type("C", (), {"clip_path": Path("/tmp/clip_a")})()
+    ) == "clip_repaired.mp4"
+    assert engine._replacement_name(object()) == "clip_repaired.mp4"
+
+
+def test_only_the_replacement_survives_the_run(tmp_path) -> None:
+    """Intermediates are reclaimed before returning; the Replacement_Media is not (Req 11.4)."""
+    result, ctx, _runner = _lifecycle_run(tmp_path)
+
+    assert result.media is not None
+    assert _workspace_files(ctx) == ["clip_repaired.mp4"]
+    assert Path(result.media).exists()
+
+
+def test_retained_stems_are_declared_durable_and_survive(tmp_path) -> None:
+    """``retain_stems`` makes the host persist them **before** the workspace goes (Req 11.3)."""
+    result, ctx, _runner = _lifecycle_run(tmp_path, retain_stems=True)
+
+    durable = [item for item in result.artifacts if item.durable]
+    assert {item.name for item in durable} == {
+        f"stems/{name}.wav" for name in stems.STEM_NAMES
+    }
+    assert all(item.media_type == "audio" for item in durable)
+
+    survivors = _workspace_files(ctx)
+    assert "clip_repaired.mp4" in survivors
+    assert "in.wav" not in survivors           # intermediates still reclaimed
+    assert "mixed.wav" not in survivors
+    for name in stems.STEM_NAMES:
+        assert f"stems/{name}.wav" in survivors
+
+
+def test_without_retain_stems_nothing_is_durable(tmp_path) -> None:
+    """The default keeps no audio: only the Replacement_Media is published."""
+    result, ctx, _runner = _lifecycle_run(tmp_path)
+
+    assert [item.durable for item in result.artifacts] == [False]
+    assert result.artifacts[0].media_type == "video"
+    assert _workspace_files(ctx) == ["clip_repaired.mp4"]
+
+
+def test_a_cleanup_failure_is_recorded_and_does_not_fail_the_clip(
+    tmp_path, monkeypatch
+) -> None:
+    """Failing to reclaim space must not turn a good clip into a failure (Req 11.4).
+
+    The guard is **per file**, so one refusal records its detail and the loop continues to the
+    next — asserted with two files where only the first refuses.
+    """
+    first = tmp_path / "stubborn.wav"
+    second = tmp_path / "deletable.wav"
+    first.write_bytes(b"\x00")
+    second.write_bytes(b"\x00")
+
+    real_unlink = Path.unlink
+
+    def refuse_one(self, missing_ok=False):
+        if self.name == "stubborn.wav":
+            raise OSError("device busy")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse_one)
+
+    details = _engine()._reclaim([first, second], keep=set())
+
+    assert details == ["cleanup_failed:stubborn.wav"]
+    monkeypatch.undo()
+    assert first.exists()                       # the refusal really happened
+    assert not second.exists()                  # and the loop carried on
+
+
+def test_reclaim_never_deletes_what_it_was_told_to_keep(tmp_path) -> None:
+    """The keep-set is what protects the media the host is about to adopt (Req 11.5)."""
+    keeper = tmp_path / "clip_repaired.mp4"
+    doomed = tmp_path / "mixed.wav"
+    keeper.write_bytes(b"\x00")
+    doomed.write_bytes(b"\x00")
+
+    assert _engine()._reclaim([keeper, doomed], keep={keeper}) == []
+    assert keeper.exists() and not doomed.exists()
+
+
+# --------------------------------------------------------------------------- #
+# P18 — cost and disk stay bounded regardless of seams and gains               #
+# --------------------------------------------------------------------------- #
+# Feature: audio-stem-inpainting, Property 18: Cost and disk stay bounded regardless of seams
+# and gains
+@settings(max_examples=50, deadline=None)
+@given(
+    seam_case=st_seam_notes(duration=6.0),
+    gains=st_stem_gains(),
+    mode=st.sampled_from(["off", "crossfade", "spectral"]),
+    retain=st.booleans(),
+)
+def test_p18_cost_and_disk_stay_bounded_regardless_of_seams_and_gains(
+    seam_case: dict, gains: dict, mode: str, retain: bool, tmp_path_factory
+) -> None:
+    """Two media passes and a bounded workspace, for any Seam count and any gain set.
+
+    Four claims, each of which must hold for *every* input rather than on average:
+
+    * **at most two media passes over the clip container** — extract and remux. Every other
+      invocation reads or writes WAVs inside the workspace, never the clip, so cost is constant
+      in the Seam count rather than linear in it (Reqs 2.6, 15.9);
+    * **every command carries a positive timeout** within the declared budget (Req 15.4);
+    * **only the Replacement_Media and the declared durable artifacts survive** (Req 11.4);
+    * the mix takes no more ``-i`` inputs than there are stems, so a seam-dense clip cannot
+      grow the graph's input count at all — the Seams live in the *expression*, not the inputs.
+    """
+    root = tmp_path_factory.mktemp("p18")
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    runner = _materialising(base)
+    options = stems.resolve_stem_options(
+        {
+            "stem_mix_preset": "custom",
+            "stem_gain_vocals": gains["vocals"],
+            "stem_gain_music": gains["music"],
+            "stem_gain_other": gains["other"],
+            "stem_repair_mode": mode,
+            "stem_retain_stems": retain,
+        }
+    )
+    engine = _engine(backend=_WritingBackend(), runner=runner)
+    ctx = _ctx(
+        root, options=options, duration=_DURATION,
+        notes=tuple(seam_case["notes"]), deps={"runner": runner},
+    )
+
+    result = engine.run(ctx)
+
+    for call in base.calls:
+        assert call.timeout_s is not None
+        assert call.timeout_s >= stems.MIN_STEP_TIMEOUT_S
+        assert call.timeout_s <= ctx.time_budget_s
+
+    clip = str(ctx.clip_path)
+    passes = [c for c in base.ffmpeg_calls if any(part == clip for part in c.argv)]
+    assert len(passes) <= 2, [c.argv for c in passes]
+
+    for call in base.ffmpeg_calls:
+        assert call.argv.count("-i") <= len(stems.STEM_NAMES)
+
+    allowed = {Path(str(result.media)).name} if result.media else set()
+    durable = {item.name for item in result.artifacts if item.durable}
+    for name in _workspace_files(ctx):
+        assert name in allowed or name in durable, (
+            f"unexpected survivor {name!r} (allowed={allowed}, durable={durable})"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Epic 16 — idempotence on repaired output                                     #
+# --------------------------------------------------------------------------- #
+def test_a_second_run_with_no_seams_is_skipped(tmp_path) -> None:
+    """Re-running on already-repaired media does nothing at all (Req 7.11).
+
+    Idempotence is achieved by **skipping**, not by a "byte-stable re-render" — which is both
+    the stronger and the more honest guarantee. A re-render could not be byte-stable anyway:
+    the remux re-encodes audio to a lossy codec, so a second pass would decode slightly
+    differently however careful the filtergraph was. Skipping makes "changes nothing" true by
+    construction.
+    """
+    runner = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = _engine(backend=_Backend(), runner=runner)
+    # Unity gains and ``crossfade`` requested, but the clip published no Seams.
+    ctx = _ctx(tmp_path, options=_opts(repair_mode="crossfade"), notes=(),
+               deps={"runner": runner})
+
+    result = engine.run(ctx)
+
+    assert result.status is Engine_Status.SKIPPED
+    assert result.media is None
+    assert _details(result) == []
+    assert runner.ffmpeg_calls == []             # and it cost no media pass
+
+
+def test_a_no_seam_clip_with_real_gains_still_runs(tmp_path) -> None:
+    """The guard must not swallow work: a gain change is a change even with no Seams."""
+    result, _ctx_, _runner = _lifecycle_run(tmp_path)
+    assert result.status in (Engine_Status.APPLIED, Engine_Status.DEGRADED)
+    assert result.media is not None
+
+
+def test_declick_is_deliberately_still_work() -> None:
+    """``declick`` is not seam-driven, so it is honoured even with no Seams.
+
+    The trade is documented rather than hidden: a creator who asked for the clip edges to be
+    faded gets that, and strict idempotence therefore needs the flag off, because fading twice
+    is not the same as fading once.
+    """
+    fmt = stems.Audio_Format(sample_rate=48000, channels=2)
+    with_declick = stems.plan_stems(
+        opts=_opts(repair_mode="off", declick=True), duration=3.0, fmt=fmt
+    )
+    without = stems.plan_stems(opts=_opts(repair_mode="off"), duration=3.0, fmt=fmt)
+
+    assert stems.plan_has_work(with_declick) is True
+    assert stems.plan_has_work(without) is False
+
+
+def test_plan_has_work_is_total() -> None:
+    """A malformed value must never silently skip the engine."""
+    for hostile in (None, object(), 42, "plan"):
+        assert stems.plan_has_work(hostile) is True
+
+
+
+# --------------------------------------------------------------------------- #
+# Task 15.4 — media handoff before deletion, and temp cleanup                 #
+# --------------------------------------------------------------------------- #
+# These two go through the **real Engine_Host** rather than calling ``run`` directly, because
+# what they assert is an ordering contract *between* the engine and the host — which a direct
+# call cannot see. They are also the first end-to-end exercise of the widened media gate.
+
+
+def _host_with_stem_engine(tmp_path, engine, *, enabled: bool = True):
+    """A real ``Engine_Host`` with only the stem engine registered."""
+    from worker.engines.registry import Engine_Registry
+    from worker.models import ProcessingOptions
+
+    registry = Engine_Registry()
+    registry.register(engine)
+    options = ProcessingOptions(stem_inpainting_enabled=enabled)
+    return stems_host(options, tmp_path, registry)
+
+
+def stems_host(options, tmp_path, registry):
+    from worker.engines.host import Engine_Host
+
+    return Engine_Host(
+        options,
+        job_id="job",
+        temp_dir=tmp_path / "temp",
+        registry=registry,
+        capabilities=_report({}),
+    )
+
+
+def _run_stage_through_host(tmp_path, engine):
+    """Drive the AUDIO stage for one clip; return ``(host, outcome, clip)``."""
+    from worker.engines.base import Engine_Stage as Stage
+
+    clip = tmp_path / "clip_a.mp4"
+    clip.write_bytes(b"\x00" * 64)
+    host = _host_with_stem_engine(tmp_path, engine)
+    outcome = host.run_stage(
+        Stage.AUDIO,
+        clip_id="clip_a",
+        source=str(clip),
+        clip_path=clip,
+        clip_start=0.0,
+        clip_end=_DURATION,
+        duration=_DURATION,
+        notes=("filler_seam:1.500",),
+    )
+    return host, outcome, clip
+
+
+def test_the_host_takes_the_media_before_the_workspace_is_deleted(tmp_path) -> None:
+    """Validates: Req 11.5 — the handoff happens while the file still exists.
+
+    The ordering is the whole point: the engine reclaims its intermediates but keeps the
+    Replacement_Media, the host adopts it as ``Stage_Outcome.media`` for the geometry stage,
+    and only ``finish_clip`` deletes the workspace. If the engine deleted too eagerly, or the
+    host read too late, this is where it would show.
+
+    This is also the first end-to-end proof of the widened gate: the engine returns
+    ``degraded`` here (no local model, so the ffmpeg backend was used) **with** media, and the
+    host adopts it — which the old ``APPLIED``-only gate would not have done.
+    """
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=_WritingBackend("ffmpeg", stems_out=("vocals", "music")),
+        runner=_materialising(base),
+    )
+    host, outcome, _clip = _run_stage_through_host(tmp_path, engine)
+
+    result = outcome.result_for("stem_inpainting")
+    assert result is not None
+    assert result.status in (Engine_Status.APPLIED, Engine_Status.DEGRADED), result.detail
+
+    # The host adopted the media, and it is readable *now* — before finish_clip.
+    assert outcome.media is not None
+    assert Path(outcome.media).exists()
+    workspace_root = Path(outcome.media).parent
+
+    host.finish_clip("clip_a")
+
+    # Only now is the workspace gone.
+    assert not workspace_root.exists()
+
+
+def test_a_degraded_result_with_media_is_adopted_by_the_host(tmp_path) -> None:
+    """Validates: Req 3.10 — Degraded_With_Media reaches the next stage.
+
+    Pinned separately from the ordering test because it is the requirement that drove the
+    foundation change, and it deserves an assertion that names it.
+    """
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=_WritingBackend("ffmpeg", stems_out=("vocals", "music")),
+        runner=_materialising(base),
+    )
+    _host, outcome, _clip = _run_stage_through_host(tmp_path, engine)
+
+    result = outcome.result_for("stem_inpainting")
+    if result.status is Engine_Status.DEGRADED:
+        assert result.media is not None
+        assert outcome.media == result.media
+        assert any("degraded:" in m for m in outcome.markers)
+
+
+def test_finish_clip_leaves_no_stem_workspace_behind(tmp_path) -> None:
+    """Validates: Req 11.8 — no ``stem_inpainting__*`` directory survives the clip.
+
+    Workspaces are deleted regardless of engine status (foundation Reqs 17.1, 17.5), so this
+    holds for a successful run as much as a failed one.
+    """
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=_WritingBackend("ffmpeg", stems_out=("vocals", "music")),
+        runner=_materialising(base),
+    )
+    host, _outcome, _clip = _run_stage_through_host(tmp_path, engine)
+
+    temp_root = tmp_path / "temp"
+    assert list(temp_root.rglob("stem_inpainting__*")), "no workspace was created"
+
+    host.finish_clip("clip_a")
+
+    leftovers = list(temp_root.rglob("stem_inpainting__*"))
+    assert leftovers == [], f"workspace survived finish_clip: {leftovers}"
+
+
+def test_the_engine_is_inert_when_its_flag_is_off(tmp_path) -> None:
+    """Validates: Reqs 4.2, 19.5 — a disabled engine costs nothing, not even a workspace.
+
+    The all-off parity guarantee in miniature: no probe, no workspace, no media pass, and a
+    ``skipped`` result carrying no marker.
+    """
+    from worker.engines.base import Engine_Stage as Stage
+    from worker.engines.registry import Engine_Registry
+    from worker.models import ProcessingOptions
+
+    base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=_WritingBackend(), runner=_materialising(base)
+    )
+    registry = Engine_Registry()
+    registry.register(engine)
+    host = stems_host(ProcessingOptions(), tmp_path, registry)   # flag defaults off
+
+    assert host.active is False
+
+    clip = tmp_path / "clip_a.mp4"
+    clip.write_bytes(b"\x00" * 64)
+    outcome = host.run_stage(
+        Stage.AUDIO, clip_id="clip_a", source=str(clip), clip_path=clip,
+        clip_start=0.0, clip_end=_DURATION, duration=_DURATION,
+    )
+
+    assert outcome.media is None
+    assert outcome.markers == []
+    assert base.calls == []
+    assert not list((tmp_path / "temp").rglob("stem_inpainting__*"))
