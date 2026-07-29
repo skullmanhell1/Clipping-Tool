@@ -126,6 +126,21 @@ class Settings(BaseSettings):
         default=BASE_DIR / "storage" / "uploads",
         description="Where uploaded/downloaded source videos are stored.",
     )
+    # Upload guard rails. Without a ceiling any client can fill the disk, and without an
+    # extension allow-list arbitrary files land in a directory whose contents are later
+    # handed to ffmpeg. 0 disables the size ceiling.
+    max_upload_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        description="Largest accepted upload in bytes (default 2 GiB); 0 = unlimited.",
+    )
+    upload_chunk_bytes: int = Field(
+        default=1024 * 1024,
+        description="Chunk size used to stream uploads to disk.",
+    )
+    allowed_upload_extensions: str = Field(
+        default=".mp4,.mov,.mkv,.webm,.avi,.m4v,.mpg,.mpeg,.wmv,.flv,.ts,.m2ts,.3gp,.mp3,.wav,.m4a,.aac,.flac,.ogg",
+        description="Comma-separated list of accepted upload file extensions.",
+    )
     temp_dir: Path = Field(
         default=BASE_DIR / "storage" / "temp",
         description="Scratch space for intermediate processing artefacts.",
@@ -172,6 +187,19 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------- ffmpeg --
     ffmpeg_binary: str = Field(default="ffmpeg", description="Path to ffmpeg binary.")
     ffprobe_binary: str = Field(default="ffprobe", description="Path to ffprobe binary.")
+    # Wall-clock ceilings for media subprocesses. Jobs run in a thread pool with a
+    # single worker, so an ffmpeg that hangs (an unreachable network input, a
+    # malformed file that stalls a demuxer, a filter waiting on a pad that never
+    # fills) would otherwise block the entire queue indefinitely with no error and
+    # no recovery path. Encoding is given a generous ceiling because a long source
+    # legitimately takes minutes; probing is metadata-only and should be quick.
+    # Set either to 0 to opt out of the ceiling entirely.
+    ffmpeg_timeout_seconds: float = Field(
+        default=3600.0, description="Max wall-clock seconds for one ffmpeg run; 0 = unbounded."
+    )
+    ffprobe_timeout_seconds: float = Field(
+        default=60.0, description="Max wall-clock seconds for one ffprobe run; 0 = unbounded."
+    )
 
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(
@@ -232,6 +260,14 @@ class Settings(BaseSettings):
         default=12, description="Max keyframes sampled per source for visual selection."
     )
 
+    # How long the per-area directory sizes reported by /api/storage may be reused.
+    # Computing them walks clips/, uploads/ and temp/ in full, and the storage panel
+    # polls that endpoint, so every poll used to traverse the whole storage tree. The
+    # figures are a rough gauge, so a short cache is free. 0 disables caching.
+    disk_usage_cache_seconds: float = Field(
+        default=30.0, description="TTL for cached storage area sizes; 0 = always recompute."
+    )
+
     # ------------- speaker diarisation & multi-speaker reframe (v0.8.0) ----
     # Cap on distinct speakers produced by diarisation (least-represented
     # speakers are merged beyond this cap).
@@ -242,9 +278,29 @@ class Settings(BaseSettings):
     diarization_pause_gap: float = Field(
         default=0.9, description="Silence gap (s) that ends a speaker turn."
     )
+    # Silence gap (seconds) after which the offline heuristic attributes the next turn
+    # to a *different* speaker. Deliberately much larger than diarization_pause_gap:
+    # ending a turn and changing speaker are different claims. Pauses just over 0.9s are
+    # routine inside one person's speech (a breath, a sentence boundary), so treating
+    # every one as a hand-off invented speakers who never spoke — and speaker-aware
+    # reframe then cut back and forth between two "speakers" who were the same person.
+    diarization_handoff_gap: float = Field(
+        default=2.5,
+        description="Silence gap (s) after which the offline heuristic changes speaker.",
+    )
     # Face-sampling rate for speaker-aware reframe (matches v0.7.0 reframe).
     reframe_sample_fps: float = Field(
         default=5.0, description="Face-sampling rate (fps) for speaker-aware reframe."
+    )
+    # How much visual cues (brightness + motion) count when blended with transcript
+    # scores during visual selection. 0 = transcript only, 1 = visuals only. This was
+    # effectively hard-coded at 0.5: merge_scores took a `weight` argument that its only
+    # call site never passed, so a 50/50 blend could not be tuned — and brightness and
+    # motion are weak signals for talking-head footage, where the transcript is the
+    # better guide.
+    visual_selection_weight: float = Field(
+        default=0.5,
+        description="Weight of visual cues vs transcript score in selection (0..1).",
     )
     # Cap on frames sampled per clip for face detection.
     reframe_sample_cap: int = Field(
@@ -257,8 +313,22 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------- publishers --
     history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")
+    # Durable job/clip records. Without this the job store is process memory only, so a
+    # restart loses every job and the history UI lists clips whose download 404s.
+    jobs_db: Path = Field(default=BASE_DIR / "storage" / "jobs.db")
+    # Upper bound on retained job records, so a long-lived instance does not grow the
+    # jobs table without limit. 0 disables pruning.
+    max_persisted_jobs: int = Field(default=500)
     publish_poll_seconds: float = Field(default=2.0)
-    publish_default_interval_seconds: float = Field(default=30.0)
+    # A *floor* under every publisher's own rate limit, for operators who want to be
+    # more conservative than the platforms require. 0 means "trust each publisher".
+    #
+    # This was `publish_default_interval_seconds`, defaulting to 30.0, and the scheduler
+    # applied `max(publisher.min_interval_seconds, <this>)`. Since every publisher
+    # declares 2-18s (whop 2, x 5, tiktok 10, youtube 15, instagram 18), the 30s floor
+    # overrode all of them — so `min_interval_seconds` was dead code on every publisher,
+    # and publishing ran roughly twice as slowly as intended with no way to tell why.
+    publish_min_interval_floor_seconds: float = Field(default=0.0)
     public_base_url: Optional[str] = Field(default=None)
     # Whop (@whop/sdk Node bridge)
     whop_api_key: Optional[str] = Field(default=None)
@@ -306,6 +376,37 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         """Return CORS origins as a list, splitting the comma-separated value."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_upload_extensions_set(self) -> set[str]:
+        """Accepted upload extensions, lower-cased and dot-prefixed."""
+        out: set[str] = set()
+        for raw in self.allowed_upload_extensions.split(","):
+            ext = raw.strip().lower()
+            if not ext:
+                continue
+            out.add(ext if ext.startswith(".") else f".{ext}")
+        return out
+
+    @property
+    def cors_allow_wildcard(self) -> bool:
+        """Whether the configured origins are the ``*`` wildcard."""
+        return "*" in self.cors_origins_list
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        """Whether to send ``Access-Control-Allow-Credentials``.
+
+        Never true alongside a wildcard origin. The CORS specification forbids
+        combining ``Access-Control-Allow-Origin: *`` with credentials, and browsers
+        reject such responses outright — so pairing the two does not loosen security,
+        it simply breaks every credentialed cross-origin request while *looking* like
+        it permits them. Worse, the wildcard is the default here, so the broken
+        combination was the out-of-the-box behaviour.
+
+        Setting an explicit ``CORS_ORIGINS`` list re-enables credentials.
+        """
+        return not self.cors_allow_wildcard
 
 
 @lru_cache

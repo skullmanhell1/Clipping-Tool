@@ -23,8 +23,12 @@ os.environ.update(
         "TEMP_DIR": str(_TMP / "storage" / "temp"),
         "CLIPS_DIR": str(_TMP / "storage" / "clips"),
         "HISTORY_DB": str(_TMP / "storage" / "history.db"),
+        # Durable job records, for the same reason as HISTORY_DB: without this the
+        # shared JobManager singleton writes into the developer's real storage
+        # directory and jobs accumulate across runs.
+        "JOBS_DB": str(_TMP / "storage" / "jobs.db"),
         "PUBLISH_POLL_SECONDS": "0.05",
-        "PUBLISH_DEFAULT_INTERVAL_SECONDS": "0",
+        "PUBLISH_MIN_INTERVAL_FLOOR_SECONDS": "0",
     }
 )
 
