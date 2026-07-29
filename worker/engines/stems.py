@@ -142,6 +142,7 @@ __all__ = [
     "step_timeout",
     "verify_replacement",
     "parse_seam_notes",
+    "plan_has_work",
     "plan_is_noop",
     "plan_stems",
     "plan_stems_from_context",
@@ -1296,6 +1297,43 @@ def plan_stems_from_context(ctx: Any) -> Stem_Plan:
         caps=getattr(ctx, "capabilities", None),
         tb=getattr(ctx, "time_base", None),
     )
+
+
+def plan_has_work(plan: Stem_Plan) -> bool:
+    """Whether this **resolved** plan would change the audio at all (Req 7.10, 7.11).
+
+    The post-probe companion to :func:`plan_is_noop`, and the second half of the idempotence
+    guarantee. The two differ in *when* they can be asked, which is why both exist:
+
+    * :func:`plan_is_noop` is answerable **before** probing — it reads only the gains and the
+      Repair_Mode — so it is rung 3 and costs nothing.
+    * this one needs the **windows**, which need the probed sample rate to snap against, so it
+      can only be asked after pass 0. It catches the case ``plan_is_noop`` structurally
+      cannot: ``repair_mode`` is ``crossfade`` (so not a no-op by rung 3's test) but the clip
+      published **no Seams**, so there is no window to repair and, with unity gains, nothing
+      whatsoever to do.
+
+    That case is exactly what re-running the engine on its own Replacement_Media looks like,
+    and returning ``False`` here is what makes Req 7.11 true *by construction*: the second run
+    is skipped, so it cannot change the audio. Getting there via a skip rather than via a
+    "byte-stable re-render" matters, because the remux pass re-encodes to a lossy codec — a
+    re-render would decode *slightly* differently no matter how careful the filtergraph was.
+
+    ``declick`` is deliberately **work**, even with no Seams. It is not seam-driven: it is an
+    explicit request to fade the clip's own head and tail, and honouring a request the operator
+    made is not a "second repair pass". A caller who wants strict idempotence leaves it off.
+
+    Total: anything that does not look like a plan reads as "has work", so a malformed value
+    can never silently skip the engine.
+    """
+    gains = getattr(plan, "gains", None)
+    if not isinstance(gains, Mapping) or set(gains) != set(STEM_NAMES):
+        return True
+    if getattr(plan, "declick", False):
+        return True
+    if getattr(plan, "windows", ()):
+        return True
+    return any(_coerce_gain(gains[name]) != GAIN_DEFAULT for name in STEM_NAMES)
 
 
 def plan_is_noop(plan: Stem_Plan) -> bool:
@@ -2651,7 +2689,15 @@ def build_mix_graph(
             continue
         index = len(inputs)
         inputs.append(Path(str(path)))
-        chain = [f"volume={_fixed(gain)}:precision=float"]
+        chain: list[str] = []
+        # Re-entrancy guard (Req 7.10, 7.11): a *unity* gain contributes no ``volume`` node
+        # at all, rather than a no-op ``volume=1.000000``. Same for an empty window list
+        # contributing no notch. The point is that re-running the engine on its own output
+        # with nothing left to do emits an empty graph, so the second run is a re-render and
+        # not a second repair pass. This complements :func:`plan_is_noop`, which catches the
+        # same situation earlier and more cheaply when it is knowable before probing.
+        if gain != GAIN_DEFAULT:
+            chain.append(f"volume={_fixed(gain)}:precision=float")
         if spectral:
             windows = overrides.get(name, plan.windows)
             chain.extend(
@@ -2659,8 +2705,11 @@ def build_mix_graph(
                     windows, scale=SPECTRAL_HALF_WIDTH_SCALE.get(name, 1.0)
                 )
             )
-        label = f"g_{name}"
-        parts.append(f"[{index}:a]{','.join(chain)}[{label}]")
+        if chain:
+            label = f"g_{name}"
+            parts.append(f"[{index}:a]{','.join(chain)}[{label}]")
+        else:
+            label = f"{index}:a"        # nothing to do: feed the input straight through
         labels.append(label)
 
     if not labels:
@@ -3435,12 +3484,14 @@ class Stem_Inpainting_Engine(AV_Engine):
         *,
         media: Any = None,
         detail: str = "",
+        artifacts: Sequence[Any] = (),
     ) -> Engine_Result:
         """One place that builds every result, so no rung can forget to namespace a marker."""
         return Engine_Result(
             engine_id=ENGINE_ID,
             status=status,
             markers=tuple(marker(ENGINE_ID, item) for item in details),
+            artifacts=tuple(artifacts),
             plan=plan.to_dict() if plan is not None else {},
             media=media,
             detail=detail,
@@ -3561,6 +3612,16 @@ class Stem_Inpainting_Engine(AV_Engine):
             tb=getattr(ctx, "time_base", None),
         )
 
+        # --- rung 3b: nothing left to do, now that the windows are known ---
+        # Rung 3 could not see this: with ``repair_mode="crossfade"`` and unity gains the
+        # plan is not a no-op by its test, but if the clip published no Seams there is no
+        # window to repair and nothing to change. Skipping here rather than rendering an
+        # identical clip is what makes re-running the engine on its own output a no-change
+        # operation (Req 7.11), and it also saves two media passes and a lossy re-encode on
+        # any clip that simply had no filler removed.
+        if not plan_has_work(plan):
+            return self._result(Engine_Status.SKIPPED, plan)
+
         # --- rung 10: a filter the resolved path cannot do without --------
         missing_filter = self._missing_filter(caps, plan)
         if missing_filter is not None:
@@ -3661,6 +3722,14 @@ class Stem_Inpainting_Engine(AV_Engine):
                         tb=getattr(ctx, "time_base", None),
                     )
                     _degradation("degraded:budget")
+                    if not plan_has_work(plan):
+                        # The fallback has nothing to do either — the gains were the only
+                        # reason to run, and they are exactly what this rung gives up. Return
+                        # without media rather than spend a remux producing an identical clip.
+                        self._discard(created)
+                        return self._result(
+                            Engine_Status.DEGRADED, plan, ["degraded:budget"]
+                        )
                     stem_set = {"vocals": extracted}
                 else:
                     # ---- rung 8: the backend actually used --------------
@@ -3738,7 +3807,7 @@ class Stem_Inpainting_Engine(AV_Engine):
             candidate = remux_replacement(
                 ctx.clip_path,
                 mixed,
-                self._workspace_path(workspace, "replacement.mp4"),
+                self._workspace_path(workspace, self._replacement_name(ctx)),
                 fmt=fmt,
                 runner=runner,
                 timeout_s=step_timeout(ctx, REMUX_RESERVE_S),
@@ -3785,6 +3854,15 @@ class Stem_Inpainting_Engine(AV_Engine):
                 Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
             )
 
+        # ---- workspace lifecycle (tasks 15.1, 15.2) --------------------
+        artifacts = self._declare_artifacts(workspace, candidate, stem_set, options)
+        cleanup_details = self._reclaim(
+            created, keep={Path(str(candidate)), *(
+                Path(str(item.path)) for item in artifacts if item.durable
+            )}
+        )
+        details.extend(cleanup_details)
+
         # ---- rung 15 (and the applied form of rungs 7-9) ---------------
         if applied_backend:
             details.append(f"applied:{applied_backend}")
@@ -3800,7 +3878,119 @@ class Stem_Inpainting_Engine(AV_Engine):
             plan,
             details,
             media=candidate,
+            artifacts=artifacts,
         )
+
+    # -- workspace lifecycle ------------------------------------------------
+
+    @staticmethod
+    def _replacement_name(ctx: Any) -> str:
+        """``clip_repaired<ext>``, reusing the incoming clip's container extension.
+
+        Matching the extension matters because the remux writes the same container: naming it
+        ``.mp4`` unconditionally would mislabel the output for any other container the
+        Pipeline might hand us, and ffmpeg picks its muxer from the extension.
+        """
+        suffix = ""
+        try:
+            suffix = Path(str(getattr(ctx, "clip_path", "") or "")).suffix
+        except Exception:  # pragma: no cover - hostile path
+            suffix = ""
+        return f"clip_repaired{suffix or '.mp4'}"
+
+    def _declare_artifacts(
+        self,
+        workspace: Any,
+        candidate: Any,
+        stem_set: Mapping[str, Path],
+        options: Stem_Options,
+    ) -> tuple[Any, ...]:
+        """The Engine_Artifacts this run publishes (Req 11.1-11.3, 11.5).
+
+        Two kinds, and **only** these two:
+
+        * the Replacement_Media, as the media artifact;
+        * when ``retain_stems`` is set, each per-stem WAV as a **durable** artifact, so the
+          host persists it through the active Storage_Backend under a ``normalize_key``-ed key
+          *before* the workspace is deleted. A persistence failure surfaces as the
+          foundation's ``artifact_failed`` marker and the clip is still produced.
+
+        Note task 15.1 also asks for the transient intermediates (``in.wav``, ``mixed.wav``,
+        the non-durable stems) to be declared. They are deliberately **not**: task 15.2
+        requires those same files to be deleted before returning, so declaring them would
+        publish an artifact list of paths that do not exist. An inaccurate list is worse than
+        a short one — the host does not persist non-durable artifacts anyway, so the only
+        effect would be to mislead a reader of ``Engine_Result.artifacts``.
+        """
+        if workspace is None:
+            return ()
+        artifacts: list[Any] = []
+        try:
+            artifacts.append(
+                workspace.artifact(
+                    Path(str(candidate)).name, media_type="video", durable=False
+                )
+            )
+            if options.retain_stems:
+                for name in STEM_NAMES:
+                    if name in stem_set:
+                        artifacts.append(
+                            workspace.artifact(
+                                f"stems/{name}.wav", media_type="audio", durable=True
+                            )
+                        )
+        except Exception:  # pragma: no cover - hostile workspace double
+            return tuple(artifacts)
+        return tuple(artifacts)
+
+    def _reclaim(self, created: Sequence[Any], *, keep: set) -> list[str]:
+        """Delete every intermediate except ``keep``, returning marker details (Req 11.4).
+
+        **The bounded-disk arithmetic** (Req 11.7). Let ``W`` be the extracted WAV's size and
+        ``C`` the clip container's. Peak workspace usage over the run is:
+
+        * ``in.wav``                       — ``W``
+        * three assembled stems            — ``3W`` (each is the same duration, rate and
+          channel count as the extraction, so each is ``W``)
+        * one bridged ``music`` stem       — ``W`` at most, and only under ``spectral``
+        * ``mixed.wav``                    — ``W``
+        * ``clip_repaired.<ext>``          — ``C`` at most; the video is stream-copied and the
+          audio re-encoded to a *lossy* codec from PCM, so it cannot exceed the source
+
+        The stems and the mix coexist (the mix reads them), and the bridged stem replaces the
+        plain ``music`` stem in the graph but both files exist while the bridge runs. That is
+        ``W + 3W + W + W = 6W`` in the worst case — over the documented
+        ``DISK_BOUND_MULTIPLE × W`` (``5W``) — which is why the bridged stem is written **into
+        the stems directory and the plain one deleted with it**, and why the bound is stated as
+        ``DISK_BOUND_MULTIPLE × W + C``: the ``+ C`` term is the Replacement_Media, and ``5W``
+        covers ``in.wav`` + three stems + ``mixed.wav`` with the bridge counted against the
+        stem it replaces.
+
+        Each delete is guarded individually: an ``OSError`` records a detail and the loop
+        continues, because failing to reclaim space must not turn a good clip into a failure.
+        Note the ordering contract this relies on — the host takes
+        ``Engine_Result.media`` and persists durable artifacts *before* deleting the
+        workspace, so keeping only those two categories here is safe (Req 11.5).
+        """
+        details: list[str] = []
+        seen: set[str] = set()
+        for path in created:
+            try:
+                target = Path(str(path))
+            except Exception:  # pragma: no cover - hostile path
+                continue
+            key = str(target)
+            if key in seen or target in keep:
+                continue
+            seen.add(key)
+            try:
+                target.unlink(missing_ok=True)
+            except OSError as exc:
+                detail = f"cleanup_failed:{target.name}"
+                if detail not in details:
+                    details.append(detail)
+                del exc
+        return details
 
     @staticmethod
     def _workspace_path(workspace: Any, *parts: str) -> Path:

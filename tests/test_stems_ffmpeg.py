@@ -411,24 +411,60 @@ def test_extract_decodes_audio_only_at_the_probed_format(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 def test_a_muted_stem_is_not_an_input_at_all(tmp_path) -> None:
     """Gain ``0.0`` excludes the stem from the graph *and* from ``-i`` (Req 5.7)."""
-    plan = _plan(gains={"music": 0.0, "other": 0.5, "vocals": 1.0})
+    plan = _plan(gains={"music": 0.0, "other": 0.5, "vocals": 1.0}, repair_mode="off")
     inputs, graph, _ = stems.build_mix_graph(plan, _stem_set(tmp_path))
 
     assert len(inputs) == 2
     assert not any("music" in str(path) for path in inputs)
     assert "g_music" not in graph
-    assert "g_other" in graph and "g_vocals" in graph
+    # ``other`` is attenuated, so it gets a volume node...
+    assert "g_other" in graph
+    # ...while ``vocals`` is at unity and therefore gets **no node at all**, feeding straight
+    # into the mix. That is the re-entrancy guard (Req 7.10): a no-op ``volume=1.000000``
+    # would make a second run a second filter pass instead of nothing.
+    assert "g_vocals" not in graph
     assert "amix=inputs=2:normalize=0:dropout_transition=0" in graph
 
 
 def test_amix_is_skipped_for_a_single_surviving_stem(tmp_path) -> None:
     """One input needs no ``amix``: mixing a stream with itself costs a node for nothing."""
-    plan = _plan(gains={"music": 0.0, "other": 0.0, "vocals": 1.0}, repair_mode="off")
+    plan = _plan(gains={"music": 0.0, "other": 0.0, "vocals": 0.5}, repair_mode="off")
     inputs, graph, out_label = stems.build_mix_graph(plan, _stem_set(tmp_path))
 
     assert len(inputs) == 1
     assert "amix" not in graph
     assert out_label == "g_vocals"
+
+
+def test_a_unity_gain_with_nothing_to_repair_emits_an_empty_graph(tmp_path) -> None:
+    """The re-entrancy guard at its limit: nothing requested means nothing emitted.
+
+    With unity gains, no windows and no declick the graph is empty and the output label is the
+    raw input — so a re-render is a stream copy of the mix stage's input rather than a second
+    filter pass (Req 7.10). ``plan_has_work`` is what stops the engine getting this far at all.
+    """
+    # All gains at unity and no windows — and the single-input Stem_Set of the repair-only
+    # path, which is the shape a second run on already-repaired media takes.
+    plan = _plan(repair_mode="off")
+    inputs, graph, out_label = stems.build_mix_graph(
+        plan, {"vocals": tmp_path / "in.wav"}
+    )
+
+    assert len(inputs) == 1
+    assert graph == ""
+    assert out_label == "0:a"
+    assert stems.plan_has_work(plan) is False
+
+
+def test_muting_a_stem_counts_as_work(tmp_path) -> None:
+    """A ``0.0`` gain is a real change, so it must not be mistaken for a no-op.
+
+    Worth pinning explicitly: ``plan_has_work`` asks "would this change the audio?", and
+    silencing a stem certainly would — even though it emits no ``volume`` node for the
+    *surviving* stems and drops the muted one as an input entirely.
+    """
+    plan = _plan(gains={"music": 0.0, "other": 1.0, "vocals": 1.0}, repair_mode="off")
+    assert stems.plan_has_work(plan) is True
 
 
 def test_normalize_zero_is_always_present(tmp_path) -> None:
