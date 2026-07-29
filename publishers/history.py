@@ -96,9 +96,13 @@ class HistoryStore:
         return attempt_id
 
     def update_attempt(self, attempt_id: str, **fields: Any) -> None:
+        # ``request_json`` is writable so an approved attempt can be re-queued with an
+        # amended request (specifically mode="auto"); without that, re-running a
+        # review_required attempt would replay mode="review" and park it right back in
+        # review forever.
         allowed = {"state","started_at","completed_at","url","external_id","error",
-                   "message","result_json","scheduled_at"}
-        data = {k: (json.dumps(v) if k == "result_json" and not isinstance(v, str) else v)
+                   "message","result_json","scheduled_at","request_json"}
+        data = {k: (json.dumps(v) if k in ("result_json","request_json") and not isinstance(v, str) else v)
                 for k,v in fields.items() if k in allowed}
         if not data: return
         with self._lock, self._connect() as db:

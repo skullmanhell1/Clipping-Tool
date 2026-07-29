@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass, field, asdict, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from typing import Any, Optional
 
@@ -342,6 +342,26 @@ class ClipResult:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "ClipResult":
+        """Rebuild a clip from its ``to_dict`` form, ignoring unknown keys.
+
+        Unknown keys are dropped rather than raising so a record written by an older
+        or newer build still loads — a persisted job outliving a deploy is the normal
+        case, not an exceptional one. Missing required keys fall back to a benign
+        default for the same reason.
+        """
+        data = data or {}
+        valid = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
+        valid.setdefault("id", "")
+        valid.setdefault("filename", "")
+        for number in ("start", "end", "duration"):
+            try:
+                valid[number] = float(valid.get(number) or 0.0)
+            except (TypeError, ValueError):
+                valid[number] = 0.0
+        return cls(**valid)
+
 
 @dataclass
 class Job:
@@ -382,3 +402,36 @@ class Job:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "Job":
+        """Rebuild a job from its :meth:`to_dict` form.
+
+        The inverse of ``to_dict``, used to restore jobs from the durable store on
+        start-up. Nested ``options`` and ``clips`` are rebuilt through their own
+        ``from_dict``, and an unrecognised ``status`` degrades to ``FAILED`` rather than
+        raising: a job whose state cannot be read is certainly not still running, and
+        surfacing it as failed is both true and actionable.
+        """
+        data = data or {}
+        try:
+            status = JobStatus(str(data.get("status") or JobStatus.FAILED.value))
+        except ValueError:
+            status = JobStatus.FAILED
+        return cls(
+            input_type=str(data.get("input_type") or "file"),
+            source=str(data.get("source") or ""),
+            options=ProcessingOptions.from_dict(data.get("options")),
+            id=str(data.get("id") or uuid.uuid4().hex[:12]),
+            batch_id=data.get("batch_id"),
+            status=status,
+            progress=float(data.get("progress") or 0.0),
+            stage=str(data.get("stage") or ""),
+            title=str(data.get("title") or ""),
+            duration=data.get("duration"),
+            thumbnail=data.get("thumbnail"),
+            error=data.get("error"),
+            clips=[ClipResult.from_dict(c) for c in (data.get("clips") or [])],
+            created_at=float(data.get("created_at") or time.time()),
+            updated_at=float(data.get("updated_at") or time.time()),
+        )

@@ -91,16 +91,28 @@ class FakeS3Client:
 class FakePublisher:
     """A configurable BasePublisher stand-in for scheduler/manager tests."""
 
-    def __init__(self, name="fake", result=None, min_interval_seconds=0.0):
+    def __init__(self, name="fake", result=None, min_interval_seconds=0.0,
+                 configured=True, direct_publish=True, message="ok"):
         self.name = name
         self.min_interval_seconds = min_interval_seconds
         self._result = result
+        # ``configured``/``direct_publish`` default to True so every pre-existing
+        # scheduler test is unaffected. They are settable because the real Instagram
+        # and X publishers gate review_required on exactly these two flags, so
+        # approve/retry behaviour cannot be tested without them.
+        self._configured = configured
+        self._direct_publish = direct_publish
+        self._message = message
         self.published: list = []
 
     def status(self, account_id=""):
         from publishers.base import PublisherStatus
 
-        return PublisherStatus(self.name, True, True, True, "ready", "ok", account_id)
+        return PublisherStatus(
+            self.name, self._configured, self._configured, self._direct_publish,
+            "ready" if self._configured else "not_configured", self._message, account_id,
+            not self._direct_publish,
+        )
 
     def publish(self, request):
         from publishers.base import PublishResult, PublishState
@@ -284,6 +296,9 @@ from pathlib import Path as _Path
 from storage_backends.base import BaseStorage as _BaseStorage
 from storage_backends.base import normalize_key as _normalize_key
 from worker.engines.base import (
+    FLAG_SUFFIX as _FLAG_SUFFIX,
+)
+from worker.engines.base import (
     AV_Engine as _AV_Engine,
 )
 from worker.engines.base import (
@@ -297,9 +312,6 @@ from worker.engines.base import (
 )
 from worker.engines.base import (
     Engine_Status as _Engine_Status,
-)
-from worker.engines.base import (
-    FLAG_SUFFIX as _FLAG_SUFFIX,
 )
 
 

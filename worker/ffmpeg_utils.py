@@ -44,17 +44,64 @@ class MediaInfo:
     has_audio: bool
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Run a command, returning the completed process or raising ``FFmpegError``."""
+def _default_timeout(cmd: list[str]) -> float:
+    """The configured ceiling for ``cmd``, chosen by which binary it invokes.
+
+    ffprobe reads metadata and gets the short ceiling; anything else is treated as an
+    encode and gets the long one. The comparison is on the *basename* so an absolute
+    ``/usr/bin/ffprobe`` is classified the same as a bare ``ffprobe``.
+    """
+    if not cmd:
+        return float(settings.ffmpeg_timeout_seconds)
+    probe_name = Path(str(settings.ffprobe_binary)).name
+    if Path(str(cmd[0])).name == probe_name:
+        return float(settings.ffprobe_timeout_seconds)
+    return float(settings.ffmpeg_timeout_seconds)
+
+
+def _run(
+    cmd: list[str], *, timeout: Optional[float] = None
+) -> subprocess.CompletedProcess:
+    """Run a command, returning the completed process or raising ``FFmpegError``.
+
+    Every invocation is bounded. Jobs are processed by a thread pool with a single
+    worker, so an ffmpeg that never exits would block the whole queue forever —
+    silently, because a hung process produces neither output nor an exception. On
+    expiry ``subprocess.run`` kills the child and reaps it, and the overrun is
+    reported as an :class:`FFmpegError` so callers already handling failure need no
+    change.
+
+    Args:
+        cmd: argv to execute.
+        timeout: Ceiling in seconds. ``None`` uses :func:`_default_timeout`; a value
+            ``<= 0`` means unbounded, which is the documented opt-out.
+
+    Raises:
+        FFmpegError: the binary is missing, the command failed, or it timed out.
+    """
+    limit = _default_timeout(cmd) if timeout is None else float(timeout)
     try:
         proc = subprocess.run(
             cmd,
             check=True,
             capture_output=True,
             text=True,
+            timeout=limit if limit > 0 else None,
         )
     except FileNotFoundError as exc:  # binary missing
         raise FFmpegError(f"Binary not found: {cmd[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        # The stderr captured so far is the only clue as to where it stalled, so it
+        # is surfaced exactly like a non-zero exit is. It may be bytes or str
+        # depending on where the timeout struck, hence the decode dance.
+        raw = exc.stderr or ""
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        tail = raw.strip().splitlines()[-15:]
+        detail = (": " + "\n".join(tail)) if tail else ""
+        raise FFmpegError(
+            f"Command timed out after {limit:g}s ({' '.join(cmd[:2])} ...){detail}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "").strip().splitlines()[-15:]
         raise FFmpegError(
