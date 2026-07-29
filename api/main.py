@@ -386,22 +386,70 @@ def _add_engine_option_domains(
     bare engine id can never collide with one.
 
     Kinetic typography advertises its supported Kinetic_Style and Reveal_Mode
-    values (Reqs 17.2, 17.3), **imported** from ``worker.engines.kinetic`` so the
-    endpoint cannot drift from the module. Emitted only when the engine is
-    actually registered, so the no-engine-registered payload stays empty. Never
-    raises: a missing engine module must not take ``/api/info`` down.
-    """
-    if not any(row.get("id") == "kinetic_typography" for row in rows):
-        return
-    try:
-        from worker.engines.kinetic import ENGINE_ID, KINETIC_STYLES, REVEAL_MODES
+    values (Reqs 17.2, 17.3), and stem inpainting its Mix_Preset / Repair_Mode /
+    backend vocabularies plus the numeric bounds the UI's sliders need — both
+    **imported** from their engine module so the endpoint cannot drift from it.
 
-        capabilities[ENGINE_ID] = {
-            "styles": list(KINETIC_STYLES),
-            "reveal_modes": list(REVEAL_MODES),
-        }
-    except Exception:
-        return
+    Note the audio-stem spec's task 17.3 asks for these on the engine *row*
+    (``engines.stem_inpainting.mix_presets`` and friends). They are placed here
+    instead, deliberately: the per-engine row schema is fixed and generic so that
+    adding an engine never changes it, which is the rule this function exists to
+    uphold. The availability facts that task also asks for are already covered —
+    the row carries ``available``/``missing``, and each engine's *optional*
+    capability ids (``python_pkg:demucs``, ``model:htdemucs``) are forced into the
+    report by :func:`_engines_info`, so they appear in the top-level
+    ``capabilities`` map under their own ``<kind>:<name>`` keys.
+
+    Each block is emitted only when that engine is actually registered, so the
+    no-engine-registered payload stays empty, and each is independently guarded:
+    one engine module failing to import must not cost the other its domains, and
+    must not take ``/api/info`` down.
+    """
+    if any(row.get("id") == "kinetic_typography" for row in rows):
+        try:
+            from worker.engines.kinetic import ENGINE_ID, KINETIC_STYLES, REVEAL_MODES
+
+            capabilities[ENGINE_ID] = {
+                "styles": list(KINETIC_STYLES),
+                "reveal_modes": list(REVEAL_MODES),
+            }
+        except Exception:
+            pass
+
+    if any(row.get("id") == "stem_inpainting" for row in rows):
+        try:
+            from worker.engines.stems import (
+                BACKEND_IDS,
+                ENGINE_ID,
+                GAIN_DEFAULT,
+                GAIN_MAX,
+                GAIN_MIN,
+                MIX_PRESET_CHOICES,
+                REPAIR_MODES,
+                STEM_NAMES,
+                WINDOW_DEFAULT_MS,
+                WINDOW_MAX_MS,
+                WINDOW_MIN_MS,
+            )
+
+            capabilities[ENGINE_ID] = {
+                "mix_presets": list(MIX_PRESET_CHOICES),
+                "repair_modes": list(REPAIR_MODES),
+                "backends": list(BACKEND_IDS),
+                "stem_set": list(STEM_NAMES),
+                "gain": {
+                    "min": GAIN_MIN,
+                    "max": GAIN_MAX,
+                    "default": GAIN_DEFAULT,
+                },
+                "repair_window_ms": {
+                    "min": WINDOW_MIN_MS,
+                    "max": WINDOW_MAX_MS,
+                    "default": WINDOW_DEFAULT_MS,
+                },
+            }
+        except Exception:
+            pass
 
 
 def _available_broll_providers() -> list[str]:

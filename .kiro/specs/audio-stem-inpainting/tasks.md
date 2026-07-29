@@ -827,7 +827,7 @@ spec's central promise to an upgrading operator).
     model hint) and its two test tasks. Until 17.5 the ten detail fields are settable through
     the API and through a saved profile, but not through the UI.
 
-- [ ] 14. Checkpoint — engine ladder complete
+- [x] 14. Checkpoint — engine ladder complete
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 15. Workspace artifact lifecycle, cleanup, and the disk bound
@@ -857,7 +857,7 @@ spec's central promise to an upgrading operator).
     - **Property 14: Re-running on repaired output changes nothing** — for any clip, applying the engine to its own Replacement_Media with the same `Stem_Options` and an empty Seam list leaves that media's decoded audio unchanged. Generators: `st_tiny_clip`, `st_stem_options` (with `requires_ffmpeg`).
     - _Requirements: 7.11_ · _Properties: P14_
 
-- [ ] 17. API and UI surface
+- [x] 17. API and UI surface
   - [x] 17.1 Add the eleven Processing_Options fields
     - Add `stem_inpainting_enabled: bool = False` plus `stem_mix_preset`, `stem_gain_vocals`, `stem_gain_music`, `stem_gain_other`, `stem_repair_mode`, `stem_repair_window_ms`, `stem_declick`, `stem_backend`, `stem_model`, `stem_retain_stems` to `worker/models.py` with exactly the designed defaults, coerced through the existing `from_dict` convention so `from_dict`/`dataclasses.asdict` round-trip losslessly; retain every existing v0.8.0 field and default, and leave `music`, `music_volume` and every existing `effects_applied` marker value untouched.
     - _Requirements: 9.8, 18.1, 20.2, 20.4, 8.4_
@@ -866,7 +866,7 @@ spec's central promise to an upgrading operator).
     - Accept `stem_inpainting_enabled` and every `Stem_Options` field name in `api/main.py`, all optional; unrecognised values are coerced to documented defaults by `Stem_Options.parse` and the job still processes.
     - _Requirements: 18.1, 18.5_
 
-  - [ ] 17.3 Extend `/api/info`
+  - [x] 17.3 Extend `/api/info`
     - Add `engines.stem_inpainting`: `{flag, default: false, available, backend, capabilities: {"python_pkg:demucs": bool, "model:htdemucs": bool}, mix_presets, repair_modes, stem_set, repair_window_ms: {min, max, default}}`, advertising the separation package and model availability and that the engine needs an operator-provisioned local model for full fidelity; leave every existing v0.8.0 value — including `audio.available_moods` — untouched.
     - _Requirements: 12.8, 16.5, 18.2, 18.6_
 
@@ -874,17 +874,57 @@ spec's central promise to an upgrading operator).
     - In `frontend/src/App.jsx`, add `stem_inpainting_enabled: false` plus one default per `Stem_Options` field, and forward every one of them from `toOptions`.
     - _Requirements: 18.3_
 
-  - [ ] 17.5 Add the "Stem repair" group to `SettingsPanel.jsx`
+  - [x] 17.5 Add the "Stem repair" group to `SettingsPanel.jsx`
     - Enable toggle, Mix_Preset `Dropdown`, three gain sliders over `0.0–4.0` disabled unless the preset is `custom`, Repair_Mode `Dropdown`, repair-window slider, declick checkbox; show `spectral` disabled with a "needs local model" hint when `/api/info` reports `model:htdemucs` unavailable.
     - _Requirements: 18.4_
 
-  - [ ]* 17.6 Property test: every option field survives the API surface → `tests/test_stems_api.py`
+  - [x]* 17.6 Property test: every option field survives the API surface → `tests/test_stems_api.py`
     - **Property 21: Every option field survives the API surface** — for any option mapping posted to `/api/upload`, the request succeeds, the resolved `Stem_Options` equal `Stem_Options.parse` of the same mapping, and the set of `stem_*` field names accepted by `OptionsModel` equals the set forwarded by `toOptions` and the set of `Stem_Options` fields. Generator: `st_options_mapping`.
     - _Requirements: 18.1, 18.3, 18.5_ · _Properties: P21_
 
-  - [ ]* 17.7 Unit tests: `/api/info` content and the panel field names → `tests/test_stems_api.py`
+  - [x]* 17.7 Unit tests: `/api/info` content and the panel field names → `tests/test_stems_api.py`
     - Assert `/api/info` advertises the engine id, the default-disabled flag, availability, the Mix_Preset values, the Repair_Mode values, the Stem_Set and the window bounds **alongside** the existing values including `audio.available_moods`; assert `SettingsPanel.jsx` references every `stem_*` field name.
     - _Requirements: 12.8, 18.2, 18.4, 18.6_
+
+  - **EPIC 17 NOTES.** New module `tests/test_stems_api.py` (17 tests). Suite: **481 passed,
+    82 skipped, 0 failed**; `npm run build` passes.
+    - **CORRECTIONS:**
+      1. **The option domains ride in `capabilities["stem_inpainting"]`, not on the engine
+         row.** Task 17.3's wording puts `mix_presets`/`repair_modes`/… on
+         `engines.stem_inpainting`, but the per-engine row schema is deliberately fixed and
+         generic so that adding an engine never changes it — that is the rule
+         `_add_engine_option_domains` exists to uphold, and kinetic typography already
+         established the Engine_Id-namespaced convention. The availability facts 17.3 also
+         asks for were already covered: the row carries `available`/`missing`, and
+         `python_pkg:demucs` / `model:htdemucs` are forced into the report by
+         `_engines_info` because the engine *declares* them as optional capabilities, so they
+         appear under their own `<kind>:<name>` keys.
+      2. **`Dropdown.jsx` gained per-option `disabled` support** (plus a whole-control
+         `disabled`). Showing `spectral` greyed out **with its reason** is what Req 18.4 asks
+         for; hiding it would look to a creator like the feature does not exist. Additive and
+         backward-compatible — every existing caller passes no `disabled`.
+      3. **`stem_model` has no panel control, deliberately.** The checkpoint *name* has to
+         agree with what is on disk in the model directory, so a free-text box in the creative
+         panel would mostly be a way to break separation by typo. It stays settable through
+         the API and through a saved profile, and a test pins exactly that split so "not in the
+         panel" cannot quietly become "not forwarded at all".
+      4. **The gain sliders are disabled unless `stem_mix_preset` is `custom`.** A named
+         Mix_Preset overrides the individual gain fields on the backend (Req 5.2), so live
+         sliders would display values that do not describe what will happen.
+    - **The panel tests assert field *names* against the JSX source.** There is no JavaScript
+      test tooling in this repo at all, and the failure mode actually worth catching is a name
+      mismatch: `App.jsx` forwards `DEFAULT_ENGINE_SETTINGS` keys **verbatim** as FormData
+      field names, so a camelCase key or a typo would silently never reach the API. That makes
+      these real integration assertions rather than style checks.
+    - **RECURRING PROBLEM — worth a foundation fix.** This is now the **third** place in this
+      spec that has had to work around `tests/test_engine_host.py` clearing the
+      `worker.engines` process globals (`reset_registry()`, `reset_report()`,
+      `MODEL_LOCATORS.clear()`) from an autouse fixture *and* from inside each property body,
+      **without restoring them** — unlike `tests/test_engine_capabilities.py`, which
+      snapshots and restores. The three workarounds: the model-locator test and the
+      registration test assert in a subprocess, and `tests/test_stems_api.py` re-registers via
+      an explicit fixture. All three pass in any order, but the root cause is one missing
+      restore in a foundation-owned test file, which Req 20.6 kept out of scope here.
 
 - [ ] 18. Backward-compatibility parity and dependency gate
   - [ ] 18.1 Property test: the Pipeline is unchanged except when the engine applies → `tests/test_stems_ladder.py`
