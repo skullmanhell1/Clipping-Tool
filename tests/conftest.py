@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import settings as hypothesis_settings
 
 # Redirect all storage + history to a throwaway directory before config loads.
 _TMP = Path(tempfile.mkdtemp(prefix="clipper-tests-"))
@@ -35,6 +36,31 @@ os.environ.update(
 from config import settings  # noqa: E402
 
 settings.ensure_local_dirs()
+
+
+# --------------------------------------------------------------------------- #
+# Hypothesis: no per-example deadline                                           #
+# --------------------------------------------------------------------------- #
+# Hypothesis defaults to a 200 ms per-example deadline and raises DeadlineExceeded
+# above it. 43 of this suite's property tests carried a bare
+# `@settings(max_examples=100)` and so inherited that deadline, including the ones
+# that do real work — `test_speaker_reframe`, `test_visual_selection`,
+# `test_reframe_geometry`, `test_broll_*`, `test_engines_base` all touch the
+# filesystem or shell out. 200 ms is easy to exceed on a shared CI runner under
+# load, which made those tests fail intermittently: the same commit could pass on
+# one run and fail on another, with nothing in the diff to explain it.
+#
+# A deadline is a *latency* assertion, not a correctness one. These properties
+# assert behaviour, and how long one example takes is a property of the host, not
+# of the code. So it is switched off suite-wide rather than sprinkled onto
+# individual tests — and setting it on the profile means the 43 bare `@settings`
+# decorators inherit `deadline=None` without needing to be edited, because
+# `settings(...)` fills unspecified fields from the active profile.
+#
+# Timing that genuinely matters is asserted explicitly and generously elsewhere
+# (see tests/test_ffmpeg_utils.py, which bounds real subprocesses).
+hypothesis_settings.register_profile("clipper", deadline=None)
+hypothesis_settings.load_profile("clipper")
 
 
 @pytest.fixture
