@@ -60,7 +60,10 @@ def slice_words(transcript: Transcript, start: float, end: float) -> list[Word]:
 
 def words_to_cues(
     words: Iterable[Word],
-    max_words: int = 5,
+    # C5: three words, not five. Five words at a readable size gives long thin lines that
+    # scan left-to-right like a subtitle; short-form captions are near-full-width and meant
+    # to be taken in at a glance, which is what allows the larger size that comes with it.
+    max_words: int = 3,
     max_gap: float = 0.6,
     max_duration: float = 3.0,
 ) -> list[Cue]:
@@ -291,6 +294,33 @@ def resolve_font(
     return FALLBACK_FONTS[-1], True
 
 
+class _Uppercased:
+    """A Word-like wrapper whose text is upper-cased (C7).
+
+    A wrapper rather than a mutation: the caller's ``Word`` objects belong to the
+    transcript and are read again by the emoji planner, the keyword planner and the
+    kinetic engine. Upper-casing in place would leak the caption's presentation choice
+    into everything downstream that reads the same words.
+    """
+
+    __slots__ = ("_word", "text")
+
+    def __init__(self, word: Any) -> None:
+        self._word = word
+        self.text = _word_text(word).upper()
+
+    def __getattr__(self, name: str) -> Any:
+        # start/end/probability and anything else come from the wrapped word.
+        return getattr(self._word, name)
+
+
+def _uppercased(word: Any) -> Any:
+    """``word`` with upper-cased text, or the word unchanged when it has none."""
+    if not _word_text(word):
+        return word
+    return _Uppercased(word)
+
+
 def _word_text(word: Any) -> str:
     """Best-effort extraction of a Word-like object's text (or a bare string)."""
     if isinstance(word, str):
@@ -431,6 +461,26 @@ def caption_emoji_glyph(
 
 # --- Preset-driven style line ------------------------------------------------
 
+#: The weight at or above which a face is taken to supply its own bold (C3).
+#:
+#: ASS expresses weight as a single on/off flag, which libass turns into a request for
+#: fontconfig weight 200 ("Bold", CSS 700). Every bundled display face is already at least
+#: that heavy, so asking for bold on top makes libass *synthesise* the emboldening on a
+#: face that was drawn heavy - visible as slightly swollen, soft-edged glyphs.
+_FACE_SUPPLIES_BOLD = 700
+
+
+def ass_bold_flag(preset: CaptionPreset) -> int:
+    """The ASS ``Bold`` field for ``preset``: ``0`` to leave the face alone, ``-1`` to bold.
+
+    Verified against libass at ``-loglevel verbose``, which reports the weight it asked
+    fontconfig for: ``-1`` produces ``fontselect: (Anton, 700, 0)`` and ``0`` produces
+    ``fontselect: (Anton, 400, 0)``. Both resolve to ``Anton-Regular`` because that is the
+    only face in the family - the difference is that the first one then emboldens it.
+    """
+    return 0 if int(getattr(preset, "font_weight", 0)) >= _FACE_SUPPLIES_BOLD else -1
+
+
 def _preset_style_line(
     preset: CaptionPreset,
     font: str,
@@ -449,17 +499,18 @@ def _preset_style_line(
     if preset.border_style == 3:
         outline_col = colors.box
         back_col = colors.box
-        outline_w = 0
-        shadow = 0
     else:
         outline_col = colors.outline
         back_col = "&H64000000"
-        outline_w = 4 if preset.animation == "karaoke_fill" else 2
-        shadow = 2 if preset.animation == "karaoke_fill" else 1
+    # C8: both come from the preset now. They used to be derived from the animation style
+    # (4/2 for karaoke_fill, 2/1 otherwise), which meant a preset could not ask for a
+    # heavier treatment and a 2-unit outline at PlayRes 1920 was effectively invisible.
+    outline_w = max(0, int(preset.outline))
+    shadow = max(0, int(preset.shadow))
     return (
         f"Style: Default,{font},{font_size},{primary},{secondary},{outline_col},"
-        f"{back_col},-1,0,0,0,100,100,0,0,{preset.border_style},{outline_w},"
-        f"{shadow},{align},80,80,{margin_v},1"
+        f"{back_col},{ass_bold_flag(preset)},0,0,0,100,100,0,0,{preset.border_style},"
+        f"{outline_w},{shadow},{align},80,80,{margin_v},1"
     )
 
 
@@ -620,7 +671,8 @@ def _preset_header_styles(
     )
     hook_style = (
         f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+        f"&H00000000,&H64000000,{ass_bold_flag(preset)},0,0,0,100,100,0,0,1,5,2,8,"
+        f"60,60,160,1"
     )
     return style_line, hook_style
 
@@ -666,6 +718,11 @@ def _preset_dialogue_lines(
         parts: list[str] = []
         for w in cue.words:
             highlighted = global_index in keyword_indices
+            if getattr(preset, "uppercase", False):
+                # C7: applied to the word before it is turned into a span, so the ASS
+                # override tags built around it are untouched. Only the hook title was
+                # upper-cased before, so no preset could ask for the all-caps look.
+                w = _uppercased(w)
             span = build_word_span(w, preset, highlighted, cue_start=cue_start)
             if getattr(preset, "emoji_inline", False):
                 glyph = caption_emoji_glyph(

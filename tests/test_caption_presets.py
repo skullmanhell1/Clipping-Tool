@@ -438,7 +438,10 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
             assert glyph in text
         else:
             assert glyph not in text
-        assert kw in text  # surrounding words retained
+        # Surrounding words are retained. Compared case-insensitively because the preset
+        # under test sets ``uppercase`` (C7) - the clause is about the word surviving the
+        # emoji decision, not about its casing.
+        assert kw.upper() in text.upper()
 
 
 
