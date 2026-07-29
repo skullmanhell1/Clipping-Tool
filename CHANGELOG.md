@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   imported without them, so the vision code paths were never actually loaded in CI.
 
 ### Fixed
+- **The `ffmpeg_filter:` capability probe could not see 124 of ffmpeg's 486 filters**, so every
+  engine requiring one of them reported `unavailable` on every host regardless of how ffmpeg was
+  built. `ffmpeg -filters` prints a three-character flags column per row (`T..`, `..C`), and the
+  parser identified it with `not parts[0].isalnum()`. A filter with *every* flag set prints a
+  dot-free group (`TSC highpass`), which that test rejects, so the row fell through to a
+  bare-name branch and recorded `"TSC"` as the filter name while losing `highpass`. Affected
+  `highpass`, `lowpass`, `bass`, `treble`, `equalizer`, `afftdn`, `arnndn` and 117 more. In
+  practice this made the `stem_inpainting` ffmpeg backend permanently unreachable, since it
+  requires `highpass` and `lowpass`. The flags column is now recognised by its alphabet, and rows
+  are only accepted when the pad-spec column (`A->A`) is present. Every canned test listing had
+  used dot-bearing flag groups only, which is why the whole suite passed against a feature that
+  could not run.
 - **Seam repair never applied.** The repair filter was specified and implemented as `volume` with
   `eval=frame` and a time-dependent expression. Against ffmpeg 7.x that is a silent no-op — `t`
   does not take the values a per-frame evaluation implies, so a `between(t,…)`-gated expression

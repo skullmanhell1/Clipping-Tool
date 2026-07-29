@@ -35,6 +35,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import shutil
+import string
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -82,6 +83,20 @@ MAX_DETAIL_LENGTH = 160
 
 FFMPEG_FILTER_TIMEOUT = 20.0
 """Wall-clock ceiling for the local ``ffmpeg -filters`` listing."""
+
+FFMPEG_FILTER_FLAG_WIDTH = 3
+"""Width of the flags column in ``ffmpeg -filters`` output (e.g. ``T..``, ``TSC``)."""
+
+FFMPEG_FILTER_FLAG_CHARS = frozenset(string.ascii_uppercase + ".")
+"""Alphabet of the flags column: a flag letter, or ``.`` where the flag is unset.
+
+Deliberately every uppercase letter rather than just today's ``T``/``S``/``C``, so a
+flag letter added by a future ffmpeg cannot silently make filters unparseable — the
+failure mode this alphabet exists to prevent.
+"""
+
+FFMPEG_FILTER_PAD_SEPARATOR = "->"
+"""Marker inside the pad-spec column (``A->A``), used to identify real filter rows."""
 
 _KIND_VALUES = frozenset(kind.value for kind in Capability_Kind)
 
@@ -257,13 +272,28 @@ def _ffmpeg_filter_names() -> set[str]:
         if not stripped:
             continue
         parts = stripped.split()
-        # ffmpeg prints "<flags> <name> <pads> <description>"; the leading flags
-        # token is a fixed-width group like "T.." / "..C". Accept both the
-        # flags-prefixed form and (defensively) a bare leading name.
-        if len(parts) >= 2 and len(parts[0]) <= 3 and not parts[0].isalnum():
+        # ffmpeg prints "<flags> <name> <pads> <description>", e.g.
+        #     "T.. aeval     A->A  Filter audio signal ..."
+        #     "TSC highpass  A->A  Apply a high-pass filter ..."
+        # The flags column is exactly three characters drawn from
+        # :data:`FFMPEG_FILTER_FLAG_CHARS` (a '.' marks an unset flag). It must be
+        # recognised by that *alphabet* and not by "contains a non-alphanumeric
+        # character": a filter with every flag set prints a dot-free group like
+        # "TSC", so an ``isalnum()`` test misreads the flags as the filter name and
+        # loses the real one. That silently hid 124 of 486 filters on ffmpeg 7.0
+        # (``highpass``/``lowpass``/``bass``/``equalizer``/... all TSC), which made
+        # every engine requiring one of them permanently unavailable.
+        #
+        # The pad-spec column ("A->A", "N->A", "|->V") is what distinguishes a real
+        # filter row from prose such as the "Filters:" banner or the flag legend, so
+        # rows are only accepted when it is present.
+        if (
+            len(parts) >= 3
+            and len(parts[0]) == FFMPEG_FILTER_FLAG_WIDTH
+            and set(parts[0]) <= FFMPEG_FILTER_FLAG_CHARS
+            and FFMPEG_FILTER_PAD_SEPARATOR in parts[2]
+        ):
             names.add(parts[1])
-        elif parts:
-            names.add(parts[0])
     return names
 
 
