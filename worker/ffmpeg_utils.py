@@ -44,6 +44,45 @@ class MediaInfo:
     has_audio: bool
 
 
+#: The pixel format every output is written in.
+#:
+#: Without this, libx264 preserves whatever the *source* used. A 10-bit source (phone
+#: footage, OBS/NVENC, many screen recorders) therefore produced a ``yuv420p10le`` /
+#: ``High 10`` clip, and a 4:2:2 source a ``High 4:2:2`` one. Neither plays in Windows
+#: Media Player or Films & TV, QuickTime, or most browsers -- the file exists, has the
+#: right duration, and simply will not open. 8-bit 4:2:0 is the format every player and
+#: every social platform accepts.
+OUTPUT_PIX_FMT = "yuv420p"
+
+#: H.264 profile and level. ``high`` is 8-bit only, so it is the encoder-side guard that
+#: matches OUTPUT_PIX_FMT; level 4.0 covers 1080p at the frame rates used here and keeps
+#: older phones and smart TVs in scope.
+OUTPUT_PROFILE = "high"
+OUTPUT_LEVEL = "4.0"
+
+
+def video_encode_args() -> list[str]:
+    """The x264 argument list every encoding pass shares.
+
+    Centralised because these flags were duplicated at eight call sites across five
+    modules (``cut_segment``, ``reformat_aspect``, captions burn-in, three reframe
+    paths, filler-removal concat and the compositor). Duplication is why the missing
+    ``-pix_fmt`` went unnoticed: there was no single place where the output contract
+    lived, so it could not be reviewed in one go.
+
+    ``crf`` and ``preset`` come from settings rather than literals, so quality/speed is
+    tunable without editing five files.
+    """
+    return [
+        "-c:v", "libx264",
+        "-preset", str(settings.x264_preset),
+        "-crf", str(settings.x264_crf),
+        "-pix_fmt", OUTPUT_PIX_FMT,
+        "-profile:v", OUTPUT_PROFILE,
+        "-level", OUTPUT_LEVEL,
+    ]
+
+
 def _default_timeout(cmd: list[str]) -> float:
     """The configured ceiling for ``cmd``, chosen by which binary it invokes.
 
@@ -192,8 +231,7 @@ def cut_segment(
     cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
            "-t", f"{duration:.3f}"]
     if reencode:
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                "-c:a", "aac", "-b:a", "128k"]
+        cmd += video_encode_args() + ["-c:a", "aac", "-b:a", "128k"]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
@@ -259,7 +297,7 @@ def reformat_aspect(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *video_encode_args(),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(dest),

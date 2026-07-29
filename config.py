@@ -200,6 +200,10 @@ class Settings(BaseSettings):
     ffprobe_timeout_seconds: float = Field(
         default=60.0, description="Max wall-clock seconds for one ffprobe run; 0 = unbounded."
     )
+    # x264 quality/speed. Previously hard-coded at eight call sites across five modules.
+    # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
+    x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
+    x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
 
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(

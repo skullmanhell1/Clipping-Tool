@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 from config import settings
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
-from worker.ffmpeg_utils import _run, probe
+from worker.ffmpeg_utils import _run, probe, video_encode_args
 from worker.models import ProcessingOptions
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import added
@@ -523,7 +523,7 @@ def render_clip(
 
     # Codecs: re-encode only the streams we changed.
     if video_changed:
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        cmd += video_encode_args()
     else:
         cmd += ["-c:v", "copy"]
     if info.has_audio:
