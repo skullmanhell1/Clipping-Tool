@@ -197,6 +197,54 @@ const KINETIC_REVEAL_LABELS = {
   word_by_word: "Word by word",
 };
 
+// --- Stem inpainting (audio-stem-inpainting spec, Req 18.4) ----------------
+// Known values used as fallbacks / friendly labels; the accepted values and the numeric
+// bounds are advertised by /api/info under capabilities.stem_inpainting.
+const STEM_ENGINE_ID = "stem_inpainting";
+
+const STEM_MIX_PRESETS = [
+  { value: "custom", label: "Custom (use the sliders)" },
+  { value: "speech_focus", label: "Speech focus" },
+  { value: "music_focus", label: "Music focus" },
+  { value: "clean_speech", label: "Clean speech (mute music)" },
+];
+
+const STEM_REPAIR_MODES = [
+  { value: "off", label: "Off" },
+  { value: "crossfade", label: "Crossfade (equal-power notch)" },
+  { value: "spectral", label: "Spectral (per-stem + music bridge)" },
+];
+
+const STEM_BACKENDS = [
+  { value: "auto", label: "Auto" },
+  { value: "ml", label: "Local model (demucs)" },
+  { value: "ffmpeg", label: "ffmpeg approximation" },
+];
+
+const STEM_MIX_PRESET_LABELS = {
+  custom: "Custom (use the sliders)",
+  speech_focus: "Speech focus",
+  music_focus: "Music focus",
+  clean_speech: "Clean speech (mute music)",
+};
+const STEM_REPAIR_MODE_LABELS = {
+  off: "Off",
+  crossfade: "Crossfade (equal-power notch)",
+  spectral: "Spectral (per-stem + music bridge)",
+};
+const STEM_BACKEND_LABELS = {
+  auto: "Auto",
+  ml: "Local model (demucs)",
+  ffmpeg: "ffmpeg approximation",
+};
+
+// The three Stem_Gain fields, in the canonical (sorted) Stem_Set order.
+const STEM_GAIN_FIELDS = [
+  ["stem_gain_music", "Music"],
+  ["stem_gain_other", "Other"],
+  ["stem_gain_vocals", "Vocals"],
+];
+
 // --- Advanced AV engines (Reqs 20.1, 20.3, 20.4) ---------------------------
 // Engine ids are snake_case ("stem_separation"); show a friendly name.
 const engineLabel = (engine) =>
@@ -286,6 +334,44 @@ export default function SettingsPanel({
     KINETIC_REVEAL_LABELS,
     KINETIC_REVEALS
   );
+  // Stem inpainting: same arrangement as kinetic typography — the option domains and the
+  // slider bounds ride in `capabilities` under the Engine_Id, while availability is on the
+  // engine row. An install that does not advertise the engine leaves the controls enabled on
+  // the known fallback values.
+  const stemEngine = engineRows.find((engine) => engine?.id === STEM_ENGINE_ID);
+  const stemAvailable = !stemEngine || stemEngine.available !== false;
+  const stemDomains = capabilities?.[STEM_ENGINE_ID] || null;
+  const stemMixPresetOptions = labelledOptions(
+    stemDomains?.mix_presets,
+    STEM_MIX_PRESET_LABELS,
+    STEM_MIX_PRESETS
+  );
+  const stemBackendOptions = labelledOptions(
+    stemDomains?.backends,
+    STEM_BACKEND_LABELS,
+    STEM_BACKENDS
+  );
+  // `spectral` needs real stems, so it needs the local checkpoint. When /api/info reports
+  // `model:htdemucs` unavailable the option is shown **disabled with a reason** rather than
+  // hidden: a creator who has configured a model directory needs to see that the mode exists
+  // and why it is not currently offered (Req 18.4).
+  const stemModelAvailable = capabilities?.["model:htdemucs"]?.available !== false;
+  const stemRepairModeOptions = labelledOptions(
+    stemDomains?.repair_modes,
+    STEM_REPAIR_MODE_LABELS,
+    STEM_REPAIR_MODES
+  ).map((option) =>
+    option.value === "spectral" && !stemModelAvailable
+      ? { ...option, label: `${option.label} — needs local model`, disabled: true }
+      : option
+  );
+  const stemGainBounds = stemDomains?.gain || { min: 0.0, max: 4.0, default: 1.0 };
+  const stemWindowBounds =
+    stemDomains?.repair_window_ms || { min: 2, max: 120, default: 12 };
+  // The gain sliders are only meaningful under `custom`: a named Mix_Preset overrides the
+  // individual fields on the backend (Req 5.2), so leaving them live would show values that
+  // do not describe what will actually happen.
+  const stemGainsEditable = (settings.stem_mix_preset || "custom") === "custom";
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showEffects, setShowEffects] = useState(false);
   const [showEngines, setShowEngines] = useState(false);
@@ -490,6 +576,142 @@ export default function SettingsPanel({
                 ? "Inherits the caption preset's font, colours, and position; off by default."
                 : engineHint(kineticEngine) ||
                   "Unavailable on this install — captions render with the standard engine."}
+            </p>
+          </fieldset>
+
+          {/* Stem repair (Req 18.4) — an unavailable engine disables the whole group, so a
+              creator cannot enable something that would silently degrade. */}
+          <fieldset
+            disabled={!stemAvailable}
+            className={stemAvailable ? "" : "opacity-60"}
+          >
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Stem repair
+            </div>
+            <div className="mb-3">
+              <Toggle
+                label="Stem-aware audio repair"
+                hint={
+                  stemAvailable
+                    ? "Separates speech from music, and repairs the joins left by filler removal"
+                    : engineHint(stemEngine)
+                }
+                checked={stemAvailable && !!settings.stem_inpainting_enabled}
+                onChange={setFlag("stem_inpainting_enabled")}
+                disabled={!stemAvailable}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Dropdown
+                label="Mix preset"
+                value={settings.stem_mix_preset}
+                onChange={set("stem_mix_preset")}
+                options={stemMixPresetOptions}
+              />
+              <Dropdown
+                label="Seam repair"
+                value={settings.stem_repair_mode}
+                onChange={set("stem_repair_mode")}
+                options={stemRepairModeOptions}
+              />
+            </div>
+
+            {/* The three Stem_Gain sliders. A named preset overrides these on the backend,
+                so they are disabled unless the preset is `custom`. */}
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {STEM_GAIN_FIELDS.map(([key, name]) => (
+                <label key={key} className="flex flex-col gap-1.5 text-sm">
+                  <span className="text-slate-400">
+                    {name} gain (
+                    {Number(
+                      settings[key] === undefined
+                        ? stemGainBounds.default
+                        : settings[key]
+                    ).toFixed(2)}
+                    ×)
+                  </span>
+                  <input
+                    type="range"
+                    min={stemGainBounds.min}
+                    max={stemGainBounds.max}
+                    step="0.05"
+                    value={
+                      settings[key] === undefined
+                        ? stemGainBounds.default
+                        : settings[key]
+                    }
+                    disabled={!stemGainsEditable}
+                    onChange={(e) =>
+                      onChange({ ...settings, [key]: Number(e.target.value) })
+                    }
+                    className="accent-emerald-500 disabled:opacity-40"
+                  />
+                </label>
+              ))}
+            </div>
+            {!stemGainsEditable && (
+              <p className="mt-1 text-xs text-slate-500">
+                The “{STEM_MIX_PRESET_LABELS[settings.stem_mix_preset] ||
+                  settings.stem_mix_preset}” preset sets the gains; choose “Custom” to
+                adjust them yourself.
+              </p>
+            )}
+
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm">
+                <span className="text-slate-400">
+                  Repair window ({settings.stem_repair_window_ms ??
+                    stemWindowBounds.default}{" "}
+                  ms)
+                </span>
+                <input
+                  type="range"
+                  min={stemWindowBounds.min}
+                  max={stemWindowBounds.max}
+                  step="1"
+                  value={
+                    settings.stem_repair_window_ms ?? stemWindowBounds.default
+                  }
+                  disabled={settings.stem_repair_mode === "off"}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      stem_repair_window_ms: Number(e.target.value),
+                    })
+                  }
+                  className="accent-emerald-500 disabled:opacity-40"
+                />
+              </label>
+              <Dropdown
+                label="Separation backend"
+                value={settings.stem_backend}
+                onChange={set("stem_backend")}
+                options={stemBackendOptions}
+              />
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Toggle
+                label="Declick clip edges"
+                hint="A 1 ms fade at the very start and end of the clip"
+                checked={settings.stem_declick}
+                onChange={setFlag("stem_declick")}
+              />
+              <Toggle
+                label="Keep separated stems"
+                hint="Save the per-stem audio alongside the clip"
+                checked={settings.stem_retain_stems}
+                onChange={setFlag("stem_retain_stems")}
+              />
+            </div>
+
+            <p className="mt-2 text-xs text-slate-500">
+              {!stemAvailable
+                ? engineHint(stemEngine) || "Unavailable on this install."
+                : !stemModelAvailable
+                ? "No local separation model found, so a real split is unavailable — the ffmpeg approximation will be used and reported."
+                : "Off by default. Repair fixes the audible clicks that filler-word removal leaves behind."}
             </p>
           </fieldset>
 
