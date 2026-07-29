@@ -174,6 +174,20 @@ class OptionsModel(BaseModel):
     kinetic_safe_area_y_pct: float = 10.0
     kinetic_motion_ms: int = 120
     kinetic_confidence_floor: float = 0.0
+    # Stem inpainting engine (default OFF). Same defaults as ``ProcessingOptions`` /
+    # ``Stem_Options``; unrecognised *choice* values are coerced by the engine's
+    # ``resolve_options`` rather than rejected here (Reqs 18.1, 18.5).
+    stem_inpainting_enabled: bool = False
+    stem_mix_preset: str = "custom"
+    stem_gain_vocals: float = 1.0
+    stem_gain_music: float = 1.0
+    stem_gain_other: float = 1.0
+    stem_repair_mode: str = "crossfade"
+    stem_repair_window_ms: int = 12
+    stem_declick: bool = False
+    stem_backend: str = "auto"
+    stem_model: str = "htdemucs"
+    stem_retain_stems: bool = False
 
     def to_options(self) -> ProcessingOptions:
         return ProcessingOptions.from_dict(self.model_dump())
@@ -372,22 +386,70 @@ def _add_engine_option_domains(
     bare engine id can never collide with one.
 
     Kinetic typography advertises its supported Kinetic_Style and Reveal_Mode
-    values (Reqs 17.2, 17.3), **imported** from ``worker.engines.kinetic`` so the
-    endpoint cannot drift from the module. Emitted only when the engine is
-    actually registered, so the no-engine-registered payload stays empty. Never
-    raises: a missing engine module must not take ``/api/info`` down.
-    """
-    if not any(row.get("id") == "kinetic_typography" for row in rows):
-        return
-    try:
-        from worker.engines.kinetic import ENGINE_ID, KINETIC_STYLES, REVEAL_MODES
+    values (Reqs 17.2, 17.3), and stem inpainting its Mix_Preset / Repair_Mode /
+    backend vocabularies plus the numeric bounds the UI's sliders need — both
+    **imported** from their engine module so the endpoint cannot drift from it.
 
-        capabilities[ENGINE_ID] = {
-            "styles": list(KINETIC_STYLES),
-            "reveal_modes": list(REVEAL_MODES),
-        }
-    except Exception:
-        return
+    Note the audio-stem spec's task 17.3 asks for these on the engine *row*
+    (``engines.stem_inpainting.mix_presets`` and friends). They are placed here
+    instead, deliberately: the per-engine row schema is fixed and generic so that
+    adding an engine never changes it, which is the rule this function exists to
+    uphold. The availability facts that task also asks for are already covered —
+    the row carries ``available``/``missing``, and each engine's *optional*
+    capability ids (``python_pkg:demucs``, ``model:htdemucs``) are forced into the
+    report by :func:`_engines_info`, so they appear in the top-level
+    ``capabilities`` map under their own ``<kind>:<name>`` keys.
+
+    Each block is emitted only when that engine is actually registered, so the
+    no-engine-registered payload stays empty, and each is independently guarded:
+    one engine module failing to import must not cost the other its domains, and
+    must not take ``/api/info`` down.
+    """
+    if any(row.get("id") == "kinetic_typography" for row in rows):
+        try:
+            from worker.engines.kinetic import ENGINE_ID, KINETIC_STYLES, REVEAL_MODES
+
+            capabilities[ENGINE_ID] = {
+                "styles": list(KINETIC_STYLES),
+                "reveal_modes": list(REVEAL_MODES),
+            }
+        except Exception:
+            pass
+
+    if any(row.get("id") == "stem_inpainting" for row in rows):
+        try:
+            from worker.engines.stems import (
+                BACKEND_IDS,
+                ENGINE_ID,
+                GAIN_DEFAULT,
+                GAIN_MAX,
+                GAIN_MIN,
+                MIX_PRESET_CHOICES,
+                REPAIR_MODES,
+                STEM_NAMES,
+                WINDOW_DEFAULT_MS,
+                WINDOW_MAX_MS,
+                WINDOW_MIN_MS,
+            )
+
+            capabilities[ENGINE_ID] = {
+                "mix_presets": list(MIX_PRESET_CHOICES),
+                "repair_modes": list(REPAIR_MODES),
+                "backends": list(BACKEND_IDS),
+                "stem_set": list(STEM_NAMES),
+                "gain": {
+                    "min": GAIN_MIN,
+                    "max": GAIN_MAX,
+                    "default": GAIN_DEFAULT,
+                },
+                "repair_window_ms": {
+                    "min": WINDOW_MIN_MS,
+                    "max": WINDOW_MAX_MS,
+                    "default": WINDOW_DEFAULT_MS,
+                },
+            }
+        except Exception:
+            pass
 
 
 def _available_broll_providers() -> list[str]:
@@ -527,6 +589,21 @@ async def upload(
     kinetic_safe_area_y_pct: Optional[str] = Form(None),
     kinetic_motion_ms: Optional[str] = Form(None),
     kinetic_confidence_floor: Optional[str] = Form(None),
+    # Stem inpainting engine (default OFF). Loose optional strings for exactly the
+    # reason the kinetic fields above are: a typed Form parameter makes FastAPI reject
+    # an unrecognised payload with 422, but an unrecognised value must never fail the
+    # job — it must fall back to the documented default (Reqs 18.1, 18.5).
+    stem_inpainting_enabled: Optional[str] = Form(None),
+    stem_mix_preset: Optional[str] = Form(None),
+    stem_gain_vocals: Optional[str] = Form(None),
+    stem_gain_music: Optional[str] = Form(None),
+    stem_gain_other: Optional[str] = Form(None),
+    stem_repair_mode: Optional[str] = Form(None),
+    stem_repair_window_ms: Optional[str] = Form(None),
+    stem_declick: Optional[str] = Form(None),
+    stem_backend: Optional[str] = Form(None),
+    stem_model: Optional[str] = Form(None),
+    stem_retain_stems: Optional[str] = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -549,6 +626,17 @@ async def upload(
         "kinetic_safe_area_y_pct": kinetic_safe_area_y_pct,
         "kinetic_motion_ms": kinetic_motion_ms,
         "kinetic_confidence_floor": kinetic_confidence_floor,
+        "stem_inpainting_enabled": stem_inpainting_enabled,
+        "stem_mix_preset": stem_mix_preset,
+        "stem_gain_vocals": stem_gain_vocals,
+        "stem_gain_music": stem_gain_music,
+        "stem_gain_other": stem_gain_other,
+        "stem_repair_mode": stem_repair_mode,
+        "stem_repair_window_ms": stem_repair_window_ms,
+        "stem_declick": stem_declick,
+        "stem_backend": stem_backend,
+        "stem_model": stem_model,
+        "stem_retain_stems": stem_retain_stems,
     }
 
     options = ProcessingOptions.from_dict(

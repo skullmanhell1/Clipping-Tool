@@ -163,7 +163,7 @@ work is opt-in and adds render time).
 
 ## Phase 2 — smart selection & metadata
 
-- **LLM highlight selection** (pluggable **OpenAI or Anthropic**, key from
+- **LLM highlight selection** (pluggable **OpenAI, Anthropic or Gemini**, key from
   `.env`): finds hooks, punchlines, complete thoughts, and emotional peaks;
   scores each clip's **virality** and snaps cuts to sentence boundaries. Honours
   a **Clip Topic/Keywords** and **Vibe/Tone**, and respects your clip count and
@@ -212,11 +212,11 @@ Instagram / X.
 | Web API         | FastAPI + uvicorn                                   |
 | Video           | FFmpeg (ffmpeg-python / subprocess)                |
 | Transcription   | faster-whisper (CPU, GPU when available)           |
-| LLM             | Pluggable client (OpenAI or Anthropic), key in env |
+| LLM             | Pluggable client (OpenAI, Anthropic, or Gemini via its OpenAI-compatible endpoint), key in env |
 | Face tracking   | mediapipe + opencv-python + numpy                  |
 | Emoji           | Twemoji PNGs                                        |
 | Video download  | yt-dlp                                              |
-| Queue           | Redis + RQ (in-process fallback)                    |
+| Queue           | In-process thread pool (single worker, so a batch runs in order). Redis + RQ is *planned*, not implemented — see the CHANGELOG |
 | Frontend        | React + Tailwind (dark theme)                      |
 | Storage         | Local folders behind a swappable interface (→ S3)  |
 | Config          | pydantic-settings + `.env`                          |
@@ -228,7 +228,7 @@ Instagram / X.
 .
 ├── api/main.py                     # FastAPI app (health, info, placeholder page)
 ├── worker/
-│   ├── tasks.py                    # pipeline orchestration (RQ + fallback)
+│   ├── tasks.py                    # re-export shim; currently unused (jobs.py is imported directly)
 │   ├── ffmpeg_utils.py             # FFmpeg/FFprobe helpers
 │   ├── transcribe.py               # faster-whisper transcription
 │   ├── selection.py                # AI "best moment" selection
@@ -266,7 +266,7 @@ Instagram / X.
 
 ## Quick start (Docker)
 
-Docker is the recommended way to run everything (API + worker + Redis, with
+Docker is the recommended way to run everything (API + worker in one container, with
 FFmpeg baked into the image).
 
 ```bash
@@ -285,7 +285,7 @@ docker compose up --build
 The Docker image builds the React UI and serves it together with the API, so
 `http://localhost:8000` is the full dashboard. Generated clips appear under
 `./storage/clips` on your host (the `storage/` directory is bind-mounted), and
-dropping a video into `./storage/watch` triggers watch-folder processing when
+dropping a video into `./storage/watch` (a fixed path, not configurable) triggers watch-folder processing when
 that mode is enabled.
 
 ## Local development (without Docker)

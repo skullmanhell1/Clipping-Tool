@@ -86,6 +86,17 @@ __all__ = [
     "filler_seam_notes",
 ]
 
+#: The statuses whose :attr:`Engine_Result.media` the host will adopt as the
+#: stage's replacement media, for an engine that declares ``produces_media``.
+#:
+#: ``applied`` and ``degraded`` only. ``failed`` means the engine could not
+#: vouch for what it produced, and ``skipped`` short-circuits before collection,
+#: so neither can hand media forward — the clip then falls back to the preceding
+#: stage's file (Req 8.3).
+_MEDIA_BEARING_STATUSES: frozenset[Engine_Status] = frozenset(
+    {Engine_Status.APPLIED, Engine_Status.DEGRADED}
+)
+
 SOURCE_CLIP_ID = "source"
 """Clip identifier used for SOURCE-stage workspaces (there is no clip yet)."""
 
@@ -281,8 +292,18 @@ class Stage_Outcome:
     (Req 3.4) and are the audit trail proving they were gated, not run.
 
     :attr:`media` is ``None`` unless an engine declaring ``produces_media``
-    returned ``applied`` with a replacement file, so a failed or degraded engine
+    returned a replacement file with a **media-bearing status** —
+    :data:`_MEDIA_BEARING_STATUSES`, i.e. ``applied`` or ``degraded``. A
+    ``failed`` or ``skipped`` engine, and any engine that returned no file,
     leaves the preceding stage's media in place (Req 8.3).
+
+    ``degraded`` is media-bearing because degradation describes *fidelity*, not
+    usability: an engine that fell back to a cheaper path and still produced a
+    usable file has produced usable output, and discarding it would throw away
+    real work while still charging the clip for the passes that made it. This is
+    the ``Degraded_With_Media`` outcome the audio-stem-inpainting spec depends on
+    (its Req 3.10): every rung that genuinely has nothing to hand back returns
+    no media, so the distinction is carried by ``media is None``, not by status.
     """
 
     stage: Engine_Stage
@@ -485,6 +506,7 @@ class Engine_Host:
         words: Sequence[Any] = (),
         clip_metadata: Optional[Mapping[str, Any]] = None,
         filler_plan: Any = None,
+        notes: Sequence[str] = (),
     ) -> Stage_Outcome:
         """Invoke every enabled engine of ``stage`` for one clip.
 
@@ -517,6 +539,18 @@ class Engine_Host:
         stage order; omitting it — or passing a plan with a single keep, or one whose
         removal did nothing — publishes zero notes, so contexts are identical to the
         pre-Seam ones and the all-off parity gate is untouched.
+
+        ``notes`` is the caller's own free-form Engine_Context notes, appended after
+        the host's synthesised ones (``fps_fallback:``, then ``filler_seam:``). It
+        exists so a Pipeline stage can publish a note the host has no way to derive:
+        the host can only synthesise what it can see, and the caller knows things it
+        cannot.
+
+        Strictly additive: the default is empty, so every pre-existing call site
+        builds byte-identical Engine_Contexts and the all-off parity gate is
+        untouched. Ordering is fixed rather than merged, so an engine reading a
+        prefix by position keeps working, and values are coerced to ``str`` so a
+        hostile sequence cannot put a non-string into ``ctx.notes``.
         """
         return self._run(
             stage,
@@ -529,6 +563,7 @@ class Engine_Host:
             words=words,
             clip_metadata=clip_metadata,
             filler_plan=filler_plan,
+            notes=notes,
         )
 
     # --- lifecycle --------------------------------------------------------
@@ -627,6 +662,7 @@ class Engine_Host:
         words: Sequence[Any] = (),
         clip_metadata: Optional[Mapping[str, Any]] = None,
         filler_plan: Any = None,
+        notes: Sequence[str] = (),
     ) -> Stage_Outcome:
         """Shared body of :meth:`run_source` and :meth:`run_stage`."""
         coerced = _coerce_stage(stage)
@@ -643,6 +679,9 @@ class Engine_Host:
         # so no engine can reach the caller's mapping or another engine's context
         # through it (Req 15.8). Keys and values are copied verbatim.
         metadata = dict(clip_metadata) if isinstance(clip_metadata, Mapping) else {}
+        # The caller's own notes, coerced once per stage run rather than per engine, and
+        # appended last so the host's synthesised prefixes keep their positions.
+        caller_notes = tuple(_as_text(note) for note in (notes or ()))
         # Seam notes are computed once per stage run, from the already-planned keeps, and
         # merged into every context this run builds — one publication, N readers.
         # A ``FillerPlan`` or, equivalently, its bare ``keeps`` sequence — the Pipeline
@@ -664,6 +703,7 @@ class Engine_Host:
                     first_input_index=offsets.get(_engine_id_of(bound), 0),
                     clip_metadata=metadata,
                     seam_notes=seams,
+                    caller_notes=caller_notes,
                 ),
             )
             outcome.results.append(result)
@@ -674,7 +714,7 @@ class Engine_Host:
                 outcome.contributions.append(result.contribution)
             if (
                 result.media is not None
-                and result.status is Engine_Status.APPLIED
+                and result.status in _MEDIA_BEARING_STATUSES
                 and bool(getattr(engine, "produces_media", False))
             ):
                 outcome.media = result.media
@@ -920,6 +960,7 @@ class Engine_Host:
         first_input_index: int = 0,
         clip_metadata: Optional[Mapping[str, Any]] = None,
         seam_notes: Sequence[str] = (),
+        caller_notes: Sequence[str] = (),
     ) -> Engine_Context:
         """Allocate the workspace and build the frozen Engine_Context (step 4).
 
@@ -941,6 +982,11 @@ class Engine_Host:
         so ``fps_fallback:`` keeps its position and spelling and an engine that reads
         neither prefix is unaffected (audio-stem-inpainting Reqs 8.5, 20.6). Empty by
         default, so every existing caller builds byte-identical contexts.
+
+        ``caller_notes`` is :meth:`run_stage`'s ``notes`` keyword, appended **after**
+        the seam notes so the note order is fully determined and stable:
+        ``fps_fallback:`` first, then ``filler_seam:``, then the caller's. Also empty
+        by default, for the same parity reason.
         """
         engine_id = _engine_id_of(engine)
         resolved = engine.resolve_options(self._options)
@@ -953,6 +999,7 @@ class Engine_Host:
         base = self.time_base()
         notes = (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
         notes = notes + tuple(_as_text(note) for note in (seam_notes or ()))
+        notes = notes + tuple(_as_text(note) for note in (caller_notes or ()))
         budget = coerce_float(getattr(engine, "time_budget_s", 0.0), 0.0, lo=0.0)
         deadline = self._now() + budget if budget > 0.0 else math.inf
 

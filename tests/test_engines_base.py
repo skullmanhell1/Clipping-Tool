@@ -1333,12 +1333,19 @@ def test_engine_method_surface_is_pinned():
     run_stage_signature = inspect.signature(Engine_Host.run_stage)
     assert list(run_stage_signature.parameters) == [
         "self", "stage", "clip_id", "source", "clip_path", "clip_start",
-        "clip_end", "duration", "words", "clip_metadata", "filler_plan",
+        "clip_end", "duration", "words", "clip_metadata", "filler_plan", "notes",
     ]
     for name in ("clip_metadata", "filler_plan"):
         added = run_stage_signature.parameters[name]
         assert added.kind is inspect.Parameter.KEYWORD_ONLY, name
         assert added.default is None, name
+    # ``notes`` is the caller's own free-form Engine_Context notes (the third designed
+    # growth of this signature). Its default is an empty *sequence* rather than ``None``,
+    # because unlike the two above it has no "not supplied" meaning distinct from "no
+    # notes" — so it is pinned separately rather than folded into the loop.
+    caller_notes = run_stage_signature.parameters["notes"]
+    assert caller_notes.kind is inspect.Parameter.KEYWORD_ONLY
+    assert caller_notes.default == ()
 
 
 def test_shared_test_doubles_and_generators_are_pinned():
