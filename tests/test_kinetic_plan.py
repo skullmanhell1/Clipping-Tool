@@ -24,6 +24,7 @@ task 8.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import math
 
@@ -686,17 +687,30 @@ def test_p13_low_confidence_words_lose_emphasis_but_keep_text_and_timing(
 #: overflow. That is what forces the re-split under test.
 _SPLIT_TOKENS = tuple(f"overflow{index:02d}token" for index in range(8))
 
+#: The word count at which ``captions.words_to_cues`` starts a new cue, read from the
+#: function's own default so a change to it (C5 took it from 5 to 3) cannot quietly
+#: invalidate the single-cue premise of the strategy below.
+_GROUPING_MAX_WORDS = int(
+    inspect.signature(captions.words_to_cues).parameters["max_words"].default
+)
+
 
 @st.composite
 def _st_single_cue_overflow_timeline(draw):
     """A timeline ``captions.words_to_cues`` provably groups into exactly one cue.
 
-    ``words_to_cues`` starts a new cue at 5 words, a gap over 0.6 s, or a span
-    over 3.0 s; at most 4 words, gaps of at most 0.05 s and a span of at most
-    2.55 s keep every draw inside all three limits, so every planned cue provably
-    comes from *one* original cue — which is what Property 15 is about.
+    ``words_to_cues`` starts a new cue at :data:`_GROUPING_MAX_WORDS` words, a gap over
+    0.6 s, or a span over 3.0 s; drawing at most that many words, with gaps of at most
+    0.05 s and a span of at most 2.55 s, keeps every draw inside all three limits — so
+    every planned cue provably comes from *one* original cue, which is what Property 15
+    is about.
+
+    The word count is read from ``words_to_cues`` itself rather than written here. It was
+    the literal ``4`` against a limit of 5, so lowering the limit to 3 (C5) silently made
+    the draws straddle two cues and the property failed on its own premise rather than on
+    the behaviour it tests.
     """
-    count = draw(st.integers(min_value=2, max_value=4))
+    count = draw(st.integers(min_value=2, max_value=_GROUPING_MAX_WORDS))
     cursor = draw(st.floats(min_value=0.0, max_value=0.5,
                             allow_nan=False, allow_infinity=False))
     words = []

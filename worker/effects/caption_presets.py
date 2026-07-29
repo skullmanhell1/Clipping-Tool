@@ -91,13 +91,34 @@ class CaptionPreset:
     # named as its own family on purpose - ASS can only express bold on/off, which
     # fontconfig reads as weight 200, so ExtraBold (205) is unreachable any other way.
     font: str = "Poppins ExtraBold"
-    font_size: int = 84
+    # C3: the weight the declared face already provides, on the usual 100-900 scale.
+    #
+    # ASS can only say "bold" or "not bold", which libass turns into a request for weight
+    # 700. Asking a face that is *already* heavy for bold on top of that makes libass
+    # synthesise the emboldening - it thickens the outlines of a face that was drawn heavy
+    # to begin with, which is what "fake bold" looks like and is why captions read as
+    # slightly mushy. So when this is >= _FACE_SUPPLIES_BOLD the Bold flag is left off and
+    # the face is allowed to speak for itself; below it, Bold is set so libass picks a bold
+    # instance or synthesises one because nothing better exists.
+    font_weight: int = 800
+    font_size: int = 96
     colors: CaptionColors = field(default_factory=CaptionColors)
     position: str = "bottom"
     highlight_keywords: bool = False
     highlight_scale: float = 1.18
     emoji_inline: bool = False
     border_style: int = 1
+    # C7: upper-case the caption text. Only the hook title was upper-cased before, so a
+    # preset could not ask for the all-caps look that most short-form captions use.
+    uppercase: bool = False
+    # C8: outline thickness and drop-shadow offset, in ASS units at PlayRes 1080x1920.
+    #
+    # Both were hard-coded and derived from the animation style: 4/2 for karaoke_fill and
+    # 2/1 for everything else. At 1080x1920 a 2px outline is barely visible, and captions
+    # sit over arbitrary footage, so legibility came down to luck. 8/4 is the weight the
+    # look actually needs, and both are per preset now rather than inferred.
+    outline: int = 8
+    shadow: int = 4
 
     def to_dict(self) -> dict:
         """Serialize the preset (nested colours included) to a plain dict."""
@@ -105,6 +126,7 @@ class CaptionPreset:
             "name": self.name,
             "animation": self.animation,
             "font": self.font,
+            "font_weight": self.font_weight,
             "font_size": self.font_size,
             "colors": self.colors.to_dict(),
             "position": self.position,
@@ -112,6 +134,9 @@ class CaptionPreset:
             "highlight_scale": self.highlight_scale,
             "emoji_inline": self.emoji_inline,
             "border_style": self.border_style,
+            "uppercase": self.uppercase,
+            "outline": self.outline,
+            "shadow": self.shadow,
         }
 
     @classmethod
@@ -128,6 +153,7 @@ class CaptionPreset:
             name=str(data.get("name", defaults.name)),
             animation=str(data.get("animation", defaults.animation)),
             font=str(data.get("font", defaults.font)),
+            font_weight=int(data.get("font_weight", defaults.font_weight)),
             font_size=int(data.get("font_size", defaults.font_size)),
             colors=colors,
             position=str(data.get("position", defaults.position)),
@@ -139,6 +165,9 @@ class CaptionPreset:
             ),
             emoji_inline=bool(data.get("emoji_inline", defaults.emoji_inline)),
             border_style=int(data.get("border_style", defaults.border_style)),
+            uppercase=bool(data.get("uppercase", defaults.uppercase)),
+            outline=int(data.get("outline", defaults.outline)),
+            shadow=int(data.get("shadow", defaults.shadow)),
         )
 
 
@@ -155,22 +184,44 @@ class CaptionPreset:
 BUILTIN_PRESETS: dict[str, CaptionPreset] = {
     "karaoke": CaptionPreset("karaoke", animation="karaoke_fill", border_style=1),
     "boxed": CaptionPreset(
-        "boxed", animation="none", border_style=3, font="Archivo Black"
+        "boxed",
+        animation="none",
+        border_style=3,
+        font="Archivo Black",
+        font_weight=900,
+        # BorderStyle 3 draws an opaque box, which *is* the legibility mechanism, so an
+        # outline would only fatten the glyphs inside it and a shadow would sit oddly
+        # against the box edge.
+        outline=0,
+        shadow=0,
     ),
     "minimal": CaptionPreset(
-        "minimal", animation="none", font_size=76, font="Poppins"
+        "minimal",
+        animation="none",
+        font_size=84,
+        font="Poppins",
+        font_weight=700,
+        # "Minimal" is about restraint, but it still has to be readable over video.
+        outline=6,
+        shadow=3,
     ),
     "pop": CaptionPreset("pop", animation="pop", highlight_keywords=True),
-    "typewriter": CaptionPreset("typewriter", animation="typewriter", font="Poppins"),
+    "typewriter": CaptionPreset(
+        "typewriter", animation="typewriter", font="Poppins", font_weight=700
+    ),
     "hormozi": CaptionPreset(
         "hormozi",
         animation="pop",
         highlight_keywords=True,
         emoji_inline=True,
-        font_size=96,
+        font_size=104,
         position="center",
         # The look this preset is named for is heavy condensed all-caps.
         font="Anton",
+        uppercase=True,
+        # The heaviest treatment we ship: this style is meant to dominate the frame.
+        outline=10,
+        shadow=5,
     ),
 }
 

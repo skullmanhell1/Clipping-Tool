@@ -1405,7 +1405,7 @@ def _style_line(
     return base  # pragma: no cover - the shape is pinned by task 15.2
 
 
-def _hook_style_line(font: str, hook_font_size: int) -> str:
+def _hook_style_line(font: str, hook_font_size: int, bold: int = -1) -> str:
     """The ``Style: Hook`` line, identical in shape to ``build_ass``'s (Req 3.3).
 
     ``captions`` keeps this definition as a literal inside ``build_ass`` /
@@ -1414,10 +1414,16 @@ def _hook_style_line(font: str, hook_font_size: int) -> str:
     probes the host font list (``fc-list``, a subprocess). The numbers are
     therefore repeated verbatim here; task 8.10's property test asserts the two
     spellings stay identical.
+
+    ``bold`` is the ASS Bold field, which C3 made a property of the preset's face rather
+    than a constant: a face that is already heavy must not be asked for bold on top, or
+    libass synthesises the emboldening. The planner passes
+    ``captions.ass_bold_flag(preset)``. The default is the pre-C3 value, and is used only
+    by :func:`emit_ass`'s fallback for a hand-built plan that carries no ``hook_style``.
     """
     return (
         f"Style: Hook,{font},{int(hook_font_size)},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+        f"&H00000000,&H64000000,{int(bold)},0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
     )
 
 
@@ -1553,7 +1559,11 @@ def plan_kinetic(
                 margin_r,
                 margin_v,
             ),
-            hook_style=_hook_style_line(family, options.hook_font_size),
+            hook_style=_hook_style_line(
+                family,
+                options.hook_font_size,
+                bold=_captions().ass_bold_flag(preset),
+            ),
             hook_text=_text(hook_text),
             hook_duration_s=options.hook_duration_s,
             motion_duration_ms=options.motion_duration_ms,

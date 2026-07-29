@@ -1442,46 +1442,52 @@ def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
 #: Every built-in preset, field by field (``CaptionPreset.to_dict()`` output).
 _EXPECTED_BUILTIN_PRESETS: dict = {
     "boxed": {
-        "name": "boxed", "animation": "none", "font": "Archivo Black", "font_size": 84,
+        "name": "boxed", "animation": "none", "font": "Archivo Black", "font_weight": 900, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 3,
+        "uppercase": False, "outline": 0, "shadow": 0,
     },
     "hormozi": {
-        "name": "hormozi", "animation": "pop", "font": "Anton", "font_size": 96,
+        "name": "hormozi", "animation": "pop", "font": "Anton", "font_weight": 800, "font_size": 104,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "center", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": True, "border_style": 1,
+        "uppercase": True, "outline": 10, "shadow": 5,
     },
     "karaoke": {
-        "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_size": 84,
+        "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
     "minimal": {
-        "name": "minimal", "animation": "none", "font": "Poppins", "font_size": 76,
+        "name": "minimal", "animation": "none", "font": "Poppins", "font_weight": 700, "font_size": 84,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 6, "shadow": 3,
     },
     "pop": {
-        "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_size": 84,
+        "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
     "typewriter": {
-        "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_size": 84,
+        "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_weight": 700, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
 }
 
@@ -1541,7 +1547,7 @@ _HORMOZI_FONT = "Anton"
 _BOXED_FONT = "Archivo Black"
 
 
-def _ass_hook_style(font: str) -> str:
+def _ass_hook_style(font: str, bold: int = -1) -> str:
     """The ``Style: Hook`` line for ``font``.
 
     Was a single constant naming Arial, which worked only because the preset font and the
@@ -1551,7 +1557,7 @@ def _ass_hook_style(font: str) -> str:
     """
     return (
         f"Style: Hook,{font},110,&H0000E5FF,&H0000E5FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
+        f"{bold},0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
     )
 _ASS_EVENTS_HEADER = (
     "\n"
@@ -1599,17 +1605,25 @@ _EXPECTED_LEGACY_DOCUMENTS: dict = {
 #: keyword index, hook title, preset position ``center`` inherited).
 _EXPECTED_HORMOZI_DOCUMENT = (
     _ASS_HEADER
-    + f"Style: Default,{_HORMOZI_FONT},96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
-      "-1,0,0,0,100,100,0,0,1,2,1,5,80,80,0,1\n"
-    + _ass_hook_style(_HORMOZI_FONT)
+    # Four C-series changes are visible in this one document:
+    #   C3 - Bold is 0, not -1. Anton is already a heavy face; asking libass for bold on
+    #        top makes it synthesise the emboldening (verified: Bold=-1 requests weight 700
+    #        from a face that only offers 400, so libass fakes the difference).
+    #   C5 - size 104, not 96, which is what three words per cue affords.
+    #   C7 - the cue text is upper-cased. Only the hook was, before.
+    #   C8 - outline 10 and shadow 5, from the preset, replacing the 2/1 that was inferred
+    #        from the animation style and was effectively invisible at PlayRes 1920.
+    + f"Style: Default,{_HORMOZI_FONT},104,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
+      "0,0,0,0,100,100,0,0,1,10,5,5,80,80,0,1\n"
+    + _ass_hook_style(_HORMOZI_FONT, bold=0)
     + _ASS_EVENTS_HEADER
     + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
     + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
       "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}THIS "
       "{\\c&H0000E5FF&\\fscx118\\fscy118}"
-      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed"
+      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}CHANGED"
       "{\\c&H00FFFFFF&\\fscx100\\fscy100} "
-      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}money \U0001f4b0\n"
+      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}MONEY \U0001f4b0\n"
 )
 
 
@@ -1635,9 +1649,14 @@ def test_caption_preset_values_are_unchanged():
     assert caption_presets.VALID_POSITIONS == frozenset({"bottom", "center", "top"})
     assert caption_presets.FALLBACK_PRESET_NAME == "karaoke"
 
+    # ``font_weight`` (C3), ``uppercase`` (C7) and ``outline``/``shadow`` (C8) are the four
+    # fields added since v0.8.0. Each exists because the value it holds used to be implicit:
+    # the Bold flag was always -1 even for a face already drawn heavy, only the hook title
+    # was upper-cased, and outline/shadow were inferred from the animation style.
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
         "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
-        "highlight_keywords", "highlight_scale", "name", "position",
+        "font_weight", "highlight_keywords", "highlight_scale", "name", "outline",
+        "position", "shadow", "uppercase",
     ]
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
         "box", "highlight", "outline", "primary",
@@ -1686,22 +1705,27 @@ def test_build_word_span_behaviour_is_unchanged():
 def test_words_to_cues_grouping_is_unchanged():
     """Validates: Requirements 19.3
 
-    The three v0.8.0 split rules (``max_words=5``, ``max_gap=0.6``, ``max_duration=3.0``)
-    and the empty-text skip, pinned as a literal grouping.
+    The three split rules (``max_words``, ``max_gap=0.6``, ``max_duration=3.0``) and the
+    empty-text skip, pinned as a literal grouping.
+
+    ``max_words`` was 5 in v0.8.0 and is 3 since C5: five words at a readable size gives
+    long thin lines that scan like a subtitle, where short-form captions are near
+    full-width and read in one glance. The gap and duration rules are untouched, and the
+    grouping below is re-pinned rather than relaxed so a further change stays deliberate.
     """
     timeline = [
         FakeWord(0.00, 0.30, "one"), FakeWord(0.35, 0.60, "two"),
         FakeWord(0.65, 0.90, ""),                 # empty text: skipped entirely
         FakeWord(0.95, 1.20, "three"), FakeWord(1.25, 1.50, "four"),
         FakeWord(1.55, 1.80, "five"),
-        FakeWord(1.85, 2.10, "six"),              # 6th survivor: max_words split
+        FakeWord(1.85, 2.10, "six"),              # 6th survivor (2 cues of 3)
         FakeWord(3.00, 3.40, "gap"),              # 0.90 s gap: max_gap split
         FakeWord(3.45, 6.90, "loooong"),          # span > 3.0 s: max_duration split
         FakeWord(6.95, 7.20, "tail"),
     ]
     expected = [
-        (0.00, 1.80, ["one", "two", "three", "four", "five"]),
-        (1.85, 2.10, ["six"]),
+        (0.00, 1.20, ["one", "two", "three"]),      # max_words split at 3
+        (1.25, 2.10, ["four", "five", "six"]),
         (3.00, 3.40, ["gap"]),
         (3.45, 6.90, ["loooong"]),
         (6.95, 7.20, ["tail"]),
@@ -1712,7 +1736,7 @@ def test_words_to_cues_grouping_is_unchanged():
     assert cap_module.words_to_cues([]) == []
     # The documented defaults are still the defaults.
     signature = inspect.signature(cap_module.words_to_cues)
-    assert signature.parameters["max_words"].default == 5
+    assert signature.parameters["max_words"].default == 3
     assert signature.parameters["max_gap"].default == 0.6
     assert signature.parameters["max_duration"].default == 3.0
 
@@ -1783,8 +1807,8 @@ def test_build_ass_documents_are_unchanged(tmp_path):
         )
     text = overridden.read_text(encoding="utf-8")
     assert (
-        f"Style: Default,{_HORMOZI_FONT},96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1" in text
+        f"Style: Default,{_HORMOZI_FONT},104,&H00FFFFFF,&H0000E5FF,&H00000000,"
+        "&H64000000,0,0,0,0,100,100,0,0,1,10,5,2,80,80,220,1" in text
     )
     empty = tmp_path / "empty.ass"
     cap_module.build_ass([], empty, video_width=1080, video_height=1920)

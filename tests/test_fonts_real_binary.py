@@ -338,3 +338,144 @@ def test_resolve_font_prefers_earlier_rungs():
 def test_resolve_font_keeps_an_available_request_untouched():
     resolved, substituted = captions.resolve_font("Anton", available=lambda n: True)
     assert (resolved, substituted) == ("Anton", False)
+
+
+
+# --------------------------------------------------------------------------- #
+# C3: a heavy face is not asked to be bold on top                              #
+# --------------------------------------------------------------------------- #
+@requires_ffmpeg
+@pytest.mark.real_binary
+@pytest.mark.parametrize("preset_name", sorted(caption_presets.BUILTIN_PRESETS))
+def test_no_preset_asks_libass_to_synthesise_bold(preset_name, tmp_path):
+    """Every bundled preset face already carries its weight, so Bold must be off.
+
+    ASS has one bold flag and no way to say "weight 800". libass turns the flag into a
+    request for CSS weight 700, and when the matched face cannot supply it, libass
+    *synthesises* the emboldening — it thickens the outlines of a face that was already
+    drawn heavy, which is the soft, slightly swollen look of fake bold.
+
+    The requested weight is in libass' own ``fontselect:`` line, so this is checked rather
+    than reasoned about:
+
+        Bold=-1  ->  fontselect: (Anton, 700, 0) -> Anton-Regular    # 700 asked, 400 got
+        Bold=0   ->  fontselect: (Anton, 400, 0) -> Anton-Regular    # no gap to fake
+
+    Both resolve to the same file. The difference is entirely whether libass then fakes
+    the weight difference, which is why asserting the resolved *file* is not enough here.
+    """
+    preset = caption_presets.BUILTIN_PRESETS[preset_name]
+    assert captions.ass_bold_flag(preset) == 0, (
+        f"preset {preset_name!r} declares font_weight={preset.font_weight}, which is below "
+        "the threshold at which the face is trusted to supply its own weight"
+    )
+
+    ass = tmp_path / f"{preset_name}.ass"
+    captions.build_ass(
+        [Cue(0.0, 1.0, [Word(0.0, 0.5, "HELLO"), Word(0.5, 1.0, "WORLD")])],
+        ass,
+        preset=preset,
+        clip_duration=1.0,
+    )
+    decisions = _fontselect_lines(captions.subtitles_filter(ass), tmp_path)
+
+    proc = subprocess.run(
+        [
+            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "verbose",
+            "-f", "lavfi", "-i", "color=black:s=540x960:d=0.1",
+            "-vf", captions.subtitles_filter(ass),
+            "-frames:v", "1", "-y", str(tmp_path / "weight.png"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    weights = re.findall(r"fontselect:\s*\(.+?,\s*(\d+),\s*\d+\)", proc.stderr)
+    assert weights, f"no fontselect line to read a weight from:\n{proc.stderr[-1500:]}"
+    assert "700" not in weights, (
+        f"preset {preset_name!r} made libass request weight 700 from an already-heavy "
+        f"face (weights seen: {sorted(set(weights))}); it will synthesise the bold"
+    )
+    assert decisions  # the render really did select fonts
+
+
+def test_every_preset_declares_a_weight_matching_its_bundled_face():
+    """``font_weight`` must describe the face the preset actually names.
+
+    The field only earns its keep if it is true: a preset claiming weight 800 while naming
+    a Regular face would turn the Bold flag off and render light text.
+    """
+    manifest = {entry["family"]: entry for entry in _manifest()["fonts"]}
+    for name, preset in sorted(caption_presets.BUILTIN_PRESETS.items()):
+        entry = manifest.get(preset.font)
+        assert entry, f"preset {name!r} names {preset.font!r}, absent from the manifest"
+        assert entry["heavy_face"], (
+            f"preset {name!r} declares font_weight={preset.font_weight} but "
+            f"{preset.font!r} is not a heavy face, so turning Bold off renders it light"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# C7 / C8: the preset's own presentation fields reach the ASS document          #
+# --------------------------------------------------------------------------- #
+def test_uppercase_preset_upper_cases_cue_text_without_mutating_the_words(tmp_path):
+    """C7, plus the reason the implementation wraps rather than mutates.
+
+    The same ``Word`` objects are read again by the keyword planner, the emoji planner and
+    the kinetic engine. Upper-casing in place would leak a caption presentation choice into
+    all of them.
+    """
+    words = [Word(0.0, 0.5, "quiet"), Word(0.5, 1.0, "words")]
+    preset = caption_presets.BUILTIN_PRESETS["hormozi"]
+    assert preset.uppercase
+
+    ass = tmp_path / "upper.ass"
+    captions.build_ass([Cue(0.0, 1.0, words)], ass, preset=preset, clip_duration=1.0)
+    text = ass.read_text(encoding="utf-8")
+
+    assert "QUIET" in text and "WORDS" in text
+    assert [word.text for word in words] == ["quiet", "words"], "the transcript was mutated"
+
+
+def test_outline_and_shadow_come_from_the_preset(tmp_path):
+    """C8: both are per preset, not inferred from the animation style.
+
+    They used to be 4/2 for ``karaoke_fill`` and 2/1 for everything else, so a preset could
+    not ask for a heavier treatment — and 2 units at PlayRes 1920 is close to invisible over
+    real footage.
+    """
+    import dataclasses
+
+    base = caption_presets.BUILTIN_PRESETS["pop"]
+    preset = dataclasses.replace(base, outline=9, shadow=7)
+    ass = tmp_path / "edges.ass"
+    captions.build_ass(
+        [Cue(0.0, 1.0, [Word(0.0, 1.0, "edge")])],
+        ass,
+        preset=preset,
+        clip_duration=1.0,
+    )
+    style = next(
+        line for line in ass.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Style: Default")
+    )
+    fields = style.split("Style: ", 1)[1].split(",")
+    # BorderStyle, Outline, Shadow are fields 16, 17, 18 of the V4+ format.
+    assert (fields[16], fields[17]) == ("9", "7"), style
+
+    # A negative value is clamped rather than written into the document, where libass
+    # would reject the whole style line.
+    weird = dataclasses.replace(base, outline=-4, shadow=-1)
+    ass2 = tmp_path / "clamped.ass"
+    captions.build_ass(
+        [Cue(0.0, 1.0, [Word(0.0, 1.0, "edge")])],
+        ass2,
+        preset=weird,
+        clip_duration=1.0,
+    )
+    style2 = next(
+        line for line in ass2.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Style: Default")
+    )
+    fields2 = style2.split("Style: ", 1)[1].split(",")
+    assert (fields2[16], fields2[17]) == ("0", "0"), style2
