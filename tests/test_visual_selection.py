@@ -16,6 +16,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from tests.conftest import requires_ffmpeg
 from worker import selection as sel
 from worker import visual_selection
 from worker.llm_client import MockLLMClient
@@ -466,8 +467,16 @@ def test_sample_keyframes_uses_a_supplied_frames_dir(tmp_path):
         assert Path(frame.path).exists()
 
 
+@requires_ffmpeg
 def test_visual_selection_leaves_no_keyframe_temp_directory(tmp_path, monkeypatch):
     """A visual-selection run removes its sampled frames.
+
+    Gated on ffmpeg: this drives the real ``select_moments_visual``, whose transcript-free
+    path probes the source for its duration before any sampling happens. Without the
+    binary that probe fails, the function's own ``except`` swallows it, and sampling is
+    never reached — the assertion below then correctly reports that the test proved
+    nothing. Stubbing the probe as well would leave almost none of the real code under
+    test, so the gate is the honest option. CI installs ffmpeg, so it runs there.
 
     Regression: ``sample_keyframes`` created its scratch directory with
     ``tempfile.mkdtemp`` and no code path ever deleted it, so every run left a ``kf-*``
