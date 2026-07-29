@@ -252,8 +252,15 @@ def test_no_new_mandatory_dependency_was_introduced() -> None:
     assert dev.count("hypothesis") == 1
 
 
-def test_the_ci_workflow_was_not_touched_by_this_spec() -> None:
-    """No stem-specific step, and no new install line (Req 20.3)."""
+def test_the_ci_workflow_has_no_stem_specific_steps() -> None:
+    """No stem-specific step, and no ML extras installed in CI (Req 20.3).
+
+    The requirement is that this engine costs CI nothing: no separate job, no model
+    download, no torch install. It is asserted on the workflow's *content* rather than by
+    pinning exact commands — the workflow has since been hardened for unrelated reasons
+    (ruff made blocking, frontend lint/tests added), and a test that breaks whenever any
+    CI line changes would be a tripwire on the wrong thing.
+    """
     ci = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     lowered = ci.lower()
@@ -262,8 +269,13 @@ def test_the_ci_workflow_was_not_touched_by_this_spec() -> None:
     assert "stems" not in lowered
     assert "demucs" not in lowered
     assert "torch" not in lowered
-    # Still the single unchanged test invocation.
-    assert ci.count("pytest tests/") == 1
+    # The optional ML extras must never be installed by CI — that is what would make the
+    # engine expensive to test, and it is the concrete form Req 20.3 takes now that
+    # requirements-ml.txt exists.
+    assert "requirements-ml" not in lowered
+    # The suite is still run as one undifferentiated invocation, not a stems-only job.
+    assert "-k stem" not in lowered
+    assert "tests/test_stems" not in lowered
 
 
 def test_the_sibling_spec_directories_were_not_modified() -> None:

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, formatBytes } from "../api.js";
 
 const RETENTION_LABELS = {

@@ -13,4 +13,13 @@ export default defineConfig({
       "/healthz": "http://localhost:8000",
     },
   },
+  test: {
+    // jsdom, because these are component tests that assert on rendered DOM.
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.js"],
+    // Only our own tests; without this vitest would also try to collect from
+    // node_modules and from the build output.
+    include: ["src/**/*.test.{js,jsx}"],
+  },
 });

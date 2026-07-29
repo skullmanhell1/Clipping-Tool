@@ -7,7 +7,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (lint + smoke)
+    name: Backend (lint + tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,10 @@ jobs:
       # `libGL.so.1: cannot open shared object file`, so every vision code path silently took
       # its degraded branch here even though the packages were installed — CI was installing
       # opencv and getting no coverage from it. The Dockerfile has always installed these.
+      #
+      # ffmpeg is likewise not optional: ~90 tests skip without it, and the real-binary
+      # capability tests (tests/test_capabilities_real_binary.py) exist specifically to catch
+      # probe bugs that every mocked test misses, so they must actually run.
       - name: Install system dependencies (FFmpeg + fonts + opencv runtime libs)
         run: |
           sudo apt-get update
@@ -33,19 +37,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      # Blocking, unlike the previous `ruff check . || true`. That step could not fail, so it
+      # reported nothing; and with no [tool.ruff] config the enforced rule set was whatever
+      # the installed ruff version defaulted to (857 findings on 0.16 versus a handful on
+      # older releases). The rule set is now pinned in pyproject.toml, which is what makes
+      # blocking on it meaningful.
+      #
+      # Formatting is deliberately not enforced: black is in requirements-dev but has never
+      # run, and adopting it would reformat essentially every file. That is a standalone
+      # change, not a CI fix.
       - name: Lint (ruff)
-        run: ruff check . || true   # non-blocking until rules are finalised
+        run: ruff check .
 
       - name: Import & boot smoke test
         run: |
           python -c "import config; print('config OK', config.settings.app_name)"
           python -c "from api.main import app; print('FastAPI app OK', app.title)"
 
-      - name: Tests (effects, publishers, scheduler, history, API)
-        run: pytest tests/ -q
+      # Fails on warnings as well as failures: filterwarnings=error in pyproject.toml. The
+      # capability bug that made the stem engine unreachable was invisible partly because
+      # nothing in the suite objected to anything.
+      #
+      # The suite is also required to run *clean of skips*. A skipped test is not a passing
+      # test: ffmpeg and the fonts are installed above, so a skip means a dependency
+      # silently went missing and the ~90 tests it gates have quietly stopped running —
+      # exactly how the earlier ffmpeg gap went unnoticed. `set -o pipefail` keeps pytest's
+      # own exit status meaningful through the pipe.
+      - name: Tests
+        run: |
+          set -o pipefail
+          pytest 2>&1 | tee /tmp/pytest.log
+          if grep -qE '[0-9]+ skipped' /tmp/pytest.log; then
+            echo "::error::Tests were skipped; a required dependency is probably missing."
+            grep -E 'SKIPPED' /tmp/pytest.log || true
+            exit 1
+          fi
 
   frontend:
-    name: Frontend (build)
+    name: Frontend (lint + tests + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,8 +89,20 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # `npm ci` rather than `npm install`: it installs exactly the lockfile and fails if
+      # package.json and the lock have drifted, so CI cannot silently test a different
+      # dependency tree than a developer has locally.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      # The lint script existed but eslint was never a dependency and no config file was
+      # present, so this command failed outright — the project shipped a lint command that
+      # could not lint.
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Tests (vitest)
+        run: npm run test:run
 
       - name: Build
         run: npm run build
@@ -71,6 +112,13 @@ jobs:
     needs: [backend, frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    # The `secrets` context cannot be used inside an `if:` expression — the expression
+    # parser does not resolve it, so the previous `if: ${{ secrets.X != '' }}` conditions
+    # did not evaluate as intended. Surfacing the values as job-level env vars and testing
+    # `env.*` is the supported way to branch on whether a secret is configured.
+    env:
+      RENDER_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      RAILWAY_HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,13 +127,13 @@ jobs:
       #   RENDER_DEPLOY_HOOK_URL   — Render "Deploy Hook" URL
       #   RAILWAY_DEPLOY_HOOK_URL  — Railway deploy webhook URL
       - name: Trigger Render deploy
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        if: env.RENDER_HOOK != ''
+        run: curl -fsS -X POST "$RENDER_HOOK"
 
       - name: Trigger Railway deploy
-        if: ${{ secrets.RAILWAY_DEPLOY_HOOK_URL != '' }}
-        run: curl -fsS -X POST "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}"
+        if: env.RAILWAY_HOOK != ''
+        run: curl -fsS -X POST "$RAILWAY_HOOK"
 
       - name: No deploy hook configured
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL == '' && secrets.RAILWAY_DEPLOY_HOOK_URL == '' }}
+        if: env.RENDER_HOOK == '' && env.RAILWAY_HOOK == ''
         run: echo "No deploy hook secret set — skipping auto-deploy. See README."

@@ -405,7 +405,6 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
     that omits the keyword builds contexts identical to the pre-Seam ones (Req 20.6).
     """
     from tests.fakes import FakeEngine
-
     from worker.effects.filler import Interval
     from worker.engines.host import Engine_Host
     from worker.engines.registry import Engine_Registry
@@ -455,21 +454,27 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
 # fast return, because only the former distinguishes "skipped before doing anything" from
 # "did the work and threw it away".
 
-import time as _time                                            # noqa: E402
-from pathlib import Path as _Path                                # noqa: E402
+import time as _time  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
 
-from tests.fakes import (                                        # noqa: E402
+from tests.fakes import (  # noqa: E402
     Recording_Command_Runner as _Runner,
+)
+from tests.fakes import (
     StaticProber as _Prober,
 )
 from worker.engines.artifacts import allocate_workspace as _alloc  # noqa: E402
-from worker.engines.base import (                                # noqa: E402
+from worker.engines.base import (  # noqa: E402
     Engine_Context as _Ctx,
+)
+from worker.engines.base import (
     Engine_Stage as _Stage,
+)
+from worker.engines.base import (
     Engine_Status as _Status,
 )
 from worker.engines.capabilities import Capability_Report as _Report  # noqa: E402
-from worker.engines.timebase import Time_Base as _TB             # noqa: E402
+from worker.engines.timebase import Time_Base as _TB  # noqa: E402
 
 
 class _CountingBackend:

@@ -19,7 +19,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings as hyp_settings
+from hypothesis import given
+from hypothesis import settings as hyp_settings
 
 from tests.strategies import st_stem_options
 from worker.engines import stems

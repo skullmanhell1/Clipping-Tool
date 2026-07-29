@@ -1095,11 +1095,11 @@ def _e2e_ctx(tmp_path, source, *, options, notes=(), remaining=120.0):
     """A real ``Engine_Context`` pointing at a real clip."""
     import time
 
+    from tests.fakes import StaticProber
     from worker.engines.artifacts import allocate_workspace
     from worker.engines.base import Engine_Context, Engine_Stage
     from worker.engines.capabilities import Capability_Report
     from worker.engines.timebase import Time_Base
-    from tests.fakes import StaticProber
 
     return Engine_Context(
         job_id="job",
