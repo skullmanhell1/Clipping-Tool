@@ -60,7 +60,10 @@ def slice_words(transcript: Transcript, start: float, end: float) -> list[Word]:
 
 def words_to_cues(
     words: Iterable[Word],
-    max_words: int = 5,
+    # C5: three words, not five. Five words at a readable size gives long thin lines that
+    # scan left-to-right like a subtitle; short-form captions are near-full-width and meant
+    # to be taken in at a glance, which is what allows the larger size that comes with it.
+    max_words: int = 3,
     max_gap: float = 0.6,
     max_duration: float = 3.0,
 ) -> list[Cue]:
@@ -109,6 +112,13 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
+#: The emphasis colour shared by the legacy templates and the preset path (C4).
+#:
+#: ASS ``&HAABBGGRR``, so this is opaque amber (R=255, G=229, B=0). It is the same value as
+#: ``caption_presets.CaptionColors.highlight``; the two are spelled separately because the
+#: legacy ``_caption_style`` path takes no preset, and a drift test pins them equal.
+HIGHLIGHT_COLOUR = "&H0000E5FF"
+
 # Caption position (UI value) -> ASS numpad alignment + default vertical margin.
 # ASS alignments: 2 = bottom-centre, 5 = middle-centre, 8 = top-centre.
 _POSITION_ALIGN: dict[str, tuple[int, int]] = {
@@ -127,14 +137,19 @@ def _caption_style(
     """Return ``(style_line, alignment, karaoke)`` for a caption template.
 
     Templates:
-        * ``karaoke`` — white text, green per-word fill sweep, bold outline.
+        * ``karaoke`` — white text, amber per-word fill sweep, bold outline.
         * ``boxed``   — white text on a semi-opaque box (BorderStyle 3).
         * ``minimal`` — plain white text, thin outline, no karaoke.
     """
     align, margin_v = _POSITION_ALIGN.get(position, _POSITION_ALIGN["bottom"])
 
     white = "&H00FFFFFF"
-    green = "&H0000FF00"
+    # C4: the karaoke fill was pure green (&H0000FF00), which reads as dated - it is the
+    # default nobody chose. The current idiom is white sweeping to yellow or to a brand
+    # colour. This is the same amber as ``CaptionColors.highlight``, so the legacy
+    # templates and the preset path now agree on what an emphasised word looks like
+    # instead of differing by which code path rendered them.
+    highlight = HIGHLIGHT_COLOUR
     black = "&H00000000"
     box = "&H80000000"  # semi-transparent black background/shadow
 
@@ -153,7 +168,7 @@ def _caption_style(
         return style, align, False
     # Default: karaoke.
     style = (
-        f"Style: Default,{font},{font_size},{white},{green},{black},&H64000000,"
+        f"Style: Default,{font},{font_size},{white},{highlight},{black},&H64000000,"
         f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
     )
     return style, align, True
@@ -161,8 +176,40 @@ def _caption_style(
 
 # --- Preset-driven ASS spans (Feature A) ------------------------------------
 
-# Font used when a preset's declared font is unavailable on the host (Req 5.3).
-_FALLBACK_FONT = "Arial"
+# Fonts tried, in order, when a preset's declared font is unavailable (Req 5.3, C1).
+#
+# This used to be the single name "Arial", which is the bug C1 names: Arial is not
+# installed on any Linux host, and every built-in preset *also* declared Arial, so the
+# substitution branch replaced a missing font with the same missing font. It reported a
+# substitution while changing nothing, and libass then metric-aliased to whatever the host
+# offered - Liberation Sans Regular where fonts-liberation is installed, Noto Sans
+# elsewhere - with synthesised rather than real bold. That single defect is most of the
+# "captions look plain" impression.
+#
+# The order is preference, not availability: the first four are the bundled heavy display
+# faces in ``assets/fonts`` (see ``assets/fonts.json``), each verified to resolve to
+# itself under both fontconfig and libass' ``fontsdir`` provider. The last three are
+# common system sans faces, so a host with no bundled directory still lands on a real
+# file. ``Liberation Sans`` is terminal because it is the one face both the Dockerfile and
+# CI install by name.
+#
+# Deliberately contains no variable font: a request for "Montserrat" through ``fontsdir``
+# silently resolves to NotoSans-Bold (verified with libass at -loglevel verbose), because
+# libass' directory provider does not select named instances the way fontconfig does.
+# Keeping this list to static faces is what makes the terminal rung a real guarantee.
+FALLBACK_FONTS: tuple[str, ...] = (
+    "Anton",
+    "Archivo Black",
+    "Bebas Neue",
+    "Poppins ExtraBold",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+)
+
+#: The documented last rung, kept as a name because callers (and
+#: ``worker.engines.kinetic.FALLBACK_FONT``) refer to "the fallback font" singular.
+_FALLBACK_FONT = FALLBACK_FONTS[-1]
 
 # Cached, best-effort lower-cased set of locally available font family names.
 _FONT_CACHE: dict[str, Optional[frozenset[str]]] = {}
@@ -217,6 +264,61 @@ def font_available(name: str) -> bool:
     if not fonts:
         return True  # uncertain -> assume available
     return name.strip().lower() in fonts
+
+
+def resolve_font(
+    requested: str,
+    *,
+    available: Optional[Any] = None,
+) -> tuple[str, bool]:
+    """Resolve ``requested`` to a font that is actually installed (C1).
+
+    Returns ``(font_to_use, substituted)``. ``substituted`` is ``True`` only when the
+    returned font differs from what was asked for, so a caller can record the event.
+
+    Walks :data:`FALLBACK_FONTS` in preference order and returns the first available
+    family. When nothing on the ladder probes available the terminal rung is returned
+    anyway: there is no third option at render time, and ``font_available`` is
+    deliberately optimistic when it cannot enumerate host fonts, so this branch means
+    enumeration *worked* and found none of them - a misconfigured image, which the
+    preflight check reports separately.
+
+    ``available`` overrides the probe (the injection point the substitution tests use).
+    """
+    probe = available if available is not None else font_available
+    if isinstance(requested, str) and requested.strip() and probe(requested):
+        return requested, False
+    for candidate in FALLBACK_FONTS:
+        if probe(candidate):
+            return candidate, True
+    return FALLBACK_FONTS[-1], True
+
+
+class _Uppercased:
+    """A Word-like wrapper whose text is upper-cased (C7).
+
+    A wrapper rather than a mutation: the caller's ``Word`` objects belong to the
+    transcript and are read again by the emoji planner, the keyword planner and the
+    kinetic engine. Upper-casing in place would leak the caption's presentation choice
+    into everything downstream that reads the same words.
+    """
+
+    __slots__ = ("_word", "text")
+
+    def __init__(self, word: Any) -> None:
+        self._word = word
+        self.text = _word_text(word).upper()
+
+    def __getattr__(self, name: str) -> Any:
+        # start/end/probability and anything else come from the wrapped word.
+        return getattr(self._word, name)
+
+
+def _uppercased(word: Any) -> Any:
+    """``word`` with upper-cased text, or the word unchanged when it has none."""
+    if not _word_text(word):
+        return word
+    return _Uppercased(word)
 
 
 def _word_text(word: Any) -> str:
@@ -359,6 +461,26 @@ def caption_emoji_glyph(
 
 # --- Preset-driven style line ------------------------------------------------
 
+#: The weight at or above which a face is taken to supply its own bold (C3).
+#:
+#: ASS expresses weight as a single on/off flag, which libass turns into a request for
+#: fontconfig weight 200 ("Bold", CSS 700). Every bundled display face is already at least
+#: that heavy, so asking for bold on top makes libass *synthesise* the emboldening on a
+#: face that was drawn heavy - visible as slightly swollen, soft-edged glyphs.
+_FACE_SUPPLIES_BOLD = 700
+
+
+def ass_bold_flag(preset: CaptionPreset) -> int:
+    """The ASS ``Bold`` field for ``preset``: ``0`` to leave the face alone, ``-1`` to bold.
+
+    Verified against libass at ``-loglevel verbose``, which reports the weight it asked
+    fontconfig for: ``-1`` produces ``fontselect: (Anton, 700, 0)`` and ``0`` produces
+    ``fontselect: (Anton, 400, 0)``. Both resolve to ``Anton-Regular`` because that is the
+    only face in the family - the difference is that the first one then emboldens it.
+    """
+    return 0 if int(getattr(preset, "font_weight", 0)) >= _FACE_SUPPLIES_BOLD else -1
+
+
 def _preset_style_line(
     preset: CaptionPreset,
     font: str,
@@ -377,17 +499,18 @@ def _preset_style_line(
     if preset.border_style == 3:
         outline_col = colors.box
         back_col = colors.box
-        outline_w = 0
-        shadow = 0
     else:
         outline_col = colors.outline
         back_col = "&H64000000"
-        outline_w = 4 if preset.animation == "karaoke_fill" else 2
-        shadow = 2 if preset.animation == "karaoke_fill" else 1
+    # C8: both come from the preset now. They used to be derived from the animation style
+    # (4/2 for karaoke_fill, 2/1 otherwise), which meant a preset could not ask for a
+    # heavier treatment and a 2-unit outline at PlayRes 1920 was effectively invisible.
+    outline_w = max(0, int(preset.outline))
+    shadow = max(0, int(preset.shadow))
     return (
         f"Style: Default,{font},{font_size},{primary},{secondary},{outline_col},"
-        f"{back_col},-1,0,0,0,100,100,0,0,{preset.border_style},{outline_w},"
-        f"{shadow},{align},80,80,{margin_v},1"
+        f"{back_col},{ass_bold_flag(preset)},0,0,0,100,100,0,0,{preset.border_style},"
+        f"{outline_w},{shadow},{align},80,80,{margin_v},1"
     )
 
 
@@ -396,7 +519,9 @@ def build_ass(
     dest: str | Path,
     video_width: int = 1080,
     video_height: int = 1920,
-    font: str = "Arial",
+    # Legacy (non-preset) path default. "Arial" here had the same problem as the preset
+    # default: never installed, so callers relying on the default got a host substitution.
+    font: str = "Poppins ExtraBold",
     font_size: int = 84,
     template: str = "karaoke",
     position: str | None = None,
@@ -533,18 +658,21 @@ def _preset_header_styles(
         resolved_position, _POSITION_ALIGN["bottom"]
     )
 
-    resolved_font = preset.font
-    if not font_available(resolved_font):
-        if notes is not None:
-            notes.append(f"font_substituted:{preset.font}")
-        resolved_font = _FALLBACK_FONT
+    resolved_font, substituted = resolve_font(preset.font)
+    if substituted and notes is not None:
+        # The font actually used, not the one requested. ``worker/models.py`` has always
+        # documented this marker as "preset font missing; <name> used", but the code
+        # recorded ``preset.font`` - the name that did *not* work - so the marker could
+        # not tell you what a clip was rendered in. C1 asks for the real substitution.
+        notes.append(f"font_substituted:{resolved_font}")
 
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v
     )
     hook_style = (
         f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+        f"&H00000000,&H64000000,{ass_bold_flag(preset)},0,0,0,100,100,0,0,1,5,2,8,"
+        f"60,60,160,1"
     )
     return style_line, hook_style
 
@@ -590,6 +718,11 @@ def _preset_dialogue_lines(
         parts: list[str] = []
         for w in cue.words:
             highlighted = global_index in keyword_indices
+            if getattr(preset, "uppercase", False):
+                # C7: applied to the word before it is turned into a span, so the ASS
+                # override tags built around it are untouched. Only the hook title was
+                # upper-cased before, so no preset could ask for the all-caps look.
+                w = _uppercased(w)
             span = build_word_span(w, preset, highlighted, cue_start=cue_start)
             if getattr(preset, "emoji_inline", False):
                 glyph = caption_emoji_glyph(
@@ -609,14 +742,30 @@ def _preset_dialogue_lines(
     return lines
 
 
+def _escape_filter_path(path: str | Path) -> str:
+    """Escape an absolute path for ffmpeg's filter-argument syntax."""
+    resolved = str(Path(path).resolve())
+    return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
 def subtitles_filter(ass: str | Path) -> str:
     """Return an ffmpeg ``subtitles=...`` filter string for an ASS file.
 
     The path is escaped for ffmpeg's filter-argument syntax so it can be dropped
     into a larger ``-vf`` / ``-filter_complex`` chain (used by the compositor).
+
+    When the bundled font directory exists, ``fontsdir`` is appended so libass loads
+    ``assets/fonts`` directly (C2). Without it, appearance depends on what the host
+    happens to have installed: verified with libass at ``-loglevel verbose``, a style
+    naming ``Anton`` on a host without it silently renders as ``NotoSans-Bold``, whereas
+    with ``fontsdir`` the same style resolves to ``Anton-Regular``. The Dockerfile also
+    installs these faces system-wide, so the two mechanisms back each other up - and
+    ``fontsdir`` is the one that also covers a bare developer checkout and CI.
     """
-    ass_path = str(Path(ass).resolve())
-    escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    escaped = _escape_filter_path(ass)
+    fonts_dir = Path(settings.font_assets_dir)
+    if fonts_dir.is_dir():
+        return f"subtitles='{escaped}':fontsdir='{_escape_filter_path(fonts_dir)}'"
     return f"subtitles='{escaped}'"
 
 

@@ -794,8 +794,15 @@ REVEAL_MODES: Tuple[str, ...] = ("cumulative", "word_by_word")
 #: "inherit the Base_Preset position" (Req 7.4), so it is a legal option value too.
 _KINETIC_POSITIONS: Tuple[str, ...] = ("bottom", "center", "top")
 
-#: The documented last rung of the font ladder.
-_FALLBACK_FONT = "Arial"
+#: The documented last rung of the font ladder, mirroring
+#: ``worker.engines.kinetic.FALLBACK_FONT`` and ``worker.captions.FALLBACK_FONTS[-1]``.
+#: ``tests/test_fonts_real_binary.py`` asserts all three spellings agree, so this cannot
+#: drift silently.
+#:
+#: Was ``"Arial"``, which is not installed on any Linux host — the C1 defect. It is kept
+#: in ``_FONT_FAMILIES`` below on purpose, as a family the probe must handle rather than
+#: as a fallback anything may rely on.
+_FALLBACK_FONT = "Liberation Sans"
 
 #: Built-in Caption_Preset names (``caption_presets.BUILTIN_PRESETS``), kept as plain
 #: strings so this module imports without the preset registry.
