@@ -58,12 +58,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
+from worker.engines import registry as engine_registry
 from worker.engines.base import (
+    AV_Engine,
+    Engine_Context,
+    Engine_Result,
+    Engine_Stage,
+    Engine_Status,
     coerce_bool,
     coerce_choice,
     coerce_float,
     coerce_int,
     coerce_str,
+    marker,
 )
 from worker.engines.capabilities import MODEL_LOCATORS
 from worker.engines.timebase import Time_Base, normalize_segments
@@ -75,6 +82,7 @@ __all__ = [
     "BACKEND_IDS",
     "Command_Runner",
     "DISK_BOUND_MULTIPLE",
+    "ENGINE_ID",
     "EXTRACT_RESERVE_S",
     "Ffmpeg_Separator_Backend",
     "GAIN_DEFAULT",
@@ -107,6 +115,7 @@ __all__ = [
     "STEM_NAMES",
     "Separator_Backend",
     "Stem_Error",
+    "Stem_Inpainting_Engine",
     "Stem_Options",
     "Stem_Plan",
     "WINDOW_DEFAULT_MS",
@@ -129,6 +138,7 @@ __all__ = [
     "remux_replacement",
     "render_mix",
     "resolve_peak_guard",
+    "step_remaining",
     "step_timeout",
     "verify_replacement",
     "parse_seam_notes",
@@ -3284,3 +3294,560 @@ def verify_replacement(
         )
 
     return produced
+
+
+
+# --------------------------------------------------------------------------- #
+# Epic 13 — the engine class and the run gate / degradation ladder            #
+# --------------------------------------------------------------------------- #
+
+#: This engine's Engine_Id; its Feature_Flag is therefore ``stem_inpainting_enabled``.
+ENGINE_ID = "stem_inpainting"
+
+#: Filters the **ffmpeg** Separator_Backend's filtergraph cannot do without (Req 13.5).
+_FFMPEG_BACKEND_FILTERS: tuple[str, ...] = (
+    "ffmpeg_filter:pan",
+    "ffmpeg_filter:highpass",
+    "ffmpeg_filter:lowpass",
+)
+
+#: The filter every path needs: gains and the V-notch are both ``volume`` nodes (Req 13.5).
+_VOLUME_FILTER = "ffmpeg_filter:volume"
+
+
+def _capability_missing(caps: Any, capability_id: str) -> bool:
+    """Whether ``caps`` positively reports ``capability_id`` unavailable.
+
+    Note the asymmetry, which is deliberate: **absence of a report is not absence of the
+    capability.** A ``None`` Capability_Report, or one that raises, reads as "available", so a
+    context built without a report does not degrade every engine that consults one. Only an
+    explicit ``False`` counts as missing.
+    """
+    if caps is None:
+        return False
+    try:
+        return not bool(caps.available(capability_id))
+    except Exception:  # pragma: no cover - hostile report
+        return False
+
+
+class Stem_Inpainting_Engine(AV_Engine):
+    """Stem-aware audio repair: separation, per-stem gains, and seam inpainting.
+
+    The AUDIO-stage counterpart to the COMPOSE-stage kinetic typography engine, and
+    deliberately the opposite kind of engine: it declares ``produces_media = True`` and hands
+    back a replacement clip, rather than contributing filters to someone else's pass.
+
+    **Why AUDIO stage and not SOURCE.** The seams this engine exists to repair *do not exist*
+    before the clip is cut and tightened — they are created by
+    ``filler.apply_keep_intervals`` concatenating kept intervals. A source-stage engine could
+    not know where they are (Req 2.4). The host publishes their positions as
+    ``filler_seam:<seconds>`` notes on the context, and :func:`parse_seam_notes` is the only
+    way this engine learns about a Seam: it never infers one from the waveform or from
+    Word_Timeline gaps (Req 6.5).
+
+    **Cost is fixed at two media passes**, always: extract (``-vn``) and remux
+    (``-c:v copy``). Every gain and every seam is folded into **one** filtergraph, so the
+    invocation count is constant in the Seam count rather than linear in it (Req 2.6, 15.9).
+
+    **Everything is injected** (Req 19.1): ``backend`` (a :class:`Separator_Backend`),
+    ``runner`` (a :data:`Command_Runner`) and ``prober``, each overridable per invocation
+    through ``ctx.deps`` via :func:`injected`. That is what lets the whole ladder be tested
+    with no ffmpeg binary, no ``demucs``, no ``torch`` and no model file.
+    """
+
+    engine_id = ENGINE_ID
+    stage = Engine_Stage.AUDIO
+    priority = 20
+    required_capabilities = ("binary:ffmpeg",)
+    optional_capabilities = (
+        "python_pkg:demucs",
+        "model:htdemucs",
+        "ffmpeg_filter:acrossfade",    # spectral music bridging
+        "ffmpeg_filter:afade",         # declick at clip head/tail
+        "ffmpeg_filter:pan",           # ffmpeg-backend mid extraction
+        "ffmpeg_filter:highpass",      # ffmpeg-backend speech band
+        "ffmpeg_filter:lowpass",       # ffmpeg-backend speech band
+        "ffmpeg_filter:alimiter",      # optional soft peak guard
+    )
+    requires_network = False
+    requires_model_download = True
+    time_budget_s = 90.0
+    max_media_passes = 2
+    max_inputs = 0
+    produces_media = True
+
+    def __init__(
+        self,
+        *,
+        backend: Any = None,
+        runner: Any = None,
+        prober: Any = None,
+    ) -> None:
+        self._backend = backend
+        self._runner = runner
+        self._prober = prober
+
+    # -- pure hooks ---------------------------------------------------------
+
+    def resolve_options(self, options: Any) -> Stem_Options:
+        """Project Processing_Options onto :class:`Stem_Options` (pure, total, idempotent)."""
+        return resolve_stem_options(options)
+
+    def plan(self, ctx: Engine_Context) -> Mapping[str, Any]:
+        """The serialised :class:`Stem_Plan` — pure, and never probes (Req 1.9, 12.5)."""
+        return plan_stems_from_context(ctx).to_dict()
+
+    # -- collaborator resolution -------------------------------------------
+
+    def _runner_for(self, ctx: Any) -> Any:
+        """The Command_Runner: ``ctx.deps`` wins, then the constructor, then the real one."""
+        return injected(ctx, "runner", self._runner) or _default_runner()
+
+    def _prober_for(self, ctx: Any) -> Any:
+        """The Audio_Format prober, same precedence."""
+        return injected(ctx, "prober", self._prober) or probe_audio_format
+
+    def _backend_for(self, ctx: Any, plan: Stem_Plan) -> Any:
+        """The Separator_Backend for the **resolved** backend id.
+
+        An injected backend is used verbatim whatever the plan resolved, because an injected
+        collaborator is a deliberate override and second-guessing it would make the seam
+        useless for testing. Otherwise the plan's resolved id decides, and ``resolve_backend``
+        has already downgraded ``ml`` → ``ffmpeg`` when ``demucs``/the checkpoint is absent,
+        so reaching :class:`ML_Separator_Backend` here means the capability report said the
+        model is present.
+        """
+        override = injected(ctx, "backend", self._backend)
+        if override is not None:
+            return override
+        if plan.backend == "ml":
+            return ML_Separator_Backend(model=plan.model or _MODEL_DEFAULT)
+        return Ffmpeg_Separator_Backend(runner=self._runner_for(ctx))
+
+    # -- result construction ------------------------------------------------
+
+    def _result(
+        self,
+        status: Engine_Status,
+        plan: Stem_Plan | None = None,
+        details: Sequence[str] = (),
+        *,
+        media: Any = None,
+        detail: str = "",
+    ) -> Engine_Result:
+        """One place that builds every result, so no rung can forget to namespace a marker."""
+        return Engine_Result(
+            engine_id=ENGINE_ID,
+            status=status,
+            markers=tuple(marker(ENGINE_ID, item) for item in details),
+            plan=plan.to_dict() if plan is not None else {},
+            media=media,
+            detail=detail,
+        )
+
+    @staticmethod
+    def _discard(paths: Sequence[Any]) -> None:
+        """Delete every file this run created, best effort (Req 15.7).
+
+        Called by every rung that abandons work, so no partial Replacement_Media and no
+        half-written stem survives to be mistaken for output. ``OSError`` is swallowed
+        deliberately: the run is already abandoning, and failing to clean up must not turn a
+        clean ``degraded`` into an exception the host reports as ``failed``.
+        """
+        for path in paths:
+            try:
+                Path(str(path)).unlink(missing_ok=True)
+            except OSError:  # pragma: no cover - unlink refused
+                continue
+
+    # -- the ladder ---------------------------------------------------------
+
+    def run(self, ctx: Engine_Context) -> Engine_Result:  # noqa: PLR0911, PLR0912
+        """Execute the engine, applying the ordered degradation ladder (Reqs 3, 13-17).
+
+        Rungs are evaluated strictly in order and the **first match returns**. The full table
+        is in the spec's design; the two structural facts worth stating here are:
+
+        * **rung 0 and rung 1 never reach this method.** A disabled Feature_Flag means the
+          host never invokes the engine at all (so no workspace, no probe, no pass), and a
+          missing *required* capability — ``binary:ffmpeg`` — is gated by the host too. Note
+          the host returns ``degraded`` + ``unavailable:binary:ffmpeg`` for that, per
+          foundation Req 7.1, **not** the ``skipped`` this engine's own spec table lists;
+          the foundation owns the gate, so the foundation's status is what happens. There is
+          deliberately no duplicate check here: re-probing a capability the host already
+          gated on would be the only place the two could disagree.
+        * **``media is None`` is what distinguishes the two degraded families**, not the
+          status. ``Degraded_With_Media`` (rungs 7-9) hands back a usable file and the host
+          adopts it exactly as for ``applied``; ``Degraded_Without_Media`` (rungs 2, 5, 6, 10,
+          11) hands back nothing and the Pipeline keeps the preceding stage's media.
+
+        Never raises for an expected condition. Unexpected exceptions are left to propagate,
+        because the host already converts them into one ``failed`` marker and logs the type
+        and message (Req 14.1) — catching them here would only hide the traceback.
+        """
+        from worker.ffmpeg_utils import FFmpegError  # lazy (Req 1.4)
+
+        options = (
+            ctx.options
+            if isinstance(ctx.options, Stem_Options)
+            else resolve_stem_options(getattr(ctx, "options", None))
+        )
+        runner = self._runner_for(ctx)
+        caps = getattr(ctx, "capabilities", None)
+
+        # --- rung 3: the whole-engine no-op --------------------------------
+        # First, and before anything at all happens: no probe, no workspace file, no
+        # subprocess. That ordering is the requirement (Req 5.6, 15.8) — "costs nothing" is
+        # observable as zero runner calls, not merely as a fast return.
+        plan = plan_stems_from_context(ctx)
+        if plan_is_noop(plan):
+            return self._result(Engine_Status.SKIPPED, plan)
+
+        # --- rung 2: permissibility vs the resolved backend ---------------
+        # The host's permissibility gate keys on this engine's *class-level*
+        # ``requires_network``, which is False — the engine itself never needs the network.
+        # What can need it is the resolved Separator_Backend, and the host cannot see that.
+        # So this rung has to live here, and it runs before the body does any work.
+        backend = self._backend_for(ctx, plan)
+        if bool(getattr(ctx, "permissibility", False)) and bool(
+            getattr(backend, "requires_network", False)
+        ):
+            return self._result(
+                Engine_Status.DEGRADED, plan, ["permissibility_blocked"]
+            )
+
+        # --- rung 6: not enough budget to finish at all -------------------
+        # Repair plus remux is the minimum that could still produce media; below it there is
+        # no point starting, and starting would leave a partial file to clean up.
+        if step_remaining(ctx) < REPAIR_MIN_S + REMUX_MIN_S:
+            return self._result(Engine_Status.DEGRADED, plan, ["degraded:budget"])
+
+        # --- rungs 4 and 5: the audio format ------------------------------
+        try:
+            fmt = self._prober_for(ctx)(
+                ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S)
+            )
+        except Invalid_Audio_Format:
+            return self._result(
+                Engine_Status.DEGRADED, plan, ["degraded:audio_format"]
+            )
+        except subprocess.TimeoutExpired as exc:
+            return self._result(
+                Engine_Status.DEGRADED, plan, ["timeout"], detail=str(exc)
+            )
+        except FFmpegError as exc:
+            # Rung 13 reaches the probe too: ``ffprobe`` is an ffmpeg invocation, and one
+            # that will not run is a failure rather than a degradation — we have no format,
+            # so there is nothing to fall back *to*. Without this the exception escaped to
+            # the host, which would still have reported ``failed`` but with the traceback of
+            # an apparently-unhandled error rather than a named rung.
+            return self._result(
+                Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
+            )
+        if fmt is None:
+            # No audio stream at all. Not a degradation and **not marked**: there was
+            # nothing to repair, so reporting one would be noise (Req 4.8).
+            return self._result(Engine_Status.SKIPPED, plan)
+
+        # Re-plan with the real format: ``plan`` is pure and could not probe, so until now the
+        # sample rate and channel count were Time_Base placeholders.
+        plan = plan_stems(
+            opts=options,
+            notes=getattr(ctx, "notes", ()) or (),
+            duration=getattr(ctx, "duration", 0.0),
+            fmt=fmt,
+            caps=caps,
+            tb=getattr(ctx, "time_base", None),
+        )
+
+        # --- rung 10: a filter the resolved path cannot do without --------
+        missing_filter = self._missing_filter(caps, plan)
+        if missing_filter is not None:
+            return self._result(
+                Engine_Status.DEGRADED, plan, [f"unavailable:{missing_filter}"]
+            )
+
+        return self._execute(ctx, plan, options, fmt, backend, runner, caps)
+
+    def _missing_filter(self, caps: Any, plan: Stem_Plan) -> str | None:
+        """The first unavailable filter the resolved path needs, or ``None`` (Req 13.5).
+
+        Declaration order, so the reported capability is stable rather than dependent on dict
+        iteration. Only filters the *resolved* path actually uses are consulted: the
+        ffmpeg-backend band-split filters matter only when that backend was resolved **and**
+        separation is wanted, and ``volume`` matters always because both the gains and the
+        V-notch are ``volume`` nodes. ``acrossfade``/``afade``/``alimiter`` are deliberately
+        absent — each has a documented fallback, so their absence degrades fidelity rather
+        than blocking the path.
+        """
+        required = [_VOLUME_FILTER]
+        if plan.backend == "ffmpeg" and plan.needs_separation:
+            required = list(_FFMPEG_BACKEND_FILTERS) + required
+        for capability_id in required:
+            if _capability_missing(caps, capability_id):
+                return capability_id
+        return None
+
+    def _execute(  # noqa: PLR0912, PLR0915
+        self,
+        ctx: Engine_Context,
+        plan: Stem_Plan,
+        options: Stem_Options,
+        fmt: Audio_Format,
+        backend: Any,
+        runner: Any,
+        caps: Any,
+    ) -> Engine_Result:
+        """Rungs 7-9 and 11-15: the part that actually spends media passes.
+
+        Split out of :meth:`run` so the pre-work gates stay readable as a flat ordered list,
+        and so every path through the working half shares one ``try`` — which is what makes
+        "every rung that abandons work deletes what it created" true by construction rather
+        than by remembering to call the cleanup in nine places.
+        """
+        from worker.ffmpeg_utils import FFmpegError  # lazy (Req 1.4)
+
+        workspace = getattr(ctx, "workspace", None)
+        created: list[Any] = []
+        details: list[str] = []
+
+        def _degradation(detail: str) -> None:
+            """Record a degradation detail at most once per clip (Req 13.7)."""
+            if detail not in details:
+                details.append(detail)
+
+        try:
+            # ---- media pass 1: extract ----------------------------------
+            extracted = extract_clip_audio(
+                ctx.clip_path,
+                self._workspace_path(workspace, "in.wav"),
+                fmt=fmt,
+                runner=runner,
+                timeout_s=step_timeout(ctx, EXTRACT_RESERVE_S),
+            )
+            created.append(extracted)
+
+            stem_set: dict[str, Path]
+            applied_backend = ""
+
+            if not plan.needs_separation:
+                # The repair-only path: no backend, no stems, no separation budget. The
+                # extracted audio is the single mix input (Req 13.4).
+                stem_set = {"vocals": extracted}
+            else:
+                need = SEPARATION_MIN_S.get(
+                    plan.backend, SEPARATION_MIN_S["ffmpeg"]
+                )
+                if step_remaining(ctx) < need + REPAIR_MIN_S + REMUX_MIN_S:
+                    # ---- rung 7: separation unaffordable ----------------
+                    # Degraded_With_Media: fall back to repairing the un-separated audio,
+                    # which still fixes the seams — the audible defect — and still yields a
+                    # usable clip. Re-planned from options rather than patched onto the frozen
+                    # plan, so the serialised plan honestly describes what ran.
+                    plan = plan_stems(
+                        opts=dataclasses.replace(
+                            options,
+                            repair_mode="crossfade",
+                            mix_preset="custom",
+                            gain_vocals=GAIN_DEFAULT,
+                            gain_music=GAIN_DEFAULT,
+                            gain_other=GAIN_DEFAULT,
+                        ),
+                        notes=getattr(ctx, "notes", ()) or (),
+                        duration=getattr(ctx, "duration", 0.0),
+                        fmt=fmt,
+                        caps=caps,
+                        tb=getattr(ctx, "time_base", None),
+                    )
+                    _degradation("degraded:budget")
+                    stem_set = {"vocals": extracted}
+                else:
+                    # ---- rung 8: the backend actually used --------------
+                    # ``resolve_backend`` already chose, and named what was missing.
+                    for capability_id in plan.missing_capabilities:
+                        _degradation(f"degraded:{capability_id}")
+
+                    raw = backend.separate(
+                        extracted,
+                        self._workspace_path(workspace, "stems"),
+                        fmt=fmt,
+                        seed=int(getattr(ctx, "seed", 0) or 0),
+                        timeout_s=step_timeout(ctx, SEPARATE_RESERVE_S),
+                    )
+                    created.extend(Path(str(p)) for p in (raw or {}).values())
+
+                    stem_set, missing_stems = assemble_stem_set(
+                        raw or {},
+                        dest_dir=self._workspace_path(workspace, "stems"),
+                        fmt=fmt,
+                        duration=plan.duration,
+                        runner=runner,
+                        timeout_s=step_timeout(ctx, SEPARATE_RESERVE_S),
+                    )
+                    created.extend(stem_set.values())
+                    details.extend(missing_stems)
+                    applied_backend = str(getattr(backend, "backend_id", "") or "")
+
+            # ---- rung 9: spectral downgraded to crossfade ---------------
+            if plan.downgraded_from == "spectral":
+                # ``spectral`` needs real stems to bridge music across the join, so on any
+                # non-``ml`` backend it is not available at all.
+                _degradation("degraded:python_pkg:demucs")
+
+            # ---- spectral music bridging (task 11.4) --------------------
+            stem_windows: dict[str, tuple[Repair_Window, ...]] = {}
+            if plan.repair_mode == "spectral" and "music" in stem_set:
+                bridged_path, bridged, residual = bridge_music_stem(
+                    stem_set["music"],
+                    self._workspace_path(workspace, "stems", "music_bridged.wav"),
+                    plan.windows,
+                    fmt=fmt,
+                    duration=plan.duration,
+                    runner=runner,
+                    timeout_s=step_timeout(ctx, REPAIR_RESERVE_S),
+                )
+                if bridged:
+                    stem_set = {**stem_set, "music": bridged_path}
+                    stem_windows["music"] = residual
+                    created.append(bridged_path)
+
+            # ---- the single gain + repair pass --------------------------
+            mixed, guard_details = render_mix(
+                plan,
+                stem_set,
+                self._workspace_path(workspace, "mixed.wav"),
+                runner=runner,
+                timeout_s=step_timeout(ctx, REPAIR_RESERVE_S),
+                alimiter=not _capability_missing(caps, ALIMITER_CAPABILITY),
+                stem_windows=stem_windows or None,
+            )
+            created.append(mixed)
+            for item in guard_details:
+                _degradation(item)
+
+            # ---- rung 11: budget gone before the remux -----------------
+            # Checked explicitly rather than left to the subprocess timeout: below
+            # REMUX_MIN_S there is no way to produce media, and starting the pass would
+            # leave a partial file behind (Req 15.6, 15.7).
+            if step_remaining(ctx) < REMUX_MIN_S:
+                self._discard(created)
+                return self._result(Engine_Status.DEGRADED, plan, [*details, "timeout"])
+
+            # ---- media pass 2: remux -----------------------------------
+            candidate = remux_replacement(
+                ctx.clip_path,
+                mixed,
+                self._workspace_path(workspace, "replacement.mp4"),
+                fmt=fmt,
+                runner=runner,
+                timeout_s=step_timeout(ctx, REMUX_RESERVE_S),
+            )
+            created.append(candidate)
+
+            # ---- rung 14: integrity ------------------------------------
+            # Applied to Degraded_With_Media exactly as to ``applied``: a degraded result
+            # still hands the clip forward, so it needs the same guarantee (Req 3.11).
+            try:
+                verify_replacement(
+                    candidate,
+                    ctx.clip_path,
+                    fmt=fmt,
+                    runner=runner,
+                    timeout_s=step_timeout(ctx, REMUX_RESERVE_S),
+                )
+            except Integrity_Error as exc:
+                self._discard(created)
+                return self._result(
+                    Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
+                )
+
+        except subprocess.TimeoutExpired as exc:
+            # ---- rung 11 (raised form) ---------------------------------
+            # The engine's own cooperative budget check is what normally catches this; a
+            # subprocess that overran anyway lands here. Either way the *contribution* is
+            # abandoned, not the clip. Note this is deliberately ``degraded`` per this
+            # spec's Req 15.6, whereas a hard host-level watchdog overrun is ``failed`` per
+            # foundation Req 8.6 — they are different events: one is us noticing in time,
+            # the other is us not noticing at all.
+            self._discard(created)
+            return self._result(
+                Engine_Status.DEGRADED, plan, [*details, "timeout"], detail=str(exc)
+            )
+        except (Stem_Error, FFmpegError) as exc:
+            # ---- rungs 12 and 13 ---------------------------------------
+            # A backend that raised, returned a non-audio file or returned wrong-duration
+            # audio (Integrity_Error from assemble_stem_set), or any failed ffmpeg
+            # invocation. Nothing usable was produced, so no media and the clip keeps the
+            # preceding stage's file.
+            self._discard(created)
+            return self._result(
+                Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
+            )
+
+        # ---- rung 15 (and the applied form of rungs 7-9) ---------------
+        if applied_backend:
+            details.append(f"applied:{applied_backend}")
+        details.append(f"mix:{options.mix_preset}")
+        if plan.windows:
+            details.append(f"repair:{plan.repair_mode}:{len(plan.windows)}")
+
+        degraded = any(
+            item.startswith(("degraded:", "unavailable:")) for item in details
+        )
+        return self._result(
+            Engine_Status.DEGRADED if degraded else Engine_Status.APPLIED,
+            plan,
+            details,
+            media=candidate,
+        )
+
+    @staticmethod
+    def _workspace_path(workspace: Any, *parts: str) -> Path:
+        """A path inside the Engine_Workspace, or a temp fallback when there is none.
+
+        ``Engine_Workspace.path`` is a sanitising, traversal-safe **method** (not an
+        attribute), and it is the only legal place this engine writes (Req 16.4). A context
+        built without a workspace is only reachable from a direct unit-test call, and falling
+        back to a temp directory keeps those callable rather than forcing every one to build
+        a workspace.
+        """
+        if workspace is not None:
+            try:
+                return workspace.path(*parts)
+            except Exception:  # pragma: no cover - hostile workspace double
+                pass
+        import tempfile
+
+        return Path(tempfile.gettempdir()) / "stem_inpainting" / Path(*parts)
+
+
+def step_remaining(ctx: Any) -> float:
+    """``ctx.remaining()`` as a finite, non-negative number of seconds.
+
+    The budget *gates* need a plain comparable number, where :func:`step_timeout` needs a
+    subprocess timeout — different jobs, so they are different functions. An infinite
+    deadline ("no deadline", the foundation's default) reads as the engine's declared
+    ``time_budget_s`` so a gate cannot be trivially satisfied by the absence of a deadline;
+    a missing or broken ``remaining`` reads as ``0.0``, which fails every gate closed rather
+    than open.
+    """
+    try:
+        raw = float(ctx.remaining())
+    except Exception:  # noqa: BLE001 - no/haywire remaining() -> fail the gate closed
+        return 0.0
+    if math.isnan(raw):
+        return 0.0
+    if math.isinf(raw):
+        if raw < 0:
+            return 0.0
+        return max(coerce_float(getattr(ctx, "time_budget_s", 0.0), 0.0), 0.0)
+    return max(raw, 0.0)
+
+
+# Registration by import side effect, exactly as the kinetic engine does it: one line in
+# ``worker/engines/loader.py`` imports this module, and the engine becomes visible to
+# ``/api/info`` and to the Engine_Host. Guarded so a re-import cannot raise a duplicate
+# registration error.
+if ENGINE_ID not in engine_registry.get_registry():
+    engine_registry.register(Stem_Inpainting_Engine())
