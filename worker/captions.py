@@ -161,8 +161,40 @@ def _caption_style(
 
 # --- Preset-driven ASS spans (Feature A) ------------------------------------
 
-# Font used when a preset's declared font is unavailable on the host (Req 5.3).
-_FALLBACK_FONT = "Arial"
+# Fonts tried, in order, when a preset's declared font is unavailable (Req 5.3, C1).
+#
+# This used to be the single name "Arial", which is the bug C1 names: Arial is not
+# installed on any Linux host, and every built-in preset *also* declared Arial, so the
+# substitution branch replaced a missing font with the same missing font. It reported a
+# substitution while changing nothing, and libass then metric-aliased to whatever the host
+# offered - Liberation Sans Regular where fonts-liberation is installed, Noto Sans
+# elsewhere - with synthesised rather than real bold. That single defect is most of the
+# "captions look plain" impression.
+#
+# The order is preference, not availability: the first four are the bundled heavy display
+# faces in ``assets/fonts`` (see ``assets/fonts.json``), each verified to resolve to
+# itself under both fontconfig and libass' ``fontsdir`` provider. The last three are
+# common system sans faces, so a host with no bundled directory still lands on a real
+# file. ``Liberation Sans`` is terminal because it is the one face both the Dockerfile and
+# CI install by name.
+#
+# Deliberately contains no variable font: a request for "Montserrat" through ``fontsdir``
+# silently resolves to NotoSans-Bold (verified with libass at -loglevel verbose), because
+# libass' directory provider does not select named instances the way fontconfig does.
+# Keeping this list to static faces is what makes the terminal rung a real guarantee.
+FALLBACK_FONTS: tuple[str, ...] = (
+    "Anton",
+    "Archivo Black",
+    "Bebas Neue",
+    "Poppins ExtraBold",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+)
+
+#: The documented last rung, kept as a name because callers (and
+#: ``worker.engines.kinetic.FALLBACK_FONT``) refer to "the fallback font" singular.
+_FALLBACK_FONT = FALLBACK_FONTS[-1]
 
 # Cached, best-effort lower-cased set of locally available font family names.
 _FONT_CACHE: dict[str, Optional[frozenset[str]]] = {}
@@ -217,6 +249,34 @@ def font_available(name: str) -> bool:
     if not fonts:
         return True  # uncertain -> assume available
     return name.strip().lower() in fonts
+
+
+def resolve_font(
+    requested: str,
+    *,
+    available: Optional[Any] = None,
+) -> tuple[str, bool]:
+    """Resolve ``requested`` to a font that is actually installed (C1).
+
+    Returns ``(font_to_use, substituted)``. ``substituted`` is ``True`` only when the
+    returned font differs from what was asked for, so a caller can record the event.
+
+    Walks :data:`FALLBACK_FONTS` in preference order and returns the first available
+    family. When nothing on the ladder probes available the terminal rung is returned
+    anyway: there is no third option at render time, and ``font_available`` is
+    deliberately optimistic when it cannot enumerate host fonts, so this branch means
+    enumeration *worked* and found none of them - a misconfigured image, which the
+    preflight check reports separately.
+
+    ``available`` overrides the probe (the injection point the substitution tests use).
+    """
+    probe = available if available is not None else font_available
+    if isinstance(requested, str) and requested.strip() and probe(requested):
+        return requested, False
+    for candidate in FALLBACK_FONTS:
+        if probe(candidate):
+            return candidate, True
+    return FALLBACK_FONTS[-1], True
 
 
 def _word_text(word: Any) -> str:
@@ -396,7 +456,9 @@ def build_ass(
     dest: str | Path,
     video_width: int = 1080,
     video_height: int = 1920,
-    font: str = "Arial",
+    # Legacy (non-preset) path default. "Arial" here had the same problem as the preset
+    # default: never installed, so callers relying on the default got a host substitution.
+    font: str = "Poppins ExtraBold",
     font_size: int = 84,
     template: str = "karaoke",
     position: str | None = None,
@@ -533,11 +595,13 @@ def _preset_header_styles(
         resolved_position, _POSITION_ALIGN["bottom"]
     )
 
-    resolved_font = preset.font
-    if not font_available(resolved_font):
-        if notes is not None:
-            notes.append(f"font_substituted:{preset.font}")
-        resolved_font = _FALLBACK_FONT
+    resolved_font, substituted = resolve_font(preset.font)
+    if substituted and notes is not None:
+        # The font actually used, not the one requested. ``worker/models.py`` has always
+        # documented this marker as "preset font missing; <name> used", but the code
+        # recorded ``preset.font`` - the name that did *not* work - so the marker could
+        # not tell you what a clip was rendered in. C1 asks for the real substitution.
+        notes.append(f"font_substituted:{resolved_font}")
 
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v
@@ -609,14 +673,30 @@ def _preset_dialogue_lines(
     return lines
 
 
+def _escape_filter_path(path: str | Path) -> str:
+    """Escape an absolute path for ffmpeg's filter-argument syntax."""
+    resolved = str(Path(path).resolve())
+    return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
 def subtitles_filter(ass: str | Path) -> str:
     """Return an ffmpeg ``subtitles=...`` filter string for an ASS file.
 
     The path is escaped for ffmpeg's filter-argument syntax so it can be dropped
     into a larger ``-vf`` / ``-filter_complex`` chain (used by the compositor).
+
+    When the bundled font directory exists, ``fontsdir`` is appended so libass loads
+    ``assets/fonts`` directly (C2). Without it, appearance depends on what the host
+    happens to have installed: verified with libass at ``-loglevel verbose``, a style
+    naming ``Anton`` on a host without it silently renders as ``NotoSans-Bold``, whereas
+    with ``fontsdir`` the same style resolves to ``Anton-Regular``. The Dockerfile also
+    installs these faces system-wide, so the two mechanisms back each other up - and
+    ``fontsdir`` is the one that also covers a bare developer checkout and CI.
     """
-    ass_path = str(Path(ass).resolve())
-    escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    escaped = _escape_filter_path(ass)
+    fonts_dir = Path(settings.font_assets_dir)
+    if fonts_dir.is_dir():
+        return f"subtitles='{escaped}':fontsdir='{_escape_filter_path(fonts_dir)}'"
     return f"subtitles='{escaped}'"
 
 

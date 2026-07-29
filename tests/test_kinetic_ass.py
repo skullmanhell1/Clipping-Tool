@@ -118,6 +118,21 @@ REFERENCE_DURATION = 3.0
 #: The frame grid used throughout: the project's default.
 TIME_BASE = Time_Base(fps=30.0)
 
+#: The font family handed to ``plan_kinetic``, which takes an already-resolved family (the
+#: planner is pure and probes nothing).
+#:
+#: This was the literal ``"Arial"``, which worked only by accident: Arial was also
+#: ``captions._FALLBACK_FONT``, so ``_preset_header_styles`` "substituted" it for itself and
+#: the two Hook style lines matched whatever the host had installed. C1 replaced that
+#: self-referential fallback with a ladder of real faces, so a request for Arial now
+#: resolves to a *different* family and the comparison in Property 5 would be comparing two
+#: different fonts.
+#:
+#: Resolving through the same ladder the caption path uses keeps this host-independent:
+#: whatever comes back is available here, so ``_preset_header_styles`` substitutes nothing
+#: and the property stays a statement about the *shape* of the style line.
+RESOLVED_FONT = captions.resolve_font("Arial")[0]
+
 #: One ASS override block, e.g. ``{\fscx60\fscy60\t(0,120,\fscx100\fscy100)}``.
 _TAG_BLOCK = re.compile(r"\{[^{}]*\}")
 
@@ -149,7 +164,7 @@ def _plan(words, duration, *, style, reveal, option_data=None, hook_text="",
         duration,
         TIME_BASE,
         opts,
-        "Arial",
+        RESOLVED_FONT,
         hook_text,
         keyword_planner=keyword_planner,
     )
@@ -694,12 +709,13 @@ def test_p5_the_hook_title_survives_engine_ownership(
     ]
 
     # --- the Style: Hook line is byte-identical to build_ass's (Req 3.3) -----
-    # ``_preset_header_styles`` owns that literal inside the v0.8.0 caption path;
-    # the plan's font is "Arial", which is also its font-substitution fallback, so
-    # the comparison is independent of which fonts this host has installed.
+    # ``_preset_header_styles`` owns that literal inside the v0.8.0 caption path; the
+    # plan's font is RESOLVED_FONT, which by construction is available on this host, so
+    # ``_preset_header_styles`` substitutes nothing and the comparison is about the shape
+    # of the style line rather than about font availability.
     preset, _substituted = caption_presets.resolve_preset(opts.preset_name)
     _default_style, expected_hook_style = captions._preset_header_styles(
-        dataclasses.replace(preset, font="Arial"), None, opts.hook_font_size, None
+        dataclasses.replace(preset, font=RESOLVED_FONT), None, opts.hook_font_size, None
     )
     assert expected_hook_style in document.splitlines()
     assert plan.hook_style == expected_hook_style
@@ -927,7 +943,7 @@ def test_every_kinetic_style_and_position_parses_under_libass(
         _BURN_DURATION,
         TIME_BASE,
         opts,
-        "Arial",
+        RESOLVED_FONT,
         "watch this",                 # exercises the Hook style + event too
         keyword_planner=lambda flat, use_ai=False, client=None: {1},
         play_res_x=play_res_x,

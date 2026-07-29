@@ -148,6 +148,12 @@ def test_missing_preset_font_falls_back_and_surfaces_note(tmp_path, monkeypatch)
     When the preset font is unavailable the caption still renders using a
     fallback font and a ``font_substituted:<name>`` note is surfaced on the
     exposed notes channel.
+
+    ``<name>`` is the font that was **used**, which is what ``worker/models.py`` has always
+    documented ("preset font missing; ``<name>`` used") and what C1 made true. It
+    previously recorded the requested font — the one that did not work — so the marker
+    could not answer the only question it exists to answer. With every probe returning
+    ``False`` the whole ladder is exhausted, so the terminal rung is what gets used.
     """
     import worker.captions as cap
 
@@ -157,10 +163,12 @@ def test_missing_preset_font_falls_back_and_surfaces_note(tmp_path, monkeypatch)
     dest = tmp_path / "fallback.ass"
     cap.build_ass(_cues(), dest, preset=preset, clip_duration=1.0, notes=notes)
 
+    fallback = cap.FALLBACK_FONTS[-1]
     text = dest.read_text()
-    assert f"font_substituted:{preset.font}" in notes
+    assert notes == [f"font_substituted:{fallback}"]
+    assert f"font_substituted:{preset.font}" not in notes  # not the font that failed
     style = next(ln for ln in text.splitlines() if ln.startswith("Style: Default"))
-    assert style.split("Style: ", 1)[1].split(",")[1] == "Arial"  # fallback font
+    assert style.split("Style: ", 1)[1].split(",")[1] == fallback
     assert "Dialogue:" in text  # clip still renders
 
 

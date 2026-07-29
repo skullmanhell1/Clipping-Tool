@@ -124,8 +124,15 @@ DEFAULT_REVEAL = "cumulative"
 #: ``caption_presets.VALID_POSITIONS``.
 POSITIONS: tuple[str, ...] = ("bottom", "center", "top")
 
-#: Req 9.3 — the last rung of the font ladder (``captions._FALLBACK_FONT``).
-FALLBACK_FONT = "Arial"
+#: Req 9.3 — the last rung of the font ladder, kept in step with
+#: ``captions.FALLBACK_FONTS[-1]`` (asserted by ``tests/test_fonts_real_binary.py`` so the
+#: two spellings cannot drift; this module deliberately avoids importing ``captions`` at
+#: module scope, so the value is repeated rather than referenced).
+#:
+#: Was ``"Arial"``, which is not installed on any Linux host — so the documented last
+#: rung of the ladder was itself missing and the engine's "nothing available" branch
+#: returned a font libass could not honour (C1).
+FALLBACK_FONT = "Liberation Sans"
 
 #: Req 1.1 — the engine identifier, and therefore the ``engine:<id>:<detail>``
 #: marker namespace the *planner* already needs (Reqs 4.8, 6.3, 14.4). The engine

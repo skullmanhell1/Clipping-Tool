@@ -85,7 +85,12 @@ class CaptionPreset:
 
     name: str
     animation: AnimationStyle = "none"
-    font: str = "Arial"
+    # A bundled static heavy face (assets/fonts.json), not "Arial": Arial is not
+    # installed on any Linux host, so every preset inheriting this default rendered in
+    # whatever the host substituted, at synthesised bold (C1). "Poppins ExtraBold" is
+    # named as its own family on purpose - ASS can only express bold on/off, which
+    # fontconfig reads as weight 200, so ExtraBold (205) is unreachable any other way.
+    font: str = "Poppins ExtraBold"
     font_size: int = 84
     colors: CaptionColors = field(default_factory=CaptionColors)
     position: str = "bottom"
@@ -143,12 +148,20 @@ class CaptionPreset:
 # The three existing static templates are expressed as presets with animation
 # styles matching current behaviour (Req 1.1); the rest are new animated
 # presets (Req 1.2).
+# Fonts are named per preset rather than left on the default where the look calls for a
+# different face. Every name here is a family in ``assets/fonts.json`` that was
+# verified to resolve to its own file (libass ``fontselect:`` at -loglevel verbose), so a
+# preset can no longer request a face that does not exist.
 BUILTIN_PRESETS: dict[str, CaptionPreset] = {
     "karaoke": CaptionPreset("karaoke", animation="karaoke_fill", border_style=1),
-    "boxed": CaptionPreset("boxed", animation="none", border_style=3),
-    "minimal": CaptionPreset("minimal", animation="none", font_size=76),
+    "boxed": CaptionPreset(
+        "boxed", animation="none", border_style=3, font="Archivo Black"
+    ),
+    "minimal": CaptionPreset(
+        "minimal", animation="none", font_size=76, font="Poppins"
+    ),
     "pop": CaptionPreset("pop", animation="pop", highlight_keywords=True),
-    "typewriter": CaptionPreset("typewriter", animation="typewriter"),
+    "typewriter": CaptionPreset("typewriter", animation="typewriter", font="Poppins"),
     "hormozi": CaptionPreset(
         "hormozi",
         animation="pop",
@@ -156,6 +169,8 @@ BUILTIN_PRESETS: dict[str, CaptionPreset] = {
         emoji_inline=True,
         font_size=96,
         position="center",
+        # The look this preset is named for is heavy condensed all-caps.
+        font="Anton",
     ),
 }
 
