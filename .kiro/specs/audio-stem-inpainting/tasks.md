@@ -565,60 +565,105 @@ spec's central promise to an upgrading operator).
        on every draw; the Req 6.9 "no note at `0.0` or at the tightened duration" clauses
        are asserted on a second `allow_zero_length=False` draw rather than weakened.
 
-- [ ] 9. The two backend adapters
-  - [ ] 9.1 Implement `ML_Separator_Backend` and the model locator
+- [x] 9. The two backend adapters
+  - [x] 9.1 Implement `ML_Separator_Backend` and the model locator
     - `backend_id = "ml"`, `requires_network = False` by construction. `_locate_model(name, dir)` stats the filesystem only (`dir / f"{name}.th"` or `dir / name / "model.th"`, `dir` defaulting to `Path(os.environ.get(MODEL_DIR_ENV, MODEL_DIR_DEFAULT))`) with no import and no network, and is registered as `MODEL_LOCATORS["htdemucs"]` so `model:htdemucs` reports available only when the file is present locally. `config.py` is left unchanged.
     - `separate` refuses with `Model_Unavailable` **before importing anything** when the checkpoint is absent, so no download can ever be triggered from inside `run`; only then does it lazily import `torch` and `demucs`, call `torch.set_num_threads(ML_THREAD_COUNT)`, disable grad, `torch.manual_seed(seed & 0xFFFFFFFF)`, best-effort `use_deterministic_algorithms(True)`, load the model from the **local path only** (never a repo id), run on CPU, and write per-Backend_Stem WAVs at the requested `Audio_Format`.
     - _Requirements: 10.2, 10.3, 12.1, 12.3, 12.4, 12.5, 12.6, 15.2, 16.1, 16.5, 16.6_
 
-  - [ ] 9.2 Implement `Ffmpeg_Separator_Backend`, the documented approximation
+  - [x] 9.2 Implement `Ffmpeg_Separator_Backend`, the documented approximation
     - `backend_id = "ffmpeg"`, `requires_network = False`, nothing beyond ffmpeg required. Emit the designed single audio-only invocation: `asplit`, mid-channel `pan` (omitted for mono input, where mid extraction is the identity), speech-band `highpass=f=180,lowpass=f=6000` for `vocals`, phase-inverted `volume=-1` + `amix=normalize=0` so `music := clip - vocals`, mapped to `vocals.wav` and `music.wav`.
     - Deliberately omit `other` so `assemble_stem_set` substitutes silence and records `stem_missing:other`. Document in the module docstring and adapter docstring that this is a band/mid **approximation**, not source separation — it is only ever reached with a `degraded:<capability_id>` marker and `Engine_Status.degraded`, and `music := clip - vocals` is what makes the additive-decomposition invariant hold exactly.
     - Apply Repair_Mode `crossfade` seam repair on this path with no model involved.
     - _Requirements: 13.2, 13.3, 13.4, 4.3, 4.7, 10.8_
 
-  - [ ]* 9.3 Property test: nothing leaves the machine and nothing enters the audio → `tests/test_stems_backends.py`
+  - [x]* 9.3 Property test: nothing leaves the machine and nothing enters the audio → `tests/test_stems_backends.py`
     - **Property 19: Nothing leaves the machine and nothing enters the audio** — for any enabled configuration with `socket.socket` raising, probing, planning and running all complete; every command argument path lies inside the workspace or is the incoming clip; and silent clip audio in yields silent audio out (no bed, no external sample, no downloaded content). Generators: `st_stem_options`, `st_availability_map`, `st_pcm_frames`.
     - _Requirements: 5.10, 12.5, 16.4, 16.7_ · _Properties: P19_
 
-  - [ ]* 9.4 Property test: reproducibility holds where it is claimed and only there → `tests/test_stems_backends.py`
+  - [x]* 9.4 Property test: reproducibility holds where it is claimed and only there → `tests/test_stems_backends.py`
     - **Property 20: Reproducibility holds where it is claimed and only there** — for any clip audio, `Stem_Options` and seed, two in-process runs in the same environment produce byte-identical decoded audio (ML backend behind a fake model shim, and the ffmpeg backend with one ffmpeg build); and for any pair of environments simulated by two backends differing by sub-tolerance noise, the two runs agree on the `Stem_Plan`, the Stem_Set, the `Audio_Format` and the output duration, and differ by at most `AMPLITUDE_TOLERANCE` per sample. Generators: `st_pcm_frames`, `st_stem_options`.
     - _Requirements: 10.4, 10.6, 10.8_ · _Properties: P20_
 
-  - [ ]* 9.5 Unit tests: locator, thread pinning, and injected collaborators → `tests/test_stems_backends.py`
+  - [x]* 9.5 Unit tests: locator, thread pinning, and injected collaborators → `tests/test_stems_backends.py`
     - The model locator with an empty versus populated directory; a fake `torch` shim recording `set_num_threads(1)` and `manual_seed`; `Model_Unavailable` raised before any import when the checkpoint is absent; the injected Capability_Report and injected backend/runner wiring reaching the engine; the repair-only path completing with `demucs` absent.
     - _Requirements: 4.5, 10.3, 12.3, 12.7, 13.4, 19.1_
 
-- [ ] 10. Checkpoint — backends complete
+- [x] 10. Checkpoint — backends complete
   - Ensure all tests pass, ask the user if questions arise.
+  - **GREEN.** `pytest tests/ -q` → **415 passed, 79 skipped, 0 failed** (was 346/77/0 before
+    epics 9-11), ffmpeg absent from `PATH`. All 79 skips are the `requires_ffmpeg` gate.
+    `worker/engines/stems.py` still imports with `torch`, `demucs`, `numpy`, `pydantic`,
+    `cv2`, `httpx` and `PIL` all forced unimportable (Req 1.4), and the pure emitters
+    (`notch_filters`, `build_bridge_graph`) still run in that state.
+  - **CORRECTIONS — deviations from the design, all deliberate:**
+    1. **The design's ffmpeg-backend snippet does not run as printed.** `design.md:396`
+       splits the input `asplit=3` but connects only `[x1]` and `[x2]`; ffmpeg rejects a
+       filtergraph with an unconnected output pad, so the graph would fail outright. Shipped
+       as `asplit=2` — only two copies are ever used (the vocal estimate and the
+       subtraction), so this is the same graph with the dead pad removed.
+    2. **`step_timeout` must read `ctx.remaining()` *before* coercing.** `coerce_float`
+       flattens every non-finite input to its default, so the documented
+       `max(MIN_STEP_TIMEOUT_S, remaining - reserve)` turned `Engine_Context.deadline = inf`
+       ("no deadline", the foundation's default) into `0.0 - reserve` and floored every step
+       at 1.0 s. The shipped version reads the raw value, and an infinite deadline falls back
+       to the engine's own declared `time_budget_s`.
+    3. **`build_mix_graph` gained a keyword-only `stem_windows` override.** A `music` stem
+       that `bridge_music_stem` already repaired must be notched over the **residual**
+       windows only, or a bridged window is repaired twice — which Req 7.7 forbids. Without
+       this the spectral path silently double-treated every bridged window.
+    4. **The bridge `concat` takes `3n+1` segments, not `2n+1`.** Each bridged window
+       contributes *two* crossfaded halves (`left` and `right`), so two windows give
+       `[k0][l0][r0][k1][l1][r1][k2]` = 7 inputs.
+    5. **Bridging additionally refuses windows whose source material would overlap.** The
+       design lists only the two clip-bound conditions; two adjacent windows would otherwise
+       read the same neighbouring material and the `concat` segment list would no longer
+       partition the timeline. `partition_bridge_windows` enforces
+       `s - h >= previous.e + h` as a fourth condition.
+    6. **`_pin_torch` was factored out of `_infer`.** The "one thread, seeded" claim is the
+       entire basis of the Req 10.4 determinism scope, and it deserves a test that does not
+       need `numpy`/`torch` installed to run.
+  - **NOTES for later epics:**
+    - `MODEL_LOCATORS` is a mutable process-global, and `tests/test_engine_host.py:113`
+      clears it in an autouse isolation fixture **without restoring it** (unlike
+      `tests/test_engine_capabilities.py:165-168`, which snapshots and restores). Any test
+      that reads the live dict therefore passes or fails on file ordering. Task 9.5 asserts
+      the import-time registration in a **subprocess** instead. The foundation test was left
+      untouched (Req 20.6) — worth raising as a foundation fix.
+    - `tests.fakes.write_pcm_wav(path, pcm, *, sample_rate, channels)` takes **packed
+      bytes**, not frame tuples; pack with the module-local `_pack(frames)` helper first.
+    - Tasks **5.9 (P11)** and **5.10 (P8)** were deferred until the mix filtergraph existed.
+      11.3 now exists, so 5.9 is unblocked; 5.10 still needs ladder rungs 0/3 from 13.2.
+    - Epic 13 is still blocked on the **host media gate** (`host.py:677` admits `APPLIED`
+      only, so `Degraded_With_Media` is discarded) — unchanged by this epic.
 
-- [ ] 11. The ffmpeg pipeline
-  - [ ] 11.1 Implement `probe_audio_format` and `step_timeout`
+- [x] 11. The ffmpeg pipeline
+  - [x] 11.1 Implement `probe_audio_format` and `step_timeout`
     - `probe_audio_format(path, runner, timeout_s)` runs the designed `ffprobe -select_streams a:0 -show_entries stream=sample_rate,channels,codec_name,start_time -of json` read (an `ffprobe`, not a media pass), returns `None` when there is no audio stream, and raises `Invalid_Audio_Format` when the sample rate or channel count is missing, zero or negative. Keep using `ffmpeg_utils.probe()` for `has_audio`, `duration` and `fps` on the video-integrity side.
     - `step_timeout(ctx, reserve_s) = max(MIN_STEP_TIMEOUT_S, ctx.remaining() - reserve_s)`, re-reading `ctx.remaining()` at every step, with the designed reserves and gate thresholds, so every ffmpeg invocation carries an explicit positive timeout derived from the remaining budget.
     - _Requirements: 4.8, 15.3, 15.4, 17.5_
 
-  - [ ] 11.2 Implement media pass 1 — extract the clip audio
+  - [x] 11.2 Implement media pass 1 — extract the clip audio
     - `ffmpeg -nostdin -hide_banner -loglevel error -y -i <clip> -vn -map 0:a:0 -c:a pcm_s16le -ar <sr> -ac <ch> -f wav <ws>/in.wav`, written inside the Engine_Workspace at the probed `Audio_Format`, with `-vn` so no video is decoded, and a `step_timeout(ctx, EXTRACT_RESERVE_S)` timeout.
     - _Requirements: 4.4, 11.1, 15.3, 15.4_
 
-  - [ ] 11.3 Implement the single gain + repair filtergraph
+  - [x] 11.3 Implement the single gain + repair filtergraph
     - One audio-only invocation taking the Stem_Set WAVs in `STEM_NAMES` order, **omitting any stem whose resolved gain is `0.0` as an input entirely**; per-input `volume=<gain>:precision=float`, then `amix=inputs=N:normalize=0:dropout_transition=0`.
     - Seam repair as a single `volume=eval=frame:precision=float` node whose piecewise expression emits, per merged `Repair_Window` `[s, e]` with centre `c` and half-width `h`, the equal-power V-notch `sin(PI/2*abs(t-c)/h)` — unity at both window edges, zero at the join, quarter-sine taper between; `1` everywhere else. Because `repair_windows` already merged overlaps, each merged window contributes exactly one notch, so no sample is faded twice, and the node count is constant in the Seam count. Emit expressions in chunks of `NOTCH_EXPR_CHUNK` chained with `,` into further `volume` filters (identity outside their own disjoint windows, so chunking is semantics-preserving).
     - Do **not** use `acrossfade` or chained `afade=t=out` for interior repair (the former shortens the output, the latter zeroes everything after the fade). Append `alimiter=limit=…:level=disabled` when `ffmpeg_filter:alimiter` is available; when a boost (> 1.0) is requested and `alimiter` is unavailable, clamp the gains to `1.0` and record `degraded:ffmpeg_filter:alimiter`. Write `mixed.wav` as `pcm_s16le` at the probed `Audio_Format`, so the representation itself enforces the no-clipping invariant.
     - _Requirements: 5.5, 5.7, 5.9, 7.2, 7.5, 7.7, 15.9_
 
-  - [ ] 11.4 Implement `spectral` per-stem repair and `music` bridging
+  - [x] 11.4 Implement `spectral` per-stem repair and `music` bridging
     - On the `ml` backend only, apply the same notch construction **per stem before `amix`** with stem-scaled half-widths (`vocals` ×0.35 to protect speech transients, `other` ×0.6, `music` ×1.0).
     - For the `music` stem only, bridge up to `MAX_BRIDGE_WINDOWS` windows with real neighbouring material using the designed duration-exact `acrossfade` construction (`d = h` over two `h`-length segments, `concat` of `[0,s) + left + right + [e,dur)`); windows within `h` of a clip bound or beyond the cap fall back to the notch. Record `bridged_windows` / `notched_windows` in the `Stem_Plan` as detail only, with no extra marker.
     - _Requirements: 7.3, 7.5, 7.9_
 
-  - [ ] 11.5 Implement declick and media pass 2 — remux
+  - [x] 11.5 Implement declick and media pass 2 — remux
     - When `declick` is set, add `afade=t=in:st=0:d=0.001` and `afade=t=out:st=<duration-0.001>:d=0.001` at the ends of the mixed stream — the clip's own head and tail, the two boundaries for which a Seam is forbidden.
     - Pass 2: `ffmpeg -nostdin -y -i <clip> [-itsoffset <start_time>] -i <ws>/mixed.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a <matching codec> -b:a 192k -ar <sr> -ac <ch> -movflags +faststart <ws>/clip_repaired.<ext>`. `-c:v copy` bit-copies the video; `-shortest` is deliberately **not** used; `-itsoffset` is emitted only when the probed audio `start_time` is non-zero. Timeout from `step_timeout(ctx, REMUX_RESERVE_S)`.
     - _Requirements: 3.1, 3.2, 3.6, 9.1, 17.1, 17.2, 17.3, 17.4, 15.4_
 
-  - [ ]* 11.6 Property test: repair touches only planned windows, once, without clipping → `tests/test_stems_ffmpeg.py`
+  - [x]* 11.6 Property test: repair touches only planned windows, once, without clipping → `tests/test_stems_ffmpeg.py`
     - **Property 12: Repair touches only planned windows, once, and never exceeds full scale** — for any clip audio, Seam list and Repair_Mode, samples outside the planned `Repair_Window`s are identical to a gain-only reference rendering; each merged window contains exactly one equal-power gain trough (overlapping seams repaired once); and no written sample's absolute amplitude exceeds full scale. Generators: `st_pcm_frames`, `st_seam_notes`, `st_repair_mode`, `st_stem_gains`.
     - _Requirements: 5.9, 7.2, 7.5, 7.7_ · _Properties: P12_
 
