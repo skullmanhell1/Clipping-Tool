@@ -1,13 +1,16 @@
 """Persistent campaign router, scheduler, and throttled publishing worker."""
 from __future__ import annotations
-import threading, time
-from datetime import datetime, timezone
+
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
+
 from config import settings
 from publishers import build_publishers
 from publishers.base import PublishRequest, PublishState
 from publishers.history import HistoryStore, get_history
+
 
 class PublishManager:
     def __init__(self, publishers=None, history: Optional[HistoryStore]=None,
@@ -49,7 +52,8 @@ class PublishManager:
         for item in self.history.due_attempts(now):
             pub=self.publishers.get(item["platform"])
             if not pub: self.history.update_attempt(item["id"],state="failed",error="Unknown platform",completed_at=now); continue
-            interval=max(pub.min_interval_seconds,settings.publish_default_interval_seconds)
+            # The publisher's own limit governs; the setting is only a floor (default 0).
+            interval=max(pub.min_interval_seconds,settings.publish_min_interval_floor_seconds)
             if now-self._last.get(pub.name,0)<interval: continue
             self._execute(item,pub); self._last[pub.name]=time.time(); processed.append(item["id"])
         return processed
