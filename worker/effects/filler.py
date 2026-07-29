@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import settings
-from worker.ffmpeg_utils import _run
+from worker.ffmpeg_utils import _run, h264_args
 
 # Disfluencies removed by default. Kept deliberately conservative so real words
 # (e.g. "like" as a verb) are never cut.
@@ -206,7 +206,7 @@ def apply_keep_intervals(
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-filter_complex", graph,
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *h264_args(normalise_fps=True),
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(dest),

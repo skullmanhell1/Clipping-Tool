@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 try:  # module-level helpers (not fixtures) from the shared conftest
-    from tests.conftest import FakeWord, requires_ffmpeg
+    from tests.conftest import FakeWord, options_all_off, requires_ffmpeg
 except ImportError:  # pragma: no cover - conftest always importable under pytest
     from conftest import FakeWord, requires_ffmpeg
 
@@ -92,7 +92,7 @@ def test_p24_all_features_off_reproduces_legacy(make_video, tmp_path, monkeypatc
     _stub_selection(monkeypatch)
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
-    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16")
     clips = pl.run_pipeline(
         src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
     )
@@ -119,7 +119,7 @@ def test_p24_compositor_all_off_returns_none(make_video, tmp_path):
     base = make_video("b.mp4", duration=2.0, w=640, h=360)
     words = [FakeWord(0.2, 0.6, "hello"), FakeWord(0.7, 1.1, "world")]
     result = compositor.render_clip(
-        base, tmp_path / "out.mp4", ProcessingOptions(captions=False),
+        base, tmp_path / "out.mp4", options_all_off(captions=False),
         words, tmp_path, broll_resolver=lambda: [],
     )
     assert result is None
@@ -144,7 +144,7 @@ def test_p27_missing_llm_still_produces_clips(make_video, tmp_path, monkeypatch)
     monkeypatch.setattr(pl.sel, "llm_available", lambda: False)
 
     src = make_video("s.mp4", duration=6.0, w=640, h=360)
-    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16")
     clips = pl.run_pipeline(
         src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp",
         llm_client=None,
@@ -445,7 +445,7 @@ def test_p22_diarization_once_per_source_sdr(make_video, tmp_path, monkeypatch):
     sampler_off = CannedSampler([[FaceBox(0.0, 100, 100, 80, 80)]])
     monkeypatch.setattr(pl, "FRAME_SAMPLER", sampler_off)
     _stub_selection_multi(monkeypatch, [(0.0, 1.5), (1.5, 3.0)])
-    opts_off = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+    opts_off = options_all_off(captions=False, metadata=False, aspect="9:16")
     clips_off = pl.run_pipeline(
         src, opts_off, clips_dir=tmp_path / "c_off", temp_dir=tmp_path / "t_off"
     )
@@ -616,7 +616,7 @@ def test_p26_all_off_reproduces_v070_sdr(make_video, tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "FRAME_SAMPLER", sampler)
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
-    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")  # both OFF
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16")  # both OFF
     clips = pl.run_pipeline(
         src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t"
     )
@@ -744,7 +744,7 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
 
     # (a) sampler -> no frames -> no tracks -> real reframe raises -> fallback clip.
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler([]))
-    opts_a = ProcessingOptions(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
+    opts_a = options_all_off(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
     clips_a = pl.run_pipeline(
         src, opts_a, clips_dir=tmp_path / "ca", temp_dir=tmp_path / "ta"
     )
@@ -755,7 +755,7 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
     # (b) forced FFmpegError on the speaker-aware pass -> fallback clip.
     monkeypatch.setattr(pl.reframe, "apply_speaker_reframe", _reframe_raise_ffmpeg)
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler([[FaceBox(0.0, 100, 100, 80, 80)]]))
-    opts_b = ProcessingOptions(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
+    opts_b = options_all_off(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
     clips_b = pl.run_pipeline(
         src, opts_b, clips_dir=tmp_path / "cb", temp_dir=tmp_path / "tb"
     )
@@ -1666,7 +1666,7 @@ def test_all_off_ffmpeg_parity_matches_unhooked_baseline(make_video, tmp_path, m
     monkeypatch.setattr(compositor, "render_clip", spying_render_clip)
 
     src = make_video("s.mp4", duration=2.0, w=320, h=240)
-    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16")
 
     def run(module, tag):
         calls.clear()

@@ -63,6 +63,7 @@ from hypothesis import strategies as st
 
 from config import settings as app_settings
 from tests.conftest import (
+    EFFECTS_OFF,
     FakeWord,
     probe_duration,
     probe_size,
@@ -527,15 +528,20 @@ def test_p3_caption_text_is_rendered_by_exactly_one_producer(
 # Task 12.3 — engine-owned path spies and marker spellings                      #
 # --------------------------------------------------------------------------- #
 def _owned_options(**overrides) -> ProcessingOptions:
-    """Captions + hook on, with the preset/feature fields overridable per test."""
+    """Captions + hook on and nothing else, preset/feature fields overridable per test.
+
+    Every *other* effect is disabled explicitly via ``EFFECTS_OFF``. These tests assert
+    ``effects_applied`` as an exact list, so an effect arriving from the defaults shows up as
+    an extra marker — which is what happened when U1 turned zoom, transitions, fades and the
+    progress bar on. The subject here is the engine's caption ownership, not the default set.
+    """
     data = {
+        **EFFECTS_OFF,
         "captions": True,
         "hook_title": True,
         "caption_preset": "hormozi",
         "caption_keyword_highlight": True,
         "caption_emoji": True,
-        "music": "",
-        "emoji": "off",
     }
     data.update(overrides)
     return ProcessingOptions.from_dict(data)

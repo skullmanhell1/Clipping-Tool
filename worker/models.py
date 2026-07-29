@@ -61,18 +61,40 @@ class ProcessingOptions:
     schedule_at: Optional[float] = None  # UTC epoch; None = now
 
     # --- Phase 4: visual effects (all individually toggleable) -----------
-    reframe: bool = False                # face-tracking auto-reframe (vs static crop)
-    zoom: bool = False                   # slow Ken-Burns zoom
-    transitions: bool = False            # subtle punch-in intro
-    hook_title: bool = False             # burn the AI hook text at the start
+    #
+    # U1: these default ON. A default run used to enable only captions, 9:16, the ``ai``
+    # strategy and metadata, which meant the out-of-the-box output was a static centre crop
+    # with plain captions - the tool shipped looking worse than it is capable of, and every
+    # feature that makes short-form video look modern had to be discovered one checkbox at
+    # a time.
+    #
+    # Three of the thirteen features the improvement plan lists are deliberately still off,
+    # each because turning it on today would make output *worse* rather than better; see the
+    # comments at ``music``, ``broll`` and ``kinetic_typography_enabled``.
+    reframe: bool = True                 # face-tracking auto-reframe (vs static crop)
+    zoom: bool = True                    # slow Ken-Burns zoom
+    transitions: bool = True             # subtle punch-in intro
+    hook_title: bool = True              # burn the AI hook text at the start
+    # Still off (U1 lists it, A14/A15 gate it): worker/effects/audio.py does not play music,
+    # it synthesises two sine waves with tremolo per mood. assets/music is empty, so turning
+    # this on by default would add a drone to every clip. It becomes a default once real
+    # licence-clean beds ship (A14).
     music: str = ""                      # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
     music_volume: float = 0.12           # background-music level (0..1)
-    fades: bool = False                  # fade in/out (video + audio)
+    fades: bool = True                   # fade in/out (video + audio)
     color: str = ""                      # "" (off) | vivid | warm | cool | cinematic | bw
-    progress_bar: bool = False           # growing progress bar along the bottom
-    emoji: str = "off"                   # off | subtle | standard | heavy
+    progress_bar: bool = True            # growing progress bar along the bottom
+    emoji: str = "standard"              # off | subtle | standard | heavy
     emoji_mode: str = "keyword"          # keyword | ai
     emoji_animate: bool = True           # pop/scale (alpha) animation on appear
+    # Still off, and this one is a deliberate departure from U1's list.
+    #
+    # Every other item there restyles the clip; this one *removes content*, and it decides
+    # what to remove from silence and filler-word detection. On footage that is quiet,
+    # music-led, or has sparse speech it cuts aggressively: a 3.0 s fixture in
+    # tests/test_pipeline_effects.py came out at 1.33 s with it on. A default that can
+    # silently discard half a clip needs to be a choice, not an inherited one - the
+    # cost of being wrong is asymmetric with the styling defaults around it.
     filler_removal: bool = False         # cut "um"/"uh"/long pauses
     caption_template: str = "karaoke"    # karaoke | boxed | minimal
     caption_position: str = "bottom"     # bottom | center | top
@@ -84,11 +106,19 @@ class ProcessingOptions:
     # Feature A — animated caption presets
     caption_preset: str = "karaoke"      # karaoke|boxed|minimal|pop|typewriter|hormozi
     caption_animation: str = ""          # "" = use preset default; else override
-    caption_keyword_highlight: bool = False  # highlight important words
+    # U1. Keyword highlighting is only worth defaulting on since C11 made it selective:
+    # the old rule emphasised any word clearing Whisper probability 0.9, which on clean
+    # audio is nearly all of them, and emphasis that applies to everything communicates
+    # nothing. ``caption_keyword_ai`` stays off because it costs an LLM call per clip.
+    caption_keyword_highlight: bool = True   # highlight important words
     caption_keyword_ai: bool = False     # AI-assisted keyword highlighting
-    caption_emoji: bool = False          # in-caption emoji glyphs
+    caption_emoji: bool = True           # in-caption emoji glyphs
     #
     # Feature B — b-roll overlays
+    # Still off (U1 lists it, A18/A21 gate it): broll.py matches keywords by
+    # case-insensitive filename-stem substring against assets/broll, which is empty, and
+    # the external downloader is explicitly not implemented. Enabling it by default would
+    # add degradation markers to every clip and nothing else.
     broll: bool = False                  # enable b-roll auto-insertion
     broll_intensity: str = "standard"    # off|subtle|standard|heavy
     asset_sourcing_mode: str = "off"     # off|local_only|local_then_external
@@ -96,7 +126,7 @@ class ProcessingOptions:
     #
     # Feature C — prompt / visual selection
     selection_prompt: str = ""           # free-text selection prompt
-    visual_selection: bool = False       # enable visual/keyframe-aided selection
+    visual_selection: bool = True        # enable visual/keyframe-aided selection (U1)
     #
     # Cross-cutting
     permissibility_mode: bool = False    # forces local_only sourcing + no added audio
@@ -117,6 +147,11 @@ class ProcessingOptions:
     # losslessly. Values are *not* validated here: unknown/malformed values are
     # coerced (and reported as substitutions) by the engine's ``resolve_options``,
     # which is also what keeps this module free of a ``worker.engines`` import.
+    # Still off (U1 lists it): this is an AV engine Feature_Flag, and when it runs it takes
+    # *ownership* of the caption layer from the standard caption path. That is a different
+    # kind of default from "switch on an effect" - it swaps out the component that draws
+    # captions - so it belongs to an opinionated profile (U2) rather than to the global
+    # default, where it would silently override caption_preset for everyone.
     kinetic_typography_enabled: bool = False   # Feature_Flag (flag_field())
     kinetic_style: str = "karaoke_fill"        # bounce|highlight_sweep|karaoke_fill|
                                                # none|pop|slide_up|typewriter

@@ -106,7 +106,12 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------- transcription --
     # faster-whisper model size, e.g. tiny/base/small/medium/large-v3.
-    whisper_model: str = Field(default="base", description="faster-whisper model.")
+    # T1: "small", not "base". Captions are the most visible artefact in the product and
+    # "base" is a noticeable accuracy step down - a mis-transcribed word is burned into the
+    # video. "small" is the cheapest model that does not make that trade. Larger models
+    # ("medium", "large-v3") are better still and cost proportionally more, so the choice is
+    # left to the operator rather than assumed.
+    whisper_model: str = Field(default="small", description="faster-whisper model.")
     # "cpu", "cuda", or "auto" to detect a GPU when present.
     whisper_device: str = Field(default="auto", description="Transcription device.")
     whisper_compute_type: str = Field(
@@ -199,6 +204,15 @@ class Settings(BaseSettings):
     )
     ffprobe_timeout_seconds: float = Field(
         default=60.0, description="Max wall-clock seconds for one ffprobe run; 0 = unbounded."
+    )
+    # O3: deliverables are encoded at a constant frame rate. A variable-frame-rate source -
+    # every screen recording and most phone footage - has no single frame duration, so
+    # burned captions drift against speech as the effective rate wanders.
+    output_fps: int = Field(
+        default=30,
+        description="Constant frame rate for delivered clips (O3). Sources with variable "
+                    "frame rate are resampled to this, which is what keeps burned captions "
+                    "in sync.",
     )
 
     # ------------------------------------------------------------ assets ---
