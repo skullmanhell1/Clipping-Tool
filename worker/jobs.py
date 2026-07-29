@@ -12,31 +12,94 @@ changing the API or pipeline.
 
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from config import settings
 from worker import download as dl
 from worker.models import Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
 
+logger = logging.getLogger(__name__)
+
 # Fraction of total progress reserved for downloading a URL before processing.
 _DOWNLOAD_BUDGET = 0.10
 
 
 class JobStore:
-    """Thread-safe in-memory store of :class:`Job` objects."""
+    """Thread-safe store of :class:`Job` objects, durable across restarts.
 
-    def __init__(self) -> None:
+    Reads are served from memory — the API polls job state continuously and must not
+    pay for a query each time — while every mutation is mirrored into
+    :class:`worker.job_persistence.Job_Persistence` so a restart does not lose the
+    record. Persistence is deliberately *write-through* rather than periodic: the
+    interesting moment to survive is a crash, and a crash gives no chance to flush.
+
+    Args:
+        persistence: The durable backend. ``None`` uses the configured shared store;
+            pass ``False`` to opt out entirely, which keeps the class usable as a pure
+            in-memory store for tests that do not care about durability.
+    """
+
+    def __init__(self, persistence: Any = None) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._persistence = self._resolve_persistence(persistence)
+        self._restore()
+
+    @staticmethod
+    def _resolve_persistence(persistence: Any) -> Any:
+        """The durable backend to use, or ``None`` for memory-only operation."""
+        if persistence is False:
+            return None
+        if persistence is not None:
+            return persistence
+        try:
+            from worker.job_persistence import get_job_persistence
+
+            return get_job_persistence()
+        except Exception:  # pragma: no cover - defensive
+            # A store that cannot be opened must not stop the process from serving
+            # jobs; it only means this run is not durable.
+            logger.exception("job persistence unavailable; continuing in memory only")
+            return None
+
+    def _restore(self) -> None:
+        """Load persisted jobs into memory, then bound the table."""
+        if self._persistence is None:
+            return
+        try:
+            for job in self._persistence.load_all():
+                self._jobs[job.id] = job
+            self._persistence.prune(keep=int(settings.max_persisted_jobs))
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("failed to restore persisted jobs")
+
+    def _persist(self, job: Optional[Job]) -> None:
+        """Mirror ``job`` into the durable store, if one is configured.
+
+        Swallows every failure. This runs on the hot path of a live render — a progress
+        update mid-encode reaches it — so a full disk or a locked database must cost the
+        durability of one record, not the job itself. ``Job_Persistence`` is already
+        defensive internally; this guard also covers an injected or third-party backend.
+        """
+        if self._persistence is None or job is None:
+            return
+        try:
+            self._persistence.save(job)
+        except Exception:
+            logger.exception("failed to persist job %s", getattr(job, "id", "?"))
 
     def add(self, job: Job) -> None:
         with self._lock:
             self._jobs[job.id] = job
+        # Written outside the lock: SQLite has its own locking and holding both would
+        # serialise every API poll behind a disk write.
+        self._persist(job)
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
@@ -62,6 +125,7 @@ class JobStore:
             for key, value in fields.items():
                 setattr(job, key, value)
             job.updated_at = time.time()
+        self._persist(job)
 
     def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[object]:
         """Atomically update editable fields on one clip within a job.
@@ -82,7 +146,10 @@ class JobStore:
                 if hasattr(clip, key):
                     setattr(clip, key, value)
             job.updated_at = time.time()
-            return clip
+        # Clip metadata edits are user-visible and must survive a restart just as job
+        # state does, so this mirrors too.
+        self._persist(job)
+        return clip
 
     def get_clip(self, job_id: str, clip_id: str) -> Optional[object]:
         """Return a single clip within a job, or ``None``."""

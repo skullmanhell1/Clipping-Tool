@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 
 /**
  * Saved settings profiles: quick-switch dropdown, save current config as a new

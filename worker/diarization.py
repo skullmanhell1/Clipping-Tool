@@ -24,7 +24,7 @@ Public surface:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from config import settings
 
@@ -218,14 +218,15 @@ def segment_by_words(
     *,
     max_speakers: int | None = None,
     pause_gap: float | None = None,
+    handoff_gap: float | None = None,
 ) -> list[Speaker_Turn]:
     """PURE offline segmentation from the Word_Timeline only.
 
     No backend, no ffmpeg, no OpenCV, no network. Algorithm:
       1. Group words into speech runs split on silence gaps > ``pause_gap``.
-      2. Assign speaker labels with a cheap deterministic turn-taking heuristic
-         (a new run after a long gap hands off to the next speaker in
-         round-robin), capped at ``max_speakers`` distinct labels.
+      2. Assign speaker labels with a cheap deterministic turn-taking heuristic.
+         A run only hands off to the next speaker when the silence *before* it
+         exceeds ``handoff_gap``, which is much larger than ``pause_gap``.
       3. Normalise: bound within ``[0, duration]``, ensure ``start <= end``,
          order by ascending start, merge adjacent same-label contiguous turns,
          guarantee non-overlapping ``[start, end)`` and, when a naive pass would
@@ -241,12 +242,32 @@ def segment_by_words(
             ``settings.diarization_max_speakers``.
         pause_gap: silence gap (s) that ends a turn; defaults to
             ``settings.diarization_pause_gap``.
+        handoff_gap: silence gap (s) after which the next turn is attributed to a
+            different speaker; defaults to ``settings.diarization_handoff_gap``.
+            Clamped to at least ``pause_gap``, since a hand-off cannot be a weaker
+            signal than a turn boundary.
+
+    Note:
+        Word timings carry no speaker identity, so this is attribution by proxy and
+        cannot be correct in general. It is therefore biased toward *under*-reporting:
+        when in doubt the words stay with the current speaker. A monologue containing
+        any number of ordinary pauses yields exactly one speaker, because no gap reaches
+        ``handoff_gap``. Previously every gap over ``pause_gap`` (0.9s by default —
+        routine within one person's speech) advanced the round-robin, so a single-speaker
+        source was reported as two speakers and speaker-aware reframe alternated between
+        them. Use a real ``DiarizationBackend`` when accurate attribution matters.
     """
     if max_speakers is None:
         max_speakers = settings.diarization_max_speakers
     if pause_gap is None:
         pause_gap = settings.diarization_pause_gap
+    if handoff_gap is None:
+        handoff_gap = settings.diarization_handoff_gap
     max_speakers = max(1, int(max_speakers))
+    pause_gap = float(pause_gap)
+    # A hand-off must be at least as strong a signal as a turn break; a smaller value
+    # would make every turn boundary a speaker change, i.e. the old behaviour.
+    handoff_gap = max(float(handoff_gap), pause_gap)
     duration = float(duration)
 
     # Collect valid, ordered word spans.
@@ -260,22 +281,31 @@ def segment_by_words(
         return []
     spans.sort(key=lambda x: x[0])
 
-    # Group into speech runs, splitting on silence gaps > pause_gap.
-    runs: list[tuple[float, float]] = []
+    # Group into speech runs, splitting on silence gaps > pause_gap. Each run records the
+    # silence that preceded it, because that gap — not the run's index — is what decides
+    # whether the speaker changed.
+    runs: list[tuple[float, float, float]] = []  # (start, end, preceding_gap)
     cur_start, cur_end = spans[0]
+    preceding_gap = float("inf")  # nothing precedes the first run
     for s, e in spans[1:]:
-        if s - cur_end > pause_gap:
-            runs.append((cur_start, cur_end))
+        gap = s - cur_end
+        if gap > pause_gap:
+            runs.append((cur_start, cur_end, preceding_gap))
             cur_start, cur_end = s, e
+            preceding_gap = gap
         else:
             cur_end = max(cur_end, e)
-    runs.append((cur_start, cur_end))
+    runs.append((cur_start, cur_end, preceding_gap))
 
-    # Deterministic round-robin turn-taking assignment.
-    raw = [
-        Speaker_Turn(f"S{(i % max_speakers) + 1}", s, e)
-        for i, (s, e) in enumerate(runs)
-    ]
+    # Deterministic turn-taking: advance the round-robin only on a gap long enough to
+    # suggest an actual hand-off. Shorter gaps still end the turn (so the turn list keeps
+    # its granularity) but keep the same label, and `_merge_same_label` then rejoins them.
+    raw: list[Speaker_Turn] = []
+    speaker_index = 0
+    for position, (start, end, gap) in enumerate(runs):
+        if position > 0 and gap > handoff_gap:
+            speaker_index = (speaker_index + 1) % max_speakers
+        raw.append(Speaker_Turn(f"S{speaker_index + 1}", start, end))
     return _normalize_turns(raw, duration, max_speakers)
 
 

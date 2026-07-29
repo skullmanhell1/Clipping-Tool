@@ -1,8 +1,16 @@
 """TikTok Content Posting API uploader (draft/private until audit approval)."""
 from __future__ import annotations
+
 import httpx
+
 from config import settings
-from publishers.base import BasePublisher, PublishRequest, PublishResult, PublishState, PublisherStatus
+from publishers.base import (
+    BasePublisher,
+    PublisherStatus,
+    PublishResult,
+    PublishState,
+)
+
 
 class TikTokPublisher(BasePublisher):
     name="tiktok"; min_interval_seconds=10

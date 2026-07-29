@@ -1,4 +1,3 @@
-import React from "react";
 import ClipCard from "./ClipCard.jsx";
 import { formatDuration } from "../api.js";
 

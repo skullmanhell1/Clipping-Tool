@@ -1218,7 +1218,7 @@ def test_engine_enums_and_constants_are_pinned():
         MAX_COMPONENT_LEN,
     )
     from worker.engines.base import MARKER_PREFIX
-    from worker.engines.capabilities import Capability_Kind, LLM_CAPABILITY
+    from worker.engines.capabilities import LLM_CAPABILITY, Capability_Kind
     from worker.engines.timebase import (
         DEFAULT_FPS,
         DEFAULT_SAMPLE_RATE,

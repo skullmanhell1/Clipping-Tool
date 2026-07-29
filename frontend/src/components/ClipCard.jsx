@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, formatDuration } from "../api.js";
 
 const PLATFORM_LABELS = {
@@ -137,7 +137,10 @@ export default function ClipCard({
     }
   };
 
-  const useAlternative = (alternative) => {
+  // Named `applyAlternative`, not `useAlternative`: the `use` prefix is reserved for
+  // hooks, and React's rules-of-hooks lint treats a `use*` call inside a callback as a
+  // hook-order violation. This is an ordinary event handler.
+  const applyAlternative = (alternative) => {
     setForm((current) => ({ ...current, title: alternative }));
     setDirty(true);
   };
@@ -258,7 +261,7 @@ export default function ClipCard({
               <button
                 key={index}
                 type="button"
-                onClick={() => useAlternative(alternative)}
+                onClick={() => applyAlternative(alternative)}
                 className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300 hover:border-brand-accent hover:text-white"
                 title="Use this title"
               >

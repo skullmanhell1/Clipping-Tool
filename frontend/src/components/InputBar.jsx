@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 /**
  * Input area: a URL bar (supports multiple URLs, one per line or comma/space

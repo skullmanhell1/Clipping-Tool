@@ -69,6 +69,16 @@ from hypothesis import strategies as st
 from tests.conftest import FakeWord
 from tests.fakes import CountingProber, RecordingStorage, StaticProber
 from tests.strategies import st_kinetic_options, st_time_base, st_word_timeline
+
+# The engine reaches ``worker.captions`` / ``worker.effects.caption_presets``
+# lazily (module-scope imports of them would break the engine package's
+# import-safety gate). Warm both here, at *test module* import time, so the first
+# example never performs a lazy import while ``subprocess``/``socket`` are
+# patched to raise — the patch is meant to catch the engine, not the import
+# machinery of a module it legitimately reuses.
+from worker import captions as _captions_warm  # noqa: F401
+from worker.effects import caption_presets as _presets_warm  # noqa: F401
+from worker.engines import kinetic as kinetic_module
 from worker.engines.artifacts import allocate_workspace, artifact_key
 from worker.engines.base import (
     Engine_Context,
@@ -91,18 +101,8 @@ from worker.engines.kinetic import (
     emit_ass,
     plan_kinetic,
 )
-from worker.engines import kinetic as kinetic_module
 from worker.engines.registry import Engine_Registry
 from worker.engines.timebase import Time_Base
-
-# The engine reaches ``worker.captions`` / ``worker.effects.caption_presets``
-# lazily (module-scope imports of them would break the engine package's
-# import-safety gate). Warm both here, at *test module* import time, so the first
-# example never performs a lazy import while ``subprocess``/``socket`` are
-# patched to raise — the patch is meant to catch the engine, not the import
-# machinery of a module it legitimately reuses.
-from worker import captions as _captions_warm  # noqa: F401
-from worker.effects import caption_presets as _presets_warm  # noqa: F401
 
 JOB_ID = "job-kinetic-determinism"
 

@@ -25,13 +25,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from config import settings
-from worker.ffmpeg_utils import ASPECT_PRESETS, FFmpegError, _run, probe
 
 # ``Speaker_Turn`` is only needed for type hints on the multi-speaker
 # association path; importing it here keeps the module self-describing without
 # creating a hard runtime dependency cycle (diarization imports nothing from
 # this module).
 from worker.diarization import Speaker_Turn
+from worker.ffmpeg_utils import ASPECT_PRESETS, FFmpegError, _run, probe
 
 
 class ReframeUnavailable(RuntimeError):

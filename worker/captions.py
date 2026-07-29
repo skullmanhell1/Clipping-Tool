@@ -23,7 +23,7 @@ from typing import Any, Iterable, Optional
 
 from config import settings
 from worker.effects.caption_presets import CaptionPreset
-from worker.ffmpeg_utils import FFmpegError, _run
+from worker.ffmpeg_utils import _run
 from worker.transcribe import Transcript, Word
 
 
