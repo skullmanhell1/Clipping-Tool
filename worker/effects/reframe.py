@@ -31,7 +31,13 @@ from config import settings
 # creating a hard runtime dependency cycle (diarization imports nothing from
 # this module).
 from worker.diarization import Speaker_Turn
-from worker.ffmpeg_utils import ASPECT_PRESETS, FFmpegError, _run, probe
+from worker.ffmpeg_utils import (
+    ASPECT_PRESETS,
+    FFmpegError,
+    _run,
+    probe,
+    video_encode_args,
+)
 
 
 class ReframeUnavailable(RuntimeError):
@@ -657,7 +663,7 @@ def apply_reframe(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *video_encode_args(),
         "-c:a", "copy", "-movflags", "+faststart",
         str(dest),
     ]
@@ -1114,7 +1120,7 @@ def apply_speaker_reframe(
             settings.ffmpeg_binary, "-y", "-i", str(video),
             "-filter_complex", graph,
             "-map", "[vout]", "-map", "0:a?",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            *video_encode_args(),
             "-c:a", "copy", "-movflags", "+faststart",
             str(dest),
         ]
@@ -1146,7 +1152,7 @@ def apply_speaker_reframe(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *video_encode_args(),
         "-c:a", "copy", "-movflags", "+faststart",
         str(dest),
     ]
