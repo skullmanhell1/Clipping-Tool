@@ -63,6 +63,7 @@ from hypothesis import strategies as st
 
 from tests import strategies
 from tests.conftest import FakeWord
+from tests.fakes import CountingProber, StaticProber
 from tests.strategies import (
     st_availability_map,
     st_font_availability,
@@ -70,7 +71,6 @@ from tests.strategies import (
     st_options_mapping,
     st_word_timeline,
 )
-from tests.fakes import CountingProber, StaticProber
 from worker.engines import kinetic
 from worker.engines import registry as engine_registry
 from worker.engines.artifacts import allocate_workspace

@@ -9,10 +9,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 - RQ-backed distributed worker (currently in-process, and **not** yet wired up — see the note
-  under 0.9.0)
-- An approve/retry endpoint for `review_required` publish attempts, which currently have no way
-  to progress
-- Durable job state (job/clip records are in-memory only and are lost on restart)
+  under 0.9.0). `redis` and `rq` are declared dependencies but no code imports them.
+- Adopt ruff's `UP` (pyupgrade, ~450 findings) and `B` (bugbear, ~30) rule sets; each is a
+  mechanical sweep of its own.
+- Enforce formatting. `black` is a dev dependency but has never run, so adopting it would
+  reformat essentially every file.
+
+## [0.10.0] - 2026-07-29
+
+Reliability and tooling hardening. No feature work; every item below is a defect found by
+running the application and its tooling for real rather than by reading it.
+
+### Added
+- **`POST /api/publish-attempts/{id}/approve` and `/retry`.** `review_required` was a
+  reachable dead end: `instagram.py`, `whop.py` and `x.py` all return it — X's own message
+  reads "approve review before posting" — but no route could move an attempt out of that
+  state, so such posts stopped permanently. `approve` rewrites the stored request to
+  `mode="auto"`; `retry` preserves the mode so a review submission is never silently
+  escalated into a live post. Approving a platform that lacks direct-publish permission is
+  refused with a 409 carrying the platform's own explanation, because re-queueing it would
+  simply reproduce `review_required` on the next tick — an invisible infinite bounce.
+- **Durable job state** (`worker/job_persistence.py`, `JOBS_DB`). The job store was process
+  memory only, so any restart discarded every job while the clips stayed on disk and in the
+  publish history — which is why the history view listed clips whose downloads 404'd. Jobs
+  are now written through to SQLite on every mutation. A job stored as `queued`/`processing`
+  is resolved to `failed` on load, since no worker thread exists to advance it and a
+  perpetually spinning progress bar is worse than an honest failure.
+- **Upload validation.** `POST /api/upload` accepted any file of any size. There is now an
+  extension allow-list (400), a size ceiling enforced while writing rather than trusting
+  `Content-Length` (413), an empty-file check, and deletion of partial writes. A rejected
+  file in a batch rolls the whole request back, so no orphaned uploads are left behind.
+- **`requirements-ml.txt`** plus `--build-arg INSTALL_ML=true`, making real stem separation an
+  explicit opt-in. `torch`/`demucs` were absent from `requirements.txt`, the Dockerfile *and*
+  `render.yaml`, so every deploy silently took the crude ffmpeg approximation with no
+  documented way to enable the real path.
+- **`pyproject.toml`** with pytest and ruff configuration; see below.
+- **Frontend lint and tests.** `npm run lint` previously failed outright — the script existed
+  but eslint was not a dependency and no config file was present. Added a flat eslint config
+  and 24 vitest tests covering the API client's URL/error handling and `Dropdown`.
+- **Real-binary capability tests** (`tests/test_capabilities_real_binary.py`), which
+  cross-check the probe against `ffmpeg -h filter=<name>` — an independent mechanism that
+  shares no parsing code with the `-filters` table. Verified to fail on the bug they guard.
+- `diarization_handoff_gap`, `visual_selection_weight`, `disk_usage_cache_seconds`,
+  `ffmpeg_timeout_seconds`, `ffprobe_timeout_seconds`, `max_upload_bytes`,
+  `max_persisted_jobs` settings.
+
+### Fixed
+- **No ffmpeg call outside the stem engine had a timeout.** `worker/ffmpeg_utils._run` called
+  `subprocess.run` with no `timeout`, so every render, extract, thumbnail and remux was
+  unbounded. Because jobs run in a thread pool with a single worker, one hung ffmpeg blocked
+  the entire queue forever — silently, since a stalled process yields neither output nor an
+  exception. Bounded now, with the ceiling chosen by binary (probe vs encode) and `0` as a
+  documented opt-out.
+- **Diarisation invented speakers who never spoke.** Label assignment advanced a round-robin
+  on every silence longer than `pause_gap` (0.9s). Pauses just over that are routine inside
+  one person's speech, so a monologue was reported as two speakers and speaker-aware reframe
+  cut back and forth between two "speakers" who were the same person. Ending a turn and
+  changing speaker are now separate thresholds, and attribution is biased toward keeping
+  words with the current speaker.
+- **Per-publisher rate limits were dead code.** The scheduler applied
+  `max(publisher.min_interval_seconds, publish_default_interval_seconds)` with the latter
+  defaulting to 30s, and every publisher declares 2–18s — so all of them were overridden and
+  publishing ran roughly twice as slowly as intended. The setting is now
+  `publish_min_interval_floor_seconds`, defaulting to 0.
+- **`sample_keyframes` leaked a temp directory per run.** It created its scratch directory
+  with `mkdtemp` and nothing ever deleted it, leaving a `kf-*` directory of JPEGs in the
+  system temp space on every visual-selection run — unbounded growth, and outside the
+  retention sweeper's remit.
+- **`/api/storage` walked the whole storage tree on every poll**, and the storage panel polls.
+  Area sizes are now cached briefly and computed with `os.scandir` instead of
+  `rglob` + `stat`; the cleanup endpoint passes `refresh=True` so it cannot report
+  pre-cleanup totals. Volume free/total figures are never cached.
+- **CORS advertised credentials it could not deliver.** `allow_credentials=True` was hard-coded
+  while `cors_origins` defaulted to `*`; the CORS specification forbids that combination and
+  browsers reject the response, so the default configuration broke every credentialed
+  cross-origin request while appearing to permit it. Credentials are now derived from the
+  origin list, and a wildcard on a non-development environment logs a warning.
+- The visual/transcript blend weight was effectively hard-coded: `merge_scores` took a
+  `weight` argument that its only call site never passed. Now `visual_selection_weight`,
+  clamped to `[0, 1]`.
+- Nine unclosed-file leaks in the test suite, surfaced by making warnings errors.
+- 14 unused imports and 27 unsorted import blocks.
+
+### Changed
+- **CI is now able to fail.** `ruff check . || true` could not, and with no `[tool.ruff]`
+  config the enforced rule set was whatever the installed ruff version defaulted to — 857
+  findings on 0.16 versus a handful on older releases. The rule set is pinned and the step
+  blocks. The suite must also run clean of *skips*: a skipped test is not a passing test, and
+  that is how the earlier missing-ffmpeg gap went unnoticed. The frontend job now lints and
+  tests as well as building, and uses `npm ci`.
+- **The deploy job's secret checks never worked.** `if: ${{ secrets.X != '' }}` does not
+  evaluate as intended, because the `secrets` context is not resolvable inside an `if`
+  expression. The values are surfaced as job-level `env` and tested via `env.*`.
+- `pytest` treats warnings as errors, with `--strict-markers`/`--strict-config`.
+- `api/main.py` uses a lifespan handler instead of the deprecated `@app.on_event("startup")`.
 
 ## [0.9.0] - 2026-07-29
 
@@ -50,6 +140,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   imported without them, so the vision code paths were never actually loaded in CI.
 
 ### Fixed
+- **The `ffmpeg_filter:` capability probe could not see 124 of ffmpeg's 486 filters**, so every
+  engine requiring one of them reported `unavailable` on every host regardless of how ffmpeg was
+  built. `ffmpeg -filters` prints a three-character flags column per row (`T..`, `..C`), and the
+  parser identified it with `not parts[0].isalnum()`. A filter with *every* flag set prints a
+  dot-free group (`TSC highpass`), which that test rejects, so the row fell through to a
+  bare-name branch and recorded `"TSC"` as the filter name while losing `highpass`. Affected
+  `highpass`, `lowpass`, `bass`, `treble`, `equalizer`, `afftdn`, `arnndn` and 117 more. In
+  practice this made the `stem_inpainting` ffmpeg backend permanently unreachable, since it
+  requires `highpass` and `lowpass`. The flags column is now recognised by its alphabet, and rows
+  are only accepted when the pad-spec column (`A->A`) is present. Every canned test listing had
+  used dot-bearing flag groups only, which is why the whole suite passed against a feature that
+  could not run.
 - **Seam repair never applied.** The repair filter was specified and implemented as `volume` with
   `eval=frame` and a time-dependent expression. Against ffmpeg 7.x that is a silent no-op — `t`
   does not take the values a per-frame evaluation implies, so a `between(t,…)`-gated expression

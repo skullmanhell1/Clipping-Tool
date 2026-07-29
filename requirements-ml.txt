@@ -1,0 +1,39 @@
+# =============================================================================
+# OPTIONAL machine-learning extras: real source separation for the
+# `stem_inpainting` engine.
+#
+# These are deliberately NOT in requirements.txt. torch alone is a several-hundred
+# megabyte install, and the engine is designed to work without it: when `demucs`
+# is absent it falls back to an ffmpeg approximation (`music := clip - vocals`)
+# and records a `degraded:python_pkg:demucs` marker, so a stock deploy is smaller
+# and still functional.
+#
+# Install these only if you want genuine stem separation:
+#
+#   pip install -r requirements-ml.txt
+#
+# For a CPU-only machine (much smaller download than the default CUDA wheels):
+#
+#   pip install -r requirements-ml.txt \
+#       --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# The package alone is not sufficient. The engine treats a model that would need
+# downloading as unavailable, by design, so that a capability probe never becomes
+# a silent network fetch. You must also place the checkpoint on disk as either:
+#
+#   models/stems/htdemucs.th          (single-file checkpoint)
+#   models/stems/htdemucs/model.th    (checkpoint directory)
+#
+# Override that directory with the CLIPPER_STEM_MODEL_DIR environment variable.
+#
+# Verify both halves are in place with:
+#
+#   curl -s localhost:8000/api/info | python -m json.tool
+#
+# and look for `capabilities.stem_inpainting`. Until the checkpoint is present the
+# `spectral` repair mode stays disabled in the UI with a "needs local model" hint.
+# =============================================================================
+-r requirements.txt
+
+torch>=2.2,<3.0
+demucs>=4.0,<5.0

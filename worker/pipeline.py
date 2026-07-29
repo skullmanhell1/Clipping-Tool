@@ -26,11 +26,17 @@ from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
-from worker import diarization
+from worker import diarization, visual_selection
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
-from worker import selection as sel
-from worker import visual_selection
+
+# Re-exported deliberately, on its own line so that neither the alias nor this
+# suppression can be lost when the import block is re-sorted. This module never calls
+# ``sel`` itself — selection is reached through ``visual_selection``, which delegates to
+# it — but the tests patch ``pipeline.sel.select_moments`` to control which moments get
+# chosen, so the alias is the seam that makes the pipeline testable. Removing it breaks
+# 23 tests with "module 'worker.pipeline' has no attribute 'sel'".
+from worker import selection as sel  # noqa: F401
 from worker.effects import broll, compositor, filler, reframe
 from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
@@ -367,10 +373,13 @@ def run_pipeline(
         report(base + clip_span / n * 0.6, f"Adding effects to clip {idx + 1}")
         broll_resolver = None
         if broll_engine is not None:
-            broll_resolver = (
-                lambda w=words, d=clip_duration:
-                broll_engine.resolve(broll_engine.plan(w, d))
-            )
+            # A def rather than an assigned lambda: it gets a real name in tracebacks,
+            # which matters because this runs deep inside the compositor. The default
+            # arguments are load-bearing — they bind this iteration's words and duration
+            # at definition time, so the resolver cannot pick up a later clip's values
+            # when it is finally called.
+            def broll_resolver(w=words, d=clip_duration):  # noqa: E306
+                return broll_engine.resolve(broll_engine.plan(w, d))
         # COMPOSE-stage engines contribute filter-graph fragments to that SAME
         # single pass — they never invoke ffmpeg themselves (Reqs 1.5, 23.3).
         compose = None

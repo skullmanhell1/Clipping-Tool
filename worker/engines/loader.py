@@ -30,5 +30,7 @@ module never requires ffmpeg, libass or any font to be installed.
 
 from __future__ import annotations
 
-from worker.engines import kinetic  # noqa: F401  (side-effect import: registers the engine)
-from worker.engines import stems  # noqa: F401  (side-effect import: registers the engine)
+from worker.engines import (
+    kinetic,  # noqa: F401  (side-effect import: registers the engine)
+    stems,  # noqa: F401  (side-effect import: registers the engine)
+)

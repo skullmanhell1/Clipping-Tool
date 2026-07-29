@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import Dropdown from "./Dropdown.jsx";
 
 // Option lists mirror the backend's accepted values (see /api/info).

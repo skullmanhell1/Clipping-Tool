@@ -1,12 +1,25 @@
 """Storage backend tests: local, S3 (mocked), and local/S3 parity."""
 from __future__ import annotations
 
+from contextlib import closing
+
 import pytest
 
 from storage_backends.base import normalize_key
 from storage_backends.local import LocalStorage
 from storage_backends.s3 import S3Storage
 from tests.fakes import FakeS3Client
+
+
+def _read_all(store, key: str) -> bytes:
+    """Read a key's bytes, closing the handle.
+
+    ``BaseStorage.open`` returns a file object whose ownership passes to the caller.
+    Chaining ``.open(...).read()`` left it for the garbage collector, which surfaces as a
+    ResourceWarning and, on a backend holding a network socket, as a leaked connection.
+    """
+    with closing(store.open(key)) as handle:
+        return handle.read()
 
 
 def test_normalize_key_prevents_escape():
@@ -22,7 +35,7 @@ def _exercise(store):
         "exists": store.exists("clips/j/a.mp4"),
         "missing": store.exists("clips/j/none.mp4"),
         "size": store.size("clips/j/a.mp4"),
-        "read": store.open("clips/j/a.mp4").read(),
+        "read": _read_all(store, "clips/j/a.mp4"),
         "list": store.list("clips/j"),
     }
     store.delete("clips/j/a.mp4")
@@ -67,8 +80,8 @@ def test_save_file_roundtrip(tmp_path):
     s3 = S3Storage(client=FakeS3Client(), bucket="bkt")
     local.save_file("clips/x/v.mp4", src)
     s3.save_file("clips/x/v.mp4", src)
-    assert local.open("clips/x/v.mp4").read() == b"payload-data"
-    assert s3.open("clips/x/v.mp4").read() == b"payload-data"
+    assert _read_all(local, "clips/x/v.mp4") == b"payload-data"
+    assert _read_all(s3, "clips/x/v.mp4") == b"payload-data"
 
 
 def test_local_save_file_same_path_is_safe(tmp_path):
@@ -78,7 +91,7 @@ def test_local_save_file_same_path_is_safe(tmp_path):
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(b"already here")
     store.save_file("clips/j/self.mp4", dest)  # src == dest
-    assert store.open("clips/j/self.mp4").read() == b"already here"
+    assert _read_all(store, "clips/j/self.mp4") == b"already here"
 
 
 @pytest.mark.parametrize("op", ["save", "exists", "size", "read", "list", "delete"])

@@ -58,6 +58,7 @@ def sample_keyframes(
     *,
     limit: int,
     sampler: Optional[Sampler] = None,
+    frames_dir: Optional[str] = None,
 ) -> list[Keyframe]:
     """Sample at most ``limit`` evenly-spaced keyframes across the source.
 
@@ -72,6 +73,14 @@ def sample_keyframes(
     so the returned list may be shorter than ``limit``. If the injected sampler
     *raises*, the error propagates to the caller (``select_moments_visual``),
     which catches it and degrades to transcript-only selection (Req 15.2).
+
+    Args:
+        frames_dir: Directory for the sampled JPEGs, used only by the default sampler.
+            Pass one to control their lifetime — the returned :class:`Keyframe` paths
+            must stay readable until :func:`derive_visual_cues` has run, so this function
+            cannot clean up after itself. When omitted a temporary directory is created
+            and **not** removed, which is the leak ``select_moments_visual`` now avoids by
+            supplying its own managed directory.
     """
     try:
         count = int(limit)
@@ -86,7 +95,8 @@ def sample_keyframes(
 
     active_sampler = sampler
     if active_sampler is None:
-        tmp_dir = tempfile.mkdtemp(prefix="kf-")
+        tmp_dir = frames_dir or tempfile.mkdtemp(prefix="kf-")
+        os.makedirs(tmp_dir, exist_ok=True)
 
         def _default_sampler(src, t, _dir=tmp_dir):
             dest = os.path.join(_dir, f"kf_{t:.3f}.jpg")
@@ -167,7 +177,7 @@ def merge_scores(
     transcript_candidates: list[ClipCandidate],
     visual_frames: list[Keyframe],
     *,
-    weight: float = 0.5,
+    weight: float | None = None,
 ) -> list[ClipCandidate]:
     """Blend transcript scores with visual-cue scores into one ranking.
 
@@ -178,7 +188,24 @@ def merge_scores(
     New :class:`ClipCandidate` objects are returned (same shape), preserving
     every field except ``score``, sorted by combined score descending
     (Reqs 14.2, 14.4).
+
+    Args:
+        transcript_candidates: candidates carrying transcript-derived scores.
+        visual_frames: sampled keyframes with brightness/motion cues.
+        weight: how much the visual signal counts, in ``[0, 1]``. ``None`` reads
+            ``settings.visual_selection_weight``. Values outside the range are clamped
+            rather than rejected: an out-of-range weight would otherwise produce negative
+            or inflated scores that silently corrupt the ranking.
+
+    Note:
+        The weight used to be a literal ``0.5`` default that the one call site never
+        overrode, so a 50/50 blend was effectively hard-coded and there was no way to
+        favour the transcript (the stronger signal for talking-head footage) or the
+        visuals. ``0`` ignores the visual cues entirely; ``1`` ignores the transcript.
     """
+    if weight is None:
+        weight = settings.visual_selection_weight
+    weight = max(0.0, min(1.0, float(weight)))
     merged: list[ClipCandidate] = []
     for cand in transcript_candidates:
         inside = [f for f in visual_frames if cand.start <= f.t <= cand.end]
@@ -290,11 +317,23 @@ def select_moments_visual(
         return []
 
     # Visual augmentation. Any failure degrades to transcript-only.
+    #
+    # The sampled JPEGs live in a managed temporary directory that is removed as soon as
+    # the cues have been derived from them. Previously `sample_keyframes` created the
+    # directory with `mkdtemp` and nothing ever deleted it, so every visual-selection run
+    # left a `kf-*` directory of thumbnails in the system temp space — unbounded growth on
+    # a long-running instance, and nothing in the retention sweeper's remit to clean.
+    # Cleanup has to sit here rather than inside `sample_keyframes`, because the Keyframe
+    # paths must still be readable while `derive_visual_cues` reads their brightness.
     try:
         limit = int(getattr(settings, "keyframe_sample_limit", 12))
-        frames = derive_visual_cues(
-            sample_keyframes(source_path, total_duration, limit=limit, sampler=sampler)
-        )
+        with tempfile.TemporaryDirectory(prefix="kf-") as frames_dir:
+            frames = derive_visual_cues(
+                sample_keyframes(
+                    source_path, total_duration, limit=limit, sampler=sampler,
+                    frames_dir=frames_dir,
+                )
+            )
     except Exception:
         frames = []
 

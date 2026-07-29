@@ -304,6 +304,30 @@ uvicorn api.main:app --reload          # http://localhost:8000
 > model; set `WHISPER_MODEL=tiny` for a fast first start or `small` for higher
 > transcription quality.
 
+**Optional: real stem separation (`stem_inpainting`).** `torch` and `demucs` are
+deliberately *not* in `requirements.txt` — torch alone is several hundred megabytes, and
+the engine is built to work without it. With them absent it falls back to an ffmpeg
+approximation (`music := clip − vocals`) and records a `degraded:python_pkg:demucs`
+marker, so a stock install still works, just with cruder separation. To enable the real
+thing you need **both** halves:
+
+```bash
+# 1. the packages (CPU-only wheels keep the download small)
+pip install -r requirements-ml.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+# 2. the checkpoint, on disk — one of:
+#      models/stems/htdemucs.th          (single file)
+#      models/stems/htdemucs/model.th    (directory)
+#    override the location with CLIPPER_STEM_MODEL_DIR
+```
+
+The checkpoint is a separate step on purpose: the engine treats a model that would have
+to be downloaded as *unavailable*, so that checking a capability can never turn into a
+silent network fetch. Confirm both are in place via `capabilities.stem_inpainting` in
+`GET /api/info`; until the checkpoint exists, the `spectral` repair mode stays disabled
+in the UI with a "needs local model" hint. In Docker, build with
+`--build-arg INSTALL_ML=true` to include the packages.
+
 **Frontend:**
 
 ```bash

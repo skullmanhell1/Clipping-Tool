@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -349,3 +350,162 @@ def test_derive_visual_cues_degrades_without_imaging_libs():
     for f in enriched:
         assert f.brightness == 0.0
         assert f.motion == 0.0
+
+
+
+# --------------------------------------------------------------------------- #
+# The transcript/visual blend weight is configurable                            #
+# --------------------------------------------------------------------------- #
+def _one_candidate_and_frames():
+    """A candidate with a known transcript score plus bright, high-motion frames.
+
+    Chosen so the transcript-only and visual-only answers differ sharply, which is what
+    makes the weight's effect observable.
+    """
+    from worker.selection import ClipCandidate
+    from worker.visual_selection import Keyframe
+
+    cand = ClipCandidate(start=0.0, end=10.0, score=20.0, reason="r", title="t", text="x")
+    # brightness + motion == 2.0 -> visual_score saturates at 1.0 -> 100 on the 0..100 scale.
+    frames = [Keyframe(t=5.0, path="frame.jpg", brightness=1.0, motion=1.0)]
+    return cand, frames
+
+
+def test_weight_zero_ignores_the_visual_signal():
+    """With weight 0 the combined score is exactly the transcript score."""
+    from worker.visual_selection import merge_scores
+
+    cand, frames = _one_candidate_and_frames()
+    merged = merge_scores([cand], frames, weight=0.0)
+    assert merged[0].score == 20.0
+
+
+def test_weight_one_ignores_the_transcript_score():
+    """With weight 1 the combined score is entirely visual."""
+    from worker.visual_selection import merge_scores
+
+    cand, frames = _one_candidate_and_frames()
+    merged = merge_scores([cand], frames, weight=1.0)
+    assert merged[0].score == 100.0
+
+
+def test_the_default_weight_comes_from_settings_not_a_literal():
+    """The blend is configuration, not a constant.
+
+    Regression: ``merge_scores`` defaulted ``weight`` to a literal 0.5 and its only call
+    site never passed the argument, so the 50/50 blend could not be changed at all.
+    """
+    from config import settings as app_settings
+    from worker.visual_selection import merge_scores
+
+    cand, frames = _one_candidate_and_frames()
+    original = app_settings.visual_selection_weight
+    try:
+        app_settings.visual_selection_weight = 0.0
+        assert merge_scores([cand], frames)[0].score == 20.0
+        app_settings.visual_selection_weight = 1.0
+        assert merge_scores([cand], frames)[0].score == 100.0
+    finally:
+        app_settings.visual_selection_weight = original
+
+
+def test_the_shipped_default_is_an_even_blend():
+    """Pins the out-of-the-box behaviour, so this change is not also a tuning change."""
+    from config import Settings
+
+    assert Settings(_env_file=None).visual_selection_weight == 0.5
+
+
+@pytest.mark.parametrize(
+    ("given_weight", "expected"),
+    [(-1.0, 20.0), (5.0, 100.0)],
+)
+def test_out_of_range_weights_are_clamped(given_weight, expected):
+    """A weight outside ``[0, 1]`` is clamped rather than producing a corrupt score.
+
+    Unclamped, a negative weight yields scores above the transcript value and a weight
+    above 1 yields negative contributions — either silently reorders the ranking.
+    """
+    from worker.visual_selection import merge_scores
+
+    cand, frames = _one_candidate_and_frames()
+    assert merge_scores([cand], frames, weight=given_weight)[0].score == expected
+
+
+
+# --------------------------------------------------------------------------- #
+# Sampled keyframes do not leak a temp directory                                #
+# --------------------------------------------------------------------------- #
+def test_sample_keyframes_uses_a_supplied_frames_dir(tmp_path):
+    """The default sampler writes into the directory it is given.
+
+    That parameter is what lets the caller own the files' lifetime; without it the
+    function had to create its own directory, which nothing then removed.
+    """
+    from pathlib import Path
+
+    from worker import ffmpeg_utils as fu
+    from worker.visual_selection import sample_keyframes
+
+    def fake_thumbnail(src, dest, at, width=160):
+        Path(dest).write_bytes(b"jpeg")
+        return dest
+
+    original = fu.generate_thumbnail
+    fu.generate_thumbnail = fake_thumbnail
+    try:
+        frames = sample_keyframes(
+            "source.mp4", 10.0, limit=3, frames_dir=str(tmp_path / "kf")
+        )
+    finally:
+        fu.generate_thumbnail = original
+
+    assert len(frames) == 3
+    for frame in frames:
+        assert Path(frame.path).parent == tmp_path / "kf"
+        assert Path(frame.path).exists()
+
+
+def test_visual_selection_leaves_no_keyframe_temp_directory(tmp_path, monkeypatch):
+    """A visual-selection run removes its sampled frames.
+
+    Regression: ``sample_keyframes`` created its scratch directory with
+    ``tempfile.mkdtemp`` and no code path ever deleted it, so every run left a ``kf-*``
+    directory of JPEGs behind in the system temp space. On a long-running instance that
+    grows without bound, and it falls outside the retention sweeper's remit.
+    """
+    import tempfile as tempfile_module
+    from pathlib import Path
+
+    from worker import ffmpeg_utils as fu
+    from worker.models import ProcessingOptions
+    from worker.transcribe import Transcript
+    from worker.visual_selection import select_moments_visual
+
+    # Redirect the system temp dir so only this test's directories are observable.
+    monkeypatch.setattr(tempfile_module, "tempdir", str(tmp_path))
+
+    # No `sampler` is injected: the leak was in the *default* sampler's directory, so
+    # injecting one would bypass the code under test entirely. Stubbing thumbnail
+    # generation instead keeps the real directory handling in play without ffmpeg.
+    thumbnails: list[str] = []
+
+    def fake_thumbnail(src, dest, at, width=160):
+        thumbnails.append(dest)
+        Path(dest).write_bytes(b"not-a-real-jpeg")
+        return dest
+
+    monkeypatch.setattr(fu, "generate_thumbnail", fake_thumbnail)
+
+    options = ProcessingOptions(visual_selection=True, strategy="silence")
+    transcript = Transcript(language="en", segments=[])
+    select_moments_visual(transcript, options, "source.mp4", 10.0, client=None)
+
+    assert thumbnails, "the default sampler never ran, so the test proved nothing"
+    # The directory the frames were written into must be gone.
+    frame_dirs = {Path(p).parent for p in thumbnails}
+    for directory in frame_dirs:
+        assert not directory.exists(), f"keyframe temp directory survived: {directory}"
+
+    leftovers = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith("kf-")]
+    assert leftovers == [], f"keyframe temp directories left behind: {leftovers}"

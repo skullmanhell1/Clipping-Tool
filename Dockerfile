@@ -44,6 +44,20 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+# Optional: real source separation for the `stem_inpainting` engine (torch + demucs).
+# Off by default because torch adds several hundred megabytes to the image, and the
+# engine degrades to an ffmpeg approximation without it rather than failing. Enable
+# with:  docker build --build-arg INSTALL_ML=true .
+# Note the package is only half of it — a checkpoint must also be present at
+# models/stems/htdemucs.th (or CLIPPER_STEM_MODEL_DIR), because the engine treats a
+# model that would need downloading as unavailable by design.
+ARG INSTALL_ML=false
+COPY requirements-ml.txt ./
+RUN if [ "$INSTALL_ML" = "true" ]; then \
+        pip install -r requirements-ml.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu ; \
+    fi
+
 # Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache.
 COPY publisher_bridge/package*.json ./publisher_bridge/
 RUN cd publisher_bridge && npm install --omit=dev

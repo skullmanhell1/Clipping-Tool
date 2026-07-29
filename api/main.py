@@ -28,10 +28,12 @@ Run: ``uvicorn api.main:app --reload``
 
 from __future__ import annotations
 
-import shutil
-import uuid
 import io
+import logging
+import time
+import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -43,20 +45,23 @@ from pydantic import BaseModel
 
 from config import settings
 from profiles import get_profile_store
+from publishers.base import PublishState
 from publishers.history import get_history
 from publishers.manager import get_publish_manager
 from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker.download import DownloadError, fetch_metadata, is_url
-from worker.jobs import get_manager
 from worker.effects import broll, caption_presets
+
 # Side-effect import: populates the default engine registry so `/api/info`
 # advertises every AV engine (each still default-off). See worker/engines/loader.py.
 from worker.engines import loader  # noqa: F401
+from worker.jobs import get_manager
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import ProcessingOptions
 from worker.watch_folder import get_watcher
+
 
 def _read_version() -> str:
     """Read the semantic version from the VERSION file (fallback to a default)."""
@@ -70,32 +75,64 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 
-app = FastAPI(
-    title=settings.app_name,
-    version=APP_VERSION,
-    description="AI-powered video clipping & auto-publishing tool — Phase 5 (storage, profiles & updates).",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+logger = logging.getLogger(__name__)
 
 
-@app.on_event("startup")
-def _startup() -> None:
+def _run_startup() -> None:
     """Ensure storage dirs exist and start the background retention sweeper."""
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
+    if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
+        "development", "dev", "local", "test",
+    ):
+        # A wildcard is a sensible default for local work and a poor one on a public
+        # host, where it lets any site call this API. Warning rather than refusing to
+        # boot: an operator may be fronting the app with a proxy that handles CORS.
+        logger.warning(
+            "CORS_ORIGINS is '*' with environment=%r. Set an explicit origin list for "
+            "a public deployment; credentialed cross-origin requests are also disabled "
+            "while the wildcard is in use.",
+            settings.environment,
+        )
     try:
         from storage_backends.retention import get_sweeper
 
         get_sweeper().start()
     except Exception:
         pass
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Application lifespan.
+
+    Replaces ``@app.on_event("startup")``, which FastAPI deprecates and which therefore
+    emitted a DeprecationWarning on every import — noise that also prevented the test
+    suite from treating warnings as errors.
+    """
+    _run_startup()
+    yield
+
+
+app = FastAPI(
+    lifespan=_lifespan,
+    title=settings.app_name,
+    version=APP_VERSION,
+    description="AI-powered video clipping & auto-publishing tool — Phase 5 (storage, profiles & updates).",
+)
+
+# allow_credentials is derived rather than hard-coded: a wildcard origin and
+# credentials are mutually exclusive per the CORS spec, and browsers drop such
+# responses. Hard-coding True alongside the default "*" therefore disabled every
+# credentialed cross-origin request while appearing to allow them. See
+# Settings.cors_allow_credentials.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +549,66 @@ def submit_batch(req: BatchRequest) -> dict:
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
 
 
+async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
+    """Stream one uploaded file to ``uploads_dir``, validating name and size.
+
+    Streamed in chunks with ``await``, not ``shutil.copyfileobj``. The endpoint is
+    ``async``, so a synchronous copy blocks the event loop for the whole transfer —
+    during a multi-gigabyte upload the server answers nothing at all, including the
+    progress polls the UI depends on.
+
+    The size ceiling is enforced *while writing* rather than by trusting a
+    ``Content-Length`` header, which a client controls and may omit entirely under
+    chunked transfer encoding. A file that exceeds the ceiling is deleted rather than
+    left as a truncated partial that ffmpeg would later fail on for a confusing reason.
+
+    Returns:
+        The ``{"input_type", "source", "title"}`` record the job manager expects.
+
+    Raises:
+        HTTPException: 400 for a disallowed extension, 413 when too large.
+    """
+    safe_name = Path(upload_file.filename or "upload").name
+    suffix = Path(safe_name).suffix.lower()
+    allowed = settings.allowed_upload_extensions_set
+    if allowed and suffix not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file type {suffix or '(none)'!r} for {safe_name!r}. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            ),
+        )
+
+    limit = int(settings.max_upload_bytes)
+    chunk_size = max(1, int(settings.upload_chunk_bytes))
+    dest = uploads_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+    written = 0
+    try:
+        with dest.open("wb") as out:
+            while chunk := await upload_file.read(chunk_size):
+                written += len(chunk)
+                if limit > 0 and written > limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"{safe_name!r} exceeds the maximum upload size of "
+                            f"{limit} bytes"
+                        ),
+                    )
+                out.write(chunk)
+    except BaseException:
+        # Covers the size rejection, a disconnect mid-transfer, and a disk error.
+        dest.unlink(missing_ok=True)
+        raise
+
+    if written == 0:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"{safe_name!r} is empty")
+
+    return {"input_type": "file", "source": str(dest), "title": safe_name}
+
+
 @app.post("/api/upload", tags=["jobs"])
 async def upload(
     files: list[UploadFile] = File(...),
@@ -698,12 +795,16 @@ async def upload(
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
     saved: list[dict] = []
-    for f in files:
-        safe_name = Path(f.filename or "upload").name
-        dest = uploads_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
-        with dest.open("wb") as out:
-            shutil.copyfileobj(f.file, out)
-        saved.append({"input_type": "file", "source": str(dest), "title": safe_name})
+    try:
+        for f in files:
+            saved.append(await _save_upload(f, uploads_dir))
+    except HTTPException:
+        # A rejected file in the middle of a batch would otherwise leave the earlier
+        # ones on disk with no job referencing them — invisible litter that the
+        # retention sweeper does not own. Roll the whole request back.
+        for item in saved:
+            Path(item["source"]).unlink(missing_ok=True)
+        raise
 
     manager = get_manager()
     if len(saved) == 1:
@@ -822,7 +923,9 @@ def save_campaign(req: CampaignModel) -> dict:
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/publish", tags=["publishing"])
 def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
-    manager=get_manager(); job=manager.store.get(job_id); clip=manager.store.get_clip(job_id,clip_id)
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
     if job is None or clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     if req.mode not in ("auto","review"):
@@ -844,8 +947,119 @@ def history(limit: int=200, platform: str="") -> dict:
 @app.get("/api/publish-attempts/{attempt_id}", tags=["publishing"])
 def publish_attempt(attempt_id: str) -> dict:
     item=get_history().get_attempt(attempt_id)
-    if not item: raise HTTPException(status_code=404,detail="Publish attempt not found")
+    if not item:
+        raise HTTPException(status_code=404, detail="Publish attempt not found")
     return item
+
+
+#: States a publish attempt can be moved out of. ``review_required`` is awaiting a
+#: human decision and ``failed`` is terminal-but-retryable; anything else is either
+#: already progressing (``queued``/``scheduled``/``uploading``) or finished
+#: (``published``/``private``/``draft``), and re-queueing those risks a double post.
+RESUMABLE_PUBLISH_STATES = frozenset(
+    {PublishState.REVIEW_REQUIRED.value, PublishState.FAILED.value}
+)
+
+
+def _resume_attempt(attempt_id: str, *, force_direct: bool) -> dict:
+    """Move a stalled publish attempt back into the scheduler's queue.
+
+    Shared by ``/approve`` and ``/retry``. The only difference between them is
+    ``force_direct``: approving is an explicit instruction to publish for real, so it
+    rewrites the stored request to ``mode="auto"``, whereas a retry re-runs the attempt
+    exactly as it was first submitted.
+
+    Raises:
+        HTTPException: 404 when the attempt is unknown, 409 when its state is not
+            resumable or when the platform cannot honour the request.
+    """
+    store = get_history()
+    item = store.get_attempt(attempt_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Publish attempt not found")
+
+    state = str(item.get("state") or "")
+    if state not in RESUMABLE_PUBLISH_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Attempt is {state!r}; only {sorted(RESUMABLE_PUBLISH_STATES)} can be resumed",
+        )
+
+    platform = str(item.get("platform") or "")
+    manager = get_publish_manager()
+    publisher = manager.publishers.get(platform)
+    if publisher is None:
+        raise HTTPException(status_code=409, detail=f"Unknown platform {platform!r}")
+
+    request = dict(item.get("request_json") or {})
+    if force_direct:
+        # Without this the publisher re-reads mode="review" and returns
+        # review_required again — the attempt would bounce between the queue and
+        # review forever, looking like a scheduler bug rather than a missing
+        # permission.
+        request["mode"] = "auto"
+
+    status = publisher.status(str(request.get("account_id") or ""))
+    if not status.configured:
+        raise HTTPException(
+            status_code=409, detail=f"{platform} is not configured: {status.message}"
+        )
+    if force_direct and not status.direct_publish:
+        # Approving cannot bypass a platform-side permission. Refusing here — with the
+        # platform's own explanation — tells the operator *why* nothing will happen,
+        # instead of accepting the approval and silently reproducing review_required.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{platform} cannot publish directly yet, so approval cannot proceed: "
+                f"{status.message}"
+            ),
+        )
+
+    # A clip that has since been cleaned up cannot be republished, and finding that out
+    # now is far better than a "file no longer exists" failure minutes later.
+    video_path = Path(str(request.get("video_path") or ""))
+    if not video_path.is_file():
+        raise HTTPException(
+            status_code=409, detail=f"Clip file no longer exists: {video_path}"
+        )
+
+    store.update_attempt(
+        attempt_id,
+        state=PublishState.QUEUED.value,
+        scheduled_at=time.time(),
+        request_json=request,
+        # The previous attempt's outcome is cleared so the record describes the run in
+        # flight rather than a mix of old and new.
+        started_at=None,
+        completed_at=None,
+        error="",
+        message="",
+    )
+    return store.get_attempt(attempt_id) or {}
+
+
+@app.post("/api/publish-attempts/{attempt_id}/approve", tags=["publishing"])
+def approve_publish_attempt(attempt_id: str) -> dict:
+    """Approve a ``review_required`` attempt and queue it for direct publishing.
+
+    Three of the five publishers can return ``review_required`` — Instagram and X when
+    the account lacks direct-publish approval, Whop when the upload could not be
+    attached to a target — and before this endpoint existed there was no way to act on
+    it, so such attempts stopped permanently.
+    """
+    return _resume_attempt(attempt_id, force_direct=True)
+
+
+@app.post("/api/publish-attempts/{attempt_id}/retry", tags=["publishing"])
+def retry_publish_attempt(attempt_id: str) -> dict:
+    """Re-queue a failed (or still-in-review) attempt without changing its mode.
+
+    Separate from ``/approve`` on purpose: a retry is for transient trouble — an expired
+    token, a network blip, a clip that was briefly missing — and must not silently
+    escalate a review-mode submission into a live post.
+    """
+    return _resume_attempt(attempt_id, force_direct=False)
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +1095,9 @@ def storage_cleanup(temp: bool = True, expired: bool = True) -> dict:
         result["expired"] = cleanup_expired()
     if temp:
         result["temp_removed"] = cleanup_temp()
-    result["usage"] = disk_usage()
+    # refresh=True: this endpoint has just deleted files, so the cached area sizes are
+    # stale by construction and would report the pre-cleanup totals.
+    result["usage"] = disk_usage(refresh=True)
     return result
 
 
@@ -991,7 +1207,8 @@ def _clip_metadata_text(clip) -> str:
 
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
 def download_clip(job_id: str, filename: str) -> StreamingResponse:
-    safe_name=Path(filename).name; path=Path(settings.clips_dir)/Path(job_id).name/safe_name
+    safe_name = Path(filename).name
+    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
     job=get_manager().store.get(job_id)
     clip=next((c for c in job.clips if c.filename==safe_name),None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
@@ -1007,8 +1224,10 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
 def download_video_only(job_id: str, filename: str) -> FileResponse:
-    safe_name=Path(filename).name; path=Path(settings.clips_dir)/Path(job_id).name/safe_name
-    if not path.exists() or not path.is_file(): raise HTTPException(status_code=404,detail="Clip not found")
+    safe_name = Path(filename).name
+    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path,filename=safe_name,media_type="video/mp4")
 
 
