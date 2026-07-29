@@ -452,6 +452,9 @@ def render_clip(
         emoji_inputs, emoji_graph = emoji.build_overlay(
             emoji_cues, base_label=video_label, out_label="vout",
             duration=duration, animate=options.emoji_animate,
+            # A8: the real target width. build_overlay assumed 1080, so the emoji was
+            # sized for a frame the output might not have.
+            frame_width=width,
             resolver=emoji_resolver, input_offset=emoji_offset,
         )
     if emoji_graph:

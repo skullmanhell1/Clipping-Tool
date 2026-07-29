@@ -219,14 +219,23 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------- effects (P4) --
-    # Base CDN for on-demand Twemoji PNG downloads (cached into emoji_assets_dir).
-    twemoji_cdn_base: str = Field(
-        default="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72",
-        description="Base URL for Twemoji 72x72 PNG assets.",
+    # Fallback source for an emoji PNG that is not vendored (A6, A7). The set the built-in
+    # keyword map can produce is committed under assets/emoji, fetched by
+    # scripts/fetch_emoji.py, so rendering never needs this.
+    emoji_cdn_base: str = Field(
+        default="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/512",
+        description="Fallback base URL for emoji PNGs (Noto Emoji 512px, OFL-1.1). "
+                    "Only consulted for a glyph missing from emoji_assets_dir.",
     )
-    # Allow the emoji overlay to fetch missing PNGs from the CDN at render time.
+    # Allow the emoji overlay to fetch a missing PNG at render time.
+    #
+    # Defaults off now that the assets are vendored: a render is not the place to discover
+    # the network is down, and the previous default meant a missing glyph turned into a
+    # silent per-clip HTTP request. Turn it on when using an emoji outside the built-in map.
     emoji_allow_download: bool = Field(
-        default=True, description="Fetch missing Twemoji PNGs from the CDN."
+        default=False,
+        description="Fetch a missing emoji PNG from emoji_cdn_base at render time. Off by "
+                    "default: the built-in set is vendored under assets/emoji.",
     )
     # Default background-music level (0..1) mixed under the original audio.
     music_default_volume: float = Field(
