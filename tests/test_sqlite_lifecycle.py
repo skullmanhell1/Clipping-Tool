@@ -14,6 +14,7 @@ Measured before the fix: 26 descriptors still held after 200 saves.
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -112,7 +113,10 @@ def test_a_failing_write_does_not_leave_the_connection_open(tmp_path: Path):
 
     before = _open_descriptors()
     for _ in range(50):
-        with pytest.raises(Exception):
+        # sqlite3.OperationalError specifically, not a blanket Exception: a bare
+        # `raises(Exception)` would also pass if the connection helper itself broke,
+        # which is the opposite of what this asserts.
+        with pytest.raises(sqlite3.OperationalError):
             with store._connect() as db:
                 db.execute("SELECT * FROM no_such_table")
     growth = _open_descriptors() - before
