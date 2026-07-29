@@ -260,22 +260,30 @@ def test_the_ci_workflow_has_no_stem_specific_steps() -> None:
     pinning exact commands — the workflow has since been hardened for unrelated reasons
     (ruff made blocking, frontend lint/tests added), and a test that breaks whenever any
     CI line changes would be a tripwire on the wrong thing.
+
+    Comment lines are excluded. The requirement is about what CI *does*, and a comment is
+    not a step: a note explaining why a checkout needs full history is allowed to name the
+    file it is talking about. Checking the raw text instead made the guard fail on its own
+    documentation, which is a tripwire rather than a test.
     """
     ci = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    lowered = ci.lower()
+    executable = "\n".join(
+        line for line in ci.splitlines() if not line.strip().startswith("#")
+    ).lower()
+
     # Careful with the substring: "system dependencies" contains "stem".
-    assert "stem_" not in lowered
-    assert "stems" not in lowered
-    assert "demucs" not in lowered
-    assert "torch" not in lowered
+    assert "stem_" not in executable
+    assert "stems" not in executable
+    assert "demucs" not in executable
+    assert "torch" not in executable
     # The optional ML extras must never be installed by CI — that is what would make the
     # engine expensive to test, and it is the concrete form Req 20.3 takes now that
     # requirements-ml.txt exists.
-    assert "requirements-ml" not in lowered
+    assert "requirements-ml" not in executable
     # The suite is still run as one undifferentiated invocation, not a stems-only job.
-    assert "-k stem" not in lowered
-    assert "tests/test_stems" not in lowered
+    assert "-k stem" not in executable
+    assert "tests/test_stems" not in executable
 
 
 def test_the_sibling_spec_directories_were_not_modified() -> None:

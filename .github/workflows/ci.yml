@@ -10,7 +10,16 @@ jobs:
     name: Backend (lint + tests)
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because two parity guards in tests/test_stems_parity.py diff the
+      # branch against `origin/main` to prove the stem feature did not touch its sibling
+      # specs or add production files. The default shallow checkout (depth 1) creates no
+      # `origin/main` ref, so `git diff origin/main...HEAD` exits 128 and both tests
+      # *skip* -- which the no-skip gate below then reports as a failure, correctly: a
+      # guard that silently stops running is worse than no guard. Full history makes them
+      # execute rather than making the gate lenient.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
