@@ -115,10 +115,30 @@ def reset_engine_globals() -> None:
 
 @pytest.fixture(autouse=True)
 def clean_engine_globals():
-    """Known-empty singletons before and after each test in this module."""
+    """Known-empty singletons during each test, **restored afterwards**.
+
+    The teardown restores rather than merely re-clearing, which matters beyond this module:
+    ``worker/engines/loader.py`` populates the default registry and ``MODEL_LOCATORS`` by
+    **import side effect**, and an already-imported module cannot re-fire it. So leaving them
+    empty on the way out silently breaks every later test file that expects a populated
+    registry — ``/api/info`` legitimately advertises no engine, and whether a test passes
+    starts depending on pytest's file ordering.
+
+    Mirrors what ``tests/test_engine_capabilities.py`` already does for ``MODEL_LOCATORS``.
+    """
+    from worker.engines.registry import get_registry, register
+
+    engines_before = [record.engine for record in get_registry().records()]
+    locators_before = dict(MODEL_LOCATORS)
+
     reset_engine_globals()
     yield
     reset_engine_globals()
+
+    for engine in engines_before:
+        register(engine)
+    MODEL_LOCATORS.update(locators_before)
+    reset_report()
 
 
 # --------------------------------------------------------------------------- #

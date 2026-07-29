@@ -18,8 +18,15 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install system dependencies (FFmpeg + fonts)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-liberation
+      # libgl1 / libglib2.0-0 are runtime libs that opencv-python and mediapipe need in order
+      # to import at all. Without them `import cv2` raises
+      # `libGL.so.1: cannot open shared object file`, so every vision code path silently took
+      # its degraded branch here even though the packages were installed — CI was installing
+      # opencv and getting no coverage from it. The Dockerfile has always installed these.
+      - name: Install system dependencies (FFmpeg + fonts + opencv runtime libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
 
       - name: Install Python dependencies
         run: |
