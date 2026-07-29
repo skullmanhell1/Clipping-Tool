@@ -23,6 +23,45 @@ class FFmpegError(RuntimeError):
     """Raised when an ffmpeg/ffprobe invocation fails."""
 
 
+# --------------------------------------------------------------------------- #
+# H.264 output settings (O1, O2, O3)
+# --------------------------------------------------------------------------- #
+# Every encode in this repository spelled out ``-c:v libx264 -preset veryfast -crf 20``
+# and nothing else, in seven places. Three flags that decide whether a platform will
+# accept the file at all were missing everywhere:
+#
+#   O1  -pix_fmt yuv420p    Without it, ffmpeg keeps the source pixel format. A 4:2:2 or
+#                           10-bit source therefore produced a 4:2:2/10-bit H.264 file,
+#                           which Safari, many Android decoders and several upload
+#                           pipelines refuse outright - and the failure appears at upload
+#                           time, long after the render looked fine locally.
+#   O2  -profile:v high     libx264 otherwise picks a profile from the input, and it can
+#       -level 4.0          land above what older hardware decoders implement.
+#   O3  -r <fps>            A variable-frame-rate source (every screen recording, most
+#                           phone footage) has no single frame duration, so burned captions
+#                           drift against speech as the effective rate wanders.
+#
+#: Container/codec flags safe to apply to any encode, intermediate or final.
+H264_COMPAT_ARGS: tuple[str, ...] = (
+    "-pix_fmt", "yuv420p",
+    "-profile:v", "high",
+    "-level", "4.0",
+)
+
+
+def h264_args(*, normalise_fps: bool = False) -> list[str]:
+    """The standard libx264 arguments for an encode.
+
+    ``normalise_fps`` adds ``-r`` at :data:`config.settings.output_fps`, forcing constant
+    frame rate. It is off by default because an intermediate that is about to be re-encoded
+    gains nothing from being resampled twice, and on for anything a user receives.
+    """
+    args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", *H264_COMPAT_ARGS]
+    if normalise_fps:
+        args += ["-r", str(int(settings.output_fps))]
+    return args
+
+
 # Common target aspect ratios keyed by the UI values, mapped to (w, h) at a
 # canonical short-form resolution.
 ASPECT_PRESETS: dict[str, tuple[int, int]] = {
@@ -192,8 +231,7 @@ def cut_segment(
     cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
            "-t", f"{duration:.3f}"]
     if reencode:
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                "-c:a", "aac", "-b:a", "128k"]
+        cmd += [*h264_args(), "-c:a", "aac", "-b:a", "128k"]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
@@ -259,7 +297,7 @@ def reformat_aspect(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *h264_args(),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(dest),

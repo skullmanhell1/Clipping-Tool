@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-29
+
+A minor bump rather than a patch: the visible output of a default run changes. No API
+signature changes, no removed fields, and every new field is additive with a default - but
+a caller who relied on the shipped defaults will get different-looking clips, so it does not
+belong in a patch release.
+
+### Changed — defaults (U1, V1, V12, T1)
+
+- **A default run now enables the features that decide how a clip looks**: auto-reframe
+  (`V1` — the default was a static centre crop that decapitated any off-centre speaker),
+  Ken-Burns zoom, punch-in transitions, fades, the hook title (`V12`), the progress bar,
+  emoji at `standard`, keyword highlighting, in-caption emoji and visual selection. Out of
+  the box the tool used to enable only captions, 9:16, the `ai` strategy and metadata, so it
+  shipped looking worse than it is capable of and every feature had to be found one checkbox
+  at a time.
+- Keyword highlighting is only a sane default because of the `C11` fix below; before it, the
+  rule emphasised nearly every word.
+- **Four features stay off deliberately**, each because enabling it today would make output
+  worse rather than better: background music (`A14` — `audio.py` synthesises two sine waves
+  per mood and `assets/music` is empty, so it would add a drone), b-roll (`A18`/`A21` — the
+  library is empty, so it would only add degradation markers), kinetic typography (an AV
+  engine that takes ownership of the caption layer, which belongs to a profile rather than
+  the global default) and filler removal — which, unlike the rest, removes *content*, and
+  cuts hard on sparse-speech footage: a 3.0 s fixture came out at 1.33 s.
+- `WHISPER_MODEL` defaults to `small`, not `base` (`T1`). A mis-transcribed word is burned
+  into the video, and `base` is a noticeable accuracy step down.
+
+### Fixed — captions rendered in the wrong font, at the wrong weight (C1-C5, C7, C8, C11)
+
+- **The fallback for an unavailable font was `Arial` — the font every preset requested, and
+  one installed on no Linux host.** The substitution branch replaced a missing font with the
+  same missing font, reported `font_substituted:Arial` naming the font that had *failed*, and
+  left libass to metric-alias to whatever the host had, with synthesised bold. Confirmed by
+  reading libass' own resolution: `fontselect: (Anton, 700, 0) -> NotoSans-Bold.ttf`.
+  `captions.FALLBACK_FONTS` is now an ordered ladder of faces that verifiably resolve, and
+  the marker names the font actually used — which is what `worker/models.py` always
+  documented and the code never did.
+- `subtitles_filter` passes `fontsdir`, so bundled faces work with no system install at all.
+- **A heavy face is no longer asked to be bold on top of itself** (`C3`). ASS has one bold
+  flag, libass turns it into a request for weight 700, and when the face cannot supply it
+  libass *synthesises* the emboldening — thickening a face already drawn heavy. Both the
+  broken and fixed versions resolve to the same file, so this is asserted on the requested
+  weight, not the resolved font.
+- Cues group at 3 words with sizes raised to match (`C5`); presets can ask for upper-case
+  (`C7`) and set their own outline and shadow (`C8`), replacing values inferred from the
+  animation style that were near-invisible at 1080x1920.
+- **Keyword highlighting fired on almost everything** (`C11`), which is visually identical to
+  highlighting nothing: the rule treated Whisper probability >= 0.9 as evidence a word
+  mattered, and `_word_probability` returns 1.0 for a word carrying no probability at all —
+  so a transcript without per-word confidence emphasised *every* non-stopword. Emphasis is
+  now a salience ranking with a budget.
+- The karaoke fill swept to pure green, the ASS default rather than a choice, and disagreed
+  with the preset path (`C4`). Both now share one emphasis colour.
+
+### Fixed — declared assets that were never shipped (A1-A3, A6-A8, A10)
+
+- **12 caption faces vendored** with their licences and a manifest (`assets/fonts.json`).
+- **The emoji set is vendored** (`A7`). `.gitignore` claimed "Emoji assets are downloaded at
+  build time" and nothing did that, so `assets/emoji` was empty and every render either made
+  a per-clip HTTP request or silently dropped the overlay. `scripts/fetch_emoji.py` is that
+  build step; CI fails if a glyph is missing.
+- Emoji artwork is Noto Emoji 512px rather than Twemoji 72px (`A6`), which was a 2.1x
+  upscale at the size the overlay renders. `emoji_allow_download` now defaults off.
+- **Emoji were sized against a hard-coded 1080** (`A8`) while overlay *placement* used
+  ffmpeg's real `W`, so on any other width the two disagreed about the frame.
+- **Inflected speech now matches the keyword map** (`A10`): `winning`, `wins`, `won` and
+  `fired` all missed while `win` hit.
+
+### Fixed — delivered files some platforms refused to decode (O1, O2, O3)
+
+- `-pix_fmt yuv420p`, `-profile:v high -level 4.0` and constant frame rate are now applied
+  through one shared builder instead of seven hand-written argument lists. Without them a
+  4:2:2 or 10-bit source produced a file that plays locally and is refused by Safari, many
+  Android decoders and several upload pipelines — a failure that only appears at upload
+  time. Verified by probing the output of a real 4:2:2 15 fps source.
+
+### Added — tests that assert resolved values (M7)
+
+- `tests/test_fonts_real_binary.py` checks the font libass *resolved* and the weight it
+  requested, by parsing libass' own output — an independent mechanism, in the spirit of
+  `tests/test_capabilities_real_binary.py`. Reintroducing the font defect fails four of them.
+- `tests/test_output_compat.py` asserts the probed pixel format, profile, level and frame
+  rate of a delivered file, plus a control proving the flags are what made the difference.
+- `.kiro/steering/working-agreement.md` records the gates and the "assert the resolved value,
+  not the requested one" rule that both files exist to enforce.
+
+
 ### Fixed
 - **`.env.example` had drifted from the code.** `config.Settings` points at it for "the full
   list", but it documented 67 of 93 settings and carried one key —

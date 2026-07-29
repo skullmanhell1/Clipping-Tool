@@ -179,3 +179,94 @@ class FakeWord:
         self.end = end
         self.text = text
         self.probability = 1.0
+
+
+
+# --------------------------------------------------------------------------- #
+# "Every effect off" options                                                    #
+# --------------------------------------------------------------------------- #
+# Many tests describe behaviour when nothing is enabled — the compositor returns None, the
+# pipeline reproduces its pre-feature output, a filtergraph stays empty. They expressed that
+# as ``ProcessingOptions(captions=False)`` and relied on every effect *defaulting* off.
+#
+# U1 changed those defaults: a default run now enables reframe, zoom, transitions, fades,
+# the hook title, the progress bar, emoji, filler removal, keyword highlighting, in-caption
+# emoji and visual selection, because shipping them off meant the tool looked worse than it
+# is capable of. That makes "the defaults happen to be off" the wrong way to say "all off" —
+# so the intent is stated explicitly here instead, once.
+#
+#: Every optional effect, at its disabled value.
+EFFECTS_OFF: dict = {
+    "reframe": False,
+    "zoom": False,
+    "transitions": False,
+    "hook_title": False,
+    "music": "",
+    "fades": False,
+    "color": "",
+    "progress_bar": False,
+    "emoji": "off",
+    "filler_removal": False,
+    "caption_keyword_highlight": False,
+    "caption_keyword_ai": False,
+    "caption_emoji": False,
+    "visual_selection": False,
+    "broll": False,
+    "asset_sourcing_mode": "off",
+    "diarization": False,
+    "speaker_reframe": False,
+    "kinetic_typography_enabled": False,
+    "stem_inpainting_enabled": False,
+}
+
+#: Boolean fields that are not effects, so :data:`EFFECTS_OFF` does not cover them.
+#:
+#: ``captions`` and ``metadata`` are the product's core function rather than an effect, and
+#: tests that want them off pass them explicitly. ``emoji_animate`` is a modifier that does
+#: nothing while ``emoji`` is ``"off"``. The rest are policy switches, not output effects.
+_NON_EFFECT_BOOLS = frozenset(
+    {
+        "captions",
+        "metadata",
+        "emoji_animate",
+        "permissibility_mode",
+        "translate",
+        "stem_declick",
+        "stem_retain_stems",
+    }
+)
+
+
+def options_all_off(**overrides):
+    """:class:`ProcessingOptions` with every optional effect explicitly disabled.
+
+    ``overrides`` are applied afterwards, so a test can enable exactly the one feature it is
+    about — which is what makes a single-feature assertion trustworthy.
+    """
+    from worker.models import ProcessingOptions
+
+    return ProcessingOptions(**{**EFFECTS_OFF, **overrides})
+
+
+def assert_effects_off_is_exhaustive() -> None:
+    """Fail if a boolean effect exists that :data:`EFFECTS_OFF` does not disable.
+
+    Without this the helper rots silently: a new default-on effect would leak into every
+    "all off" test, and those tests would quietly stop testing what they claim to.
+    """
+    import dataclasses
+
+    from worker.models import ProcessingOptions
+
+    leaked = [
+        field.name
+        for field in dataclasses.fields(ProcessingOptions)
+        if field.type in ("bool", bool)
+        and field.name not in EFFECTS_OFF
+        and field.name not in _NON_EFFECT_BOOLS
+        and getattr(options_all_off(), field.name) is True
+    ]
+    assert not leaked, (
+        f"{leaked} default(s) are on and not covered by EFFECTS_OFF; add them there so "
+        '"all effects off" tests keep meaning what they say'
+    )
