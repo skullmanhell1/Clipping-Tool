@@ -18,8 +18,9 @@ backend adapters — :class:`ML_Separator_Backend` with its :func:`_locate_model
 (task 11.1), :func:`extract_clip_audio` (task 11.2), the gain + repair filtergraph
 :func:`build_mix_graph` / :func:`render_mix` with :func:`notch_filters` (task 11.3), the
 spectral per-stem repair and music bridging :func:`bridge_music_stem` (task 11.4), and
-:func:`remux_replacement` (task 11.5). The engine class, its ``run`` gate / degradation
-ladder and its registration arrive in epic 13; ``verify_replacement`` arrives in epic 12.
+:func:`remux_replacement` (task 11.5), and the integrity gate — :class:`Media_Probe`,
+:func:`probe_media` and :func:`verify_replacement` (task 12.1). The engine class, its ``run``
+gate / degradation ladder and its registration arrive in epic 13.
 
 Import contract (Req 1.4)
 -------------------------
@@ -86,6 +87,7 @@ __all__ = [
     "MIX_PRESETS",
     "MIX_PRESET_CHOICES",
     "ML_Separator_Backend",
+    "Media_Probe",
     "ML_THREAD_COUNT",
     "MODEL_DIR_DEFAULT",
     "MODEL_DIR_ENV",
@@ -121,12 +123,14 @@ __all__ = [
     "notch_filters",
     "partition_bridge_windows",
     "probe_audio_format",
+    "probe_media",
     "remux_codec",
     "remux_command",
     "remux_replacement",
     "render_mix",
     "resolve_peak_guard",
     "step_timeout",
+    "verify_replacement",
     "parse_seam_notes",
     "plan_is_noop",
     "plan_stems",
@@ -3045,3 +3049,238 @@ def remux_replacement(
         timeout_s,
     )
     return target
+
+
+
+# --------------------------------------------------------------------------- #
+# Epic 12 — integrity verification of the Replacement_Media                   #
+# --------------------------------------------------------------------------- #
+
+#: Tolerance on the **video** duration comparison, in seconds.
+#:
+#: The design words this comparison as "equal", and under ``-c:v copy`` the video packets
+#: really are bit-identical — but the *container* may carry them on a different timescale
+#: (an MP4 written fresh does not necessarily reuse the input's ``timescale``), so the
+#: duration ``ffprobe`` reports can differ in the last decimal place without a single frame
+#: having changed. Comparing exactly would therefore fail good output on a technicality.
+#: One millisecond is far below one frame at any sane frame rate, so a real truncation — the
+#: thing this check exists to catch — still fails loudly.
+_VIDEO_DURATION_TOLERANCE_S = 0.001
+
+#: Slack added to every tolerance comparison below, to absorb binary-float error.
+#:
+#: Needed because the comparisons are of the form "drift must be **within** one audio frame",
+#: and a file that is legitimately exactly one frame different fails a naive ``>`` test:
+#: ``abs((3.0 + 1/8000) - 3.0)`` is ``0.00012500000000011...``, which is fractionally larger
+#: than ``1/8000``. Without this slack the check would reject good output depending on where
+#: the durations happen to land in binary floating point — i.e. non-deterministically from
+#: the operator's point of view. A nanosecond is ~5 orders of magnitude below one sample at
+#: 48 kHz, so it widens nothing that matters.
+_DRIFT_EPSILON = 1e-9
+
+
+@dataclass(frozen=True)
+class Media_Probe:
+    """Stream inventory and timings of one media file, as ``ffprobe`` reports them.
+
+    Distinct from :class:`Audio_Format`, which answers "what format is the audio?" for the
+    *processing* passes. This answers "what streams and timings does this file have?" for the
+    *verification* pass, and therefore has to look at every stream rather than ``a:0``.
+
+    A pure record, like :class:`Audio_Format`: no coercion beyond parsing, no validation.
+    Deciding what counts as acceptable is :func:`verify_replacement`'s job, and doing it here
+    would hide the very mismatches that function exists to report.
+
+    ``video_frames`` is ``0`` when ``ffprobe`` does not report ``nb_frames`` — legitimately
+    common for some containers — which the comparison treats as "unknown", not "zero frames".
+    """
+
+    audio_streams: int = 0
+    video_streams: int = 0
+    audio_duration: float = 0.0
+    video_duration: float = 0.0
+    video_frames: int = 0
+    sample_rate: int = 0
+    channels: int = 0
+    audio_start_time: float = 0.0
+
+
+def _stream_duration(stream: Mapping[str, Any], fallback: float) -> float:
+    """One stream's duration, falling back to the container's when it carries none."""
+    value = stream.get("duration")
+    if value in (None, "N/A", ""):
+        return fallback
+    return coerce_float(value, fallback)
+
+
+def probe_media(path: Any, runner: Any = None, timeout_s: float = MIN_STEP_TIMEOUT_S) -> Media_Probe:
+    """Probe **every** stream of ``path`` for the integrity comparison (Req 17.1-17.4).
+
+    An ``ffprobe``, not a media pass. Unlike :func:`probe_audio_format` this selects no
+    stream: the count of audio and video streams is itself part of what
+    :func:`verify_replacement` checks, so a query that pinned ``a:0`` could not see a second
+    audio stream sneaking in.
+
+    Total: a missing field, ``"N/A"``, an unparseable number or output that is not JSON at
+    all yields a :class:`Media_Probe` with zeros rather than raising. That is deliberate —
+    an unreadable candidate must fail *verification* with an :class:`Integrity_Error`
+    naming the mismatch, not blow up with a parse error the ladder would report as a bare
+    ``failed``.
+    """
+    argv = [
+        _ffprobe_binary(), "-v", "error",
+        "-show_streams", "-show_format",
+        "-of", "json",
+        str(path),
+    ]
+    completed = _run(
+        runner if runner is not None else _default_runner(), argv, timeout_s
+    )
+
+    raw = getattr(completed, "stdout", "") or ""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return Media_Probe()
+    if not isinstance(payload, Mapping):
+        return Media_Probe()
+
+    streams = payload.get("streams")
+    if not isinstance(streams, Sequence):
+        streams = ()
+    container = payload.get("format")
+    container_duration = coerce_float(
+        (container or {}).get("duration") if isinstance(container, Mapping) else 0.0, 0.0
+    )
+
+    audio = [s for s in streams if isinstance(s, Mapping) and s.get("codec_type") == "audio"]
+    video = [s for s in streams if isinstance(s, Mapping) and s.get("codec_type") == "video"]
+
+    first_audio: Mapping[str, Any] = audio[0] if audio else {}
+    first_video: Mapping[str, Any] = video[0] if video else {}
+    start = first_audio.get("start_time")
+
+    return Media_Probe(
+        audio_streams=len(audio),
+        video_streams=len(video),
+        audio_duration=(
+            _stream_duration(first_audio, container_duration) if audio else 0.0
+        ),
+        video_duration=(
+            _stream_duration(first_video, container_duration) if video else 0.0
+        ),
+        video_frames=coerce_int(first_video.get("nb_frames"), 0, lo=0),
+        sample_rate=coerce_int(first_audio.get("sample_rate"), 0, lo=0),
+        channels=coerce_int(first_audio.get("channels"), 0, lo=0),
+        audio_start_time=(
+            0.0 if start in (None, "N/A", "") else coerce_float(start, 0.0)
+        ),
+    )
+
+
+def verify_replacement(
+    candidate: Any,
+    clip: Any,
+    *,
+    fmt: Audio_Format,
+    runner: Any = None,
+    timeout_s: float = MIN_STEP_TIMEOUT_S,
+    probe: Any = None,
+) -> Media_Probe:
+    """Promote a remux candidate to Replacement_Media, or raise (Req 3.5, 17.1-17.4, 17.7).
+
+    Every condition must hold; the **first** failure raises :class:`Integrity_Error` naming
+    the specific mismatch, because "the audio got shorter" and "a second audio stream
+    appeared" need different fixes and a generic message would hide which happened:
+
+    * exactly one audio stream and exactly one video stream (Req 17.2);
+    * audio duration within **one audio frame** (``1/sample_rate``) of the incoming clip's
+      (Req 17.1) — this is the check that catches a stray ``-shortest`` or an
+      ``acrossfade`` that shortened the stream, which is the single most likely way this
+      engine could silently corrupt a clip;
+    * sample rate and channel count equal the probed :class:`Audio_Format` (Req 17.2);
+    * video duration and frame count equal the incoming clip's (Req 17.3), so ``-c:v copy``
+      demonstrably copied rather than re-encoded or truncated;
+    * audio ``start_time`` equal to the incoming clip's, within one audio frame (Req 17.4),
+      so A/V alignment survived.
+
+    Returns the candidate's :class:`Media_Probe` on success, which the caller can attach to
+    the result detail. **Deletion is the caller's job**, not this function's: the ladder rung
+    that catches the error is what owns the workspace and what decides to fall back to the
+    preceding stage's media (Req 3.5, 17.7). Keeping deletion out of here means a caller can
+    also use it as a read-only assertion.
+
+    ``probe`` overrides the prober (the Req 19.1 seam) and must accept
+    ``(path, runner, timeout_s)``.
+
+    Raises:
+        Invalid_Audio_Format: ``fmt`` is not a probed :class:`Audio_Format`.
+        Integrity_Error: any condition above fails.
+        worker.ffmpeg_utils.FFmpegError: a probe invocation failed (via :func:`_run`).
+    """
+    if not isinstance(fmt, Audio_Format):
+        raise Invalid_Audio_Format("verify_replacement requires a probed Audio_Format")
+
+    reader = probe if probe is not None else probe_media
+    produced = reader(candidate, runner, timeout_s)
+    original = reader(clip, runner, timeout_s)
+
+    # 1. Stream inventory (Req 17.2).
+    if produced.audio_streams != 1:
+        raise Integrity_Error(
+            f"Replacement_Media has {produced.audio_streams} audio streams, expected 1"
+        )
+    if produced.video_streams != 1:
+        raise Integrity_Error(
+            f"Replacement_Media has {produced.video_streams} video streams, expected 1"
+        )
+
+    # 2. Audio format (Req 17.2).
+    if produced.sample_rate != int(fmt.sample_rate):
+        raise Integrity_Error(
+            f"Replacement_Media is {produced.sample_rate}Hz, expected {int(fmt.sample_rate)}Hz"
+        )
+    if produced.channels != int(fmt.channels):
+        raise Integrity_Error(
+            f"Replacement_Media has {produced.channels} channels, "
+            f"expected {int(fmt.channels)}"
+        )
+
+    # 3. Audio duration, within one audio frame (Req 17.1).
+    frame = 1.0 / max(int(fmt.sample_rate), 1)
+    audio_drift = abs(produced.audio_duration - original.audio_duration)
+    if audio_drift > frame + _DRIFT_EPSILON:
+        raise Integrity_Error(
+            f"audio duration drifted by {audio_drift:.6f}s "
+            f"({produced.audio_duration:.6f} vs {original.audio_duration:.6f}), "
+            f"tolerance is one audio frame ({frame:.6f}s)"
+        )
+
+    # 4. Video untouched (Req 17.3).
+    video_drift = abs(produced.video_duration - original.video_duration)
+    if video_drift > _VIDEO_DURATION_TOLERANCE_S + _DRIFT_EPSILON:
+        raise Integrity_Error(
+            f"video duration drifted by {video_drift:.6f}s "
+            f"({produced.video_duration:.6f} vs {original.video_duration:.6f})"
+        )
+    # ``nb_frames`` is compared only when the probe reported it for both files: some
+    # containers legitimately omit it, and treating "unknown" as "zero" would fail every
+    # such clip. When both report it, ``-c:v copy`` makes equality exact.
+    if produced.video_frames and original.video_frames:
+        if produced.video_frames != original.video_frames:
+            raise Integrity_Error(
+                f"video frame count changed: {produced.video_frames} vs "
+                f"{original.video_frames}"
+            )
+
+    # 5. A/V alignment (Req 17.4).
+    start_drift = abs(produced.audio_start_time - original.audio_start_time)
+    if start_drift > frame + _DRIFT_EPSILON:
+        raise Integrity_Error(
+            f"audio start_time drifted by {start_drift:.6f}s "
+            f"({produced.audio_start_time:.6f} vs {original.audio_start_time:.6f})"
+        )
+
+    return produced

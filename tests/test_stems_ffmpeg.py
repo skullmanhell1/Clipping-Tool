@@ -747,3 +747,269 @@ def test_a_probed_audio_format_is_required(tmp_path, call: str) -> None:
                 tmp_path / "m.wav", tmp_path / "b.wav", (), fmt=None, duration=1.0,
                 runner=Recording_Command_Runner(), timeout_s=5.0,
             )
+
+
+
+# =========================================================================== #
+# Epic 12 — integrity verification of the Replacement_Media (tasks 12.1-12.2) #
+# =========================================================================== #
+
+
+def _probe(**overrides) -> stems.Media_Probe:
+    """A ``Media_Probe`` describing a well-formed one-video/one-audio clip."""
+    fields = {
+        "audio_streams": 1,
+        "video_streams": 1,
+        "audio_duration": 3.0,
+        "video_duration": 3.0,
+        "video_frames": 90,
+        "sample_rate": 48000,
+        "channels": 2,
+        "audio_start_time": 0.0,
+    }
+    fields.update(overrides)
+    return stems.Media_Probe(**fields)
+
+
+def _canned(candidate: stems.Media_Probe, original: stems.Media_Probe):
+    """A ``probe`` seam returning ``candidate`` first and ``original`` second."""
+    answers = [candidate, original]
+
+    def probe(_path, _runner=None, _timeout=None):
+        return answers.pop(0) if answers else original
+
+    return probe
+
+
+def _verify(candidate: stems.Media_Probe, original=None, **fmt_kwargs):
+    """Run ``verify_replacement`` against canned probes."""
+    fields = {"sample_rate": 48000, "channels": 2}
+    fields.update(fmt_kwargs)
+    return stems.verify_replacement(
+        "candidate.mp4", "clip.mp4",
+        fmt=stems.Audio_Format(**fields),
+        probe=_canned(candidate, original if original is not None else _probe()),
+    )
+
+
+def test_a_well_formed_candidate_verifies() -> None:
+    """The happy path returns the candidate's probe rather than just ``None``."""
+    produced = _verify(_probe())
+    assert isinstance(produced, stems.Media_Probe)
+    assert produced.audio_streams == 1 and produced.video_streams == 1
+
+
+@pytest.mark.parametrize(
+    "overrides,expected",
+    [
+        ({"audio_streams": 0}, "audio streams"),
+        ({"audio_streams": 2}, "audio streams"),
+        ({"video_streams": 0}, "video streams"),
+        ({"video_streams": 2}, "video streams"),
+        ({"sample_rate": 44100}, "44100Hz"),
+        ({"channels": 1}, "channels"),
+        ({"audio_duration": 2.5}, "audio duration drifted"),
+        ({"video_duration": 2.5}, "video duration drifted"),
+        ({"video_frames": 89}, "video frame count changed"),
+        ({"audio_start_time": 0.5}, "start_time drifted"),
+    ],
+)
+def test_every_integrity_condition_is_enforced_and_named(
+    overrides: dict, expected: str
+) -> None:
+    """Each failure raises, and says **which** condition failed (Req 17.1-17.4).
+
+    A generic "integrity check failed" would be nearly useless in a log: "the audio got
+    shorter" and "a second audio stream appeared" have different causes and different fixes,
+    so the message names the specific mismatch.
+    """
+    with pytest.raises(stems.Integrity_Error, match=re.escape(expected)):
+        _verify(_probe(**overrides))
+
+
+def test_the_audio_duration_tolerance_is_exactly_one_audio_frame() -> None:
+    """One frame passes, two fail — the check that catches a stray ``-shortest`` (Req 17.1)."""
+    frame = 1.0 / 48000
+
+    _verify(_probe(audio_duration=3.0 + frame))                       # at tolerance: ok
+    with pytest.raises(stems.Integrity_Error, match="audio duration drifted"):
+        _verify(_probe(audio_duration=3.0 + frame * 2))
+
+    # The tolerance follows the *probed* rate, so a low rate is looser in absolute terms.
+    _verify(
+        _probe(sample_rate=8000, audio_duration=3.0 + 1.0 / 8000),
+        _probe(sample_rate=8000),
+        sample_rate=8000,
+    )
+
+
+def test_an_unknown_frame_count_is_not_treated_as_zero_frames() -> None:
+    """Some containers omit ``nb_frames``; failing every such clip would be wrong."""
+    # Neither side reports it -> the comparison is skipped, not failed.
+    _verify(_probe(video_frames=0), _probe(video_frames=0))
+    # Only one side reports it -> also skipped, because 0 means "unknown" here.
+    _verify(_probe(video_frames=0), _probe(video_frames=90))
+    _verify(_probe(video_frames=90), _probe(video_frames=0))
+
+
+def test_verification_does_not_delete_the_candidate(tmp_path) -> None:
+    """Deletion belongs to the ladder rung that owns the workspace (Req 3.5, 17.7)."""
+    candidate = tmp_path / "candidate.mp4"
+    candidate.write_bytes(b"not really an mp4")
+
+    with pytest.raises(stems.Integrity_Error):
+        stems.verify_replacement(
+            candidate, "clip.mp4",
+            fmt=stems.Audio_Format(sample_rate=48000, channels=2),
+            probe=_canned(_probe(audio_streams=0), _probe()),
+        )
+
+    assert candidate.exists(), "verify_replacement must not delete anything itself"
+
+
+def test_probe_media_counts_every_stream() -> None:
+    """It selects no stream, because the stream *count* is part of what is verified."""
+    runner = Recording_Command_Runner(
+        probe_json={
+            "streams": [
+                {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
+                 "duration": "3.0", "start_time": "0.0"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2},
+            ],
+            "format": {"duration": "3.0"},
+        }
+    )
+    probed = stems.probe_media("clip.mp4", runner, 5.0)
+
+    assert probed.audio_streams == 2 and probed.video_streams == 1
+    assert probed.video_frames == 90
+    assert (probed.sample_rate, probed.channels) == (48000, 2)
+    argv = runner.calls[0].argv
+    assert "-show_streams" in argv
+    assert "-select_streams" not in argv          # would hide a second audio stream
+
+
+def test_probe_media_falls_back_to_the_container_duration() -> None:
+    """A stream that carries no duration of its own still yields a usable answer."""
+    runner = Recording_Command_Runner(
+        probe_json={
+            "streams": [
+                {"codec_type": "video", "duration": "N/A"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
+                 "start_time": "N/A"},
+            ],
+            "format": {"duration": "4.25"},
+        }
+    )
+    probed = stems.probe_media("clip.mp4", runner, 5.0)
+
+    assert probed.video_duration == pytest.approx(4.25)
+    assert probed.audio_duration == pytest.approx(4.25)
+    assert probed.audio_start_time == 0.0
+    assert probed.video_frames == 0                # unknown, not zero frames
+
+
+def test_probe_media_is_total_on_unreadable_output() -> None:
+    """An unreadable candidate must fail *verification*, not raise a parse error.
+
+    That distinction matters to the ladder: a parse error would surface as a bare ``failed``
+    with an opaque message, whereas an all-zero probe fails the stream-count check and says
+    so.
+    """
+    for payload in ("not json at all", "[]", "null", ""):
+        runner = Recording_Command_Runner(probe_json=payload)
+        assert stems.probe_media("x.mp4", runner, 5.0) == stems.Media_Probe()
+
+    with pytest.raises(stems.Integrity_Error, match="audio streams"):
+        stems.verify_replacement(
+            "candidate.mp4", "clip.mp4",
+            fmt=stems.Audio_Format(sample_rate=48000, channels=2),
+            runner=Recording_Command_Runner(probe_json="garbage"),
+        )
+
+
+def test_verification_requires_a_probed_format() -> None:
+    """Without a probed format there is nothing to compare the candidate against."""
+    with pytest.raises(stems.Invalid_Audio_Format):
+        stems.verify_replacement("c.mp4", "clip.mp4", fmt=None, probe=_canned(_probe(), _probe()))
+
+
+# --------------------------------------------------------------------------- #
+# P13 — Replacement_Media preserves duration, format, streams and alignment    #
+# --------------------------------------------------------------------------- #
+# Feature: audio-stem-inpainting, Property 13: Replacement_Media preserves duration, format,
+# streams and A/V alignment
+@requires_ffmpeg
+@pytest.mark.parametrize(
+    "gains,repair_mode,declick",
+    [
+        ({"music": 1.0, "other": 1.0, "vocals": 1.0}, "off", False),
+        ({"music": 0.25, "other": 0.6, "vocals": 1.0}, "crossfade", False),
+        ({"music": 0.0, "other": 0.0, "vocals": 1.0}, "crossfade", True),
+    ],
+)
+def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
+    tmp_path, make_video, gains: dict, repair_mode: str, declick: bool
+) -> None:
+    """End to end on a real tiny clip: the video is untouched and the audio is exact.
+
+    Runs the whole epic-11 pipeline for real — extract, separate (ffmpeg backend), assemble,
+    mix + repair, remux — then checks the candidate through :func:`verify_replacement` and
+    additionally asserts the two things verification cannot see:
+
+    * the **video stream is bit-identical** to the incoming clip's, which is the strongest
+      possible statement of "``-c:v copy`` copied" (Req 3.2, 17.3);
+    * the **incoming clip file is unchanged**, byte for byte, so the engine provably works on
+      copies and never edits its input in place (Req 17.6, 17.7).
+    """
+    source = make_video(name="src.mp4", duration=2.0, w=320, h=240, audio=True)
+    before = source.read_bytes()
+
+    fmt = stems.probe_audio_format(source, _real_runner, 60.0)
+    assert fmt is not None
+
+    extracted = stems.extract_clip_audio(
+        source, tmp_path / "in.wav", fmt=fmt, runner=_real_runner, timeout_s=60.0
+    )
+    raw = stems.Ffmpeg_Separator_Backend(runner=_real_runner).separate(
+        extracted, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=60.0
+    )
+    stem_set, _missing = stems.assemble_stem_set(
+        raw, dest_dir=tmp_path / "stems", fmt=fmt, duration=2.0,
+        runner=_real_runner, timeout_s=60.0,
+    )
+
+    plan = _plan(
+        windows=_windows(((1.0, 1.012),)) if repair_mode != "off" else (),
+        gains=gains, repair_mode=repair_mode, duration=2.0, declick=declick,
+        sample_rate=fmt.sample_rate, channels=fmt.channels, backend="ffmpeg",
+    )
+    mixed, _details = stems.render_mix(
+        plan, stem_set, tmp_path / "mixed.wav", runner=_real_runner, timeout_s=60.0
+    )
+    candidate = stems.remux_replacement(
+        source, mixed, tmp_path / "repaired.mp4",
+        fmt=fmt, runner=_real_runner, timeout_s=60.0,
+    )
+
+    # The whole integrity gate, on real output.
+    produced = stems.verify_replacement(
+        candidate, source, fmt=fmt, runner=_real_runner, timeout_s=60.0
+    )
+    assert produced.audio_streams == 1 and produced.video_streams == 1
+
+    # The video stream is bit-identical: -c:v copy really copied.
+    def _video_bytes(path: Path) -> bytes:
+        out = tmp_path / f"{path.stem}.h264"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
+             "-map", "0:v:0", "-c", "copy", "-f", "h264", str(out)],
+            check=True, capture_output=True,
+        )
+        return out.read_bytes()
+
+    assert _video_bytes(candidate) == _video_bytes(source)
+
+    # The incoming clip was never edited in place.
+    assert source.read_bytes() == before

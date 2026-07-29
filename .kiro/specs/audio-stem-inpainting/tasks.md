@@ -667,15 +667,72 @@ spec's central promise to an upgrading operator).
     - **Property 12: Repair touches only planned windows, once, and never exceeds full scale** — for any clip audio, Seam list and Repair_Mode, samples outside the planned `Repair_Window`s are identical to a gain-only reference rendering; each merged window contains exactly one equal-power gain trough (overlapping seams repaired once); and no written sample's absolute amplitude exceeds full scale. Generators: `st_pcm_frames`, `st_seam_notes`, `st_repair_mode`, `st_stem_gains`.
     - _Requirements: 5.9, 7.2, 7.5, 7.7_ · _Properties: P12_
 
-- [ ] 12. Integrity verification of the Replacement_Media
-  - [ ] 12.1 Implement `verify_replacement`
+- [x] 12. Integrity verification of the Replacement_Media
+  - [x] 12.1 Implement `verify_replacement`
     - Raise `Integrity_Error` unless **all** hold: exactly one audio stream and exactly one video stream; audio duration within one audio frame (`1/sample_rate`) of the incoming clip; sample rate and channel count equal the probed `Audio_Format`; video duration and `nb_frames` equal the incoming clip's; audio `start_time` equal to the incoming clip's.
     - Call it before returning any media; on failure delete the candidate and return `failed` with no media, so the preceding stage's media is used.
     - _Requirements: 3.5, 17.1, 17.2, 17.3, 17.4, 17.7_
 
-  - [ ]* 12.2 Property test: Replacement_Media preserves duration, format, streams and alignment → `tests/test_stems_ffmpeg.py`
+  - [x]* 12.2 Property test: Replacement_Media preserves duration, format, streams and alignment → `tests/test_stems_ffmpeg.py`
     - **Property 13: Replacement_Media preserves duration, format, streams and A/V alignment** — for any tiny generated clip and any `Stem_Options`, the Replacement_Media has exactly one audio and one video stream, audio duration within one audio frame of the incoming clip, identical sample rate and channel count, identical video duration and frame count, identical audio start timestamp, and a bit-identical video stream; and the incoming clip file's checksum is unchanged. Generators: `st_tiny_clip`, `st_stem_options` (with `requires_ffmpeg`).
     - _Requirements: 3.1, 3.2, 3.6, 7.9, 17.1, 17.2, 17.3, 17.4, 17.6, 17.7_ · _Properties: P13_
+
+  - **EPIC 12 NOTES.** `verify_replacement` needed a second, fuller prober:
+    `probe_audio_format` selects `a:0`, so it cannot see a *second* audio stream — and the
+    stream count is one of the things Req 17.2 asks us to check. Added `Media_Probe` +
+    `probe_media` (`-show_streams -show_format`, no `-select_streams`) alongside it.
+    - **CORRECTIONS:**
+      1. **The design words the video-duration check as "equal"; shipped with a documented
+         1 ms tolerance** (`_VIDEO_DURATION_TOLERANCE_S`). Under `-c:v copy` the packets are
+         bit-identical, but the output container need not reuse the input's `timescale`, so
+         the reported duration can differ in the last decimal without a frame changing.
+         Comparing exactly would fail good output on a technicality; 1 ms is far below one
+         frame at any sane rate, so a real truncation still fails. The stronger claim — that
+         the video stream is **bit-identical** — is asserted directly in P13 by extracting
+         both video streams with `-c copy` and comparing bytes.
+      2. **Every tolerance comparison needed an explicit float epsilon**
+         (`_DRIFT_EPSILON = 1e-9`). "Within one audio frame" fails a naive `>` test for a
+         file that is legitimately *exactly* one frame different:
+         `abs((3.0 + 1/8000) - 3.0)` is `0.00012500000000011…`, fractionally larger than
+         `1/8000`. Without the epsilon the check rejected good output depending on where the
+         durations landed in binary floating point — non-deterministic from the operator's
+         point of view. Caught by the tolerance-boundary test, not by inspection.
+      3. **`nb_frames` is compared only when both files report it.** Several containers
+         legitimately omit it, and treating "unknown" as "zero frames" would fail every such
+         clip. When both report it, `-c:v copy` makes equality exact.
+      4. **`verify_replacement` deliberately does not delete the failed candidate.**
+         Deletion belongs to the ladder rung that owns the workspace (13.4), which also has
+         to decide about falling back to the preceding stage's media. Keeping it out means
+         the function doubles as a read-only assertion.
+
+  - **FOUNDATION CHANGES (the two decisions carried in `SESSION_HANDOFF.md` §3, now done).**
+    Both were user-approved; both are in `worker/engines/host.py`, and both required moving a
+    foundation contract pin, which is the pin doing its job rather than a violation of
+    Req 20.6.
+    1. **The media gate is widened to admit `degraded` (decision (a)).** Was
+       `result.status is Engine_Status.APPLIED`; now `result.status in
+       _MEDIA_BEARING_STATUSES` (`applied` | `degraded`). Rationale recorded on the constant:
+       degradation describes *fidelity*, not usability, and the old gate created a real
+       asymmetry — a degraded engine's artifacts and Compose_Contribution were collected
+       while its media was silently dropped. Req 8.3 still holds because it is carried by
+       `media is None`, not by status. **No Pipeline change was needed**: `raw = out.media or
+       raw` already does the right thing. This unblocks tasks 13.3 / 13.5 / 13.7.
+       Tests updated: `test_stage_media_replaces_only_for_a_successful_produces_media_engine`
+       → `test_stage_media_is_adopted_only_from_a_media_bearing_produces_media_engine`, now a
+       6-row matrix over (status × has-media) so "declared `produces_media` but returned
+       nothing" is covered separately from the status gate.
+    2. **`run_stage` gained an additive `notes` keyword (decision (b)).** Threaded into
+       `_build_context` as `caller_notes` and appended **after** the host's synthesised
+       notes, so the order is fixed: `fps_fallback:`, then `filler_seam:`, then the
+       caller's. Default `()`, values coerced to `str`. The epic-7 `filler_plan=` keyword is
+       left as shipped — `notes` is the general channel, `filler_plan` is the specific
+       seam-publication one, and collapsing them would make the host stop owning the
+       `filler_seam:` spelling. Contract pin in `tests/test_engines_base.py` extended.
+
+  - **CAVEAT.** The all-off parity gate (`tests/test_pipeline_degradation.py`) is
+    `requires_ffmpeg` and therefore **skipped** in a sandbox with no binary. The gate widening
+    cannot change all-off behaviour by construction (no engine is enabled, so no result is
+    collected), but that reasoning has not been *executed* here — check the CI run.
 
 - [ ] 13. The engine class and the `run` gate / degradation ladder
   - [ ] 13.1 Declare the ClassVar contract, injected collaborators, and registration
