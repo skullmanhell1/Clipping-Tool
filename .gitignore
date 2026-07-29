@@ -17,6 +17,9 @@ venv/
 storage/uploads/*
 storage/temp/*
 storage/clips/*
+# Durable per-clip engine artifacts persisted through the storage backend
+# (e.g. retained stem WAVs under storage/engines/<job>/<clip>/<engine>/).
+storage/engines/*
 storage/*.db
 storage/*.db-wal
 storage/*.db-shm

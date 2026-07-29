@@ -26,6 +26,7 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
+from tests.conftest import FakeWord
 from worker.diarization import Speaker_Turn, rebase_turns, segment_by_words
 from worker.effects import filler
 from worker.effects.filler import Interval
@@ -33,10 +34,10 @@ from worker.effects.reframe import (
     REFRAME_INTENSITY,
     Association,
     Center,
-    FaceBox,
     Face_Track,
-    Region,
+    FaceBox,
     ReframeUnavailable,
+    Region,
     apply_speaker_reframe,
     associate_faces,
     build_follow_active_path,
@@ -46,7 +47,6 @@ from worker.effects.reframe import (
     intensity_params,
 )
 from worker.ffmpeg_utils import MediaInfo
-from tests.conftest import FakeWord
 
 _INTENSITIES = ["subtle", "standard", "heavy"]
 

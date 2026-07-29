@@ -18,7 +18,6 @@ remembered so it is not processed twice.
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 

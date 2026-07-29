@@ -75,6 +75,7 @@ from tests.strategies import (
 )
 from worker import captions as cap_module
 from worker.effects import caption_presets, compositor, overlays
+from worker.engines import kinetic as kinetic_module
 from worker.engines.base import (
     Compose_Contribution,
     Engine_Result,
@@ -84,7 +85,6 @@ from worker.engines.base import (
 )
 from worker.engines.capabilities import Capability_Report
 from worker.engines.host import Engine_Host
-from worker.engines import kinetic as kinetic_module
 from worker.engines.kinetic import (
     ASS_NAME,
     ENGINE_ID,

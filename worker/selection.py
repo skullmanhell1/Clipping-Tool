@@ -14,7 +14,7 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from worker import segmentation as seg

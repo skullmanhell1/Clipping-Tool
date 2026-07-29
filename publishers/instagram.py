@@ -1,8 +1,18 @@
 """Instagram Graph API resumable Reels uploader."""
 from __future__ import annotations
-import time, httpx
+
+import time
+
+import httpx
+
 from config import settings
-from publishers.base import BasePublisher, PublishRequest, PublishResult, PublishState, PublisherStatus
+from publishers.base import (
+    BasePublisher,
+    PublisherStatus,
+    PublishResult,
+    PublishState,
+)
+
 
 class InstagramPublisher(BasePublisher):
     name="instagram"; min_interval_seconds=18

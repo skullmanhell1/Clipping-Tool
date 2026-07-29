@@ -1,4 +1,3 @@
-import React from "react";
 
 /**
  * Labelled <select> styled for the dark theme.

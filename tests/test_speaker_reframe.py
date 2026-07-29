@@ -23,8 +23,8 @@ from tests.fakes import FakeFaceDetector
 from worker.diarization import Speaker_Turn
 from worker.effects.reframe import (
     Association,
-    FaceBox,
     Face_Track,
+    FaceBox,
     associate_faces,
     build_face_tracks,
 )

@@ -344,10 +344,11 @@ def test_p28_permissibility_forces_local_only_no_external(
 #     ``max_samples`` cap logic is exercised over 100 generated inputs with no
 #     ffmpeg and no OpenCV (cv2 is not importable in this environment).
 # ===========================================================================
-from pathlib import Path as _Path
 import sys as _sys
+from pathlib import Path as _Path
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from worker.effects.reframe import FaceBox
 

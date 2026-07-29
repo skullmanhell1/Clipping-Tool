@@ -218,6 +218,7 @@ import os  # noqa: E402
 import re  # noqa: E402
 import tempfile  # noqa: E402
 from dataclasses import replace  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import worker.captions as cap  # noqa: E402
 from worker.captions import (  # noqa: E402
@@ -277,7 +278,7 @@ def test_p4_per_word_animation_timed_and_bounded(data, anim):
     cues = words_to_cues(words)
     dest = tempfile.mktemp(suffix=".ass")
     build_ass(cues, dest, preset=preset, clip_duration=duration)
-    text = open(dest, encoding="utf-8").read()
+    text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
     eps = 1e-6
     for line in text.splitlines():
@@ -308,7 +309,7 @@ def test_p5_captions_use_ass_tags_only(data, name):
     from worker.captions import subtitles_filter
 
     filt = subtitles_filter(dest)
-    text = open(dest, encoding="utf-8").read()
+    text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
     assert "drawtext" not in text.lower()
     assert "drawtext" not in filt.lower()
@@ -367,7 +368,7 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
             dest, preset=preset, clip_duration=1.0,
         )
         style = next(
-            ln for ln in open(dest, encoding="utf-8").read().splitlines()
+            ln for ln in Path(dest).read_text(encoding="utf-8").splitlines()
             if ln.startswith("Style: Default")
         )
         os.remove(dest)
@@ -383,7 +384,7 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
             dest2, preset=preset, position=override, clip_duration=1.0,
         )
         style2 = next(
-            ln for ln in open(dest2, encoding="utf-8").read().splitlines()
+            ln for ln in Path(dest2).read_text(encoding="utf-8").splitlines()
             if ln.startswith("Style: Default")
         )
         os.remove(dest2)
@@ -427,7 +428,7 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
         clip_duration=float(len(words)), permissibility=True,
         emoji_glyph_available=glyph_available, emoji_downloader=downloader,
     )
-    text = open(dest, encoding="utf-8").read()
+    text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
 
     assert downloads == []  # no external download under permissibility

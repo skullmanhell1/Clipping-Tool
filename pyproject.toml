@@ -1,0 +1,76 @@
+[tool.pytest.ini_options]
+# The suite previously ran with no configuration at all, which meant a typo'd marker
+# silently did nothing, a typo'd option key was ignored, and warnings — including
+# deprecations from our own code — scrolled past unnoticed.
+minversion = "8.0"
+testpaths = ["tests"]
+
+addopts = [
+    # A misspelt marker (@pytest.mark.slwo) would otherwise be silently accepted and
+    # the test would just never be selected.
+    "--strict-markers",
+    # Same idea for this file: an unknown key here becomes an error rather than being
+    # quietly dropped.
+    "--strict-config",
+    # Show the reason for every skip/xfail, so a test that stops running because a
+    # binary went missing is visible instead of hiding in a summary count.
+    "-ra",
+]
+
+# Warnings are errors. The bug that motivated most of this hardening was invisible
+# precisely because nothing in the suite objected to it, and a DeprecationWarning is the
+# usual early notice that a dependency is about to break. Third-party warnings we cannot
+# fix are ignored individually rather than by relaxing the whole policy.
+filterwarnings = [
+    "error",
+    # starlette's TestClient warns about httpx; there is no httpx2 release to move to.
+    # Matched by message with no category, because starlette raises its own
+    # StarletteDeprecationWarning rather than the builtin DeprecationWarning.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:",
+    # google.protobuf (via mediapipe) reaches into deprecated importlib APIs.
+    "ignore:Deprecated call to `pkg_resources:DeprecationWarning",
+    "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+    # SWIG-generated bindings in mediapipe declare __module__ in a way Python 3.11 flags.
+    "ignore:builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute:DeprecationWarning",
+]
+
+markers = [
+    "slow: takes more than a second or two; deselect with '-m \"not slow\"'",
+    "real_binary: shells out to a real ffmpeg/ffprobe rather than an injected runner",
+]
+
+
+[tool.ruff]
+# Previously there was no ruff configuration at all, so the enforced rule set was
+# whatever the installed ruff version happened to default to — 857 findings on ruff 0.16
+# versus a handful on older releases. That variability is why CI ran `ruff check . ||
+# true`: the step could not be trusted to mean anything. Pinning the selection makes the
+# result reproducible, which is what allows CI to block on it.
+target-version = "py311"
+line-length = 100
+exclude = ["frontend", ".venv", "storage"]
+
+[tool.ruff.lint]
+# Deliberately a focused set: rules that catch mistakes rather than rules that impose a
+# house style on 300 existing files. `UP` (pyupgrade, ~450 findings — mostly
+# `Optional[X]` -> `X | None`) and `B` (bugbear, ~30) are both worth adopting, but each
+# is a mechanical sweep of its own and does not belong in the same change as a set of
+# behavioural fixes.
+select = [
+    "F",   # pyflakes: undefined names, unused imports/variables — real bugs
+    "E4",  # import placement/shadowing
+    "E7",  # statement-level mistakes
+    "E9",  # syntax and IO errors
+    "I",   # import sorting, so import blocks stop churning between contributors
+]
+
+[tool.ruff.lint.per-file-ignores]
+# publishers/* is written in a deliberately compressed one-statement-per-line style
+# (`self._stop.clear(); self._thread = ...`). Reformatting those modules is a standalone
+# refactor; scoping the exemption here keeps the checks live everywhere else rather than
+# disabling them globally, which is what a top-level ignore would have done.
+"publishers/*" = ["E701", "E702", "E401"]
+# tests/* imports after module-level setup on purpose: conftest rewrites environment
+# variables before `config` is imported, and several test modules import their subject
+# only after installing a guard. That ordering is the point, so E402 cannot apply.
+"tests/*" = ["E402"]

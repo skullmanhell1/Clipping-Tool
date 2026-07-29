@@ -34,6 +34,7 @@ from typing import Any, Callable, Optional, Protocol
 from config import settings
 from worker.effects.caption_presets import plan_keywords
 
+
 # --------------------------------------------------------------------------- #
 # Data types
 # --------------------------------------------------------------------------- #

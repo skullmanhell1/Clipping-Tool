@@ -1,5 +1,11 @@
 """Publisher registry and platform capability discovery."""
-from publishers.base import BasePublisher, PublishRequest, PublishResult, PublishState, PublisherStatus
+from publishers.base import (
+                 BasePublisher,
+                 PublisherStatus,
+                 PublishRequest,
+                 PublishResult,
+                 PublishState,
+)
 from publishers.instagram import InstagramPublisher
 from publishers.tiktok import TikTokPublisher
 from publishers.whop import WhopPublisher
