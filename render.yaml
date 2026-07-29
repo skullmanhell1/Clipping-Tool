@@ -22,6 +22,19 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      # Set this to your site's origin, e.g. https://ai-video-clipper.onrender.com
+      # (or your custom domain). It is deliberately left blank rather than defaulted:
+      #
+      #   * The application default is "*", which is fine for local development but
+      #     lets any site call this API once it is public.
+      #   * A wildcard also disables credentialed cross-origin requests, because the
+      #     CORS specification forbids combining "*" with
+      #     Access-Control-Allow-Credentials and browsers reject such a response.
+      #
+      # Leaving it unset boots with the wildcard and logs a warning on every start,
+      # since ENVIRONMENT is production here. Comma-separate multiple origins.
+      - key: CORS_ORIGINS
+        sync: false
       - key: STORAGE_BACKEND
         value: local        # set to "s3" and fill the S3_* vars for durable storage
       - key: WHISPER_MODEL
