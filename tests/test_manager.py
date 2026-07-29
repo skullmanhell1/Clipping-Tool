@@ -70,7 +70,7 @@ def test_throttling_defers_second_post(tmp_path, fake_clip, video_file, monkeypa
     import publishers.manager as manager_mod
 
     # Force a long per-platform interval so the second attempt is throttled.
-    monkeypatch.setattr(manager_mod.settings, "publish_default_interval_seconds", 999)
+    monkeypatch.setattr(manager_mod.settings, "publish_min_interval_floor_seconds", 999)
     pub = FakePublisher("youtube", min_interval_seconds=999)
     manager, store = _manager(tmp_path, {"youtube": pub})
 
@@ -112,3 +112,64 @@ def test_failed_publish_result_recorded(tmp_path, fake_clip, video_file):
     attempt = store.get_attempt(ids[0])
     assert attempt["state"] == "failed"
     assert attempt["error"] == "boom"
+
+
+
+def test_each_publisher_own_rate_limit_governs(tmp_path, fake_clip, video_file, monkeypatch):
+    """A publisher's declared ``min_interval_seconds`` is what throttles it.
+
+    Regression: the scheduler applied
+    ``max(publisher.min_interval_seconds, settings.publish_default_interval_seconds)``
+    with that setting defaulting to 30s. Every real publisher declares 2-18s, so the
+    30s floor overrode all of them and ``min_interval_seconds`` was dead on every
+    publisher. The setting is now a floor defaulting to 0.
+
+    Two platforms are used so the assertion cannot pass by accident, and two poll cycles
+    are driven because ``run_due_once`` sends at most one attempt per platform per poll
+    (it captures ``now`` once). Across two immediate polls the fast publisher — whose
+    declared interval is well under the old 30s floor — must send both attempts, while the
+    slow one is still inside its own window.
+    """
+    import publishers.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod.settings, "publish_min_interval_floor_seconds", 0.0)
+    fast = FakePublisher("whop", min_interval_seconds=0.0)
+    slow = FakePublisher("youtube", min_interval_seconds=999)
+    manager, _store = _manager(tmp_path, {"whop": fast, "youtube": slow})
+
+    for job in ("j1", "j2"):
+        manager.submit(job_id=job, clip=fake_clip, video_path=video_file,
+                       platforms=["whop", "youtube"], mode="auto")
+
+    manager.run_due_once()
+    manager.run_due_once()
+
+    assert len(fast.published) == 2, "the fast publisher was throttled by a global floor"
+    assert len(slow.published) == 1, "the slow publisher ignored its own rate limit"
+
+
+def test_the_floor_can_still_slow_a_fast_publisher(tmp_path, fake_clip, video_file,
+                                                   monkeypatch):
+    """The floor remains available for operators who want to be more conservative."""
+    import publishers.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod.settings, "publish_min_interval_floor_seconds", 999)
+    fast = FakePublisher("whop", min_interval_seconds=0.0)
+    manager, _store = _manager(tmp_path, {"whop": fast})
+
+    for job in ("j1", "j2"):
+        manager.submit(job_id=job, clip=fake_clip, video_path=video_file,
+                       platforms=["whop"], mode="auto")
+
+    manager.run_due_once()
+    manager.run_due_once()
+
+    # The floor, not the publisher's own 0s interval, is what stops the second send.
+    assert len(fast.published) == 1
+
+
+def test_the_shipped_floor_default_trusts_the_publishers():
+    """0 by default, so per-publisher limits are effective out of the box."""
+    from config import Settings
+
+    assert Settings(_env_file=None).publish_min_interval_floor_seconds == 0.0

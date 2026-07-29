@@ -354,3 +354,100 @@ def test_marker_selection_transcript_model_degraded():
     notes = []
     diarize_source(words, duration, backend=RaisingDiarizationBackend(), notes=notes)
     assert notes == ["diarization_degraded"]
+
+
+
+# --------------------------------------------------------------------------- #
+# Speaker attribution is conservative (does not invent speakers)                #
+# --------------------------------------------------------------------------- #
+def test_ordinary_pauses_in_a_monologue_do_not_invent_a_second_speaker():
+    """A single speaker pausing repeatedly is reported as one speaker.
+
+    Regression: label assignment advanced a round-robin on every gap larger than
+    ``pause_gap`` (0.9s by default). Pauses just over that are entirely normal inside one
+    person's speech — a breath, a sentence boundary — so a monologue was reported as two
+    speakers, and speaker-aware reframe then cut back and forth between two "speakers"
+    who were the same person.
+
+    Word timings carry no speaker identity, so attribution must be biased toward leaving
+    words with the current speaker.
+
+    Validates: Requirements 2.3
+    """
+    # Five runs separated by 1.2s: longer than pause_gap (0.9) so each ends a turn, but
+    # far short of handoff_gap (2.5), so none of them implies a different speaker.
+    words = []
+    t = 0.0
+    for _ in range(5):
+        words.append(FakeWord(t, t + 0.8, "talking"))
+        t += 0.8 + 1.2
+
+    turns = segment_by_words(words, t)
+
+    assert {turn.speaker_label for turn in turns} == {"S1"}
+
+
+def test_a_long_silence_still_hands_off_to_another_speaker():
+    """The heuristic is conservative, not inert: a real hand-off is still detected.
+
+    Validates: Requirements 2.3
+    """
+    words = [
+        FakeWord(0.0, 1.0, "first"),
+        FakeWord(1.2, 2.0, "speaker"),
+        # A 4s silence, comfortably beyond handoff_gap.
+        FakeWord(6.0, 7.0, "second"),
+        FakeWord(7.2, 8.0, "speaker"),
+    ]
+
+    turns = segment_by_words(words, 9.0)
+
+    assert [turn.speaker_label for turn in turns] == ["S1", "S2"]
+
+
+def test_the_handoff_threshold_is_configurable():
+    """Lowering ``handoff_gap`` restores eager switching for callers who want it."""
+    words = [
+        FakeWord(0.0, 0.8, "one"),
+        FakeWord(2.0, 2.8, "two"),
+    ]
+
+    conservative = segment_by_words(words, 3.0, handoff_gap=5.0)
+    eager = segment_by_words(words, 3.0, handoff_gap=0.5)
+
+    assert {t.speaker_label for t in conservative} == {"S1"}
+    assert [t.speaker_label for t in eager] == ["S1", "S2"]
+
+
+def test_a_handoff_gap_below_the_pause_gap_is_clamped():
+    """``handoff_gap`` cannot be a weaker signal than ``pause_gap``.
+
+    Otherwise every turn boundary would also be a speaker change, which is the behaviour
+    being fixed.
+    """
+    words = [
+        FakeWord(0.0, 0.8, "one"),
+        FakeWord(2.0, 2.8, "two"),
+    ]
+
+    # handoff_gap below pause_gap is raised to pause_gap; the 1.2s gap then exceeds it,
+    # so this is still a hand-off — but it can never be *more* eager than the turn split.
+    turns = segment_by_words(words, 3.0, pause_gap=0.9, handoff_gap=0.1)
+    assert [t.speaker_label for t in turns] == ["S1", "S2"]
+
+    # With a pause_gap larger than the gap, there is only one run and one speaker.
+    single = segment_by_words(words, 3.0, pause_gap=5.0, handoff_gap=0.1)
+    assert {t.speaker_label for t in single} == {"S1"}
+
+
+def test_speaker_labels_wrap_within_the_cap():
+    """Round-robin still wraps, so the label set stays within ``max_speakers``."""
+    words = []
+    t = 0.0
+    for _ in range(4):
+        words.append(FakeWord(t, t + 1.0, "turn"))
+        t += 1.0 + 4.0  # every gap is a hand-off
+
+    turns = segment_by_words(words, t, max_speakers=2)
+
+    assert [x.speaker_label for x in turns] == ["S1", "S2", "S1", "S2"]
