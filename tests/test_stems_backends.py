@@ -34,6 +34,7 @@ from tests.conftest import requires_ffmpeg
 from tests.fakes import (
     Fake_Separator_Backend,
     Recording_Command_Runner,
+    StaticProber,
     Truncating_Separator_Backend,
     write_pcm_wav,
 )
@@ -837,4 +838,257 @@ def test_the_repair_only_path_completes_with_demucs_absent(tmp_path, monkeypatch
     )
 
     assert details == ()
-    assert "eval=frame" in runner.calls[0].argv[runner.calls[0].argv.index("-filter_complex") + 1]
+    graph = runner.calls[0].argv[runner.calls[0].argv.index("-filter_complex") + 1]
+    assert "aeval" in graph      # the per-sample V-notch (see notch_filters)
+
+
+
+# =========================================================================== #
+# Task 19.1 — the module imports with every heavy dependency absent           #
+# =========================================================================== #
+
+
+def test_the_module_imports_and_plans_with_no_heavy_dependency_present(tmp_path) -> None:
+    """A minimal install can import the module, probe capabilities and plan (Reqs 1.4, 1.9).
+
+    Run in a **fresh interpreter** with ``demucs``, ``torch``, ``numpy`` and every optional
+    heavy package forced unimportable, and with ``PATH`` emptied so no ffmpeg binary exists.
+    Asserted there: the import succeeds, the whole pure planner runs, and — the part that is
+    easy to lose — the planner opens **no socket** and reads **no model file**.
+
+    A subprocess rather than ``sys.modules`` poisoning in-process, because the claim is about
+    what a *cold import* does: an in-process test would already have the real modules loaded
+    from earlier tests and could not observe an import-time dependency.
+    """
+    root = Path(__file__).resolve().parents[1]
+    script = r'''
+import builtins, socket, sys
+
+# Nothing heavy may be importable...
+BLOCKED = {"torch", "demucs", "numpy", "cv2", "PIL", "yt_dlp", "faster_whisper",
+           "boto3", "openai", "anthropic", "httpx"}
+_real_import = builtins.__import__
+def guarded(name, *a, **k):
+    if name.split(".")[0] in BLOCKED:
+        raise ImportError(f"blocked: {name}")
+    return _real_import(name, *a, **k)
+builtins.__import__ = guarded
+
+# ...and nothing may open a socket.
+def no_socket(*a, **k):
+    raise AssertionError("planning opened a socket")
+socket.socket = no_socket
+socket.create_connection = no_socket
+
+from worker.engines import stems              # the import under test
+
+# The whole pure planner, with no format, no capabilities and no model.
+opts = stems.resolve_stem_options({"stem_mix_preset": "speech_focus",
+                                   "stem_repair_mode": "crossfade"})
+plan = stems.plan_stems(opts=opts, notes=("filler_seam:1.500", "filler_seam:2.250"),
+                        duration=5.0, fmt=None, caps=None, tb=None)
+assert plan.backend == "ffmpeg", plan.backend       # no demucs -> the approximation
+assert len(plan.windows) == 2, plan.windows
+assert plan.to_dict()["repair_mode"] == "crossfade"
+
+# The emitters are pure too, so they work here as well.
+assert stems.notch_filters(plan.windows, channels=2)
+assert stems.plan_has_work(plan) is True
+assert stems.plan_is_noop(plan) is False
+
+# And the locator reports "absent" rather than trying to fetch anything.
+assert stems._locate_model("htdemucs", "/nonexistent") is None
+print("OK")
+'''
+    env = {
+        "PATH": "",                                  # no ffmpeg, no ffprobe
+        "PYTHONPATH": str(root),
+        "HOME": str(tmp_path),
+        stems.MODEL_DIR_ENV: str(tmp_path / "no-models"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, cwd=str(root), env=env, timeout=120,
+    )
+    assert out.returncode == 0, f"stdout={out.stdout}\nstderr={out.stderr}"
+    assert out.stdout.strip().endswith("OK")
+
+
+def test_the_engine_class_is_constructible_without_the_ml_stack(tmp_path) -> None:
+    """Constructing the engine and calling its pure hooks needs nothing heavy either.
+
+    Registration happens at import, so if the class body or the constructor touched ``torch``
+    the whole module would become unimportable on a stock install — and ``/api/info`` would
+    fail with it.
+    """
+    root = Path(__file__).resolve().parents[1]
+    script = r'''
+import builtins, sys
+BLOCKED = {"torch", "demucs", "numpy"}
+_real = builtins.__import__
+def guarded(name, *a, **k):
+    if name.split(".")[0] in BLOCKED:
+        raise ImportError(name)
+    return _real(name, *a, **k)
+builtins.__import__ = guarded
+
+from worker.engines import loader             # registers via import side effect
+from worker.engines.registry import get_registry
+from worker.engines.stems import Stem_Inpainting_Engine
+
+assert "stem_inpainting" in get_registry()
+engine = Stem_Inpainting_Engine()
+assert engine.is_enabled(None) is False
+resolved = engine.resolve_options({"stem_mix_preset": "clean_speech"})
+assert resolved.mix_preset == "custom"        # a mapping is not an attribute source
+print("OK")
+'''
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, cwd=str(root), timeout=120,
+        env={**os.environ, "PYTHONPATH": str(root)},
+    )
+    assert out.returncode == 0, f"stdout={out.stdout}\nstderr={out.stderr}"
+    assert out.stdout.strip().endswith("OK")
+
+
+
+# =========================================================================== #
+# P11 — gain resolution follows the preset rules, and zero means excluded      #
+# =========================================================================== #
+# Deferred from epic 5 until the mix filtergraph emitter (11.3) and the applied rung (13.4)
+# existed, because the property's last two clauses assert against them.
+
+
+# Feature: audio-stem-inpainting, Property 11: Gain resolution follows the preset rules, and
+# zero means excluded
+@settings(max_examples=100, deadline=None)
+@given(
+    preset=st.sampled_from(list(stems.MIX_PRESET_CHOICES)),
+    gains=st.fixed_dictionaries(
+        {
+            name: st.one_of(
+                st.floats(min_value=0.0, max_value=4.0,
+                          allow_nan=False, allow_infinity=False),
+                st.just(0.0),
+                st.just(1.0),
+                st.sampled_from([-1.0, 5.0, float("nan"), "loud", None]),
+            )
+            for name in stems.STEM_NAMES
+        }
+    ),
+)
+def test_p11_gain_resolution_follows_the_preset_rules_and_zero_means_excluded(
+    preset: str, gains: dict, tmp_path_factory
+) -> None:
+    """Four clauses, spanning resolution, the emitted graph and the marker set.
+
+    * a **non-``custom``** preset yields exactly its documented bundle and **ignores** the
+      individual gain fields entirely (Req 5.2) — including hostile ones, which is what makes
+      "the preset wins" a real guarantee rather than a happy path;
+    * ``custom`` yields the *validated* fields, so an out-of-range or non-numeric value becomes
+      ``GAIN_DEFAULT`` rather than propagating (Req 5.4);
+    * a stem resolving to ``0.0`` appears in neither ``active_stems`` **nor the emitted
+      filtergraph** — muting costs no decode, it is not "decode and multiply by zero"
+      (Req 5.7);
+    * the marker set contains ``mix:<mix_preset>`` exactly once (Req 5.8).
+    """
+    root = tmp_path_factory.mktemp("p11")
+    options = stems.resolve_stem_options(
+        type("O", (), {
+            "stem_mix_preset": preset,
+            "stem_gain_vocals": gains["vocals"],
+            "stem_gain_music": gains["music"],
+            "stem_gain_other": gains["other"],
+            "stem_repair_mode": "crossfade",
+        })()
+    )
+    resolved = stems.resolve_gains(options)
+
+    # 1 & 2 — preset precedence, and validation of the custom fields.
+    if preset in stems.MIX_PRESETS:
+        assert resolved == stems.MIX_PRESETS[preset]
+    else:
+        assert preset == "custom"
+        for name in stems.STEM_NAMES:
+            assert resolved[name] == stems._coerce_gain(gains[name])
+
+    plan = stems.plan_stems(
+        opts=options, duration=3.0,
+        fmt=stems.Audio_Format(sample_rate=48000, channels=2),
+    )
+
+    # 3 — a zero gain is excluded from active_stems and from the graph.
+    muted = [name for name in stems.STEM_NAMES if resolved[name] == 0.0]
+    for name in muted:
+        assert name not in plan.active_stems
+    for name in stems.STEM_NAMES:
+        if resolved[name] > 0.0:
+            assert name in plan.active_stems
+
+    stem_set = {name: root / f"{name}.wav" for name in stems.STEM_NAMES}
+    inputs, graph, _label = stems.build_mix_graph(plan, stem_set)
+    for name in muted:
+        assert f"g_{name}" not in graph
+        assert not any(Path(p).name == f"{name}.wav" for p in inputs)
+    assert len(inputs) == len(plan.active_stems)
+
+    # 4 — the applied rung emits mix:<preset> exactly once.
+    runner = Recording_Command_Runner(probe_json=_P11_MEDIA_JSON)
+    engine = stems.Stem_Inpainting_Engine(
+        backend=_P11_Backend(), runner=runner
+    )
+    result = engine.run(_p11_ctx(root, options, runner))
+    details = [m.split(":", 2)[2] for m in result.markers]
+    assert details.count(f"mix:{options.mix_preset}") == (
+        1 if result.status in (stems.Engine_Status.APPLIED, stems.Engine_Status.DEGRADED)
+        and result.media is not None else 0
+    )
+
+
+_P11_MEDIA_JSON = {
+    "streams": [
+        {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
+         "codec_name": "aac", "start_time": "0.0", "duration": "3.0"},
+        {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
+    ],
+    "format": {"duration": "3.0"},
+}
+
+
+class _P11_Backend:
+    """A minimal offline separator for the marker clause."""
+
+    backend_id = "ml"
+    requires_network = False
+
+    def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
+        return {
+            name: Path(str(dest_dir)) / f"{name}.wav"
+            for name in ("vocals", "drums", "bass", "other")
+        }
+
+
+def _p11_ctx(root: Path, options, runner):
+    """An Engine_Context with a real workspace, aimed at the applied rung."""
+    import time
+
+    from worker.engines.artifacts import allocate_workspace
+    from worker.engines.base import Engine_Context, Engine_Stage
+    from worker.engines.capabilities import Capability_Report
+    from worker.engines.timebase import Time_Base
+
+    clip = root / "clip.mp4"
+    if not clip.exists():
+        clip.write_bytes(b"\x00" * 64)
+    return Engine_Context(
+        job_id="job", clip_id="clip_a", engine_id=stems.ENGINE_ID,
+        stage=Engine_Stage.AUDIO, source_path=clip, clip_path=clip,
+        time_base=Time_Base(sample_rate=48000),
+        clip_start=0.0, clip_end=3.0, duration=3.0,
+        options=options, options_digest="p11", seed=3,
+        workspace=allocate_workspace(root / "ws", "job", "clip_a", stems.ENGINE_ID, "p11"),
+        capabilities=Capability_Report(prober=StaticProber({}, default=True)),
+        permissibility=False, deadline=time.monotonic() + 120.0, time_budget_s=120.0,
+        notes=("filler_seam:1.500",), deps={"runner": runner},
+    )

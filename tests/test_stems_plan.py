@@ -443,3 +443,156 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
     assert seam_only == ("filler_seam:1.000", "filler_seam:2.500")
     assert recorded[0][: len(recorded[0]) - 2] == recorded[1]
     assert not any(n.startswith("filler_seam:") for n in recorded[1])
+
+
+
+# =========================================================================== #
+# P8 — the no-op configuration costs nothing                                   #
+# =========================================================================== #
+# Deferred from epic 5 until ladder rungs 0 and 3 existed (13.2), because that is what this
+# property asserts against. "Costs nothing" is checked as **observable absence of work** —
+# zero runner invocations, zero backend calls, no file in the workspace — rather than as a
+# fast return, because only the former distinguishes "skipped before doing anything" from
+# "did the work and threw it away".
+
+import time as _time                                            # noqa: E402
+from pathlib import Path as _Path                                # noqa: E402
+
+from tests.fakes import (                                        # noqa: E402
+    Recording_Command_Runner as _Runner,
+    StaticProber as _Prober,
+)
+from worker.engines.artifacts import allocate_workspace as _alloc  # noqa: E402
+from worker.engines.base import (                                # noqa: E402
+    Engine_Context as _Ctx,
+    Engine_Stage as _Stage,
+    Engine_Status as _Status,
+)
+from worker.engines.capabilities import Capability_Report as _Report  # noqa: E402
+from worker.engines.timebase import Time_Base as _TB             # noqa: E402
+
+
+class _CountingBackend:
+    """A separator that records whether it was ever asked to do anything."""
+
+    backend_id = "ml"
+    requires_network = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
+        self.calls += 1
+        return {}
+
+
+def _p8_context(root: _Path, options, runner, *, enabled_options=None):
+    clip = root / "clip.mp4"
+    clip.parent.mkdir(parents=True, exist_ok=True)
+    if not clip.exists():
+        clip.write_bytes(b"\x00" * 64)
+    return _Ctx(
+        job_id="job", clip_id="clip_a", engine_id=stems.ENGINE_ID, stage=_Stage.AUDIO,
+        source_path=clip, clip_path=clip, time_base=_TB(sample_rate=48000),
+        clip_start=0.0, clip_end=3.0, duration=3.0,
+        options=options if enabled_options is None else enabled_options,
+        options_digest="p8", seed=1,
+        workspace=_alloc(root / "ws", "job", "clip_a", stems.ENGINE_ID, "p8"),
+        capabilities=_Report(prober=_Prober({}, default=True)),
+        permissibility=False, deadline=_time.monotonic() + 120.0, time_budget_s=120.0,
+        notes=("filler_seam:1.500",), deps={"runner": runner},
+    )
+
+
+# Feature: audio-stem-inpainting, Property 8: The no-op configuration costs nothing
+@settings(max_examples=100, deadline=None)
+@given(option_map=st_stem_options())
+def test_p8_the_noop_configuration_costs_nothing(option_map: dict, tmp_path_factory) -> None:
+    """Rung 3: unity gains plus ``repair_mode="off"`` is skipped before any work happens.
+
+    The generated options are forced onto the no-op configuration, so every example exercises
+    the rung rather than only the occasional one that happens to land there. Asserted: status
+    ``skipped``, **no marker** (a no-op is not a degradation and reporting one would be noise),
+    no media, zero command-runner invocations, zero backend calls, and **not a single file in
+    the Engine_Workspace** — the last being what proves no probe and no extraction happened.
+    """
+    root = tmp_path_factory.mktemp("p8")
+    options = stems.resolve_stem_options(
+        type("O", (), {
+            **{f"stem_{k}": v for k, v in option_map.items()},
+            # Force the no-op shape: neutral gains, no repair.
+            "stem_mix_preset": "custom",
+            "stem_gain_vocals": 1.0,
+            "stem_gain_music": 1.0,
+            "stem_gain_other": 1.0,
+            "stem_repair_mode": "off",
+        })()
+    )
+    assert stems.plan_is_noop(
+        stems.plan_stems(opts=options, duration=3.0)
+    ), "the generated options were not the no-op configuration"
+
+    runner = _Runner()
+    backend = _CountingBackend()
+    engine = stems.Stem_Inpainting_Engine(backend=backend, runner=runner)
+    ctx = _p8_context(root, options, runner)
+
+    result = engine.run(ctx)
+
+    assert result.status is _Status.SKIPPED
+    assert result.markers == ()
+    assert result.media is None
+    assert runner.calls == []
+    assert backend.calls == 0
+    assert [p for p in ctx.workspace.root.rglob("*") if p.is_file()] == []
+
+
+@settings(max_examples=100, deadline=None)
+@given(option_map=st_stem_options())
+def test_p8_a_disabled_flag_costs_nothing_for_any_options(
+    option_map: dict, tmp_path_factory
+) -> None:
+    """Rung 0: with the Feature_Flag off the engine is never invoked at all.
+
+    Asserted through the **real Engine_Host**, because rung 0 is the host's gate rather than
+    the engine's: what has to be true is that no workspace is allocated, no exclusive
+    capability is probed and no media pass is spent — none of which the engine could observe
+    about itself. Holds for *any* option mapping, including ones that would otherwise be
+    expensive.
+    """
+    from worker.engines.host import Engine_Host
+    from worker.engines.registry import Engine_Registry
+    from worker.models import ProcessingOptions
+
+    root = tmp_path_factory.mktemp("p8_off")
+    runner = _Runner()
+    backend = _CountingBackend()
+    engine = stems.Stem_Inpainting_Engine(backend=backend, runner=runner)
+
+    registry = Engine_Registry()
+    registry.register(engine)
+    options = ProcessingOptions.from_dict(
+        {f"stem_{k}": v for k, v in option_map.items()}
+    )                                          # stem_inpainting_enabled stays False
+    assert options.stem_inpainting_enabled is False
+
+    temp_dir = root / "temp"
+    host = Engine_Host(
+        options, job_id="job", temp_dir=temp_dir, registry=registry,
+        capabilities=_Report(prober=_Prober({}, default=True)),
+    )
+
+    assert host.active is False                # no probe, no allocation, nothing
+
+    clip = root / "clip.mp4"
+    clip.write_bytes(b"\x00" * 64)
+    outcome = host.run_stage(
+        _Stage.AUDIO, clip_id="clip_a", source=str(clip), clip_path=clip,
+        clip_start=0.0, clip_end=3.0, duration=3.0, notes=("filler_seam:1.500",),
+    )
+
+    assert outcome.media is None
+    assert outcome.markers == []               # skipped contributes no marker
+    assert runner.calls == []
+    assert backend.calls == 0
+    assert not temp_dir.exists() or not list(temp_dir.rglob("stem_inpainting__*"))

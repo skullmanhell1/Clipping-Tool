@@ -42,7 +42,6 @@ from worker.engines.artifacts import allocate_workspace
 from worker.engines.base import Engine_Context, Engine_Stage, Engine_Status
 from worker.engines.capabilities import Capability_Report
 from worker.engines.timebase import Time_Base
-from worker.ffmpeg_utils import FFmpegError
 
 # A probe payload both probers agree on: ``probe_audio_format`` reads ``streams[0]`` (so the
 # audio stream must come first) while ``probe_media`` needs to see a video stream too. Using
@@ -502,7 +501,9 @@ def test_rung14_a_failed_integrity_check_fails_and_deletes_the_candidate(tmp_pat
         ],
         "format": {"duration": "3.0"},
     }
-    runner = Recording_Command_Runner(probe_json=[_MEDIA_JSON, broken, _MEDIA_JSON])
+    # Probe order is: probe_audio_format(clip), probe_media(clip) as the verification
+    # baseline, then probe_media(candidate) — so the broken payload belongs third.
+    runner = Recording_Command_Runner(probe_json=[_MEDIA_JSON, _MEDIA_JSON, broken])
     result, details, _ = _run(
         tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
         notes=("filler_seam:1.500",),
