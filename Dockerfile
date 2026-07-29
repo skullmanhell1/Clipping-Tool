@@ -34,6 +34,23 @@ RUN apt-get update \
         npm \
     && rm -rf /var/lib/apt/lists/*
 
+# A2: register the bundled caption faces (assets/fonts, described by fonts.json) with
+# fontconfig. Copied early and in their own layer so the cache survives source changes.
+#
+# This is belt-and-braces with the `fontsdir` option that `captions.subtitles_filter`
+# passes to libass, and both are wanted: `fontsdir` covers a bare checkout and CI, while a
+# system install is what lets fontconfig select *named instances* of a variable font.
+# Verified with libass at -loglevel verbose: a request for "Montserrat" resolves to
+# `Montserrat_700wght` when installed here, but silently falls back to NotoSans-Bold when
+# only reachable through `fontsdir`.
+COPY assets/fonts/ /usr/share/fonts/clipping-tool/
+RUN fc-cache -f \
+    # Fail the build rather than ship an image whose captions silently substitute. The
+    # font chain has already been broken once by exactly this going unnoticed (C1).
+    && fc-match Anton | grep -q Anton \
+    && fc-match "Archivo Black" | grep -q ArchivoBlack \
+    && fc-match "Poppins ExtraBold" | grep -q Poppins-ExtraBold
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1

@@ -61,6 +61,7 @@ import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
+from config import settings as app_settings
 from tests.conftest import (
     FakeWord,
     probe_duration,
@@ -1293,12 +1294,26 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path):
     assert checked_with_captions >= 40
 
 
+#: The terminal rung of the caption font ladder — what a render falls back to when no
+#: family probes available. Referenced rather than spelled so the goldens below track the
+#: ladder; ``tests/test_fonts_real_binary.py`` pins the value itself.
+_LADDER_FALLBACK = cap_module.FALLBACK_FONTS[-1]
+
+#: The substitution marker the compositor appends when the preset font is unavailable.
+#:
+#: Was frozen as the literal ``"font_substituted:Arial"``, which encoded the C1 defect as
+#: expected output twice over: Arial was the requested font *and* the fallback, and the
+#: marker named the font that had failed rather than the one used. ``worker/models.py``
+#: documents it as "preset font missing; ``<name>`` used", and it now is.
+_SUBSTITUTION_MARKER = f"font_substituted:{_LADDER_FALLBACK}"
+
 #: Source C — literal v0.8.0 goldens, generated from the **reconstructed** module (the one
 #: with the caption-ownership feature deleted from its AST) and frozen here verbatim. Only
-#: the absolute ASS path is normalised, to ``<ASS>``. ``font_available`` is pinned per case
-#: because font substitution is a property of the host, not of the compositor: an absent
-#: family appends ``font_substituted:<name>``, so both answers are frozen and both are
-#: asserted.
+#: the absolute ASS path is normalised, to ``<ASS>`` — which also absorbs the ``fontsdir``
+#: argument ``subtitles_filter`` now carries, since the whole filter string is replaced.
+#: ``font_available`` is pinned per case because font substitution is a property of the
+#: host, not of the compositor: an absent family appends ``font_substituted:<name>``, so
+#: both answers are frozen and both are asserted.
 _V080_GOLDENS: dict = {
     "legacy-karaoke-captions-hook": {
         "options": dict(hook_title=True),
@@ -1323,7 +1338,7 @@ _V080_GOLDENS: dict = {
         ],
         "font_substituted_effects": [
             "caption_preset:hormozi", "keyword_highlight", "caption_emoji",
-            "font_substituted:Arial", "captions", "hook_title",
+            _SUBSTITUTION_MARKER, "captions", "hook_title",
         ],
         "graph": "[0:v]subtitles='<ASS>'[vbase]",
     },
@@ -1337,7 +1352,7 @@ _V080_GOLDENS: dict = {
             "color:vivid", "zoom", "transitions", "fades", "progress_bar",
         ],
         "font_substituted_effects": [
-            "caption_preset:pop", "keyword_highlight", "font_substituted:Arial",
+            "caption_preset:pop", "keyword_highlight", _SUBSTITUTION_MARKER,
             "captions", "hook_title", "color:vivid", "zoom", "transitions", "fades",
             "progress_bar",
         ],
@@ -1427,46 +1442,52 @@ def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
 #: Every built-in preset, field by field (``CaptionPreset.to_dict()`` output).
 _EXPECTED_BUILTIN_PRESETS: dict = {
     "boxed": {
-        "name": "boxed", "animation": "none", "font": "Arial", "font_size": 84,
+        "name": "boxed", "animation": "none", "font": "Archivo Black", "font_weight": 900, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 3,
+        "uppercase": False, "outline": 0, "shadow": 0,
     },
     "hormozi": {
-        "name": "hormozi", "animation": "pop", "font": "Arial", "font_size": 96,
+        "name": "hormozi", "animation": "pop", "font": "Anton", "font_weight": 800, "font_size": 104,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "center", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": True, "border_style": 1,
+        "uppercase": True, "outline": 10, "shadow": 5,
     },
     "karaoke": {
-        "name": "karaoke", "animation": "karaoke_fill", "font": "Arial", "font_size": 84,
+        "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
     "minimal": {
-        "name": "minimal", "animation": "none", "font": "Arial", "font_size": 76,
+        "name": "minimal", "animation": "none", "font": "Poppins", "font_weight": 700, "font_size": 84,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 6, "shadow": 3,
     },
     "pop": {
-        "name": "pop", "animation": "pop", "font": "Arial", "font_size": 84,
+        "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
     "typewriter": {
-        "name": "typewriter", "animation": "typewriter", "font": "Arial", "font_size": 84,
+        "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_weight": 700, "font_size": 96,
         "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
                    "outline": "&H00000000", "box": "&H80000000"},
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
+        "uppercase": False, "outline": 8, "shadow": 4,
     },
 }
 
@@ -1517,10 +1538,27 @@ _ASS_HEADER = (
     " BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle,"
     " BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
 )
-_ASS_HOOK_STYLE = (
-    "Style: Hook,Arial,110,&H0000E5FF,&H0000E5FF,&H00000000,&H64000000,"
-    "-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
-)
+#: The font ``build_ass`` writes when no preset is supplied (its ``font`` default), and the
+#: fonts the two presets used below declare. All three were ``"Arial"`` until C1: Arial is
+#: not installed on any Linux host, so the goldens below pinned documents naming a font no
+#: render could ever use. They are bundled faces now (``assets/fonts.json``).
+_LEGACY_FONT = "Poppins ExtraBold"
+_HORMOZI_FONT = "Anton"
+_BOXED_FONT = "Archivo Black"
+
+
+def _ass_hook_style(font: str, bold: int = -1) -> str:
+    """The ``Style: Hook`` line for ``font``.
+
+    Was a single constant naming Arial, which worked only because the preset font and the
+    substitution fallback were the same missing font. Now that a substitution actually
+    changes the font, the hook style has to vary with it too — it is written from the same
+    resolved family as the Default style.
+    """
+    return (
+        f"Style: Hook,{font},110,&H0000E5FF,&H0000E5FF,&H00000000,&H64000000,"
+        f"{bold},0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
+    )
 _ASS_EVENTS_HEADER = (
     "\n"
     "[Events]\n"
@@ -1533,9 +1571,13 @@ _ASS_EVENTS_HEADER = (
 _EXPECTED_LEGACY_DOCUMENTS: dict = {
     "karaoke": (
         _ASS_HEADER
-        + "Style: Default,Arial,84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+        # C4: the karaoke SecondaryColour (the per-word fill sweep) was pure green,
+        # &H0000FF00. Green reads as dated - it is the ASS default rather than a choice -
+        # and it disagreed with the preset path, which has always swept to amber.
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
+          "&H00000000,&H64000000,"
           "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
-        + _ASS_HOOK_STYLE
+        + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
@@ -1543,17 +1585,17 @@ _EXPECTED_LEGACY_DOCUMENTS: dict = {
     ),
     "boxed": (
         _ASS_HEADER
-        + "Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H80000000,&H80000000,"
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H00FFFFFF,&H80000000,&H80000000,"
           "-1,0,0,0,100,100,0,0,3,0,0,2,80,80,220,1\n"
-        + _ASS_HOOK_STYLE
+        + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
     ),
     "minimal": (
         _ASS_HEADER
-        + "Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
           "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1\n"
-        + _ASS_HOOK_STYLE
+        + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
     ),
@@ -1563,17 +1605,25 @@ _EXPECTED_LEGACY_DOCUMENTS: dict = {
 #: keyword index, hook title, preset position ``center`` inherited).
 _EXPECTED_HORMOZI_DOCUMENT = (
     _ASS_HEADER
-    + "Style: Default,Arial,96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
-      "-1,0,0,0,100,100,0,0,1,2,1,5,80,80,0,1\n"
-    + _ASS_HOOK_STYLE
+    # Four C-series changes are visible in this one document:
+    #   C3 - Bold is 0, not -1. Anton is already a heavy face; asking libass for bold on
+    #        top makes it synthesise the emboldening (verified: Bold=-1 requests weight 700
+    #        from a face that only offers 400, so libass fakes the difference).
+    #   C5 - size 104, not 96, which is what three words per cue affords.
+    #   C7 - the cue text is upper-cased. Only the hook was, before.
+    #   C8 - outline 10 and shadow 5, from the preset, replacing the 2/1 that was inferred
+    #        from the animation style and was effectively invisible at PlayRes 1920.
+    + f"Style: Default,{_HORMOZI_FONT},104,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
+      "0,0,0,0,100,100,0,0,1,10,5,5,80,80,0,1\n"
+    + _ass_hook_style(_HORMOZI_FONT, bold=0)
     + _ASS_EVENTS_HEADER
     + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
     + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
       "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}THIS "
       "{\\c&H0000E5FF&\\fscx118\\fscy118}"
-      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed"
+      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}CHANGED"
       "{\\c&H00FFFFFF&\\fscx100\\fscy100} "
-      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}money \U0001f4b0\n"
+      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}MONEY \U0001f4b0\n"
 )
 
 
@@ -1599,9 +1649,14 @@ def test_caption_preset_values_are_unchanged():
     assert caption_presets.VALID_POSITIONS == frozenset({"bottom", "center", "top"})
     assert caption_presets.FALLBACK_PRESET_NAME == "karaoke"
 
+    # ``font_weight`` (C3), ``uppercase`` (C7) and ``outline``/``shadow`` (C8) are the four
+    # fields added since v0.8.0. Each exists because the value it holds used to be implicit:
+    # the Bold flag was always -1 even for a face already drawn heavy, only the hook title
+    # was upper-cased, and outline/shadow were inferred from the animation style.
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
         "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
-        "highlight_keywords", "highlight_scale", "name", "position",
+        "font_weight", "highlight_keywords", "highlight_scale", "name", "outline",
+        "position", "shadow", "uppercase",
     ]
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
         "box", "highlight", "outline", "primary",
@@ -1650,22 +1705,27 @@ def test_build_word_span_behaviour_is_unchanged():
 def test_words_to_cues_grouping_is_unchanged():
     """Validates: Requirements 19.3
 
-    The three v0.8.0 split rules (``max_words=5``, ``max_gap=0.6``, ``max_duration=3.0``)
-    and the empty-text skip, pinned as a literal grouping.
+    The three split rules (``max_words``, ``max_gap=0.6``, ``max_duration=3.0``) and the
+    empty-text skip, pinned as a literal grouping.
+
+    ``max_words`` was 5 in v0.8.0 and is 3 since C5: five words at a readable size gives
+    long thin lines that scan like a subtitle, where short-form captions are near
+    full-width and read in one glance. The gap and duration rules are untouched, and the
+    grouping below is re-pinned rather than relaxed so a further change stays deliberate.
     """
     timeline = [
         FakeWord(0.00, 0.30, "one"), FakeWord(0.35, 0.60, "two"),
         FakeWord(0.65, 0.90, ""),                 # empty text: skipped entirely
         FakeWord(0.95, 1.20, "three"), FakeWord(1.25, 1.50, "four"),
         FakeWord(1.55, 1.80, "five"),
-        FakeWord(1.85, 2.10, "six"),              # 6th survivor: max_words split
+        FakeWord(1.85, 2.10, "six"),              # 6th survivor (2 cues of 3)
         FakeWord(3.00, 3.40, "gap"),              # 0.90 s gap: max_gap split
         FakeWord(3.45, 6.90, "loooong"),          # span > 3.0 s: max_duration split
         FakeWord(6.95, 7.20, "tail"),
     ]
     expected = [
-        (0.00, 1.80, ["one", "two", "three", "four", "five"]),
-        (1.85, 2.10, ["six"]),
+        (0.00, 1.20, ["one", "two", "three"]),      # max_words split at 3
+        (1.25, 2.10, ["four", "five", "six"]),
         (3.00, 3.40, ["gap"]),
         (3.45, 6.90, ["loooong"]),
         (6.95, 7.20, ["tail"]),
@@ -1676,7 +1736,7 @@ def test_words_to_cues_grouping_is_unchanged():
     assert cap_module.words_to_cues([]) == []
     # The documented defaults are still the defaults.
     signature = inspect.signature(cap_module.words_to_cues)
-    assert signature.parameters["max_words"].default == 5
+    assert signature.parameters["max_words"].default == 3
     assert signature.parameters["max_gap"].default == 0.6
     assert signature.parameters["max_duration"].default == 3.0
 
@@ -1718,8 +1778,10 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     assert dest.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT
     assert notes == []
 
-    # Preset path, font absent: same document (the preset font *is* the fallback family)
-    # plus exactly the v0.8.0 substitution note.
+    # Preset path, font absent: the document now differs, which is the whole point of C1.
+    # It used to be byte-identical because the preset font and the fallback were both the
+    # missing "Arial" — a substitution that substituted nothing, reported as if it had.
+    # The Default *and* Hook styles now name the terminal rung of the ladder.
     notes = []
     substituted = tmp_path / "hormozi-substituted.ass"
     with mock.patch.object(cap_module, "font_available", lambda _n: False):
@@ -1729,8 +1791,10 @@ def test_build_ass_documents_are_unchanged(tmp_path):
             keyword_indices={1}, position=None, hook_text="watch this",
             clip_duration=3.0, notes=notes,
         )
-    assert notes == ["font_substituted:Arial"]
-    assert substituted.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT
+    assert notes == [f"font_substituted:{_LADDER_FALLBACK}"]
+    assert substituted.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT.replace(
+        f",{_HORMOZI_FONT},", f",{_LADDER_FALLBACK},"
+    )
 
     # An explicit position still overrides the preset default (Alignment 2, MarginV 220),
     # and an empty cue list with no hook yields a header-only document with no events.
@@ -1743,16 +1807,17 @@ def test_build_ass_documents_are_unchanged(tmp_path):
         )
     text = overridden.read_text(encoding="utf-8")
     assert (
-        "Style: Default,Arial,96,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1" in text
+        f"Style: Default,{_HORMOZI_FONT},104,&H00FFFFFF,&H0000E5FF,&H00000000,"
+        "&H64000000,0,0,0,0,100,100,0,0,1,10,5,2,80,80,220,1" in text
     )
     empty = tmp_path / "empty.ass"
     cap_module.build_ass([], empty, video_width=1080, video_height=1920)
     assert empty.read_text(encoding="utf-8") == (
         _ASS_HEADER
-        + "Style: Default,Arial,84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
+          "&H00000000,&H64000000,"
           "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
-        + _ASS_HOOK_STYLE
+        + _ass_hook_style(_LEGACY_FONT)
         # No events at all: the document is exactly the header plus ``build_ass``'s own
         # trailing newline (the blank line before the first ``Dialogue:`` is v0.8.0's).
         + _ASS_EVENTS_HEADER
@@ -1763,18 +1828,34 @@ def test_subtitles_filter_escaping_is_unchanged():
     """Validates: Requirements 19.3
 
     The libass filter string and its ffmpeg argument escaping, pinned literally.
+
+    C2 appended ``:fontsdir=`` so libass loads ``assets/fonts`` directly instead of
+    depending on the host's installed families — verified with libass at ``-loglevel
+    verbose``, a style naming ``Anton`` renders as ``NotoSans-Bold`` without it. The
+    escaping rules themselves are unchanged, and are what this test exists to pin, so the
+    suffix is asserted separately from the escaping of the ASS path.
     """
-    assert cap_module.subtitles_filter("/tmp/plain.ass") == "subtitles='/tmp/plain.ass'"
+    fonts_dir = Path(app_settings.font_assets_dir)
+    suffix = f":fontsdir='{fonts_dir.resolve()}'" if fonts_dir.is_dir() else ""
+
+    assert cap_module.subtitles_filter("/tmp/plain.ass") == (
+        f"subtitles='/tmp/plain.ass'{suffix}"
+    )
     # ``:`` and ``'`` are the two characters ffmpeg's filter syntax needs escaped.
     assert cap_module.subtitles_filter("/tmp/a:b/it's.ass") == (
-        "subtitles='/tmp/a\\:b/it\\'s.ass'"
+        f"subtitles='/tmp/a\\:b/it\\'s.ass'{suffix}"
     )
     # A relative path is resolved against the cwd, and a ``Path`` behaves like a string.
     relative = cap_module.subtitles_filter("clip.ass")
-    assert relative == f"subtitles='{Path('clip.ass').resolve()}'"
+    assert relative == f"subtitles='{Path('clip.ass').resolve()}'{suffix}"
     assert cap_module.subtitles_filter(Path("/tmp/plain.ass")) == (
         cap_module.subtitles_filter("/tmp/plain.ass")
     )
+
+    # The bundled directory is expected to exist in a checkout; if it ever does not, the
+    # filter must degrade to the bare form rather than naming a missing directory.
+    assert fonts_dir.is_dir(), "assets/fonts is vendored (A1) and must be present"
+    assert suffix and suffix in cap_module.subtitles_filter("/tmp/plain.ass")
 
 
 

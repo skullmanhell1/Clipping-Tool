@@ -210,6 +210,12 @@ class Settings(BaseSettings):
         default=BASE_DIR / "assets" / "emoji",
         description="Directory containing (and caching) Twemoji PNG assets.",
     )
+    font_assets_dir: Path = Field(
+        default=BASE_DIR / "assets" / "fonts",
+        description="Directory of bundled caption fonts (see assets/fonts.json). "
+                    "Passed to libass as 'fontsdir' so appearance does not depend on "
+                    "which fonts the host has installed.",
+    )
     music_dir: Path = Field(
         default=BASE_DIR / "assets" / "music",
         description="Optional directory of user-supplied mood music beds "

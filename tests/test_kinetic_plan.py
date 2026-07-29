@@ -24,6 +24,7 @@ task 8.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import math
 
@@ -584,9 +585,17 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     if not planned:
         return 0
 
-    # Trap 2 closed: emphasis is genuinely reachable — every planned word is a
-    # keyword when nothing is floored out.
-    assert all(word.emphasis for word in planned)
+    # Trap 2 closed: emphasis is genuinely reachable — at least one planned word is
+    # emphasised when nothing is floored out, so the clauses below are not vacuous.
+    #
+    # This asserted *every* planned word was emphasised, which held only because emphasis
+    # used an absolute rule (Whisper probability >= 0.9, defaulting to 1.0 when absent)
+    # that essentially everything cleared. C11 replaced it with a ranked budget, so which
+    # words are chosen is now the emphasis policy's business — and is pinned directly in
+    # ``tests/test_caption_presets.py``. What Property 13 is about is the *floor*: that it
+    # governs emphasis word by word and touches nothing else. Asserting the selection here
+    # would couple this property to a policy it does not own.
+    assert any(word.emphasis for word in planned)
 
     # Text, timing and layout are bit-identical between the runs; only emphasis
     # may differ (Req 5.9 — spoken text and timing untouched).
@@ -595,9 +604,22 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     assert floor_plan.degraded == base_plan.degraded
 
     # Trap 1 closed: the floor decides emphasis, word by word (Req 6.5).
+    #
+    # Stated as an implication plus monotonicity rather than an equality, because emphasis
+    # is now the conjunction of two independent decisions: the emphasis policy selects
+    # candidates (C11's ranked budget) and the floor vetoes the ones we did not hear
+    # clearly enough. The floor's half is fully pinned by the two clauses together — it may
+    # only ever remove emphasis, and never from a word that clears it.
+    base_emphasised = {
+        word.text for cue in base_plan.cues for word in cue.words if word.emphasis
+    }
     for cue in floor_plan.cues:
         for word in cue.words:
-            assert word.emphasis is (confidence[word.text] >= floor)
+            if word.emphasis:
+                assert confidence[word.text] >= floor
+                assert word.text in base_emphasised
+            elif word.text in base_emphasised:
+                assert confidence[word.text] < floor
 
     # A floor of 1.0 over confidences that are all strictly below 1.0 strips every
     # word, so the emphasis matrix provably differs somewhere.
@@ -665,17 +687,30 @@ def test_p13_low_confidence_words_lose_emphasis_but_keep_text_and_timing(
 #: overflow. That is what forces the re-split under test.
 _SPLIT_TOKENS = tuple(f"overflow{index:02d}token" for index in range(8))
 
+#: The word count at which ``captions.words_to_cues`` starts a new cue, read from the
+#: function's own default so a change to it (C5 took it from 5 to 3) cannot quietly
+#: invalidate the single-cue premise of the strategy below.
+_GROUPING_MAX_WORDS = int(
+    inspect.signature(captions.words_to_cues).parameters["max_words"].default
+)
+
 
 @st.composite
 def _st_single_cue_overflow_timeline(draw):
     """A timeline ``captions.words_to_cues`` provably groups into exactly one cue.
 
-    ``words_to_cues`` starts a new cue at 5 words, a gap over 0.6 s, or a span
-    over 3.0 s; at most 4 words, gaps of at most 0.05 s and a span of at most
-    2.55 s keep every draw inside all three limits, so every planned cue provably
-    comes from *one* original cue — which is what Property 15 is about.
+    ``words_to_cues`` starts a new cue at :data:`_GROUPING_MAX_WORDS` words, a gap over
+    0.6 s, or a span over 3.0 s; drawing at most that many words, with gaps of at most
+    0.05 s and a span of at most 2.55 s, keeps every draw inside all three limits — so
+    every planned cue provably comes from *one* original cue, which is what Property 15
+    is about.
+
+    The word count is read from ``words_to_cues`` itself rather than written here. It was
+    the literal ``4`` against a limit of 5, so lowering the limit to 3 (C5) silently made
+    the draws straddle two cues and the property failed on its own premise rather than on
+    the behaviour it tests.
     """
-    count = draw(st.integers(min_value=2, max_value=4))
+    count = draw(st.integers(min_value=2, max_value=_GROUPING_MAX_WORDS))
     cursor = draw(st.floats(min_value=0.0, max_value=0.5,
                             allow_nan=False, allow_infinity=False))
     words = []

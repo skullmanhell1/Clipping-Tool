@@ -85,14 +85,40 @@ class CaptionPreset:
 
     name: str
     animation: AnimationStyle = "none"
-    font: str = "Arial"
-    font_size: int = 84
+    # A bundled static heavy face (assets/fonts.json), not "Arial": Arial is not
+    # installed on any Linux host, so every preset inheriting this default rendered in
+    # whatever the host substituted, at synthesised bold (C1). "Poppins ExtraBold" is
+    # named as its own family on purpose - ASS can only express bold on/off, which
+    # fontconfig reads as weight 200, so ExtraBold (205) is unreachable any other way.
+    font: str = "Poppins ExtraBold"
+    # C3: the weight the declared face already provides, on the usual 100-900 scale.
+    #
+    # ASS can only say "bold" or "not bold", which libass turns into a request for weight
+    # 700. Asking a face that is *already* heavy for bold on top of that makes libass
+    # synthesise the emboldening - it thickens the outlines of a face that was drawn heavy
+    # to begin with, which is what "fake bold" looks like and is why captions read as
+    # slightly mushy. So when this is >= _FACE_SUPPLIES_BOLD the Bold flag is left off and
+    # the face is allowed to speak for itself; below it, Bold is set so libass picks a bold
+    # instance or synthesises one because nothing better exists.
+    font_weight: int = 800
+    font_size: int = 96
     colors: CaptionColors = field(default_factory=CaptionColors)
     position: str = "bottom"
     highlight_keywords: bool = False
     highlight_scale: float = 1.18
     emoji_inline: bool = False
     border_style: int = 1
+    # C7: upper-case the caption text. Only the hook title was upper-cased before, so a
+    # preset could not ask for the all-caps look that most short-form captions use.
+    uppercase: bool = False
+    # C8: outline thickness and drop-shadow offset, in ASS units at PlayRes 1080x1920.
+    #
+    # Both were hard-coded and derived from the animation style: 4/2 for karaoke_fill and
+    # 2/1 for everything else. At 1080x1920 a 2px outline is barely visible, and captions
+    # sit over arbitrary footage, so legibility came down to luck. 8/4 is the weight the
+    # look actually needs, and both are per preset now rather than inferred.
+    outline: int = 8
+    shadow: int = 4
 
     def to_dict(self) -> dict:
         """Serialize the preset (nested colours included) to a plain dict."""
@@ -100,6 +126,7 @@ class CaptionPreset:
             "name": self.name,
             "animation": self.animation,
             "font": self.font,
+            "font_weight": self.font_weight,
             "font_size": self.font_size,
             "colors": self.colors.to_dict(),
             "position": self.position,
@@ -107,6 +134,9 @@ class CaptionPreset:
             "highlight_scale": self.highlight_scale,
             "emoji_inline": self.emoji_inline,
             "border_style": self.border_style,
+            "uppercase": self.uppercase,
+            "outline": self.outline,
+            "shadow": self.shadow,
         }
 
     @classmethod
@@ -123,6 +153,7 @@ class CaptionPreset:
             name=str(data.get("name", defaults.name)),
             animation=str(data.get("animation", defaults.animation)),
             font=str(data.get("font", defaults.font)),
+            font_weight=int(data.get("font_weight", defaults.font_weight)),
             font_size=int(data.get("font_size", defaults.font_size)),
             colors=colors,
             position=str(data.get("position", defaults.position)),
@@ -134,6 +165,9 @@ class CaptionPreset:
             ),
             emoji_inline=bool(data.get("emoji_inline", defaults.emoji_inline)),
             border_style=int(data.get("border_style", defaults.border_style)),
+            uppercase=bool(data.get("uppercase", defaults.uppercase)),
+            outline=int(data.get("outline", defaults.outline)),
+            shadow=int(data.get("shadow", defaults.shadow)),
         )
 
 
@@ -143,19 +177,51 @@ class CaptionPreset:
 # The three existing static templates are expressed as presets with animation
 # styles matching current behaviour (Req 1.1); the rest are new animated
 # presets (Req 1.2).
+# Fonts are named per preset rather than left on the default where the look calls for a
+# different face. Every name here is a family in ``assets/fonts.json`` that was
+# verified to resolve to its own file (libass ``fontselect:`` at -loglevel verbose), so a
+# preset can no longer request a face that does not exist.
 BUILTIN_PRESETS: dict[str, CaptionPreset] = {
     "karaoke": CaptionPreset("karaoke", animation="karaoke_fill", border_style=1),
-    "boxed": CaptionPreset("boxed", animation="none", border_style=3),
-    "minimal": CaptionPreset("minimal", animation="none", font_size=76),
+    "boxed": CaptionPreset(
+        "boxed",
+        animation="none",
+        border_style=3,
+        font="Archivo Black",
+        font_weight=900,
+        # BorderStyle 3 draws an opaque box, which *is* the legibility mechanism, so an
+        # outline would only fatten the glyphs inside it and a shadow would sit oddly
+        # against the box edge.
+        outline=0,
+        shadow=0,
+    ),
+    "minimal": CaptionPreset(
+        "minimal",
+        animation="none",
+        font_size=84,
+        font="Poppins",
+        font_weight=700,
+        # "Minimal" is about restraint, but it still has to be readable over video.
+        outline=6,
+        shadow=3,
+    ),
     "pop": CaptionPreset("pop", animation="pop", highlight_keywords=True),
-    "typewriter": CaptionPreset("typewriter", animation="typewriter"),
+    "typewriter": CaptionPreset(
+        "typewriter", animation="typewriter", font="Poppins", font_weight=700
+    ),
     "hormozi": CaptionPreset(
         "hormozi",
         animation="pop",
         highlight_keywords=True,
         emoji_inline=True,
-        font_size=96,
+        font_size=104,
         position="center",
+        # The look this preset is named for is heavy condensed all-caps.
+        font="Anton",
+        uppercase=True,
+        # The heaviest treatment we ship: this style is meant to dominate the frame.
+        outline=10,
+        shadow=5,
     ),
 }
 
@@ -237,7 +303,21 @@ DEFAULT_STOPWORDS: frozenset[str] = frozenset(
     }
 )
 
-# High-confidence Whisper probability threshold for emphasis.
+# C11: the share of a cue's words that may be emphasised at once.
+#
+# Emphasis used to include an *absolute* rule — "Whisper probability >= 0.9" — which on
+# clean audio nearly every word clears, so highlighting fired on almost everything, which
+# is visually the same as highlighting nothing. It was worse than that in practice:
+# ``_word_probability`` returns 1.0 when a word carries no probability at all, so any
+# transcript without per-word confidence highlighted *every* non-stopword.
+#
+# Emphasis is inherently relative — it means "these words, not those" — so the rule is now
+# a ranking with a budget rather than a threshold. A quarter of the words is enough for one
+# or two emphases in a typical 3-5 word cue.
+_HIGHLIGHT_RATIO = 0.25
+
+# Confidence is no longer a reason to emphasise a word, but it is still a sensible
+# tie-break between two equally salient ones: prefer the word we heard more clearly.
 _HIGH_PROBABILITY = 0.9
 # Minimum token length (normalized) for length-based emphasis.
 _MIN_KEYWORD_LEN = 6
@@ -272,33 +352,77 @@ def _word_probability(word: Any) -> float:
         return 1.0
 
 
-def _is_deterministic_keyword(word: Any) -> bool:
-    """Apply the deterministic emphasis rule set to a single word."""
+def _keyword_salience(word: Any) -> int:
+    """How emphasis-worthy ``word`` is, ``0`` meaning "not a candidate" (pure).
+
+    A rank, not a verdict (C11). The signals are the same ones the old rule set used,
+    ordered by how strongly each marks a word as the point of a sentence:
+
+    * ``3`` — a number or currency amount ("$5", "42", "100%"). Concrete and quotable.
+    * ``3`` — an ALL-CAPS run, which the speaker or transcriber already marked as emphatic.
+    * ``2`` — a long content word (>= 6 characters), the usual carrier of meaning.
+    * ``1`` — a mid-length content word (>= 4), a candidate only if nothing better exists.
+
+    Stopwords and empty tokens score ``0`` and can never be emphasised.
+    """
     raw = _word_text(word)
     token = _normalize_token(raw)
-    if not token:
-        return False
-    if token in DEFAULT_STOPWORDS:
-        return False
+    if not token or token in DEFAULT_STOPWORDS:
+        return 0
     # Numeric / currency (checked on the raw text so "$5" counts).
     if _NUMERIC_RE.search(raw):
-        return True
+        return 3
     # ALL-CAPS acronym / emphasis (use the raw alphabetic core).
     alpha_core = re.sub(r"[^A-Za-z]", "", raw)
     if len(alpha_core) >= 2 and alpha_core.isupper():
-        return True
-    # Long content word.
+        return 3
     if len(token) >= _MIN_KEYWORD_LEN:
-        return True
-    # High Whisper confidence.
-    if _word_probability(word) >= _HIGH_PROBABILITY:
-        return True
-    return False
+        return 2
+    if len(token) >= 4:
+        return 1
+    return 0
+
+
+def _is_deterministic_keyword(word: Any) -> bool:
+    """Whether ``word`` is *eligible* for emphasis at all (pure).
+
+    Eligibility is not selection: :func:`_deterministic_indices` then ranks the eligible
+    words and emphasises only the strongest few. Kept as a named predicate because it is
+    the readable half of the rule, and because the old absolute-threshold version is what
+    C11 replaced.
+    """
+    return _keyword_salience(word) > 0
+
+
+def _highlight_budget(count: int) -> int:
+    """How many of ``count`` words may be emphasised (C11).
+
+    At least one whenever there is anything to emphasise, so a short cue with a single
+    strong word still gets it, and a quarter of the words otherwise.
+    """
+    if count <= 0:
+        return 0
+    return max(1, int(count * _HIGHLIGHT_RATIO))
 
 
 def _deterministic_indices(words: list) -> set[int]:
-    """Deterministic highlighted-index set for ``words`` (pure)."""
-    return {i for i, w in enumerate(words) if _is_deterministic_keyword(w)}
+    """Deterministic highlighted-index set for ``words`` (pure).
+
+    Ranks the eligible words by salience and keeps the top few, rather than returning
+    everything above a threshold (C11). Ties break on Whisper confidence and then on
+    position, so the result is a pure function of the input — the same words in, the same
+    emphasis out, which the determinism properties depend on.
+    """
+    scored = [
+        (index, score, _word_probability(word))
+        for index, word in enumerate(words)
+        for score in (_keyword_salience(word),)
+        if score > 0
+    ]
+    if not scored:
+        return set()
+    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+    return {index for index, _score, _prob in scored[: _highlight_budget(len(words))]}
 
 
 def _ai_indices(words: list, client: Any) -> set[int]:
