@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "React + Tailwind dark-themed dashboard for the AI Video Clipper (scaffold).",
+  "engines": {
+    "node": "^20.9.0 || >=22.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -18,7 +21,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
-    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^4.3.1",
@@ -27,7 +30,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.8.0",
-    "jsdom": "^30.0.1",
+    "jsdom": "^26.1.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "vite": "^5.3.1",
