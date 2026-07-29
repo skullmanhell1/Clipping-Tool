@@ -31,6 +31,22 @@ const DEFAULT_ENGINE_SETTINGS = {
   kinetic_safe_area_y_pct: 10.0,
   kinetic_motion_ms: 120,
   kinetic_confidence_floor: 0.0,
+
+  // Stem inpainting engine (audio-stem-inpainting spec). Defaults mirror
+  // `ProcessingOptions` / `Stem_Options` exactly; the flag is off, so a stock install
+  // still renders exactly as v0.8.0. Listing every field here is what makes them reach
+  // the backend and round-trip through saved profiles without a dedicated panel.
+  stem_inpainting_enabled: false,
+  stem_mix_preset: "custom",
+  stem_gain_vocals: 1.0,
+  stem_gain_music: 1.0,
+  stem_gain_other: 1.0,
+  stem_repair_mode: "crossfade",
+  stem_repair_window_ms: 12,
+  stem_declick: false,
+  stem_backend: "auto",
+  stem_model: "htdemucs",
+  stem_retain_stems: false,
 };
 
 const engineOptions = (settings) =>

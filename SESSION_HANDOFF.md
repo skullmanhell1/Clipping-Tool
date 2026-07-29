@@ -1,193 +1,118 @@
 # Session Handoff
 
-Written at the end of a working session on branch `docs/stem-foundation-gate`
-(head `36f6251`). Everything below is either verified in this repo or an
-explicit user decision. Where something is *unverified*, it says so.
+Rewritten after the `audio-stem-inpainting` spec completed. The previous version of this file
+described a session that ended mid-epic and is no longer accurate in any part; it has been
+replaced rather than amended.
 
 ## 1. Status
 
-**kinetic-typography — complete.** All 17 epics are implemented and their tasks
-are closed. One known open defect (P12, see section 5) which the user has
-decided to move to its own bugfix spec rather than patch inline.
+**All five specs are complete — 388/388 tasks, nothing open.**
 
-**audio-stem-inpainting — barely started.** Epic 1 (the foundation
-prerequisite gate) is done and committed. 84 of the 86 remaining tasks are
-untouched. The gate's findings are the single most valuable artefact from epic 1
-because they correct nine wrong assumptions the design had baked in about the
-existing worker API (section 6).
+| Spec | Tasks |
+| --- | --- |
+| `av-engines-foundation` | 91/91 |
+| `kinetic-typography` | 76/76 |
+| `tier1-creator-output-upgrade` | 69/69 |
+| `speaker-diarization-reframe` | 66/66 |
+| `audio-stem-inpainting` | 86/86 |
 
-## 2. Open PRs — merge in this order
+Two AV engines are registered and advertised by `/api/info`, both **default-off**:
+`kinetic_typography` (COMPOSE) and `stem_inpainting` (AUDIO).
 
-Each is a fast-forward on top of the previous one. Merging out of order will
-force a rebase.
+## 2. Open PR
 
-| Order | PR | Contents |
-| --- | --- | --- |
-| 1 | #36 | Kinetic parity gate: flag-off parity test plus the caption drift pins. |
-| 2 | #37 | libass burn sweep and the end-to-end single-pass render test. |
-| 3 | #38 | Stem foundation prerequisite gate (epic 1 of audio-stem-inpainting). |
+| PR | Contents |
+| --- | --- |
+| [#42](https://github.com/skullmanhell1/Clipping-Tool/pull/42) | `audio-stem-inpainting` epics 9-20, plus two approved foundation changes. Its description understates the contents — it was written when the branch only held epics 9-11. |
 
-## 3. User decisions carried into the next session
+## 3. Test baselines
 
-**(a) Widen the host gate.** In `host.py`, the gate currently admits only
-`APPLIED`. It must be widened to admit `DEGRADED` as well, on the condition
-that `result.media is not None` and `engine.produces_media`. A degraded engine
-that still produced media has produced usable output and its media must not be
-discarded.
-
-**(b) Additive `notes` parameter — accepted.** Add a `notes` parameter to the
-public `run_stage` and thread it through into `_build_context`. It is strictly
-additive: existing callers must keep working unchanged, so it needs a default.
-
-**(c) Kinetic P12 gets its own bugfix spec.** Do not fold the fix into any
-kinetic-typography task. Open a dedicated bugfix spec, seeded with the analysis
-and the counter-examples in section 5.
-
-## 4. Baselines
-
-Test command:
-
-```
-PYENV_VERSION=3.11.15 python3 -m pytest tests/ -q
-```
+Run with `PYENV_VERSION=3.11.15 python3 -m pytest tests/ -q`.
 
 | Environment | Result |
 | --- | --- |
-| With `ffmpeg` on `PATH` | 410 passed, 1 failed |
-| Bare (no `ffmpeg`) | 336 passed, 75 skipped, 0 failed |
+| Full `requirements-dev.txt` + ffmpeg + fonts (what CI has) | **598 passed, 0 failed, 0 skipped** |
+| The same, plus `libGL` so `cv2`/`mediapipe` import (what Docker has) | **598 passed, 0 failed, 0 skipped** |
+| No ffmpeg on `PATH` (a bare developer checkout) | **509 passed, 89 skipped, 0 failed** |
 
-The single failure with ffmpeg present is the P12 test in section 5.
+The 89 skips are all the `requires_ffmpeg` gate. **A skip is not a pass** — anything touching a
+filtergraph needs ffmpeg on `PATH` before you can claim it works. There is no
+`/projects/sandbox/.ffbin` in this repo; get a static build and put it on `PATH`.
 
-**A skip is not a pass.** The 75-test delta between the two runs is entirely
-media-gated tests that silently skip when `ffmpeg` is absent. Any session that
-intends to claim a green suite needs a static `ffmpeg`/`ffprobe` on `PATH`;
-otherwise those 75 tests assert nothing and the "0 failed" bare number is not
-evidence of correctness.
+## 4. Superseded decisions
 
-## 5. Kinetic P12
+These were carried by the previous handoff and are now **resolved**; do not act on them again.
 
-### Symptom
+* **(a) Widen the host media gate — DONE.** `worker/engines/host.py` now admits `degraded` as
+  well as `applied` via `_MEDIA_BEARING_STATUSES`. Req 8.3 still holds because it is carried by
+  `media is None`, not by status. No Pipeline change was needed.
+* **(b) Additive `notes` parameter — DONE.** `Engine_Host.run_stage(notes=...)`, threaded into
+  `_build_context` and appended after the host's own synthesised notes. Both contract pins were
+  updated to match.
+* **(c) A dedicated bugfix spec for kinetic P12 — NOT RECOMMENDED, see below.**
 
-`test_p12_malformed_timings_degrade_instead_of_raising` fails, minimising to
-`Time_Base(fps=14.0)`.
+## 5. Kinetic P12: could not be reproduced
 
-### This is not a one-line fix
+The previous handoff described `test_p12_malformed_timings_degrade_instead_of_raising` as a
+known-red defect and asked for its own bugfix spec. **It does not reproduce.**
 
-The `+ frame` widening term — the obvious suspect — **is already correct**. It
-was checked by sweeping fps from 1.0 to 240.0 against a 200-position grid: the
-smallest span produced was 0.08218 s, and in every single case the snapped span
-was at least `ceil(MIN_WORD_S * fps)` frames. The widening term is not the bug
-and changing it will not fix this.
+Evidence:
 
-### Actual root cause
+* 4000 fresh Hypothesis examples with the example database disabled — clean.
+* A deterministic sweep of 1020 cases (5 degenerate timeline shapes x 17 fps values, including
+  the `14.0` the old analysis named, x 3 sample rates x 4 durations) — clean.
+* The predicate the old analysis blamed (`later_start > cue_start`, `worker/engines/kinetic.py`
+  ~line 1639) is **still present**, so this is not a silent fix — the diagnosis appears to have
+  been wrong.
 
-The point-cue ceiling scan in planner step 5 required `later_start >
-cue_start`. That predicate skips a later cue whose *snapped* start landed
-exactly on the point cue's start. With that neighbour invisible to the scan,
-the ceiling was left too high, the widened point cue overran the neighbour, and
-the downstream disjointness cursor shaved the overlap off the widened cue's
-**front**. What survives is a 1-frame cue that still contains its synthesised
-words — shorter than `MIN_WORD_S` with words inside it.
+Also note the old handoff attributed the failure to ffmpeg being on `PATH`. That is definitely
+wrong: P12 is a pure planner property with no ffmpeg dependency. The likeliest explanation for
+the original red run is a stale counterexample in a local `.hypothesis` database.
 
-### Partial fix — present in the working tree, UNVERIFIED, and reverted
+**Recommendation:** keep the property test as the guard, do not open the spec. Absence of a
+counterexample is not proof of absence, so if it ever reappears, capture the counterexample
+*and* the generator versions before analysing.
 
-The diff below was captured from `git diff worker/engines/kinetic.py` before
-being reverted at the end of the session. It addresses the ceiling scan but it
-was never validated against a full run, and it does **not** close the two
-counter-examples that follow. Treat it as a starting hypothesis for the bugfix
-spec, not as a fix.
+## 6. What is actually left
 
-```diff
-diff --git a/worker/engines/kinetic.py b/worker/engines/kinetic.py
-index 294e408..30eed27 100644
---- a/worker/engines/kinetic.py
-+++ b/worker/engines/kinetic.py
-@@ -1636,7 +1636,17 @@ def plan_kinetic(
-             cue_start = max(cue_start, cursor_pre)
-             ceiling = grid_limit
-             for later_start, later_end in bounds[index + 1 :]:
--                if later_end > later_start and later_start > cue_start:
-+                if later_end > later_start:
-+                    # The *first* later cue with a real interval is the ceiling
-+                    # whatever its start — including a start that snapped onto
-+                    # this very point, or that this cue's ``cursor_pre`` shift
-+                    # already reached. Requiring ``later_start > cue_start``
-+                    # here let the widened point cue run *over* such a
-+                    # neighbour; the disjointness cursor below then shaved the
-+                    # overlap off the widened cue's front, leaving it shorter
-+                    # than MIN_WORD_S with its synthesised words inside it
-+                    # (Req 6.2). With no room left the cue collapses to a point
-+                    # and normalisation drops it with its words (Req 5.5).
-                     ceiling = min(ceiling, later_start)
-                     break
-             # ``+ frame`` absorbs the half-frame snap error, so the snapped span
-```
+No spec work. Everything below is unplanned.
 
-### Two counter-examples remain, by a different path
+### Small and mechanical
+* No `VERSION`/`CHANGELOG` entry existed for the stem engine — addressed in this pass (0.9.0).
+* `README.md` claimed a Redis + RQ queue that does not exist — addressed in this pass.
 
-These survive the diff above, which is the evidence that the ceiling scan is
-not the whole story. They arrive at the same bad state — a sub-`MIN_WORD_S` cue
-holding synthesised words — via a different route. Note `timing_synthesised=True`
-and the collapse of `normalised` to a single interval in both traces.
+### Real product gaps, highest impact first
+1. **`review_required` is a dead end.** Every publisher can return it, but there is no
+   approve/retry/resume endpoint and `PublishManager` only picks up `queued`/`scheduled`. The
+   README describes an approval flow with no server-side path.
+2. **Job state is in-memory only.** `JobStore` is a dict; history/campaigns/profiles are
+   durable. After a restart `/api/history` lists clips whose ZIP download 404s and whose
+   `PATCH` silently updates 0 rows.
+3. **No ffmpeg invocation outside the stem engine carries a timeout.** `worker/ffmpeg_utils._run`
+   passes none, so a wedged ffmpeg hangs a job thread forever. The stem engine threads an
+   explicit timeout through every call; the rest of the pipeline does not.
+4. **`allow_origins=["*"]` with `allow_credentials=True`** (`api/main.py`) is a combination
+   browsers reject outright.
+5. **Diarisation invents speakers.** `segment_by_words` labels speech runs **round-robin**, so a
+   monologue with pauses over `diarization_pause_gap` (0.9 s) alternates `S1`/`S2` — and that
+   drives visible `follow_active`/`split_screen` framing changes.
+6. `merge_scores` hard-codes `weight=0.5` with at most 12 keyframes per source, so most
+   candidates score `visual_score = 0` and brightness dominates the ranking.
+7. Uploads have no size/type validation, and `shutil.copyfileobj` runs synchronously inside an
+   `async def`, blocking the event loop.
+8. Per-platform `min_interval_seconds` are dead — `max(..., publish_default_interval_seconds)`
+   with a 30 s default overrides every one of them.
+9. `visual_selection.sample_keyframes` leaks its `mkdtemp` directory; `disk_usage()` walks every
+   file on every `/api/storage` poll.
 
-**Counter-example 1 — 30 fps** (`.verify_tmp/h1.txt`):
-
-```
-words = [(0.155, 'NOATTR', "'hello'"), (0.554, 0.905, "'like'"), (1.0, 1.61, "'so'"), (1.904, 2.45, "'\\t'"), (2.98, 3.738, "'\\t'"), ('', 4.821, "'word'"), (None, 6.155, "'so'"), ([0.0], 6.245, "'hello'")]
-duration = 7.218
-base = Time_Base(fps=30.0, sample_rate=8000, rounding=<Rounding.NEAREST: 'nearest'>, fps_substituted=True)
-options = {'style': 'slide_up', 'reveal': 'cumulative', 'preset_name': 'typewriter', 'font_override': '', 'preset_font': 'Noto Sans JP', 'font_size': 59, 'position': 'top', 'max_lines': 1, 'max_line_width': 66, 'safe_area_x_pct': 5.030300410544809, 'safe_area_y_pct': 30.74874886414598, 'motion_duration_ms': 253, 'highlight_keywords': True, 'keyword_ai': False, 'emoji_inline': True, 'confidence_floor': 1.0, 'captions_enabled': True, 'hook_enabled': True, 'hook_duration_s': 4.610499555557423, 'hook_font_size': 137, 'durable_subtitle': True, 'permissibility': True}
-bad = [(6.166666666666667, 6.233333333333333, Kinetic_Word(text='hello', start=6.166666666666667, end=6.233333333333333, rel_ms=0, emphasis=False, timing_synthesised=True, emoji='', line=0))]
-plan = [(0.0, 4.833333333333333, [('word', 0.0, 4.833333333333333, True)]), (4.833333333333333, 6.166666666666667, [('so', 4.833333333333333, 6.166666666666667, True)]), (6.166666666666667, 6.233333333333333, [('hello', 6.166666666666667, 6.233333333333333, True)])]
-trace = {'drafts': [(0.155, 1.61, ['hello', 'like', 'so']), (0.0, 4.821, ['word']), (0.0, 6.155, ['so']), (0.0, 6.245, ['hello'])], 'bounds': [(0.16666666666666666, 1.6), (0.0, 4.833333333333333), (0.0, 6.166666666666667), (0.0, 6.233333333333333)], 'filled': [(0.16666666666666666, 1.6), (0.0, 4.833333333333333), (0.0, 6.166666666666667), (0.0, 6.233333333333333)], 'normalised': [(0.0, 6.233333333333333)], 'grid_limit': 7.2, 'frame': 0.03333333333333333}
-hits: 1
-```
-
-**Counter-example 2 — 240 fps** (`.verify_tmp/h5.txt`):
-
-```
-words = [(1.192, 0.328, "'um'"), (1.645, 1.279, "'like'"), (1.879, 'NOATTR', "'like'"), (2.285, 2.85, "''"), ('nan', 3.465, "'word'"), (None, 4.378, "'like'"), ('nan', 4.438, "'word'")]
-duration = 4.438
-base = Time_Base(fps=240.0, sample_rate=96000, rounding=<Rounding.NEAREST: 'nearest'>, fps_substituted=True)
-options = {'style': 'bounce', 'reveal': 'cumulative', 'preset_name': 'boxed', 'font_override': '', 'preset_font': 'Inter-Bold', 'font_size': 61, 'position': 'top', 'max_lines': 3, 'max_line_width': 24, 'safe_area_x_pct': 15.368890325562075, 'safe_area_y_pct': 24.704870077009314, 'motion_duration_ms': 271, 'highlight_keywords': True, 'keyword_ai': False, 'emoji_inline': True, 'confidence_floor': 0.5, 'captions_enabled': True, 'hook_enabled': False, 'hook_duration_s': 5.577269891137479, 'hook_font_size': 115, 'durable_subtitle': True, 'permissibility': True}
-bad = [(4.379166666666666, 4.4375, Kinetic_Word(text='word', start=4.379166666666666, end=4.4375, rel_ms=0, emphasis=False, timing_synthesised=True, emoji='', line=0))]
-plan = [(0.0, 4.379166666666666, [('like', 0.0, 4.379166666666666, True)]), (4.379166666666666, 4.4375, [('word', 4.379166666666666, 4.4375, True)])]
-trace = {'drafts': [(1.192, 3.465, ['um', 'like', 'like', 'word']), (0.0, 4.378, ['like']), (0.0, 4.438, ['word'])], 'bounds': [(1.1916666666666667, 3.466666666666667), (0.0, 4.379166666666666), (0.0, 4.4375)], 'filled': [(1.1916666666666667, 3.466666666666667), (0.0, 4.379166666666666), (0.0, 4.4375)], 'normalised': [(0.0, 4.4375)], 'grid_limit': 4.4375, 'frame': 0.004166666666666667}
-hits: 1
-```
-
-## 6. Nine binding API corrections from the stem foundation gate
-
-The audio-stem-inpainting design was written against an imagined worker API.
-The gate checked each assumption against the code. These nine corrections are
-binding on every remaining stem task — write new code against these, not
-against the design's prose.
-
-1. `FakeWord` is a class in `tests/conftest.py` whose constructor argument order
-   is `(start, end, text)` — e.g. `FakeWord(0.0, 0.5, "hi")` — **not**
-   `(text, start, end)`. It exposes `.start`, `.end`, `.text` and sets
-   `.probability = 1.0` (hard-coded, not a constructor parameter), which is why
-   a generator needing a real confidence must set `.probability` on the
-   instance.
-2. `Engine_Workspace.path` is a **method**, not an attribute. The directory is
-   `.root`.
-3. There is no `Engine_Result.applied()` constructor. Do not call it.
-4. The stage entry points are named `run_stage` and `finish_clip`.
-5. The `raw = out.media or raw` reassignment lives in `pipeline.py`, not in the
-   engine or the host.
-6. `normalize_segments` **drops plain tuples**. Anything passed to it has to be
-   the real segment type or it vanishes silently.
-7. `Engine_Artifact` carries a `storage_key`.
-8. `Engine_Context` has three fields beyond what the design assumed. Construct
-   it fully.
-9. `make_video` is a **fixture factory**, so it must be called to get a video —
-   it is not the video itself.
-
-## 7. Next steps
-
-1. **Epic 2** — generators and test doubles, built against the corrected
-   bindings in section 6.
-2. **Epics 4–6** — data models, then the pure planner.
-
-Before claiming any suite green, install a static `ffmpeg`/`ffprobe` so the 75
-gated tests actually run (section 4).
+### Test / CI infrastructure
+* **CI installs `opencv-python` but not `libgl1`**, so `import cv2` fails there with
+  `libGL.so.1: cannot open shared object file`. The Dockerfile installs it (with a comment
+  saying opencv needs it); the workflow does not. Addressed in this pass. Note the suite passes
+  either way, because the vision tests inject their detectors — so this was costing CI
+  *coverage*, not correctness.
+* The frontend has no tests of any kind, and `npm run lint` fails: `eslint` is scripted but not
+  in `devDependencies`.
+* The `deploy` job uses `secrets` inside step-level `if:` expressions, which does not evaluate
+  as intended.
+* There is no pytest configuration at all — no registered markers, no coverage gate.

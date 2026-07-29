@@ -8,7 +8,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- RQ-backed distributed worker (currently in-process)
+- RQ-backed distributed worker (currently in-process, and **not** yet wired up — see the note
+  under 0.9.0)
+- An approve/retry endpoint for `review_required` publish attempts, which currently have no way
+  to progress
+- Durable job state (job/clip records are in-memory only and are lost on restart)
+
+## [0.9.0] - 2026-07-29
+
+### Added
+- **Stem-aware audio repair (`stem_inpainting` engine, default OFF).** An AUDIO-stage AV engine
+  that separates clip audio into a `vocals`/`music`/`other` Stem_Set, applies per-stem gains, and
+  repairs the waveform joins that filler-word removal leaves behind.
+  - Two separator backends behind one file-based protocol: a local `demucs` checkpoint (`ml`),
+    and a dependency-free ffmpeg approximation (`music := clip - vocals`) that is only ever
+    reached carrying a `degraded:` marker so it is never mistaken for real separation.
+  - Seam repair as an equal-power V-notch, `sin(PI/2*|t-c|/h)`, evaluated **per sample**. Fixed
+    at exactly two media passes per clip regardless of seam count: extract (`-vn`) and remux
+    (`-c:v copy`).
+  - Mix presets `speech_focus` / `music_focus` / `clean_speech`, plus `custom` gains over
+    `0.0-4.0`; repair modes `off` / `crossfade` / `spectral`; optional declick and retained
+    per-stem WAVs as durable artifacts.
+  - Eleven new `ProcessingOptions` fields (`stem_inpainting_enabled` plus ten `stem_*`),
+    accepted by `OptionsModel` and `/api/upload`, advertised under
+    `/api/info` → `capabilities.stem_inpainting`, and exposed as a "Stem repair" group in the
+    settings panel. `spectral` is shown disabled with a "needs local model" hint when
+    `model:htdemucs` is unavailable.
+- `demucs` and `torch` remain **optional**: they are not in `requirements.txt`, and a stock
+  install runs the engine via the ffmpeg approximation.
+
+### Changed
+- **`Engine_Host` now adopts replacement media from a `degraded` engine**, not only an `applied`
+  one (`_MEDIA_BEARING_STATUSES`). Degradation describes fidelity, not usability — an engine that
+  fell back and still produced a usable file has produced usable output. Requirement 8.3 is
+  unchanged, because it is carried by `media is None` rather than by status.
+- `Engine_Host.run_stage` gained an additive, keyword-only `notes` parameter for caller-supplied
+  Engine_Context notes. Existing call sites are unaffected.
+- `Dropdown.jsx` supports per-option and whole-control `disabled`, so a mode that exists but is
+  unavailable can be shown with its reason instead of hidden.
+- CI installs `libgl1`/`libglib2.0-0`. `opencv-python` was already installed but could not be
+  imported without them, so the vision code paths were never actually loaded in CI.
+
+### Fixed
+- **Seam repair never applied.** The repair filter was specified and implemented as `volume` with
+  `eval=frame` and a time-dependent expression. Against ffmpeg 7.x that is a silent no-op — `t`
+  does not take the values a per-frame evaluation implies, so a `between(t,…)`-gated expression
+  never fires, and the output is byte-identical to the input with no error. Replaced with
+  `aeval`, which evaluates per sample.
+- **Separated stems failed their own integrity check.** They were verified against the clip
+  container duration, but a lossy audio stream carries encoder padding (2.000 s of AAC decodes to
+  ~2.020 s of PCM), so every real separation was rejected. Stems are now checked against the
+  decoded audio they were separated from.
+- **Repaired clips grew by ~20 ms per pass** as that same padding compounded through
+  extract + re-encode. The remux is now bounded with `-t` taken from the original clip's audio
+  stream duration. (Deliberately not `-shortest`, which truncates to whichever stream happens to
+  be shorter — an input-dependent change rather than a measured one.)
+- `tests/test_engine_host.py` no longer leaves the `worker.engines` process globals cleared. It
+  cleared the default registry and `MODEL_LOCATORS` for isolation without restoring them, and
+  because `loader.py` populates those by import side effect they could not be repopulated —
+  making later test files depend on pytest's file ordering.
 
 ## [0.8.0] - 2026-07-23
 

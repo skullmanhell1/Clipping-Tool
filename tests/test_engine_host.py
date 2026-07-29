@@ -115,10 +115,30 @@ def reset_engine_globals() -> None:
 
 @pytest.fixture(autouse=True)
 def clean_engine_globals():
-    """Known-empty singletons before and after each test in this module."""
+    """Known-empty singletons during each test, **restored afterwards**.
+
+    The teardown restores rather than merely re-clearing, which matters beyond this module:
+    ``worker/engines/loader.py`` populates the default registry and ``MODEL_LOCATORS`` by
+    **import side effect**, and an already-imported module cannot re-fire it. So leaving them
+    empty on the way out silently breaks every later test file that expects a populated
+    registry — ``/api/info`` legitimately advertises no engine, and whether a test passes
+    starts depending on pytest's file ordering.
+
+    Mirrors what ``tests/test_engine_capabilities.py`` already does for ``MODEL_LOCATORS``.
+    """
+    from worker.engines.registry import get_registry, register
+
+    engines_before = [record.engine for record in get_registry().records()]
+    locators_before = dict(MODEL_LOCATORS)
+
     reset_engine_globals()
     yield
     reset_engine_globals()
+
+    for engine in engines_before:
+        register(engine)
+    MODEL_LOCATORS.update(locators_before)
+    reset_report()
 
 
 # --------------------------------------------------------------------------- #
@@ -947,23 +967,47 @@ def test_failed_engine_logs_exception_class_and_message(tmp_path, caplog):
 
 
 @pytest.mark.parametrize(
-    ("status", "expects_media"),
+    ("status", "has_media", "expects_media"),
     [
-        (Engine_Status.APPLIED, True),
-        (Engine_Status.DEGRADED, False),
-        (Engine_Status.FAILED, False),
+        # Media-bearing statuses: the file is adopted.
+        (Engine_Status.APPLIED, True, True),
+        (Engine_Status.DEGRADED, True, True),      # Degraded_With_Media
+        # No file to adopt, whatever the status.
+        (Engine_Status.APPLIED, False, False),
+        (Engine_Status.DEGRADED, False, False),    # Degraded_Without_Media
+        # Not media-bearing: the file is discarded even though it exists.
+        (Engine_Status.FAILED, True, False),
+        (Engine_Status.SKIPPED, True, False),
     ],
 )
-def test_stage_media_replaces_only_for_a_successful_produces_media_engine(
-    tmp_path, status, expects_media
+def test_stage_media_is_adopted_only_from_a_media_bearing_produces_media_engine(
+    tmp_path, status, has_media, expects_media
 ):
-    """Validates: Requirements 8.3 — a failed/degraded engine leaves the prior media."""
+    """Validates: Requirements 8.3 — and the ``Degraded_With_Media`` widening.
+
+    The gate admits ``applied`` **and** ``degraded``, because degradation describes
+    fidelity rather than usability: an engine that fell back to a cheaper path and still
+    produced a usable file has produced usable output, and discarding it would throw the
+    work away while still charging the clip for the passes that made it.
+
+    Req 8.3 is unchanged and still holds, because it is carried by ``media is None``
+    rather than by the status — a rung with nothing to hand back returns no media, and the
+    Pipeline's ``out.media or raw`` then keeps the pre-stage file. ``failed`` stays
+    excluded: an engine that failed cannot vouch for what it produced.
+    """
     replacement = tmp_path / "replacement.wav"
     replacement.write_bytes(b"replacement-audio")
     engine = FakeEngine(
-        "media_engine", Engine_Stage.AUDIO, status=status, media=replacement
+        "media_engine",
+        Engine_Stage.AUDIO,
+        status=status,
+        media=replacement if has_media else None,
     )
-    assert engine.produces_media is True
+    # ``FakeEngine`` derives ``produces_media`` from whether it was given a file, but the
+    # declaration and the file are independent in the contract: an engine may declare it and
+    # still return nothing. Pin it on so the no-file rows exercise the gate rather than the
+    # declaration.
+    engine.produces_media = True
 
     host = build_host(tmp_path, registry_of([engine]), all_enabled(["media_engine"]))
     outcome = host.run_stage(
@@ -981,6 +1025,88 @@ def test_stage_media_replaces_only_for_a_successful_produces_media_engine(
     else:
         # ``out.media or raw`` in the Pipeline therefore keeps the pre-stage media.
         assert outcome.media is None
+
+
+def test_caller_notes_are_appended_after_the_hosts_own(tmp_path):
+    """Validates: the additive ``run_stage(notes=...)`` keyword.
+
+    The host can only synthesise notes it can derive (``fps_fallback:`` from the probe,
+    ``filler_seam:`` from the keep plan); ``notes`` is how a caller publishes one it cannot.
+    Order is asserted because it is part of the contract — an engine reading a prefix by
+    position must keep working when a caller starts passing notes.
+    """
+    engine = FakeEngine("note_reader", Engine_Stage.AUDIO)
+    host = build_host(tmp_path, registry_of([engine]), all_enabled(["note_reader"]))
+
+    host.run_stage(
+        Engine_Stage.AUDIO,
+        clip_id="clip_a",
+        source="/media/source.mp4",
+        clip_path=tmp_path / "clip_a.mp4",
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
+        notes=("diarization:model", 17),
+    )
+
+    seen = engine.contexts[-1].notes
+    assert seen[-2:] == ("diarization:model", "17")     # coerced to str
+    assert all(isinstance(note, str) for note in seen)
+
+
+def test_omitting_caller_notes_changes_no_context(tmp_path):
+    """Validates: Requirements 23.1 — the ``notes`` keyword is strictly additive.
+
+    The parity guarantee for the new keyword: a call that omits it must build exactly the
+    context it built before the keyword existed.
+    """
+    without = FakeEngine("a", Engine_Stage.AUDIO)
+    host_a = build_host(tmp_path, registry_of([without]), all_enabled(["a"]))
+    host_a.run_stage(
+        Engine_Stage.AUDIO, clip_id="c", source="/s.mp4",
+        clip_path=tmp_path / "c.mp4", clip_start=0.0, clip_end=1.0, duration=1.0,
+    )
+
+    explicit = FakeEngine("a", Engine_Stage.AUDIO)
+    host_b = build_host(tmp_path, registry_of([explicit]), all_enabled(["a"]))
+    host_b.run_stage(
+        Engine_Stage.AUDIO, clip_id="c", source="/s.mp4",
+        clip_path=tmp_path / "c.mp4", clip_start=0.0, clip_end=1.0, duration=1.0,
+        notes=(),
+    )
+
+    # Equal to each other, and carrying nothing the caller contributed — the host's own
+    # synthesised notes (here ``fps_fallback:``) are unchanged in content and position.
+    assert without.contexts[-1].notes == explicit.contexts[-1].notes
+    assert not any(note.startswith("diarization:") for note in without.contexts[-1].notes)
+
+
+def test_a_degraded_engines_artifacts_and_media_are_both_kept(tmp_path):
+    """Validates: Requirements 3.10 — ``degraded`` is a first-class outcome throughout.
+
+    Before the gate was widened, a degraded engine's artifacts and Compose_Contribution
+    were collected but its **media** was silently dropped — an asymmetry with no
+    justification, and the reason the audio-stem engine's ``Degraded_With_Media`` rungs
+    could not work. This pins that the three now travel together.
+    """
+    replacement = tmp_path / "degraded.wav"
+    replacement.write_bytes(b"usable-but-degraded")
+    engine = FakeEngine(
+        "partial",
+        Engine_Stage.AUDIO,
+        status=Engine_Status.DEGRADED,
+        media=replacement,
+        markers=("engine:partial:degraded:model:htdemucs",),
+    )
+
+    host = build_host(tmp_path, registry_of([engine]), all_enabled(["partial"]))
+    outcome = host.run_stage(
+        Engine_Stage.AUDIO, clip_id="clip_a", source="/media/source.mp4",
+        clip_path=tmp_path / "clip_a.mp4", clip_start=0.0, clip_end=3.0, duration=3.0,
+    )
+
+    assert outcome.media == replacement
+    assert "engine:partial:degraded:model:htdemucs" in outcome.markers
 
 
 def test_finish_job_persists_source_stage_durable_artifacts(tmp_path, monkeypatch):
