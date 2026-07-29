@@ -83,8 +83,12 @@ def test_keyword_highlight_disabled_makes_zero_llm_calls():
     result = plan_keywords(words, use_ai=False, client=spy)
 
     assert spy.calls == []  # zero LLM calls
-    # Deterministic emphasis still identifies the content/ALL-CAPS words.
-    assert result == {1, 2}
+    # Deterministic emphasis still identifies the strongest content word. Both
+    # "revolutionary" (a long content word) and "AI" (an ALL-CAPS run) are *eligible*, but
+    # C11 gives a three-word list a budget of one emphasis, and ALL-CAPS outranks length —
+    # so the highest-salience word wins rather than both. Emphasising two words in three
+    # is what made highlighting meaningless before.
+    assert result == {2}
 
 
 

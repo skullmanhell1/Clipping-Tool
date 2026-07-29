@@ -584,9 +584,17 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     if not planned:
         return 0
 
-    # Trap 2 closed: emphasis is genuinely reachable — every planned word is a
-    # keyword when nothing is floored out.
-    assert all(word.emphasis for word in planned)
+    # Trap 2 closed: emphasis is genuinely reachable — at least one planned word is
+    # emphasised when nothing is floored out, so the clauses below are not vacuous.
+    #
+    # This asserted *every* planned word was emphasised, which held only because emphasis
+    # used an absolute rule (Whisper probability >= 0.9, defaulting to 1.0 when absent)
+    # that essentially everything cleared. C11 replaced it with a ranked budget, so which
+    # words are chosen is now the emphasis policy's business — and is pinned directly in
+    # ``tests/test_caption_presets.py``. What Property 13 is about is the *floor*: that it
+    # governs emphasis word by word and touches nothing else. Asserting the selection here
+    # would couple this property to a policy it does not own.
+    assert any(word.emphasis for word in planned)
 
     # Text, timing and layout are bit-identical between the runs; only emphasis
     # may differ (Req 5.9 — spoken text and timing untouched).
@@ -595,9 +603,22 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     assert floor_plan.degraded == base_plan.degraded
 
     # Trap 1 closed: the floor decides emphasis, word by word (Req 6.5).
+    #
+    # Stated as an implication plus monotonicity rather than an equality, because emphasis
+    # is now the conjunction of two independent decisions: the emphasis policy selects
+    # candidates (C11's ranked budget) and the floor vetoes the ones we did not hear
+    # clearly enough. The floor's half is fully pinned by the two clauses together — it may
+    # only ever remove emphasis, and never from a word that clears it.
+    base_emphasised = {
+        word.text for cue in base_plan.cues for word in cue.words if word.emphasis
+    }
     for cue in floor_plan.cues:
         for word in cue.words:
-            assert word.emphasis is (confidence[word.text] >= floor)
+            if word.emphasis:
+                assert confidence[word.text] >= floor
+                assert word.text in base_emphasised
+            elif word.text in base_emphasised:
+                assert confidence[word.text] < floor
 
     # A floor of 1.0 over confidences that are all strictly below 1.0 strips every
     # word, so the emphasis matrix provably differs somewhere.

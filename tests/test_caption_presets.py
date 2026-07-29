@@ -439,3 +439,118 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
         else:
             assert glyph not in text
         assert kw in text  # surrounding words retained
+
+
+
+# ===========================================================================
+# C11 — emphasis is relative, not absolute
+# ===========================================================================
+# The old rule set highlighted any non-stopword whose Whisper probability reached 0.9.
+# Two things made that the same as highlighting nothing:
+#
+#   * on clean audio nearly every word clears 0.9; and
+#   * ``_word_probability`` returns 1.0 when a word has no probability attribute at all,
+#     so a transcript without per-word confidence highlighted *every* non-stopword.
+#
+# Emphasis is now a ranking with a budget. These tests pin that, because the goldens
+# elsewhere only show its effect on one fixed sentence.
+def test_high_confidence_alone_no_longer_emphasises_a_word():
+    """The exact defect C11 names: confidence is not salience.
+
+    Six short stopword-free words with perfect confidence and no other signal. Under the
+    old rule every one of them was emphasised; a budget now applies, and a word that is
+    merely short and clearly-heard is the weakest candidate there is.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [FakeWord(float(i), float(i) + 0.4, "word") for i in range(6)]
+    for word in words:
+        word.probability = 1.0
+
+    emphasised = plan_keywords(words, use_ai=False)
+    assert len(emphasised) <= 2, (
+        f"{len(emphasised)} of 6 identical words emphasised; emphasis that applies to "
+        "everything communicates nothing"
+    )
+
+
+def test_words_without_probability_are_not_all_emphasised():
+    """A transcript with no per-word confidence must not emphasise everything.
+
+    ``_word_probability`` defaults to 1.0 for a word that carries no probability, so the
+    old ``>= 0.9`` rule fired on every non-stopword here.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    class Bare:
+        def __init__(self, text):
+            self.text = text
+            self.start = 0.0
+            self.end = 0.4
+
+    words = [Bare(t) for t in ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")]
+    emphasised = plan_keywords(words, use_ai=False)
+    assert 0 < len(emphasised) <= 2, f"expected a small budget, got {len(emphasised)}"
+
+
+def test_emphasis_prefers_the_strongest_signal_available():
+    """Numbers and ALL-CAPS outrank mere length, and the budget keeps the best."""
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [
+        FakeWord(0.0, 0.4, "the"),          # stopword: never eligible
+        FakeWord(0.4, 0.8, "interesting"),  # long content word
+        FakeWord(0.8, 1.2, "$5000"),        # currency: strongest
+        FakeWord(1.2, 1.6, "and"),          # stopword
+    ]
+    for word in words:
+        word.probability = 1.0
+
+    assert plan_keywords(words, use_ai=False) == {2}
+
+
+def test_stopwords_are_never_emphasised_whatever_the_budget():
+    """A budget must not promote a stopword just because nothing better is present."""
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [FakeWord(float(i), float(i) + 0.3, t) for i, t in enumerate(("the", "of", "a"))]
+    for word in words:
+        word.probability = 1.0
+
+    assert plan_keywords(words, use_ai=False) == set()
+
+
+def test_emphasis_is_a_pure_function_of_its_input():
+    """Ranking introduces ordering; the result must still be deterministic.
+
+    The kinetic determinism properties depend on this: the same words in, the same
+    emphasis out, every time.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [
+        FakeWord(0.0, 0.4, "revolutionary"),
+        FakeWord(0.4, 0.8, "AI"),
+        FakeWord(0.8, 1.2, "$42"),
+        FakeWord(1.2, 1.6, "changed"),
+        FakeWord(1.6, 2.0, "everything"),
+        FakeWord(2.0, 2.4, "the"),
+        FakeWord(2.4, 2.8, "world"),
+        FakeWord(2.8, 3.2, "forever"),
+    ]
+    first = plan_keywords(words, use_ai=False)
+    assert all(plan_keywords(words, use_ai=False) == first for _ in range(5))
+    assert first  # non-vacuous
+
+
+def test_the_legacy_karaoke_sweep_and_the_preset_highlight_agree():
+    """C4: one emphasis colour, not two that differ by which code path rendered.
+
+    The legacy templates swept to pure green (``&H0000FF00``) while every preset swept to
+    amber, so the same clip looked different depending on whether a preset was supplied.
+    """
+    from worker import captions
+    from worker.effects.caption_presets import CaptionColors
+
+    assert captions.HIGHLIGHT_COLOUR == CaptionColors().highlight
+    assert captions.HIGHLIGHT_COLOUR != "&H0000FF00", "green is the value C4 removed"

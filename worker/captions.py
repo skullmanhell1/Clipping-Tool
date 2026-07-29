@@ -109,6 +109,13 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
+#: The emphasis colour shared by the legacy templates and the preset path (C4).
+#:
+#: ASS ``&HAABBGGRR``, so this is opaque amber (R=255, G=229, B=0). It is the same value as
+#: ``caption_presets.CaptionColors.highlight``; the two are spelled separately because the
+#: legacy ``_caption_style`` path takes no preset, and a drift test pins them equal.
+HIGHLIGHT_COLOUR = "&H0000E5FF"
+
 # Caption position (UI value) -> ASS numpad alignment + default vertical margin.
 # ASS alignments: 2 = bottom-centre, 5 = middle-centre, 8 = top-centre.
 _POSITION_ALIGN: dict[str, tuple[int, int]] = {
@@ -127,14 +134,19 @@ def _caption_style(
     """Return ``(style_line, alignment, karaoke)`` for a caption template.
 
     Templates:
-        * ``karaoke`` — white text, green per-word fill sweep, bold outline.
+        * ``karaoke`` — white text, amber per-word fill sweep, bold outline.
         * ``boxed``   — white text on a semi-opaque box (BorderStyle 3).
         * ``minimal`` — plain white text, thin outline, no karaoke.
     """
     align, margin_v = _POSITION_ALIGN.get(position, _POSITION_ALIGN["bottom"])
 
     white = "&H00FFFFFF"
-    green = "&H0000FF00"
+    # C4: the karaoke fill was pure green (&H0000FF00), which reads as dated - it is the
+    # default nobody chose. The current idiom is white sweeping to yellow or to a brand
+    # colour. This is the same amber as ``CaptionColors.highlight``, so the legacy
+    # templates and the preset path now agree on what an emphasised word looks like
+    # instead of differing by which code path rendered them.
+    highlight = HIGHLIGHT_COLOUR
     black = "&H00000000"
     box = "&H80000000"  # semi-transparent black background/shadow
 
@@ -153,7 +165,7 @@ def _caption_style(
         return style, align, False
     # Default: karaoke.
     style = (
-        f"Style: Default,{font},{font_size},{white},{green},{black},&H64000000,"
+        f"Style: Default,{font},{font_size},{white},{highlight},{black},&H64000000,"
         f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
     )
     return style, align, True

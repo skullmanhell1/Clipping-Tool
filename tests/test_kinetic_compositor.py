@@ -1565,7 +1565,11 @@ _ASS_EVENTS_HEADER = (
 _EXPECTED_LEGACY_DOCUMENTS: dict = {
     "karaoke": (
         _ASS_HEADER
-        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+        # C4: the karaoke SecondaryColour (the per-word fill sweep) was pure green,
+        # &H0000FF00. Green reads as dated - it is the ASS default rather than a choice -
+        # and it disagreed with the preset path, which has always swept to amber.
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
+          "&H00000000,&H64000000,"
           "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
         + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
@@ -1786,7 +1790,8 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     cap_module.build_ass([], empty, video_width=1080, video_height=1920)
     assert empty.read_text(encoding="utf-8") == (
         _ASS_HEADER
-        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H0000FF00,&H00000000,&H64000000,"
+        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
+          "&H00000000,&H64000000,"
           "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
         + _ass_hook_style(_LEGACY_FONT)
         # No events at all: the document is exactly the header plus ``build_ass``'s own
