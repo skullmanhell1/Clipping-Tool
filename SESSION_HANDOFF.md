@@ -1,12 +1,12 @@
 # Session Handoff
 
-Rewritten after the `audio-stem-inpainting` spec completed. The previous version of this file
-described a session that ended mid-epic and is no longer accurate in any part; it has been
+Rewritten after the reliability and tooling pass that followed the specs completing. The
+previous version described the work that is now merged as "what is left", so it has been
 replaced rather than amended.
 
 ## 1. Status
 
-**All five specs are complete — 388/388 tasks, nothing open.**
+**All five specs are complete — 388/388 tasks, nothing open.** Version `0.10.0`.
 
 | Spec | Tasks |
 | --- | --- |
@@ -19,100 +19,121 @@ replaced rather than amended.
 Two AV engines are registered and advertised by `/api/info`, both **default-off**:
 `kinetic_typography` (COMPOSE) and `stem_inpainting` (AUDIO).
 
-## 2. Open PR
+No PRs are open. [#42](https://github.com/skullmanhell1/Clipping-Tool/pull/42) (stem epics
+9-20) and [#43](https://github.com/skullmanhell1/Clipping-Tool/pull/43) (reliability and
+tooling) are both merged.
 
-| PR | Contents |
-| --- | --- |
-| [#42](https://github.com/skullmanhell1/Clipping-Tool/pull/42) | `audio-stem-inpainting` epics 9-20, plus two approved foundation changes. Its description understates the contents — it was written when the branch only held epics 9-11. |
+## 2. Test baselines
 
-## 3. Test baselines
-
-Run with `PYENV_VERSION=3.11.15 python3 -m pytest tests/ -q`.
+Run with `python -m pytest` from the repo root. Configuration lives in `pyproject.toml`.
 
 | Environment | Result |
 | --- | --- |
-| Full `requirements-dev.txt` + ffmpeg + fonts (what CI has) | **598 passed, 0 failed, 0 skipped** |
-| The same, plus `libGL` so `cv2`/`mediapipe` import (what Docker has) | **598 passed, 0 failed, 0 skipped** |
-| No ffmpeg on `PATH` (a bare developer checkout) | **509 passed, 89 skipped, 0 failed** |
+| Full `requirements-dev.txt` + ffmpeg + fonts + `libGL` (what CI and Docker have) | **724 passed, 0 failed, 0 skipped, 0 warnings** |
+| No ffmpeg on `PATH` (a bare developer checkout) | **616 passed, 108 skipped, 0 failed** |
 
-The 89 skips are all the `requires_ffmpeg` gate. **A skip is not a pass** — anything touching a
-filtergraph needs ffmpeg on `PATH` before you can claim it works. There is no
-`/projects/sandbox/.ffbin` in this repo; get a static build and put it on `PATH`.
+Frontend: `npm run lint` → 0 errors (2 `exhaustive-deps` warnings, see §5), `npm run test:run`
+→ 24 passed, `npm run build` → OK.
 
-## 4. Superseded decisions
+Three things to know before trusting a green run:
 
-These were carried by the previous handoff and are now **resolved**; do not act on them again.
+* **A skip is not a pass.** The 108 skips are the `requires_ffmpeg` gate. CI installs ffmpeg
+  and **fails if any test is skipped**, so a skip there means a dependency went missing and
+  the coverage it gated has silently stopped running.
+* **Warnings are errors** (`filterwarnings = ["error", ...]`). Adding a dependency that emits
+  a new deprecation will fail the suite until it is triaged.
+* **CI needs full git history.** `.github/workflows/ci.yml` sets `fetch-depth: 0` on the
+  backend job, because two parity guards diff against `origin/main`. With the default shallow
+  checkout they skip, which the no-skip gate then reports — that is how it was discovered
+  they had *never* run in CI.
 
-* **(a) Widen the host media gate — DONE.** `worker/engines/host.py` now admits `degraded` as
-  well as `applied` via `_MEDIA_BEARING_STATUSES`. Req 8.3 still holds because it is carried by
-  `media is None`, not by status. No Pipeline change was needed.
-* **(b) Additive `notes` parameter — DONE.** `Engine_Host.run_stage(notes=...)`, threaded into
-  `_build_context` and appended after the host's own synthesised notes. Both contract pins were
-  updated to match.
-* **(c) A dedicated bugfix spec for kinetic P12 — NOT RECOMMENDED, see below.**
+## 3. The most important lesson from the last pass
 
-## 5. Kinetic P12: could not be reproduced
+The `stem_inpainting` engine shipped, merged, and **could not run on any machine** — while
+598 tests passed.
 
-The previous handoff described `test_p12_malformed_timings_degrade_instead_of_raising` as a
-known-red defect and asked for its own bugfix spec. **It does not reproduce.**
+`ffmpeg -filters` prints a three-character flag column per row. The capability probe
+identified it with `not parts[0].isalnum()`, which is true for `T..`/`..C` but **false for
+`TSC`** (every flag set, so alphanumeric). Those rows fell through to a bare-name branch that
+recorded `"TSC"` as the filter name and dropped the real one — hiding **124 of ffmpeg 7.0's
+486 filters**, including the `highpass` and `lowpass` that the stem ffmpeg backend requires.
 
-Evidence:
+It was invisible because **every capability test mocked the probe**, and every canned
+`-filters` fixture used dot-bearing flag groups only. `tests/test_capabilities_real_binary.py`
+now cross-checks the probe against `ffmpeg -h filter=<name>`, an independent mechanism that
+shares no parsing code with the `-filters` table. Reverting the fix makes 12 of those fail.
+
+Generalise from it: **for anything that parses another program's output, test against the real
+program.** Three defects in the stem repair filter itself were found the same way, by running
+ffmpeg rather than reading the design.
+
+## 4. Kinetic P12: could not be reproduced
+
+An older handoff described `test_p12_malformed_timings_degrade_instead_of_raising` as
+known-red and asked for its own bugfix spec. **It does not reproduce.**
 
 * 4000 fresh Hypothesis examples with the example database disabled — clean.
-* A deterministic sweep of 1020 cases (5 degenerate timeline shapes x 17 fps values, including
-  the `14.0` the old analysis named, x 3 sample rates x 4 durations) — clean.
-* The predicate the old analysis blamed (`later_start > cue_start`, `worker/engines/kinetic.py`
-  ~line 1639) is **still present**, so this is not a silent fix — the diagnosis appears to have
-  been wrong.
+* A deterministic sweep of 1020 cases (5 degenerate timeline shapes × 17 fps values, including
+  the `14.0` the old analysis named, × 3 sample rates × 4 durations) — clean.
+* The predicate that analysis blamed (`later_start > cue_start`, `worker/engines/kinetic.py`
+  ~line 1639) is **still present**, so this is not a silent fix — the diagnosis was wrong.
 
-Also note the old handoff attributed the failure to ffmpeg being on `PATH`. That is definitely
-wrong: P12 is a pure planner property with no ffmpeg dependency. The likeliest explanation for
-the original red run is a stale counterexample in a local `.hypothesis` database.
+That handoff also blamed ffmpeg being on `PATH`, which is definitely wrong: P12 is a pure
+planner property with no ffmpeg dependency. The likeliest explanation is a stale counterexample
+in a local `.hypothesis` database.
 
 **Recommendation:** keep the property test as the guard, do not open the spec. Absence of a
-counterexample is not proof of absence, so if it ever reappears, capture the counterexample
-*and* the generator versions before analysing.
+counterexample is not proof of absence — if it reappears, capture the counterexample *and* the
+generator versions before analysing.
 
-## 6. What is actually left
+## 5. What is actually left
 
-No spec work. Everything below is unplanned.
+No spec work. Everything below is unplanned, and none of it is a regression.
 
-### Small and mechanical
-* No `VERSION`/`CHANGELOG` entry existed for the stem engine — addressed in this pass (0.9.0).
-* `README.md` claimed a Redis + RQ queue that does not exist — addressed in this pass.
+### Only you can close these — they need credentials or a real deploy
 
-### Real product gaps, highest impact first
-1. **`review_required` is a dead end.** Every publisher can return it, but there is no
-   approve/retry/resume endpoint and `PublishManager` only picks up `queued`/`scheduled`. The
-   README describes an approval flow with no server-side path.
-2. **Job state is in-memory only.** `JobStore` is a dict; history/campaigns/profiles are
-   durable. After a restart `/api/history` lists clips whose ZIP download 404s and whose
-   `PATCH` silently updates 0 rows.
-3. **No ffmpeg invocation outside the stem engine carries a timeout.** `worker/ffmpeg_utils._run`
-   passes none, so a wedged ffmpeg hangs a job thread forever. The stem engine threads an
-   explicit timeout through every call; the rest of the pipeline does not.
-4. **`allow_origins=["*"]` with `allow_credentials=True`** (`api/main.py`) is a combination
-   browsers reject outright.
-5. **Diarisation invents speakers.** `segment_by_words` labels speech runs **round-robin**, so a
-   monologue with pauses over `diarization_pause_gap` (0.9 s) alternates `S1`/`S2` — and that
-   drives visible `follow_active`/`split_screen` framing changes.
-6. `merge_scores` hard-codes `weight=0.5` with at most 12 keyframes per source, so most
-   candidates score `visual_score = 0` and brightness dominates the ranking.
-7. Uploads have no size/type validation, and `shutil.copyfileobj` runs synchronously inside an
-   `async def`, blocking the event loop.
-8. Per-platform `min_interval_seconds` are dead — `max(..., publish_default_interval_seconds)`
-   with a 30 s default overrides every one of them.
-9. `visual_selection.sample_keyframes` leaks its `mkdtemp` directory; `disk_usage()` walks every
-   file on every `/api/storage` poll.
+1. **Publishers are entirely unverified.** TikTok, Instagram, X, YouTube and Whop have never
+   been exercised against a live platform, including the `/approve` and `/retry` endpoints.
+   Their logic is covered by test doubles only. **This is the largest untested surface in the
+   repository** — treat it as unproven, not as working.
+2. **URL ingest is untested.** Only local files have been pushed through the pipeline; `yt-dlp`
+   has never actually downloaded anything in a verified run.
+3. **The Docker image has never been built end to end.** The `INSTALL_ML` shell logic and the
+   frontend stage were validated in isolation; a full build was not run.
 
-### Test / CI infrastructure
-* **CI installs `opencv-python` but not `libgl1`**, so `import cv2` fails there with
-  `libGL.so.1: cannot open shared object file`. The Dockerfile installs it (with a comment
-  saying opencv needs it); the workflow does not. Addressed in this pass. Note the suite passes
-  either way, because the vision tests inject their detectors — so this was costing CI
-  *coverage*, not correctness.
-* The frontend has no tests of any kind, and `npm run lint` fails: `eslint` is scripted but not
-  in `devDependencies`.
-* The `deploy` job uses `secrets` inside step-level `if:` expressions, which does not evaluate
-  as intended.
-* There is no pytest configuration at all — no registered markers, no coverage gate.
+### Deliberate deferrals — each is its own change, not a loose end
+
+4. **Formatting is not enforced.** `black` is in `requirements-dev.txt` and has never run;
+   adopting it reformats essentially every file.
+5. **ruff `UP` (~450 findings) and `B` (~30) are not selected.** Both are worth adopting; each
+   is a mechanical sweep that should not be mixed with behavioural changes. The enforced set is
+   pinned in `pyproject.toml` to `F`/`E4`/`E7`/`E9`/`I`.
+6. **`redis` and `rq` are declared dependencies that no code imports.** `worker/tasks.py` is
+   imported by nothing. Either wire up the distributed worker or drop them — right now the
+   dependency list overstates the architecture.
+7. **11 dev-only npm advisories** (`brace-expansion` via eslint, `esbuild` via vite/vitest).
+   None reach the shipped bundle; clearing them needs `vite@8`, a breaking upgrade.
+8. **Frontend test coverage is thin.** Only `api.js` and `Dropdown` are covered; the other ten
+   components have none.
+9. **Two `react-hooks/exhaustive-deps` warnings** in `App.jsx` (`jobs`) and `HistoryView.jsx`
+   (`load`). Both are polling effects where naively adding the dependency causes a
+   re-subscribe loop, so they need thought rather than a quick edit.
+
+### Notes for whoever works here next
+
+* **Node 20 is the target.** CI and the Dockerfile both use it. `frontend/package.json` declares
+  `engines` and `frontend/.npmrc` sets `engine-strict=true`, so an incompatible dependency now
+  fails at install time — added after `jsdom@30` (Node ≥22) was installed on a newer local
+  runtime and broke CI with `webidl.util.markAsUncloneable is not a function`. `npm ci` had
+  exited 0 with only warnings.
+* **Job state is durable** (`storage/jobs.db`, `JOBS_DB`). A job stored as `queued`/`processing`
+  is resolved to `failed` on load, because no worker thread survives a restart to advance it.
+* **Real stem separation is opt-in.** `torch`/`demucs` are not in `requirements.txt`; see
+  `requirements-ml.txt`. Without them the engine degrades to an ffmpeg approximation and records
+  `degraded:python_pkg:demucs`. The checkpoint is a *separate* step on purpose — the engine treats
+  a model that would need downloading as unavailable, so that probing a capability can never
+  become a silent network fetch.
+* **`.env.example` is a contract**, not a sample: `config.Settings` points at it for the full
+  list, and `tests/test_config_documentation.py` fails if a setting is undocumented or a
+  documented key is not a real setting. It had drifted to 67 of 93, with one stale key that
+  silently did nothing.

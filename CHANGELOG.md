@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`.env.example` had drifted from the code.** `config.Settings` points at it for "the full
+  list", but it documented 67 of 93 settings and carried one key —
+  `PUBLISH_DEFAULT_INTERVAL_SECONDS` — that no longer exists. Since `Settings` uses
+  `extra="ignore"`, setting that key was accepted and discarded, so it read as a working
+  control that did nothing. All 93 are now documented and
+  `tests/test_config_documentation.py` fails on drift in either direction.
+- `render.yaml` set `ENVIRONMENT=production` but never `CORS_ORIGINS`, so a Render deploy ran
+  the `*` wildcard in production — which also disables credentialed cross-origin requests. The
+  blueprint now asks for an explicit origin.
+- `test_visual_selection_leaves_no_keyframe_temp_directory` is gated on ffmpeg. It drives the
+  real `select_moments_visual`, whose transcript-free path probes the source before sampling;
+  without the binary that probe fails, sampling is never reached, and the test's own guard
+  correctly reported that it proved nothing.
+
 ### Planned
 - RQ-backed distributed worker (currently in-process, and **not** yet wired up — see the note
   under 0.9.0). `redis` and `rq` are declared dependencies but no code imports them.
