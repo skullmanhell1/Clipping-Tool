@@ -245,6 +245,14 @@ class Settings(BaseSettings):
                     "headroom for the lossy encoder, which can overshoot the sample peak.",
     )
     # AU2: how hard the music bed is pushed down while someone is speaking.
+    # V10: filler removal joins the kept segments sample-exactly, so every seam was a step
+    # discontinuity in the waveform - the click you hear at each removed "um".
+    filler_seam_fade_ms: int = Field(
+        default=12,
+        description="Audio fade length in milliseconds at each filler-removal seam (V10). "
+                    "Long enough to remove the click, short enough not to be audible as a "
+                    "fade; 0 disables it and restores the hard cut.",
+    )
     music_duck_ratio: float = Field(
         default=8.0,
         description="Compression ratio for ducking music under speech (AU2). Higher ducks "
