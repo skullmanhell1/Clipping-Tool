@@ -143,6 +143,10 @@ def resolve_music_bed(
     user = find_user_track(mood)
     if user is not None:
         return MusicBed(path=user, mood=mood, source=SOURCE_USER_TRACK)
+    # A16 note: a user track is returned as-is here and fitted to the clip by
+    # :func:`bed_fit_filter` inside the mix, rather than being pre-rendered to length. Cutting a
+    # separate correctly-sized file first would cost an extra encode per clip for something the
+    # existing mix pass can do in the same graph.
     if mood not in _MOOD_SYNTH:
         return None
     if not settings.music_allow_synthesis:
@@ -163,6 +167,61 @@ def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[
     """
     bed = resolve_music_bed(mood, duration, temp_dir)
     return None if bed is None else bed.path
+
+
+#: How long a bed takes to fade out at the end of a clip, in seconds (A16).
+#:
+#: Long enough to read as an ending rather than as a dropout. A bed that stops dead at the final
+#: frame is the single most obvious sign a clip was cut by a machine - the music is mid-phrase and
+#: simply gone. This cannot make the ending *musical* (that needs beat detection, and a bed cut
+#: anywhere is mid-phrase whatever we do), but a fade turns an abrupt stop into a deliberate one.
+BED_FADE_OUT_S = 1.2
+
+#: And a shorter fade in, so a bed does not begin mid-note either.
+BED_FADE_IN_S = 0.35
+
+
+def bed_fit_filter(
+    label_in: str,
+    label_out: str,
+    duration: float,
+    *,
+    fade_in: float = BED_FADE_IN_S,
+    fade_out: float = BED_FADE_OUT_S,
+) -> str:
+    """Loop or trim a music bed to exactly ``duration``, with fades at both ends (A16).
+
+    Three things in order, and the order matters:
+
+    * ``aloop`` repeats the bed indefinitely, because a track shorter than the clip previously
+      just stopped part-way through and the rest of the clip played dry - silence appearing
+      mid-clip, which reads as a fault rather than as a choice.
+    * ``atrim`` + ``asetpts`` cut it back to the clip length. Without resetting the timestamps
+      the looped audio keeps the source's own PTS and the mix drifts out of alignment.
+    * ``afade`` at each end. The out-fade is positioned from the clip's own duration, so it
+      always lands on the ending regardless of how many times the bed looped.
+
+    A clip shorter than the fades gets proportionally shorter ones rather than overlapping
+    fades, which would attenuate the whole bed towards silence.
+    """
+    span = max(0.1, float(duration))
+    # Never let the two fades exceed the clip: on a 1-second clip a 1.2s out-fade plus a 0.35s
+    # in-fade would overlap and multiply, leaving the bed inaudible.
+    fade_in = max(0.0, min(float(fade_in), span * 0.25))
+    fade_out = max(0.0, min(float(fade_out), span * 0.5))
+    out_start = max(0.0, span - fade_out)
+
+    parts = [
+        # -1 = loop forever; the atrim below is what bounds it.
+        f"[{label_in}]aloop=loop=-1:size=2147483647",
+        f"atrim=0:{span:.3f}",
+        "asetpts=N/SR/TB",
+    ]
+    if fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={fade_in:.3f}")
+    if fade_out > 0:
+        parts.append(f"afade=t=out:st={out_start:.3f}:d={fade_out:.3f}")
+    return ",".join(parts) + f"[{label_out}]"
 
 
 def music_mix_filter(
@@ -197,15 +256,19 @@ def music_mix_filter(
     parts: list[str] = []
     out_start = max(0.0, duration - fade_dur)
 
-    # --- the bed: level, then optional fades -------------------------------
-    bed_chain = f"[{music_label}]volume={vol:.3f}"
-    if fade:
-        bed_chain += (
-            f",afade=t=in:st=0:d={fade_dur:.3f}"
-            f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
-        )
-    bed_chain += "[bedv]"
-    parts.append(bed_chain)
+    # --- the bed: fitted to the clip, levelled, then optional fades --------
+    #
+    # A16: the bed is looped or trimmed to the clip length first. Before this it was mixed as-is
+    # with ``amix=duration=first``, which bounded the *mix* to the speech but did nothing about a
+    # bed shorter than the clip - that simply ran out, leaving the rest of the clip dry, which
+    # sounds like a fault rather than an ending. A bed longer than the clip was cut dead at the
+    # final frame instead.
+    #
+    # ``bed_fit_filter`` carries its own fades, so the ``fade`` flag's fades are not applied to
+    # the bed again: two overlapping out-fades multiply and would pull the ending to silence
+    # early. The speech keeps the caller's fades exactly as before.
+    parts.append(bed_fit_filter(music_label, "bedfit", duration))
+    parts.append(f"[bedfit]volume={vol:.3f}[bedv]")
 
     # --- the speech: optional fades, then a split when ducking -------------
     speech_chain = f"[{original_label}]"

@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from config import settings
 
@@ -198,24 +198,95 @@ def plan_emoji(
         if ai_map:
             mapping = {**KEYWORD_EMOJI, **ai_map}
 
-    cues: list[EmojiCue] = []
-    last_t = -spacing
-    slot = 0
+    # A11: rank the candidates by salience and keep the strongest, instead of taking whichever
+    # matching word happens to arrive first after the stopwatch has elapsed.
+    #
+    # The old rule was purely temporal: `standard` allows one emoji per five seconds, so the
+    # first mapped word after each interval won regardless of whether it mattered. On
+    # "so anyway the money was completely gone", "so" is not mapped but "anyway"-class filler
+    # often is, and it would take the slot that "money" wanted. Salience is the same signal
+    # C11 uses to choose which word to *emphasise*, so the emoji now lands on the same word the
+    # caption highlights rather than on an unrelated one a second earlier.
+    candidates: list[tuple[float, float, str]] = []
     for w in words:
         key = _norm(getattr(w, "text", ""))
         glyph = lookup_emoji(key, mapping) if key else ""
         if not glyph:
             continue
-        start = float(getattr(w, "start", 0.0))
-        if start - last_t < spacing:
+        try:
+            start = float(getattr(w, "start", 0.0))
+        except (TypeError, ValueError):
             continue
+        if start != start:      # NaN
+            continue
+        candidates.append((_emoji_salience(w, key), start, glyph))
+
+    if not candidates:
+        return []
+
+    # Strongest first; ties break on time so the result stays a pure function of the input -
+    # the kinetic determinism properties depend on that.
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+
+    chosen: list[tuple[float, str]] = []
+    used_glyphs: set[str] = set()
+    cap = _emoji_cap(intensity, duration)
+    for _salience, start, glyph in candidates:
+        if len(chosen) >= cap:
+            break
+        # A12: the same glyph twice in one clip reads as a template rather than as a reaction,
+        # and two identical emoji a few seconds apart is the single most obvious way an
+        # automatic overlay looks automatic.
+        if glyph in used_glyphs:
+            continue
+        # Spacing is still enforced, but now against every already-chosen cue rather than only
+        # against the previous one in time order - the list is no longer in time order here.
+        if any(abs(start - other) < spacing for other, _g in chosen):
+            continue
+        if min(duration, start + hold) <= start:
+            continue
+        chosen.append((start, glyph))
+        used_glyphs.add(glyph)
+
+    cues: list[EmojiCue] = []
+    for slot, (start, glyph) in enumerate(sorted(chosen)):
         end = min(duration, start + hold)
-        if end <= start:
-            continue
         cues.append(EmojiCue(glyph, round(start, 3), round(end, 3), slot % 3))
-        last_t = start
-        slot += 1
     return cues
+
+
+def _emoji_salience(word: Any, key: str) -> float:
+    """How much this word deserves the emoji slot (A11).
+
+    Deliberately reuses the caption keyword planner's own scorer rather than inventing a second
+    notion of importance: two different answers to "which word matters here" would put the
+    emoji on one word and the highlight on another, which looks like a bug to a viewer even
+    though each component is behaving as written.
+
+    Falls back to a length proxy if that import is unavailable, so this module keeps working
+    standalone - it is imported by the overlay builder, which must not depend on caption code.
+    """
+    try:
+        from worker.effects.caption_presets import _keyword_salience
+
+        base = float(_keyword_salience(word))
+    except Exception:
+        base = 2.0 if len(key) >= 6 else 1.0
+    # A longer key is a more specific match: "celebrate" carries more than "up".
+    return base + min(0.9, len(key) / 20.0)
+
+
+def _emoji_cap(intensity: str, duration: float) -> int:
+    """The most emoji one clip may carry (A12).
+
+    A cap is needed independently of spacing, because spacing alone scales with clip length: a
+    three-minute clip at `heavy` could carry sixty emoji and still satisfy every gap. Scaled by
+    duration so a 15-second clip and a 3-minute one are both proportionate, with a floor of one -
+    an intensity the user switched on should produce at least one.
+    """
+    per_minute = {"subtle": 3, "standard": 6, "heavy": 12}.get(intensity, 6)
+    minutes = max(0.25, float(duration or 0.0) / 60.0)
+    return max(1, int(round(per_minute * minutes)))
 
 
 def _ai_emoji_map(words: list, client) -> dict[str, str]:
