@@ -47,6 +47,14 @@ export const api = {
   listJobs: () => fetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => fetch(`/api/jobs/${id}`).then(jsonOrThrow),
 
+  // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
+  // which jsonOrThrow surfaces as an error carrying the API's own explanation.
+  cancelJob: (id) =>
+    fetch(`/api/jobs/${id}/cancel`, { method: "POST" }).then(jsonOrThrow),
+
+  // M5: per-stage render timings for a finished (or running) job.
+  jobTimings: (id) => fetch(`/api/jobs/${id}/timings`).then(jsonOrThrow),
+
   editClip: (jobId, clipId, fields) =>
     fetch(`/api/jobs/${jobId}/clips/${clipId}`, {
       method: "PATCH",
