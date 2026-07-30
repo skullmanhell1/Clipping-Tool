@@ -206,3 +206,71 @@ def segment_video(
         segments = sorted(segments, key=lambda s: s.start)
 
     return segments
+
+
+
+# --------------------------------------------------------------------------- #
+# Edge silence trimming (AU7)
+# --------------------------------------------------------------------------- #
+# A clip that opens on half a second of dead air reads as an amateur cut, and the first
+# second is where a viewer decides whether to keep watching. Trailing silence is less costly
+# but still pads the clip with nothing.
+#
+# The window is tightened rather than the audio being filtered: moving the cut points means
+# no extra pass, and it keeps video and audio in step by construction. Filtering silence out
+# of the audio alone would desynchronise them.
+
+#: How much may be trimmed from each edge, in seconds.
+#:
+#: A cap is essential. ``silencedetect`` reports a *pause*, and a pause at a clip boundary is
+#: often the intake of breath before the first word or the beat after a punchline - both of
+#: which belong to the clip. Without a ceiling, a moment selected mid-pause could have
+#: seconds removed and start abruptly on a syllable.
+MAX_EDGE_TRIM_S = 1.25
+
+#: Never trim a clip below this. A window that collapses is worse than dead air.
+MIN_TRIMMED_DURATION_S = 1.0
+
+
+def trim_edge_silence(
+    start: float,
+    end: float,
+    silences: list[tuple[float, float]],
+    *,
+    max_trim: float = MAX_EDGE_TRIM_S,
+    min_duration: float = MIN_TRIMMED_DURATION_S,
+) -> tuple[float, float]:
+    """Tighten ``[start, end]`` onto speech, given source-relative ``silences`` (AU7).
+
+    Pure, and the only place the trimming policy lives - :func:`detect_silences` supplies the
+    measurements and the pipeline supplies the window, so this can be tested exhaustively
+    without ffmpeg.
+
+    A silence only counts when it *straddles or touches* the boundary: a silence wholly
+    inside the clip is a pause in the middle of speech, which is content. Both edges are
+    capped by ``max_trim``, and the result is never shorter than ``min_duration`` nor
+    inverted.
+    """
+    if end <= start:
+        return start, end
+
+    new_start, new_end = float(start), float(end)
+
+    # Leading: a silence covering the start point moves it to where speech resumes.
+    for silence_start, silence_end in silences:
+        if silence_start <= new_start < silence_end:
+            new_start = min(silence_end, start + max_trim)
+            break
+
+    # Trailing: a silence covering the end point moves it back to where speech stopped.
+    for silence_start, silence_end in silences:
+        if silence_start < new_end <= silence_end:
+            new_end = max(silence_start, end - max_trim)
+            break
+
+    # Never invert, never collapse, never extend beyond the original window.
+    new_start = max(start, min(new_start, end))
+    new_end = min(end, max(new_end, start))
+    if new_end - new_start < min_duration:
+        return start, end
+    return round(new_start, 3), round(new_end, 3)

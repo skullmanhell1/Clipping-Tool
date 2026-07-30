@@ -109,6 +109,12 @@ class MediaInfo:
     height: int
     fps: float
     has_audio: bool
+    # O10: needed to validate a clip against a platform's accepted codecs before upload.
+    # Defaulted and last so existing positional construction (several tests build MediaInfo
+    # directly) keeps working.
+    video_codec: str = ""
+    audio_codec: str = ""
+    size_bytes: int = 0
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -219,12 +225,20 @@ def probe(path: str | Path) -> MediaInfo:
     except (ValueError, ZeroDivisionError):
         fps = 0.0
 
+    try:
+        size_bytes = int(float(fmt.get("size") or 0))
+    except (TypeError, ValueError):
+        size_bytes = 0
+
     return MediaInfo(
         duration=duration,
         width=int(video.get("width") or 0),
         height=int(video.get("height") or 0),
         fps=round(fps, 3),
         has_audio=audio is not None,
+        video_codec=str(video.get("codec_name") or ""),
+        audio_codec=str((audio or {}).get("codec_name") or ""),
+        size_bytes=size_bytes,
     )
 
 

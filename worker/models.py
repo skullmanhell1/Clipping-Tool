@@ -91,6 +91,11 @@ class ProcessingOptions:
     # normalise. AU2: duck the music bed under speech instead of mixing it flat.
     loudness_normalise: bool = True      # two-pass loudnorm to the platform LUFS target
     music_duck: bool = True              # sidechain-duck music under speech
+    # AU7: pull the cut points onto speech so a clip does not open on dead air. Unlike
+    # filler_removal this only moves the clip's *boundaries*, and by at most 1.25 s per edge -
+    # it cannot cut anything out of the middle, which is why it is a safe default and filler
+    # removal is not.
+    trim_silence: bool = True            # trim leading/trailing silence from each clip
     emoji_mode: str = "keyword"          # keyword | ai
     emoji_animate: bool = True           # pop/scale (alpha) animation on appear
     # Still off, and this one is a deliberate departure from U1's list.

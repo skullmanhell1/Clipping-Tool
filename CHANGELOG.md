@@ -29,6 +29,34 @@ Verified absent across the whole repository before this: no `loudnorm`, no `dyna
   phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
   decoder sees it first, if at all.
 
+### Added — clips are checked before they are uploaded (O10)
+
+- **The only pre-flight in the publish path was `video_path.exists()`.** Nothing checked
+  aspect, duration, resolution, file size, codec or frame rate, so a clip a platform would
+  refuse was discovered *by uploading it*: the failure arrived as whatever that platform's
+  API chose to say, after spending an upload attempt and a rate-limit slot. `publishers/
+  preflight.py` now validates against per-platform limits first, and a rejected clip never
+  reaches the publisher.
+- **Errors block, warnings do not.** A wrong codec or an over-limit duration should not cost
+  an upload attempt to discover. A landscape clip going somewhere that prefers 9:16 will
+  publish letterboxed, and that is the user's call — blocking it would be us overruling them
+  on taste.
+- The limits are deliberately looser than the strictest figure each platform advertises, so
+  a *false* rejection is unlikely. They are approximations collected in one place, not a
+  specification: platform limits change without notice and differ by account tier. Since the
+  publishers have never run against a live platform (`PB1`), none of this has been confirmed
+  against a real rejection — it guards against obvious mistakes, it does not certify.
+
+### Fixed — clips no longer open on dead air (AU7)
+
+- Leading and trailing silence is trimmed from each clip by moving the **cut points**, which
+  costs no extra pass and keeps video and audio in step by construction (filtering the audio
+  alone would desynchronise them). Capped at 1.25 s per edge: `silencedetect` reports a
+  *pause*, and a pause at a boundary is often the breath before the first word or the beat
+  after a punchline. Silence in the middle of a clip is speech rhythm and is left alone.
+- Unlike `filler_removal`, this only moves boundaries and cannot cut anything out of the
+  middle, which is why it is a safe default and filler removal is not.
+
 ### Fixed — a busy clip could balloon past platform size limits (O4)
 
 - `-maxrate`/`-bufsize` VBV caps on delivered clips. `-crf` sets a *quality* target with no
