@@ -38,7 +38,7 @@ def _stub_transcribe(monkeypatch, text="hello there my friend today"):
     import worker.pipeline as pl
     from worker.transcribe import Transcript, TranscriptSegment, Word
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         words = [
             Word(0.2, 0.6, "hello"),
             Word(0.7, 1.1, "there"),
