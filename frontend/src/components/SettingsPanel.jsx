@@ -432,6 +432,22 @@ export default function SettingsPanel({
             />
           </label>
 
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-slate-400">Names &amp; jargon</span>
+            <input
+              type="text"
+              value={settings.vocabulary}
+              onChange={(e) => onChange({ ...settings, vocabulary: e.target.value })}
+              placeholder="e.g. Kubernetes, Anthropic, Siobhan, ARR"
+              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
+            />
+            <span className="text-xs text-slate-500">
+              Unusual words in this video. Transcription has no reason to expect a name or a
+              product, so it mis-hears the same one the same way every time &mdash; and that
+              mistake is burned into every clip&apos;s captions.
+            </span>
+          </label>
+
           <div className="grid grid-cols-2 gap-4">
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="text-slate-400">Process from (sec)</span>

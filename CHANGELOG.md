@@ -69,6 +69,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards the same error in the other direction: Jaccard over two words is noise, and acting on
   noise here deletes a moment the user wanted with no trace it was ever a candidate.
 
+
+### Added — transcription can be told what to expect, and says when it is unsure (T4, T5, T7, M3)
+
+- **`T4` — vocabulary prompt.** Whisper has no reason to expect a person's name, a product or
+  domain jargon, so it mis-hears the same word the same way every time it is said — and that
+  mistake is burned into every clip's captions. A per-video **Names & jargon** field now feeds
+  the decode, alongside a standing `WHISPER_INITIAL_PROMPT` for terms a channel always uses. The
+  per-video terms go last, because Whisper's conditioning weakens with distance from the audio.
+- **`T5` — VAD is adjustable.** Voice-activity detection was switched on with every parameter at
+  the library default, so nothing could be tuned for difficult audio. Threshold, minimum
+  silence, minimum speech and speech padding are now settings — **at faster-whisper's own
+  defaults**, so behaviour is unchanged until something is changed deliberately.
+- **Both are part of the transcript cache key.** A transcript decoded with a vocabulary prompt,
+  or with VAD tuned to keep quiet speech, is not interchangeable with one decoded without.
+  Omitting them would serve the stale transcript forever — silently, with nothing downstream
+  able to notice, which is worse than having no cache. The VAD parameters are excluded when the
+  filter is off, since they cannot affect the output then and would only cause pointless misses.
+- **`T7` — low-confidence words are dimmed rather than asserted.** Captions stated every word
+  with identical confidence, including the ones the model barely guessed at; on difficult audio
+  that is the pipeline presenting a mis-transcription as fact in its most visible artefact. Off
+  by default. Deliberately a *dim*, not a colour or a `[?]` marker: a colour would collide with
+  keyword highlighting, and a marker draws the eye to the pipeline's own uncertainty rather than
+  to the speech. A word with no probability reads as **confident**, not doubtful — treating
+  "unknown" as "unsure" would dim every caption on any transcript without per-word confidence,
+  the same failure mode `C11` had.
+- **`M3` — a WER benchmark** (`evaluation/wer.py`, `scripts/eval_transcription.py`). `T1` raised
+  the default model on argument; this measures it on *your* audio. Errors are reported by kind,
+  because deletions point at VAD (`T5`) and substitutions at vocabulary (`T4`) and the two call
+  for opposite fixes; the table names whichever dominates. Aggregation pools errors before
+  dividing rather than averaging per-file rates, which would let one short difficult file
+  dominate a figure meant to describe the dataset.
+
+### Fixed
+
+- **`evaluation/wer.py` normalisation folded no typographic apostrophes.** Unicode NFKC does not
+  touch U+2019, so a reference typed in a word processor split `don't` into `don` and `t` and the
+  contraction table never matched — two substitutions per contraction on every human-written
+  reference. It would have inflated each model's score roughly equally, so the comparison would
+  still have looked entirely plausible.
+- `CaptionPreset.to_dict`/`from_dict` now carry the T7 fields, so the setting survives being
+  persisted in a saved profile instead of appearing to work until reload.
+
 ### Changed — one name for the shared encoder arguments
 
 - Two branches independently centralised the duplicated libx264 flags, under two names:

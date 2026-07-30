@@ -111,6 +111,22 @@ class CaptionPreset:
     # C7: upper-case the caption text. Only the hook title was upper-cased before, so a
     # preset could not ask for the all-caps look that most short-form captions use.
     uppercase: bool = False
+    # T7: how a word the model was unsure about is drawn.
+    #
+    # Captions assert every word with identical confidence, including the ones Whisper barely
+    # guessed at. On difficult audio that is the pipeline stating a mis-transcription as fact,
+    # in the most visible artefact the product has. Dimming such a word is honest and costs
+    # nothing when the audio is clean, because on clean audio almost nothing falls below the
+    # threshold.
+    #
+    # Deliberately a *dim*, not a colour or a marker. A distinct colour would collide with
+    # keyword highlighting, which is the one signal that must stay unambiguous, and anything
+    # like a "[?]" would be worse than the wrong word - it draws the eye to the pipeline's own
+    # uncertainty rather than to the speech.
+    #
+    # 0.0 disables it entirely; the alpha is the fraction of full opacity a doubted word keeps.
+    low_confidence_threshold: float = 0.0
+    low_confidence_alpha: float = 0.55
     # C8: outline thickness and drop-shadow offset, in ASS units at PlayRes 1080x1920.
     #
     # Both were hard-coded and derived from the animation style: 4/2 for karaoke_fill and
@@ -137,6 +153,11 @@ class CaptionPreset:
             "uppercase": self.uppercase,
             "outline": self.outline,
             "shadow": self.shadow,
+            # T7: included so the setting round-trips. A field missing here is silently lost
+            # by every path that persists a preset through to_dict - saved profiles among them -
+            # so it would appear to work until reload and then revert with no error.
+            "low_confidence_threshold": self.low_confidence_threshold,
+            "low_confidence_alpha": self.low_confidence_alpha,
         }
 
     @classmethod
@@ -168,6 +189,12 @@ class CaptionPreset:
             uppercase=bool(data.get("uppercase", defaults.uppercase)),
             outline=int(data.get("outline", defaults.outline)),
             shadow=int(data.get("shadow", defaults.shadow)),
+            low_confidence_threshold=float(
+                data.get("low_confidence_threshold", defaults.low_confidence_threshold)
+            ),
+            low_confidence_alpha=float(
+                data.get("low_confidence_alpha", defaults.low_confidence_alpha)
+            ),
         )
 
 
