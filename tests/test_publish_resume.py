@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from publishers import preflight
 from publishers.base import PublishState
 from publishers.manager import PublishManager
 from tests.fakes import FakePublisher
@@ -238,3 +239,22 @@ def test_attempt_for_an_unknown_platform_is_409(client, resume_env, action):
     resp = client.post(f"/api/publish-attempts/{attempt_id}/{action}")
     assert resp.status_code == 409
     assert "unknown platform" in resp.json()["detail"].lower()
+
+
+@pytest.fixture(autouse=True)
+def _accept_stub_clips(monkeypatch):
+    """Let the byte-stub ``video_file`` fixture through the O10 pre-flight.
+
+    These tests are about routing, scheduling and throttling, and their clips are a few
+    hundred bytes of fake MP4 header - ffprobe cannot read them, so the pre-flight correctly
+    refuses to upload them and every scheduling assertion would fail for the wrong reason.
+
+    Stubbed at the seam rather than weakened: ``validate_clip`` blocking an unprobeable file
+    is deliberate (publishing a file ffprobe cannot read will not go well either), and it is
+    covered by ``tests/test_publish_preflight.py`` against real media, including a
+    manager-level test that a rejected clip never reaches the publisher.
+    """
+    monkeypatch.setattr(
+        preflight, "validate_clip",
+        lambda video_path, platform: preflight.PreflightReport(platform=platform),
+    )

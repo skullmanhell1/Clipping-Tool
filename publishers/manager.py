@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from config import settings
-from publishers import build_publishers
+from publishers import build_publishers, preflight
 from publishers.base import PublishRequest, PublishState
 from publishers.history import HistoryStore, get_history
 
@@ -66,6 +66,16 @@ class PublishManager:
           campaign_id=data.get("campaign_id",""),target_type=data.get("target_type",""),target_id=data.get("target_id",""),mode=data.get("mode","auto"))
         if not req.video_path.exists():
             self.history.update_attempt(item["id"],state="failed",error="Clip file no longer exists",completed_at=time.time()); return
+        # O10: validate against the platform's constraints before spending an upload
+        # attempt. The only check here used to be existence, so a clip the platform would
+        # refuse was discovered by uploading it - the user then read a rejection from
+        # TikTok's API instead of a sentence saying their clip was too long. Warnings do not
+        # block: a 4:5 clip going somewhere that prefers 9:16 is the user's call, not ours.
+        report=preflight.validate_clip(req.video_path,pub.name)
+        if not report.ok:
+            self.history.update_attempt(item["id"],state="failed",
+              error=f"Clip rejected before upload - {report.summary()}",
+              result_json=report.to_dict(),completed_at=time.time()); return
         result=pub.publish(req)
         self.history.update_attempt(item["id"],state=result.state.value,url=result.url,external_id=result.external_id,
           error=result.error,message=result.message,result_json=result.to_dict(),completed_at=time.time())
