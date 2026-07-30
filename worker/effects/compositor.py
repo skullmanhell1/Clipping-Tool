@@ -538,6 +538,16 @@ def render_clip(
             audio_out = "aloud"
             applied.append(f"loudness:{target:g}lufs")
 
+    # --- true-peak limiting (AU3) -----------------------------------------
+    # Last, after everything that can raise a level. loudnorm targets a true-peak ceiling but
+    # only on the path where it runs; with normalisation off or unmeasurable, nothing
+    # constrained the output and a hot source plus a music bed sums past full scale (measured:
+    # +5.5 dBFS). No marker is recorded, deliberately - this is a safety stage that is
+    # inaudible when it does not engage, and "applied" markers describe choices, not guards.
+    if settings.true_peak_limit_enabled and info.has_audio and audio_changed:
+        graph_parts.append(f"[{audio_out}]{audio.true_peak_limit_filter()}[apeak]")
+        audio_out = "apeak"
+
     # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
     # the engine block was emitted with the base clip above so its indices are
     # fixed and knowable before any engine ran.

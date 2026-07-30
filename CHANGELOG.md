@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — output could exceed full scale and clip (AU3)
+
+- A true-peak limiter now ends the audio chain, at `LOUDNESS_TRUE_PEAK_DB`. `loudnorm`
+  *targets* a true-peak ceiling and lowers its gain to respect one, but only on the path where
+  it runs: with normalisation disabled or the source unmeasurable, nothing constrained the
+  output. Measured on a mix of a −0.1 dBFS source and a bed, the result reached **+5.5 dBFS
+  true peak**; with the limiter, −1.0.
+- **`level=disabled` is the load-bearing argument.** `alimiter`'s `level` defaults to *on*,
+  which auto-levels output up to the ceiling — so a filter whose job is to attenuate would, in
+  its default configuration, make quiet audio *louder*. Measured: a quiet input came out 1 dB
+  hotter and 1 LU higher, which would have silently shifted every clip off the platform
+  loudness target `AU1` just set.
+- Placed after loudness normalisation, since anything that can raise a level belongs upstream
+  of the thing that catches it. No `effects_applied` marker: a limiter that does not engage is
+  inaudible, and those markers describe choices rather than guards.
+
+
 ### Added — transcripts are cached (T8)
 
 - ASR is the most expensive stage in the pipeline and the most repeated: re-running a source to

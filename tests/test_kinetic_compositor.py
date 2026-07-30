@@ -1091,11 +1091,19 @@ def _matrix_options(**overrides) -> ProcessingOptions:
         emoji="off",
         broll=False,
         kinetic_typography_enabled=False,
-        # AU1/AU2, off for the same reason as every other flag here: these cases pin
-        # v0.8.0 compose parity, and loudness normalisation would add a filter and a
-        # marker to the graph being compared. It is also measured from the real file, and
-        # these renders use a stubbed ffmpeg, so the marker would record only that the
+        # AU1/AU2/AU3, off for the same reason as every other flag here: these cases pin
+        # v0.8.0 compose parity, and each audio mastering stage would add a filter to the
+        # graph being compared. Loudness normalisation is also measured from the real file,
+        # and these renders use a stubbed ffmpeg, so its marker would record only that the
         # stub has no audio to measure — a fact about the fixture, not the compositor.
+        #
+        # The tradeoff is real and worth naming: switching each new audio stage off here
+        # keeps the golden a statement about *v0.8.0 compose parity* rather than letting it
+        # drift into "v0.8.0 plus whatever mastering we have since added" — but it also means
+        # this test covers less of the audio graph with every stage added. That is acceptable
+        # only because each stage is verified against rendered audio elsewhere:
+        # tests/test_audio_mastering.py (AU1/AU2/AU3, including the limiter's position in the
+        # chain) and tests/test_render_output_quality.py (M6, loudness of the delivered file).
         loudness_normalise=False,
         music_duck=False,
     )
@@ -1225,7 +1233,7 @@ def _parity_cases() -> list:
 # --------------------------------------------------------------------------- #
 # Task 15.1 — flag-off parity of ``effects_applied`` and the ffmpeg filter graph #
 # --------------------------------------------------------------------------- #
-def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path):
+def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monkeypatch):
     """Validates: Requirements 19.1, 19.4, 19.6
 
     With ``kinetic_typography_enabled`` off and no compose contributions, every case in
@@ -1240,6 +1248,7 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path):
     checked in both of its spellings — ``engine_contributions=None`` (every v0.8.0 caller)
     and ``engine_contributions=[]`` (an enabled host whose engine skipped).
     """
+    monkeypatch.setattr(app_settings, "true_peak_limit_enabled", False)
     baseline_module = _v080_module()
     cases = _parity_cases()
     assert len(cases) >= 50                       # a representative matrix, not a token one
@@ -1382,7 +1391,7 @@ _V080_GOLDENS: dict = {
 }
 
 
-def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path):
+def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path, monkeypatch):
     """Validates: Requirements 19.1, 19.4, 19.6
 
     Source C of the parity gate: four canonical flag-off renders asserted against
@@ -1390,7 +1399,13 @@ def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path):
     future drift in the flag-off output is a one-line diff — including a drift that moved
     the reference oracle and the compositor together. Both host font answers are pinned,
     so the goldens hold with or without the preset font installed.
+
+    AU3's true-peak limiter is switched off for the same reason the other audio mastering
+    stages are (see ``_matrix_options``): it appends a filter to the audio chain, so leaving it
+    on would make this a comparison against "v0.8.0 plus a limiter". Its own placement in the
+    chain is asserted in ``tests/test_audio_mastering.py``.
     """
+    monkeypatch.setattr(app_settings, "true_peak_limit_enabled", False)
     for name, golden in sorted(_V080_GOLDENS.items()):
         options = _matrix_options(**golden["options"])
         for available, key in ((True, "effects_applied"), (False, "font_substituted_effects")):
