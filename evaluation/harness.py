@@ -15,7 +15,6 @@ different function, and comparing two selectors is the same code path as scoring
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +24,7 @@ from evaluation import baselines
 from evaluation.dataset import Dataset, LabelledSource
 from evaluation.metrics import AggregateScore, score_source
 from evaluation.report import Report
+from worker import transcript_cache
 
 
 class Selector(Protocol):
@@ -56,87 +56,50 @@ class SourceRun:
 # --------------------------------------------------------------------------- #
 # Transcript cache
 # --------------------------------------------------------------------------- #
-def _cache_key(source: Path) -> str:
-    """Identity of a media file for caching: path, size and mtime.
+# Delegated to worker.transcript_cache (T8), which the pipeline now uses too. This module
+# previously carried its own copy keyed on path/size/mtime, with its own JSON shape - two
+# caches of the same thing, diverging on the detail that matters: a re-exported file with the
+# same name and size would have been a hit here and a miss in the pipeline.
+#
+# The harness keeps its own directory (--cache) rather than sharing storage/transcripts,
+# because a benchmark dataset is not production media and mixing them makes "clear the cache"
+# ambiguous.
 
-    Content hashing would be more correct and is not worth it - reading a gigabyte to decide
-    whether to skip a transcription defeats the purpose. Size and mtime change whenever the
-    footage is re-exported, which is the case that matters.
+
+def _harness_key(source: Path) -> str:
+    """Cache key for a benchmark source.
+
+    Uses the same content hash and the same ASR parameters as the pipeline, read from
+    settings, so a dataset transcribed by the harness and the same file transcribed by a real
+    job agree - and both miss when the model changes.
     """
-    stat = source.stat()
-    return f"{source.resolve()}|{stat.st_size}|{int(stat.st_mtime)}"
+    from config import settings
 
-
-def _cache_path(cache_dir: Path, source: Path) -> Path:
-    import hashlib
-
-    digest = hashlib.sha256(_cache_key(source).encode("utf-8")).hexdigest()[:16]
-    return cache_dir / f"{source.stem}-{digest}.json"
+    return transcript_cache.cache_key(
+        transcript_cache.hash_source(source),
+        model=settings.whisper_model,
+        language=None,
+        translate=False,
+        beam_size=5,
+    )
 
 
 def load_cached_transcript(cache_dir: Path, source: Path):
     """A previously cached transcript for ``source``, or ``None``."""
-    from worker.transcribe import Transcript, TranscriptSegment, Word
-
     try:
-        path = _cache_path(Path(cache_dir), Path(source))
+        key = _harness_key(Path(source))
     except OSError:
         return None
-    if not path.exists():
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        segments = [
-            TranscriptSegment(
-                start=float(s["start"]),
-                end=float(s["end"]),
-                text=str(s.get("text", "")),
-                words=[
-                    Word(start=float(w["start"]), end=float(w["end"]),
-                         text=str(w.get("text", "")),
-                         probability=float(w.get("probability", 1.0)))
-                    for w in s.get("words", [])
-                ],
-            )
-            for s in raw.get("segments", [])
-        ]
-        return Transcript(language=str(raw.get("language", "")), segments=segments)
-    except (ValueError, KeyError, TypeError, OSError):
-        # A corrupt cache entry must not fail a run; re-transcribing is always an option.
-        return None
+    return transcript_cache.load(key, cache_dir)
 
 
 def save_cached_transcript(cache_dir: Path, source: Path, transcript) -> Optional[Path]:
     """Cache ``transcript`` for ``source``. Best-effort; returns the path written."""
-    cache_dir = Path(cache_dir)
     try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        path = _cache_path(cache_dir, Path(source))
-        path.write_text(
-            json.dumps(
-                {
-                    "language": getattr(transcript, "language", ""),
-                    "segments": [
-                        {
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text,
-                            "words": [
-                                {"start": w.start, "end": w.end, "text": w.text,
-                                 "probability": getattr(w, "probability", 1.0)}
-                                for w in getattr(segment, "words", []) or []
-                            ],
-                        }
-                        for segment in getattr(transcript, "segments", []) or []
-                    ],
-                },
-                indent=1,
-            ),
-            encoding="utf-8",
-        )
-        return path
-    except (OSError, TypeError, ValueError):
+        key = _harness_key(Path(source))
+    except OSError:
         return None
+    return transcript_cache.store(key, transcript, cache_dir)
 
 
 # --------------------------------------------------------------------------- #
