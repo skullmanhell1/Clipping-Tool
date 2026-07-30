@@ -256,6 +256,14 @@ class Settings(BaseSettings):
         description="True-peak ceiling in dBTP for loudness normalisation (AU1). -1 leaves "
                     "headroom for the lossy encoder, which can overshoot the sample peak.",
     )
+    # AU3: a true-peak limiter at the end of the audio chain, using
+    # loudness_true_peak_db as its ceiling so there is one source of truth for it.
+    true_peak_limit_enabled: bool = Field(
+        default=True,
+        description="Apply a true-peak limiter at the end of the audio chain (AU3), at "
+                    "loudness_true_peak_db. Guards the paths where loudness normalisation "
+                    "does not run, where a hot source plus a music bed can exceed full scale.",
+    )
     # AU2: how hard the music bed is pushed down while someone is speaking.
     # V10: filler removal joins the kept segments sample-exactly, so every seam was a step
     # discontinuity in the waveform - the click you hear at each removed "um".

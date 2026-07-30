@@ -44,6 +44,9 @@ requires_ffmpeg = pytest.mark.skipif(
     reason="no ffmpeg/ffprobe on PATH; audio mastering checks need both",
 )
 
+#: Sample rate for fixtures that must match the output layout.
+_RATE = 48000
+
 
 def _make_tone(path, *, freq=300, seconds=4.0, volume=1.0, rate=44100, channels=1):
     """A tone at a known level, deliberately *not* at the output's rate/layout."""
@@ -346,3 +349,175 @@ def test_a_44100_mono_source_is_delivered_as_48000_stereo(tmp_path):
     assert probed["sample_rate"] == str(app_settings.output_sample_rate)
     assert probed["channels"] == str(app_settings.output_channels)
     assert probed["codec_name"] == "aac"
+
+
+
+# --------------------------------------------------------------------------- #
+# AU3 — true-peak limiting                                                     #
+# --------------------------------------------------------------------------- #
+# `loudnorm` *targets* a true-peak ceiling and, in linear mode, lowers its gain to respect one -
+# but only on the path where it runs. With normalisation disabled or the source unmeasurable,
+# nothing constrained the output: a hot source plus a music bed sums straight past full scale.
+#
+# Measuring this correctly matters more than usual. An encoded AAC file cannot reveal clipping,
+# because the encoder clamps - a clipped signal measures "fine" while sounding bad. So these
+# tests measure float PCM, before any encode.
+def _float_tone(path, *, gain_db, freq=300, seconds=2.0):
+    """A tone at a known level, as 32-bit float so it can legitimately exceed full scale."""
+    subprocess.run(
+        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", f"sine=f={freq}:d={seconds}:sample_rate={_RATE}",
+         "-af", f"volume={gain_db}dB", "-c:a", "pcm_f32le", "-y", str(path)],
+        check=True, capture_output=True, timeout=120,
+    )
+    return path
+
+
+def _true_peak_db(path) -> float:
+    proc = subprocess.run(
+        [FFMPEG, "-nostdin", "-hide_banner", "-i", str(path),
+         "-af", "ebur128=peak=true", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=120,
+    )
+    peaks = [line for line in proc.stderr.splitlines() if "Peak:" in line]
+    assert peaks, f"no true-peak reading:\n{proc.stderr[-800:]}"
+    return float(peaks[-1].split("Peak:")[1].strip().split()[0])
+
+
+def _integrated_lufs(path) -> float:
+    stats = audio.measure_loudness(path)
+    assert stats is not None
+    return stats.input_i
+
+
+def test_the_ceiling_is_converted_from_db_to_linear_amplitude():
+    """``alimiter``'s ``limit`` is a linear amplitude, not dB. Passing dB would be a no-op."""
+    assert "limit=0.8913" in audio.true_peak_limit_filter(-1.0)
+    assert "limit=0.7079" in audio.true_peak_limit_filter(-3.0)
+    assert "limit=1.0000" in audio.true_peak_limit_filter(0.0)
+    # A nonsensical ceiling is clamped rather than emitting an invalid filter.
+    assert "limit=1.0000" in audio.true_peak_limit_filter(12.0)
+
+
+def test_the_ceiling_defaults_to_the_configured_true_peak():
+    """One source of truth: the same value loudnorm targets."""
+    expected = 10.0 ** (app_settings.loudness_true_peak_db / 20.0)
+    assert f"limit={expected:.4f}" in audio.true_peak_limit_filter()
+
+
+def test_auto_levelling_is_disabled():
+    """The argument that stops the limiter from making quiet audio *louder*.
+
+    ``alimiter``'s ``level`` defaults to on, which auto-levels the output up to the ceiling. A
+    filter whose job is to attenuate when necessary would, in its default configuration, boost
+    anything quiet - undoing the loudness normalisation immediately upstream of it.
+    """
+    assert "level=disabled" in audio.true_peak_limit_filter()
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_a_signal_over_the_ceiling_is_brought_down_to_it(tmp_path):
+    """AU3's purpose, measured on float PCM so clipping is visible."""
+    hot = _float_tone(tmp_path / "hot.wav", gain_db=24)
+    assert _true_peak_db(hot) > 0.0, "fixture must actually exceed full scale"
+
+    limited = tmp_path / "limited.wav"
+    subprocess.run(
+        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(hot),
+         "-af", audio.true_peak_limit_filter(), "-c:a", "pcm_f32le", "-y", str(limited)],
+        check=True, capture_output=True, timeout=120,
+    )
+    peak = _true_peak_db(limited)
+    assert peak <= app_settings.loudness_true_peak_db + 0.5, peak
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_the_limiter_is_transparent_below_the_ceiling(tmp_path):
+    """The trap this test exists for.
+
+    With ``alimiter``'s default ``level``, a quiet input came out **1 dB louder** and 1 LU
+    higher - measured. Since this filter runs at the end of every changed audio chain, that
+    would have silently shifted every clip off the platform loudness target `AU1` just set.
+    """
+    quiet = _float_tone(tmp_path / "quiet.wav", gain_db=6)
+    before_peak, before_lufs = _true_peak_db(quiet), _integrated_lufs(quiet)
+    assert before_peak < app_settings.loudness_true_peak_db, "fixture must be under the ceiling"
+
+    out = tmp_path / "out.wav"
+    subprocess.run(
+        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(quiet),
+         "-af", audio.true_peak_limit_filter(), "-c:a", "pcm_f32le", "-y", str(out)],
+        check=True, capture_output=True, timeout=120,
+    )
+    assert _true_peak_db(out) == pytest.approx(before_peak, abs=0.2)
+    assert _integrated_lufs(out) == pytest.approx(before_lufs, abs=0.2)
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_a_mix_that_would_clip_is_contained(tmp_path):
+    """The concrete gap: a hot source plus a bed, on the path where loudnorm does not run.
+
+    Without limiting this mix reaches about +5.5 dBFS true peak. The encoder would clamp it,
+    which is not protection - it is distortion that no longer shows up as a high peak.
+    """
+    speech = _float_tone(tmp_path / "speech.wav", gain_db=18, freq=300)
+    bed = _float_tone(tmp_path / "bed.wav", gain_db=18, freq=700)
+
+    def _mix(extra: str) -> float:
+        out = tmp_path / f"mix{'_lim' if extra else ''}.wav"
+        graph = "[1:a]volume=0.9[bedv];[0:a][bedv]amix=inputs=2:duration=first:normalize=0[m]"
+        graph += f";[m]{extra}[out]" if extra else ";[m]anull[out]"
+        subprocess.run(
+            [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+             "-i", str(speech), "-i", str(bed), "-filter_complex", graph,
+             "-map", "[out]", "-c:a", "pcm_f32le", "-y", str(out)],
+            check=True, capture_output=True, timeout=120,
+        )
+        return _true_peak_db(out)
+
+    unlimited = _mix("")
+    limited = _mix(audio.true_peak_limit_filter())
+    assert unlimited > 0.0, f"fixture no longer clips ({unlimited:.1f} dBFS)"
+    assert limited <= app_settings.loudness_true_peak_db + 0.5, limited
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_the_compositor_puts_the_limiter_after_loudness_normalisation(tmp_path, monkeypatch):
+    """Order matters, and it is only visible in the assembled filtergraph."""
+    from tests.conftest import FakeWord
+    from worker.effects import compositor
+    from worker.models import ProcessingOptions
+
+    source = tmp_path / "src.mp4"
+    subprocess.run(
+        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "testsrc=s=320x240:d=2:r=30",
+         "-f", "lavfi", "-i", f"sine=f=300:d=2:sample_rate={_RATE}",
+         "-shortest", "-c:v", "libx264", "-c:a", "aac", "-y", str(source)],
+        check=True, capture_output=True, timeout=180,
+    )
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(compositor, "_run", lambda cmd, **kw: captured.append(list(cmd)))
+
+    options = ProcessingOptions(platform="tiktok")   # shipped defaults: fades on
+    compositor.render_clip(source, tmp_path / "out.mp4", options,
+                           [FakeWord(0.2, 0.6, "money")], tmp_path)
+    assert captured, "no ffmpeg invocation captured"
+    graph = captured[-1][captured[-1].index("-filter_complex") + 1]
+    assert "alimiter=" in graph, graph
+    assert graph.index("loudnorm=") < graph.index("alimiter="), (
+        "the limiter must come after loudness normalisation, not before it"
+    )
+
+    # And it is genuinely optional.
+    captured.clear()
+    monkeypatch.setattr(app_settings, "true_peak_limit_enabled", False)
+    compositor.render_clip(source, tmp_path / "out2.mp4", options,
+                           [FakeWord(0.2, 0.6, "money")], tmp_path)
+    graph = captured[-1][captured[-1].index("-filter_complex") + 1]
+    assert "alimiter=" not in graph
