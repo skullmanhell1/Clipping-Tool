@@ -106,7 +106,12 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------- transcription --
     # faster-whisper model size, e.g. tiny/base/small/medium/large-v3.
-    whisper_model: str = Field(default="base", description="faster-whisper model.")
+    # T1: "small", not "base". Captions are the most visible artefact in the product and
+    # "base" is a noticeable accuracy step down - a mis-transcribed word is burned into the
+    # video. "small" is the cheapest model that does not make that trade. Larger models
+    # ("medium", "large-v3") are better still and cost proportionally more, so the choice is
+    # left to the operator rather than assumed.
+    whisper_model: str = Field(default="small", description="faster-whisper model.")
     # "cpu", "cuda", or "auto" to detect a GPU when present.
     whisper_device: str = Field(default="auto", description="Transcription device.")
     whisper_compute_type: str = Field(
@@ -140,6 +145,58 @@ class Settings(BaseSettings):
     allowed_upload_extensions: str = Field(
         default=".mp4,.mov,.mkv,.webm,.avi,.m4v,.mpg,.mpeg,.wmv,.flv,.ts,.m2ts,.3gp,.mp3,.wav,.m4a,.aac,.flac,.ogg",
         description="Comma-separated list of accepted upload file extensions.",
+    )
+    # T8: ASR is the most expensive stage and the most repeated - re-running a source to try
+    # a different caption preset or aspect ratio re-transcribes audio that has not changed.
+    transcript_cache_dir: Path = Field(
+        default=BASE_DIR / "storage" / "transcripts",
+        description="Directory of cached transcripts (T8), keyed by source content hash and "
+                    "the ASR parameters that produced them.",
+    )
+    # T3: Whisper invents text over music, applause and silence, and gets stuck in decode
+    # loops. Every threshold here is set so that two independent signals must agree before a
+    # segment is dropped, because a false positive deletes real speech and nothing downstream
+    # can notice - while a missed hallucination is visible in the clip.
+    transcript_filter_enabled: bool = Field(
+        default=True,
+        description="Drop transcript segments that look hallucinated or looped (T3).",
+    )
+    transcript_no_speech_threshold: float = Field(
+        default=0.6,
+        description="Whisper no_speech_prob at or above which a segment is suspect (T3). "
+                    "Never acted on alone: quiet but real speech scores high here.",
+    )
+    transcript_logprob_threshold: float = Field(
+        default=-1.0,
+        description="Mean token log-probability at or below which a segment is suspect (T3). "
+                    "Must coincide with a high no_speech_prob before anything is dropped.",
+    )
+    transcript_max_token_run: int = Field(
+        default=4,
+        description="Identical consecutive tokens that mark a decode loop (T3). No speaker "
+                    "says the same word four times with nothing in between.",
+    )
+    transcript_max_segment_repeats: int = Field(
+        default=2,
+        description="Consecutive segments repeating the same phrase before the repeats are "
+                    "dropped (T3) - a loop spanning segment boundaries.",
+    )
+    transcript_min_word_probability: float = Field(
+        default=0.35,
+        description="Mean word probability below which a repetitive segment is treated as a "
+                    "loop over non-speech (T3).",
+    )
+    transcript_filter_keep_floor: float = Field(
+        default=0.5,
+        description="Minimum share of segments that must survive filtering (T3). Below it "
+                    "nothing is dropped: if most of a transcript looks invented the "
+                    "thresholds are wrong for that audio, and emptying it is worse than "
+                    "keeping a poor transcript.",
+    )
+    transcript_cache_enabled: bool = Field(
+        default=True,
+        description="Reuse a cached transcript when the source content and ASR settings "
+                    "match (T8). Turn off to force re-transcription.",
     )
     temp_dir: Path = Field(
         default=BASE_DIR / "storage" / "temp",
@@ -228,6 +285,68 @@ class Settings(BaseSettings):
                     "boundary the selector chose is kept.",
     )
 
+    # O3: deliverables are encoded at a constant frame rate. A variable-frame-rate source -
+    # every screen recording and most phone footage - has no single frame duration, so
+    # burned captions drift against speech as the effective rate wanders.
+    output_fps: int = Field(
+        default=30,
+        description="Constant frame rate for delivered clips (O3). Sources with variable "
+                    "frame rate are resampled to this, which is what keeps burned captions "
+                    "in sync.",
+    )
+    # O4: a VBV ceiling for delivered clips. -crf sets a quality target with no bitrate
+    # limit, so a busy clip can balloon past a platform's file-size cap and be rejected.
+    output_max_bitrate_kbps: int = Field(
+        default=12000,
+        description="Peak video bitrate for delivered clips in kbit/s (O4); -bufsize is "
+                    "twice this. Generous for 1080x1920 at 30 fps, so it only engages on "
+                    "genuinely complex footage.",
+    )
+    # AU8: neither was set anywhere, so output sample rate and channel count were whatever
+    # the source happened to be - 44.1 kHz mono from a phone, 48 kHz 5.1 from a camera.
+    output_sample_rate: int = Field(
+        default=48000, description="Output audio sample rate in Hz (AU8)."
+    )
+    output_channels: int = Field(
+        default=2, description="Output audio channel count (AU8); 2 = stereo."
+    )
+    # AU1: loudness targets. A clip quieter than the platform's target gets turned *up* on
+    # playback, which amplifies its noise floor along with the speech; one louder is turned
+    # down, losing the headroom it was mastered with.
+    loudness_target_lufs: float = Field(
+        default=-14.0,
+        description="Integrated loudness target in LUFS for platforms without a specific "
+                    "target (AU1). YouTube is about -14; TikTok and Instagram sit nearer "
+                    "-11, and are set per platform in worker.effects.audio.",
+    )
+    loudness_true_peak_db: float = Field(
+        default=-1.0,
+        description="True-peak ceiling in dBTP for loudness normalisation (AU1). -1 leaves "
+                    "headroom for the lossy encoder, which can overshoot the sample peak.",
+    )
+    # AU3: a true-peak limiter at the end of the audio chain, using
+    # loudness_true_peak_db as its ceiling so there is one source of truth for it.
+    true_peak_limit_enabled: bool = Field(
+        default=True,
+        description="Apply a true-peak limiter at the end of the audio chain (AU3), at "
+                    "loudness_true_peak_db. Guards the paths where loudness normalisation "
+                    "does not run, where a hot source plus a music bed can exceed full scale.",
+    )
+    # AU2: how hard the music bed is pushed down while someone is speaking.
+    # V10: filler removal joins the kept segments sample-exactly, so every seam was a step
+    # discontinuity in the waveform - the click you hear at each removed "um".
+    filler_seam_fade_ms: int = Field(
+        default=12,
+        description="Audio fade length in milliseconds at each filler-removal seam (V10). "
+                    "Long enough to remove the click, short enough not to be audible as a "
+                    "fade; 0 disables it and restores the hard cut.",
+    )
+    music_duck_ratio: float = Field(
+        default=8.0,
+        description="Compression ratio for ducking music under speech (AU2). Higher ducks "
+                    "harder; 1.0 disables ducking and restores the flat mix.",
+    )
+
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(
         default=BASE_DIR / "assets" / "emoji",
@@ -246,18 +365,39 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------- effects (P4) --
-    # Base CDN for on-demand Twemoji PNG downloads (cached into emoji_assets_dir).
-    twemoji_cdn_base: str = Field(
-        default="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72",
-        description="Base URL for Twemoji 72x72 PNG assets.",
+    # Fallback source for an emoji PNG that is not vendored (A6, A7). The set the built-in
+    # keyword map can produce is committed under assets/emoji, fetched by
+    # scripts/fetch_emoji.py, so rendering never needs this.
+    emoji_cdn_base: str = Field(
+        default="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/512",
+        description="Fallback base URL for emoji PNGs (Noto Emoji 512px, OFL-1.1). "
+                    "Only consulted for a glyph missing from emoji_assets_dir.",
     )
-    # Allow the emoji overlay to fetch missing PNGs from the CDN at render time.
+    # Allow the emoji overlay to fetch a missing PNG at render time.
+    #
+    # Defaults off now that the assets are vendored: a render is not the place to discover
+    # the network is down, and the previous default meant a missing glyph turned into a
+    # silent per-clip HTTP request. Turn it on when using an emoji outside the built-in map.
     emoji_allow_download: bool = Field(
-        default=True, description="Fetch missing Twemoji PNGs from the CDN."
+        default=False,
+        description="Fetch a missing emoji PNG from emoji_cdn_base at render time. Off by "
+                    "default: the built-in set is vendored under assets/emoji.",
     )
     # Default background-music level (0..1) mixed under the original audio.
     music_default_volume: float = Field(
         default=0.12, description="Default background-music volume (0..1)."
+    )
+    # A15: whether the synthesised fallback bed may be used at all.
+    #
+    # It is not music - it is two sine tones with tremolo, identical for every clip of a
+    # given mood. Left on so that asking for music still produces something, but a caller
+    # who would rather have silence than a drone can turn it off, and every clip that uses
+    # it is marked music_degraded:synthesised.
+    music_allow_synthesis: bool = Field(
+        default=True,
+        description="Allow the synthesised two-tone fallback bed when no user track "
+                    "exists in music_dir. Clips using it are marked "
+                    "music_degraded:synthesised.",
     )
 
     # ------------------------------------------- b-roll (Tier 1) ----------
@@ -398,6 +538,7 @@ class Settings(BaseSettings):
             self.uploads_dir,
             self.temp_dir,
             self.clips_dir,
+            self.transcript_cache_dir,
             self.emoji_assets_dir,
             self.music_dir,
             self.broll_dir,

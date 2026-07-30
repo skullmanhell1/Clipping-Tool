@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
+from publishers import preflight
 from publishers.base import PublishResult, PublishState
 from publishers.history import HistoryStore
 from publishers.manager import PublishManager
@@ -173,3 +176,22 @@ def test_the_shipped_floor_default_trusts_the_publishers():
     from config import Settings
 
     assert Settings(_env_file=None).publish_min_interval_floor_seconds == 0.0
+
+
+@pytest.fixture(autouse=True)
+def _accept_stub_clips(monkeypatch):
+    """Let the byte-stub ``video_file`` fixture through the O10 pre-flight.
+
+    These tests are about routing, scheduling and throttling, and their clips are a few
+    hundred bytes of fake MP4 header - ffprobe cannot read them, so the pre-flight correctly
+    refuses to upload them and every scheduling assertion would fail for the wrong reason.
+
+    Stubbed at the seam rather than weakened: ``validate_clip`` blocking an unprobeable file
+    is deliberate (publishing a file ffprobe cannot read will not go well either), and it is
+    covered by ``tests/test_publish_preflight.py`` against real media, including a
+    manager-level test that a rejected clip never reaches the publisher.
+    """
+    monkeypatch.setattr(
+        preflight, "validate_clip",
+        lambda video_path, platform: preflight.PreflightReport(platform=platform),
+    )

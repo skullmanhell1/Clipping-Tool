@@ -120,7 +120,7 @@ def test_an_8bit_source_is_unaffected(tmp_path):
 
 def test_the_encode_args_pin_format_profile_and_level():
     """The three flags that make output universally playable are all present."""
-    args = fu.video_encode_args()
+    args = fu.h264_args()
     assert "-pix_fmt" in args and args[args.index("-pix_fmt") + 1] == SAFE_PIX_FMT
     assert "-profile:v" in args and args[args.index("-profile:v") + 1] == "high"
     assert "-level" in args
@@ -130,7 +130,7 @@ def test_quality_settings_are_configurable(monkeypatch):
     """CRF and preset come from settings, not from literals in five modules."""
     monkeypatch.setattr(app_settings, "x264_crf", 17)
     monkeypatch.setattr(app_settings, "x264_preset", "slow")
-    args = fu.video_encode_args()
+    args = fu.h264_args()
     assert args[args.index("-crf") + 1] == "17"
     assert args[args.index("-preset") + 1] == "slow"
 
@@ -152,5 +152,5 @@ def test_no_module_hardcodes_its_own_encoder_flags():
 
     assert not offenders, (
         f"these modules set encoder flags directly instead of calling "
-        f"video_encode_args(): {offenders}"
+        f"h264_args(): {offenders}"
     )

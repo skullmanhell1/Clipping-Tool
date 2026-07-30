@@ -71,6 +71,103 @@ def _norm(token: str) -> str:
     return m[0] if m else ""
 
 
+# --- Keyword lookup: inflected forms (A10) ---------------------------------- #
+#
+# The map is keyed on base forms, and lookup was exact, so speech missed constantly:
+# "win" hit while "winning", "wins" and "won" did not, and "fired" missed "fire". Emoji are
+# planned from spoken words, which arrive inflected far more often than not.
+#
+# Deliberately a small rule set plus a table of irregulars rather than a real stemmer: no
+# new dependency, no surprises, and every transformation is reversible by eye. A Porter
+# stemmer would also fold "business" to "busi" and stop matching the map at all.
+
+#: Irregular forms that no suffix rule can reach, mapped to a key in ``KEYWORD_EMOJI``.
+_IRREGULAR: dict[str, str] = {
+    "won": "win", "winning": "win", "wins": "win",
+    "lost": "lose", "loses": "lose", "losing": "lose",
+    "thought": "think", "thinking": "think", "thinks": "think",
+    "grew": "grow", "grown": "grow", "growing": "grow",
+    "blew": "blown", "blowing": "blown",
+    "ate": "food", "eating": "food", "eats": "food", "eat": "food",
+    "ran": "fast", "running": "fast", "runs": "fast",
+    "best": "best", "better": "best",
+    "laughed": "laugh", "laughing": "laugh", "laughs": "laugh",
+    "cried": "cry", "crying": "cry", "cries": "cry",
+    "exploded": "explode", "exploding": "explode", "explodes": "explode",
+    "launched": "launch", "launching": "launch", "launches": "launch",
+    "celebrated": "celebrate", "celebrating": "celebrate", "celebrates": "celebrate",
+    "focused": "focus", "focusing": "focus", "focuses": "focus",
+    "stopped": "stop", "stopping": "stop", "stops": "stop",
+    "looked": "look", "looking": "look", "looks": "look",
+    "worked": "work", "working": "work", "works": "work",
+    "powerful": "power", "empowered": "power",
+    "moneys": "money", "riches": "rich", "richest": "rich",
+    "fastest": "fast", "faster": "fast", "strongest": "strong", "stronger": "strong",
+    "smarter": "smart", "smartest": "smart", "happiest": "happy", "happier": "happy",
+    "craziest": "crazy", "crazier": "crazy", "funniest": "funny", "funnier": "funny",
+    "hottest": "hot", "hotter": "hot", "biggest": "big", "bigger": "big",
+    "angrier": "angry", "angriest": "angry", "saddest": "sad", "sadder": "sad",
+    "ideas": "idea", "goals": "goal", "targets": "target", "secrets": "secret",
+    "questions": "question", "teams": "team", "deals": "deal", "gifts": "gift",
+    "stars": "star", "parties": "party", "brains": "brain", "minds": "mind",
+    "eyes": "eye", "points": "point", "clocks": "clock", "phones": "phone",
+    "cameras": "camera", "videos": "video", "games": "game", "rockets": "rocket",
+    "warnings": "warning", "dangers": "danger", "businesses": "business",
+}
+
+
+def _candidate_keys(token: str) -> list[str]:
+    """Lookup keys for ``token``, most specific first (A10).
+
+    The token itself always comes first, so an exact match can never be overridden by a
+    stemmed one, and the map keeps exactly the meaning it had before.
+    """
+    if not token:
+        return []
+    keys = [token]
+
+    irregular = _IRREGULAR.get(token)
+    if irregular:
+        keys.append(irregular)
+
+    # "-ies" -> "-y" ("parties" -> "party"), before the bare "-s" rule.
+    if token.endswith("ies") and len(token) > 4:
+        keys.append(token[:-3] + "y")
+    # Plural / third person: "wins" -> "win". Not "-ss" ("business", "success").
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+        keys.append(token[:-1])
+    # "-ed": "fired" -> "fire" (keep the e) and "worked" -> "work".
+    if token.endswith("ed") and len(token) > 4:
+        keys.append(token[:-1])
+        keys.append(token[:-2])
+    # "-ing": "firing" -> "fire" (restore the e) and "working" -> "work".
+    if token.endswith("ing") and len(token) > 5:
+        keys.append(token[:-3])
+        keys.append(token[:-3] + "e")
+        # Doubled consonant: "winning" -> "win", "stopping" -> "stop".
+        stem = token[:-3]
+        if len(stem) > 2 and stem[-1] == stem[-2]:
+            keys.append(stem[:-1])
+    # "-ly": "quickly" -> "quick".
+    if token.endswith("ly") and len(token) > 4:
+        keys.append(token[:-2])
+
+    seen: set[str] = set()
+    return [key for key in keys if not (key in seen or seen.add(key))]
+
+
+def lookup_emoji(token: str, mapping: dict[str, str]) -> str:
+    """The emoji for ``token`` under ``mapping``, or ``""`` (A10).
+
+    Tries the token as spoken first, then its uninflected candidates.
+    """
+    for key in _candidate_keys(token):
+        glyph = mapping.get(key)
+        if glyph:
+            return glyph
+    return ""
+
+
 def plan_emoji(
     words: list,
     duration: float,
@@ -106,7 +203,8 @@ def plan_emoji(
     slot = 0
     for w in words:
         key = _norm(getattr(w, "text", ""))
-        if not key or key not in mapping:
+        glyph = lookup_emoji(key, mapping) if key else ""
+        if not glyph:
             continue
         start = float(getattr(w, "start", 0.0))
         if start - last_t < spacing:
@@ -114,7 +212,7 @@ def plan_emoji(
         end = min(duration, start + hold)
         if end <= start:
             continue
-        cues.append(EmojiCue(mapping[key], round(start, 3), round(end, 3), slot % 3))
+        cues.append(EmojiCue(glyph, round(start, 3), round(end, 3), slot % 3))
         last_t = start
         slot += 1
     return cues
@@ -150,16 +248,23 @@ def _ai_emoji_map(words: list, client) -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 # Twemoji asset resolution
 # --------------------------------------------------------------------------- #
-def twemoji_filename(char: str) -> str:
-    """Return the Twemoji PNG filename for an emoji string.
+def emoji_filename(char: str) -> str:
+    """Return the vendored PNG filename for an emoji string.
 
-    Follows Twemoji's convention: codepoints joined by ``-`` in lowercase hex,
-    dropping the ``U+FE0F`` variation selector for multi-codepoint sequences.
+    Codepoints joined by ``-`` in lower-case hex, dropping the ``U+FE0F`` variation
+    selector for multi-codepoint sequences — the Twemoji convention, kept as our on-disk
+    naming even though the artwork now comes from Noto Emoji (A6), because it is the
+    convention every emoji set agrees on modulo case and separator.
+    ``scripts/fetch_emoji.py`` translates it to Noto's ``emoji_u<...>.png`` spelling.
     """
     codepoints = [ord(c) for c in char]
     if len(codepoints) > 1:
         codepoints = [cp for cp in codepoints if cp != 0xFE0F]
     return "-".join(f"{cp:x}" for cp in codepoints) + ".png"
+
+
+#: Retained spelling for callers written against the Twemoji-only version.
+twemoji_filename = emoji_filename
 
 
 def _default_downloader(url: str, dest: Path) -> bool:
@@ -187,7 +292,7 @@ def resolve_asset(
     Looks in ``settings.emoji_assets_dir`` first; otherwise fetches from the
     configured Twemoji CDN and caches it. ``downloader`` is injectable for tests.
     """
-    filename = twemoji_filename(char)
+    filename = emoji_filename(char)
     assets = Path(settings.emoji_assets_dir)
     assets.mkdir(parents=True, exist_ok=True)
     local = assets / filename
@@ -195,7 +300,7 @@ def resolve_asset(
         return local
 
     fetch = downloader or _default_downloader
-    url = f"{settings.twemoji_cdn_base.rstrip('/')}/{filename}"
+    url = f"{settings.emoji_cdn_base.rstrip('/')}/{filename}"
     if fetch(url, local) and local.exists() and local.stat().st_size > 0:
         return local
     return None
@@ -209,12 +314,24 @@ _SLOT_X = (0.16, 0.74, 0.45)
 _SLOT_Y = (0.15, 0.24, 0.15)
 
 
+def _emoji_px(frame_width: int, size_frac: float) -> int:
+    """Emoji width in pixels, at least 2 and always even.
+
+    ``scale=<w>:-1`` derives the height from the aspect ratio and rounds it to an even
+    number; giving it an even width keeps the two consistent, and libx264's 4:2:0 chroma
+    subsampling requires even dimensions anyway.
+    """
+    px = int(max(2.0, float(frame_width) * float(size_frac)))
+    return px - (px % 2)
+
+
 def build_overlay(
     cues: list[EmojiCue],
     base_label: str,
     out_label: str,
     *,
     duration: float,
+    frame_width: int = 1080,
     size_frac: float = 0.14,
     animate: bool = True,
     resolver: Optional[Callable[[str], Optional[Path]]] = None,
@@ -227,6 +344,11 @@ def build_overlay(
         base_label: label of the base video stream (without brackets), e.g. ``v0``.
         out_label: label to assign the final overlaid stream (without brackets).
         duration: clip duration (each looped PNG input is bounded to this).
+        frame_width: width of the frame being composited onto, in pixels. ``size_frac`` is
+            taken against this. It was hard-coded to 1080 (A8), so a 1:1 (1080) run was
+            right by accident and a 16:9 (1920) or square-ish output got an emoji sized
+            for a different frame — the overlay *placement* used the real ``W`` while the
+            *scale* used a constant, so the two disagreed on what the frame was.
         size_frac: emoji width as a fraction of the frame width.
         animate: alpha "pop" fade-in as each emoji appears.
         resolver: ``char -> Path`` resolver (defaults to :func:`resolve_asset`).
@@ -254,8 +376,8 @@ def build_overlay(
         # Loop the still PNG for the clip's duration so its PTS tracks main time.
         input_args += ["-loop", "1", "-t", f"{max(0.1, duration):.3f}", "-i", str(path)]
 
-        # Scale relative to a 1080-wide reference, then let overlay place it.
-        prep = f"[{idx}:v]scale={int(1080 * size_frac)}:-1,format=rgba"
+        # Scale relative to the real frame width, then let overlay place it (A8).
+        prep = f"[{idx}:v]scale={_emoji_px(frame_width, size_frac)}:-1,format=rgba"
         if animate:
             prep += f",fade=t=in:st={cue.start:.3f}:d=0.18:alpha=1"
         prep += f"[e{i}]"

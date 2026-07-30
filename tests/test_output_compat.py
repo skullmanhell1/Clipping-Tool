@@ -1,0 +1,175 @@
+"""Delivered files decode on the platforms they are uploaded to (O1, O2, O3).
+
+Every encode in this repository spelled out ``-c:v libx264 -preset veryfast -crf 20`` and
+nothing else, in seven places. Three flags that decide whether a file is *accepted* at all
+were missing everywhere, and their absence is invisible locally:
+
+* **O1** — without ``-pix_fmt yuv420p``, ffmpeg keeps the source pixel format. A 4:2:2 or
+  10-bit source (any ProRes, most capture cards, some phones) therefore produced a
+  4:2:2/10-bit H.264 file. It plays perfectly in VLC and ffplay, and is refused by Safari,
+  many Android decoders and several upload pipelines — so the failure surfaces at upload
+  time, long after the render looked fine.
+* **O2** — without ``-profile:v high -level 4.0``, libx264 derives both from the input and
+  can land above what older hardware decoders implement.
+* **O3** — a variable-frame-rate source has no single frame duration, so burned captions
+  drift against speech as the effective rate wanders.
+
+The tests assert the *probed output*, not the argument list. An argument-list test passes
+whenever the flag is spelled correctly, including when something later in the command
+overrides it; ffprobe reports what the file actually is.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+
+import pytest
+
+from config import settings as app_settings
+from worker import captions as cap
+from worker.ffmpeg_utils import H264_COMPAT_ARGS, h264_args
+
+FFMPEG = shutil.which(app_settings.ffmpeg_binary) or shutil.which("ffmpeg")
+FFPROBE = shutil.which(app_settings.ffprobe_binary) or shutil.which("ffprobe")
+
+requires_ffmpeg = pytest.mark.skipif(
+    FFMPEG is None or FFPROBE is None,
+    reason="no ffmpeg/ffprobe on PATH; output-compatibility checks need both",
+)
+
+
+def _probe(path) -> dict[str, str]:
+    """``pix_fmt``, ``profile``, ``level`` and ``r_frame_rate`` of a file's video stream."""
+    proc = subprocess.run(
+        [
+            FFPROBE, "-v", "error", "-select_streams", "v",
+            "-show_entries", "stream=pix_fmt,profile,level,r_frame_rate",
+            "-of", "default=nw=1", str(path),
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
+@pytest.fixture
+def source_422(tmp_path):
+    """A 4:2:2, 15 fps source — the shape that exposed O1 and O3.
+
+    Deliberately *not* the 4:2:0 30 fps that every other fixture uses: a yuv420p source
+    would be converted to yuv420p by accident, so the test would pass with the flag absent.
+    """
+    path = tmp_path / "src422.mp4"
+    subprocess.run(
+        [
+            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=s=320x240:d=1:r=15",
+            "-f", "lavfi", "-i", "sine=d=1",
+            "-shortest", "-pix_fmt", "yuv422p", "-c:v", "libx264", "-y", str(path),
+        ],
+        check=True, capture_output=True, timeout=120,
+    )
+    probed = _probe(path)
+    assert probed["pix_fmt"] == "yuv422p", "the fixture must really be 4:2:2"
+    assert probed["r_frame_rate"] == "15/1", "the fixture must really not be 30 fps"
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# The argument builder                                                          #
+# --------------------------------------------------------------------------- #
+def test_compat_flags_are_present_in_every_encode():
+    args = h264_args()
+    for flag in H264_COMPAT_ARGS:
+        assert flag in args
+    assert "-pix_fmt" in args and args[args.index("-pix_fmt") + 1] == "yuv420p"
+    assert "-profile:v" in args and args[args.index("-profile:v") + 1] == "high"
+    assert "-level" in args and args[args.index("-level") + 1] == "4.0"
+
+
+def test_frame_rate_normalisation_is_opt_in():
+    """An intermediate that will be re-encoded gains nothing from being resampled twice."""
+    assert "-r" not in h264_args()
+    delivered = h264_args(normalise_fps=True)
+    assert delivered[delivered.index("-r") + 1] == str(app_settings.output_fps)
+
+
+def test_every_encode_site_uses_the_shared_builder():
+    """The flags are only a guarantee if no encode bypasses them.
+
+    Seven call sites each spelled the libx264 arguments out by hand, which is how three
+    flags came to be missing from all seven. A new site that hand-rolls them would silently
+    reintroduce that.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    for path in sorted((root / "worker").rglob("*.py")):
+        if path.name == "ffmpeg_utils.py":   # defines the builder
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r'["\']libx264["\']', line) and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
+    assert not offenders, (
+        "these encodes name libx264 directly instead of calling h264_args(), so they do "
+        "not get the compatibility flags:\n" + "\n".join(offenders)
+    )
+
+
+# --------------------------------------------------------------------------- #
+# What the file actually is                                                     #
+# --------------------------------------------------------------------------- #
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_a_422_source_is_delivered_as_420_high_at_a_constant_rate(source_422, tmp_path):
+    """O1, O2, O3 end to end, through a real deliverable path.
+
+    ``burn_captions`` is a path a user's file really comes out of, so this covers the
+    argument builder *and* its wiring.
+    """
+    ass = tmp_path / "cap.ass"
+    cap.build_ass([cap.Cue(0.0, 1.0, [])], ass, hook_text="hello")
+    out = tmp_path / "burned.mp4"
+    cap.burn_captions(source_422, ass, out)
+
+    probed = _probe(out)
+    assert probed["pix_fmt"] == "yuv420p", "a 4:2:2 file some platforms refuse to decode"
+    assert probed["profile"] == "High"
+    assert probed["level"] == "40", "level 4.0 is reported by ffprobe as 40"
+    assert probed["r_frame_rate"] == f"{app_settings.output_fps}/1"
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_the_missing_flags_really_were_the_difference(source_422, tmp_path):
+    """Without the flags the same source yields a file with the old problems.
+
+    This is the control. It runs the previous argument list against the same input, so the
+    test above is demonstrably testing the flags rather than a property the encoder would
+    have given us anyway.
+    """
+    out = tmp_path / "legacy.mp4"
+    subprocess.run(
+        [
+            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source_422),
+            # The pre-O1/O2/O3 argument list, verbatim.
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "copy", "-movflags", "+faststart", str(out),
+        ],
+        check=True, capture_output=True, timeout=120,
+    )
+    probed = _probe(out)
+    assert probed["pix_fmt"] == "yuv422p", (
+        "if this is already 4:2:0 the fixture no longer reproduces O1 and the test above "
+        "proves nothing"
+    )
+    assert probed["r_frame_rate"] != f"{app_settings.output_fps}/1"

@@ -20,6 +20,9 @@ storage/clips/*
 # Durable per-clip engine artifacts persisted through the storage backend
 # (e.g. retained stem WAVs under storage/engines/<job>/<clip>/<engine>/).
 storage/engines/*
+# T8: cached transcripts are derived data, regenerated on demand.
+storage/transcripts/*
+!storage/transcripts/.gitkeep
 storage/*.db
 storage/*.db-wal
 storage/*.db-shm
@@ -28,9 +31,10 @@ storage/runtime_config.json
 storage/profiles.json
 !storage/**/.gitkeep
 
-# Emoji assets are downloaded at build time; keep the directory only
-assets/emoji/*
-!assets/emoji/.gitkeep
+# Emoji assets ARE committed (A7). This used to ignore them with the comment "downloaded
+# at build time", and no build step did that - so assets/emoji was empty and the overlay
+# had nothing to composite. scripts/fetch_emoji.py is that build step, and its output is
+# tracked so a render never depends on a CDN.
 
 # Node / frontend
 frontend/node_modules/
@@ -42,3 +46,11 @@ publisher_bridge/node_modules/
 # OS / editor
 .DS_Store
 *.swp
+
+# S1 evaluation harness: labels are committed (they are the benchmark), footage and cached
+# transcripts are not. A transcript cache is derived data keyed on file size and mtime, and
+# the footage is the user's own media - neither belongs in the repository.
+eval/cache/
+eval/media/
+eval/*.json
+!eval/labels/*.json
