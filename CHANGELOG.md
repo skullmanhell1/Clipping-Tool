@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — jobs can be stopped, and the time they take is visible (I4, I6, M5, U8)
+
+- **`I4` — job cancellation.** There was no way to stop a running render: a job submitted by
+  mistake occupied the single worker until it finished and, because the pool is serial, held up
+  everything queued behind it. The only remedy was restarting the process, which lost every other
+  job's state. `POST /api/jobs/{id}/cancel`, and a Cancel button on the job card.
+  - **Cooperative, not pre-emptive**, and the difference is stated rather than glossed: a
+    **queued** job stops immediately, a job **between stages** stops in well under a second, and
+    a job **inside an ffmpeg pass finishes that pass first**. `subprocess.run` exposes no handle
+    to signal, so terminating mid-encode means restructuring every encode site around `Popen` —
+    a change with its own failure modes that belongs with the concurrency work (`I1`).
+  - **`cancelled` is a distinct status, not `failed`.** A job the user stopped did not go wrong,
+    and collapsing the two would both mislead the operator and inflate any failure rate computed
+    from these records.
+- **`I6` — every log line carries its job id and stage.** A line could not previously be
+  attributed to a job; survivable with one worker by reading timestamps, and not survivable at
+  all once `I1` lands and two renders interleave their output. The lines that matter most are the
+  degradation markers, which are exactly the ones needing to be traced to one clip in one job.
+- **`M5` — per-stage render timings**, on the job record, at `GET /api/jobs/{id}/timings`, and
+  behind a click on a finished job. Nobody knew where the minutes went: which stage dominates is
+  not guessable, because the pipeline performs at least three full re-encodes per clip, so on a
+  short source with a long clip list the encodes can outweigh transcription entirely. Timings are
+  recorded for **failed** stages too — a stage that reliably burns ninety seconds and then throws
+  is the most useful row in the report and would be invisible if only successes were measured.
+- **`U8` — progress shows structure.** It was one coarse fraction and a free-text stage string,
+  so the UI could only show a bar and a sentence. Jobs now report which step of how many, so a
+  long stage reads as progress rather than as a stalled bar.
+
+### Changed
+
+- **`U10` — failures and empty results explain themselves.** The raw exception text a job fails
+  with is written for a log, not a person. Recognised causes — a missing source, no ffmpeg, a
+  timeout, an undecodable file, a full disk — now carry what to do about them, with the original
+  message kept below as the evidence. A completed job with no clips gets its likely causes
+  instead of a bare "no clips were generated".
+- **`U13` — the fallback landing page reports real state**: version, whether ffmpeg actually
+  resolves, the model, the storage backend, job counts and the registered engines. Anyone reaching
+  that page got there by accident and needs "is the backend healthy" answered; a page that only
+  says "the UI is not built" answers neither that nor "what is missing".
+
+### Fixed
+
+- **`I11` — the two `exhaustive-deps` warnings are gone, and one hid a real bug.** The job-polling
+  effect depended on `jobs.length`, which does not change when a job merely goes from *processing*
+  to *completed* — so the fast 1.2 s poll continued indefinitely after everything had finished.
+  The activity check is now derived outside the effect, which both silences the warning and lets
+  the poll actually slow down.
+
 ### Changed — one name for the shared encoder arguments
 
 - Two branches independently centralised the duplicated libx264 flags, under two names:

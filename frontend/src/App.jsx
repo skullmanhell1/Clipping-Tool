@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
@@ -328,16 +328,26 @@ export default function App() {
     }
   }, []);
 
+  // I11: derived outside the effect so the effect can depend on a *boolean* rather than on the
+  // jobs array. Depending on `jobs` directly would tear down and rebuild the interval on every
+  // poll, since each response is a new array; depending on `jobs.length` — the previous
+  // suppression — silently missed the case that matters, because a job going from processing to
+  // completed does not change the count, so the fast 1.2s poll continued indefinitely after
+  // everything had finished. This fixes that as well as the warning.
+  const hasActiveJobs = useMemo(
+    () => jobs.some((job) => ["queued", "processing"].includes(job.status)),
+    [jobs]
+  );
+
   useEffect(() => {
-    const active =
-      watch.enabled || jobs.some((job) => ["queued", "processing"].includes(job.status));
+    const active = watch.enabled || hasActiveJobs;
     if (pollRef.current) clearInterval(pollRef.current);
     if (trackedIds.size > 0 || watch.enabled) {
       poll();
       pollRef.current = setInterval(poll, active ? 1200 : 4000);
     }
     return () => pollRef.current && clearInterval(pollRef.current);
-  }, [trackedIds, watch.enabled, poll, jobs.length]);
+  }, [trackedIds, watch.enabled, poll, hasActiveJobs]);
 
   const handlePreview = useCallback(async (url) => {
     setPreview(null);
