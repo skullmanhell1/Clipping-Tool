@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the first audio-derived selection signal (S4)
+
+- **There were no audio features in clip selection at all** — verified by grep: no pitch, no
+  energy, no speech rate, no laughter. The LLM saw only `[i] start-end: text` lines, so it could
+  not tell that a moment was delivered fast, slowly, or after a pause. Speech rate is the
+  cheapest of those signals because the data already existed: word timestamps are already
+  produced, so this is one pass over a list.
+- **Relative rate is the signal; absolute rate is context.** A measured lecturer and an excitable
+  streamer sit at very different words-per-second and neither figure says which *moment*
+  mattered. `relative_speech_rate` normalises against the source's own median, so 1.0 is that
+  speaker's normal pace and 2.5 is a burst.
+- The baseline is a **median, not a mean**: a silent stretch or music interlude produces near-zero
+  slices, and a mean would sink the baseline until ordinary speech read as fast — inverting the
+  signal exactly where footage is hardest.
+- A `reliable` flag distinguishes **"not measurable" from "average pace"**, since both report a
+  relative rate of 1.0. Two words in 0.3 s is 6.7 words/sec, which describes a measurement
+  artefact rather than fast speech.
+- **Nothing here changes ranking**, and there's a test asserting scores and ordering are
+  untouched. The features are attached to every candidate — including the fallback path, so the
+  two selection paths can be compared on the same terms — so that `S1` can judge whether they
+  *should* influence ranking. Choosing a weight first would make an improvement and a regression
+  look identical.
+
+
 ### Fixed — invented transcript text reached captions and the selector (T3)
 
 - Whisper invents text over music, applause and silence, and gets stuck in decode loops that
