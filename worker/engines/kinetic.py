@@ -1686,7 +1686,23 @@ def plan_kinetic(
             continue                        # dropped by normalisation: words go too
         start = max(cue_start, float(segment.start), cursor)
         end = min(cue_end, float(segment.end))
-        if end <= start:
+        # A cue shaved below MIN_WORD_S is dropped, exactly as normalize_segments already drops
+        # one that arrives shorter than that (step 4, ``min_duration=MIN_WORD_S``).
+        #
+        # This was Property 12's long-standing counterexample. The disjointness cursor above runs
+        # *after* normalisation, so it could shave a cue's front down to a sliver - in the
+        # recorded failure, a single frame at 13 fps, 0.0769 s - and normalisation never saw the
+        # result. The cue was then kept, and the widening below cannot rescue a synthesised word
+        # inside it: there is nowhere to widen *into*, because the cue is itself shorter than the
+        # minimum. So the word shipped at 0.0769 s against a documented floor of 0.08, which is
+        # what P12 asserts against.
+        #
+        # Dropping is the right repair rather than relaxing the floor. Such a cue would be drawn
+        # for less than one frame at the fps that produced it, so it is not a cue anyone sees,
+        # and keeping it means emitting a word whose interval contradicts the contract every
+        # consumer reads. The alternative - widening the cue - cannot be done without overlapping
+        # the neighbour the cursor exists to protect.
+        if end - start < MIN_WORD_S:
             continue
         cursor = end
         kept.append((start, end, filled, lines))
