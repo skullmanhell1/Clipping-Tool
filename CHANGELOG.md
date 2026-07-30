@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — visual polish: framing, grading and motion (V5, V6, V8, V14, V16, V18, V19)
+
+- **`V16` — de-letterbox before reframing.** Source footage is very often already boxed: a 16:9
+  export inside a 1:1 frame, anything re-uploaded from another platform. Reframing that
+  *centred the crop on the bars* and baked black bands into the middle of the vertical output.
+  The content rectangle is now detected first and the crop is confined to it. Detection
+  deliberately skips the opening second, because an opening fade from black looks exactly like a
+  fully-letterboxed frame to `cropdetect` — probing from zero would crop the picture away
+  entirely. The cost of that choice is that clips shorter than the skip window go undetected,
+  which falls back to using the frame as-is.
+- **`V5` — split-screen tiles now move.** Each tile was frozen on the *mean* of its track's boxes
+  for the whole clip: a position the speaker occupied only on average, so anyone who leaned in
+  and back sat off-centre for most of the clip and anyone who moved was cropped out of their own
+  tile — while the single-speaker path has followed faces since v0.7.0. Each tile now gets its
+  own smoothed, clamped centre path.
+
+  The mechanism is worth recording. `sendcmd` addresses filters **by name**, and a split-screen
+  graph contains several `crop` filters, so the obvious implementation broadcasts every tile's
+  commands to every crop. Verified by building that version: the second tile stops moving
+  entirely. Each crop is therefore given an *instance* name (`crop@t0`, `crop@t1`).
+- **`V6` — three and four speakers.** Split-screen supported exactly two. More than two now lay
+  out as a 2-column grid rather than a stack: four tiles stacked in a 1080x1920 frame are
+  1080x480 slots — a 2.25:1 letterbox holding a crop of a face — whereas two columns give
+  540x960 portrait slots that match the shape of a head and shoulders. An odd final tile spans
+  the full width rather than leaving a black half-cell that reads as a dropped participant.
+  Landscape targets keep their side-by-side layout, which already produces portrait-shaped slots.
+- **`V8` — crop-update rate.** Was a hardcoded 12/s, visible as stepping when the subject moved
+  quickly. Now `REFRAME_COMMAND_FPS`, defaulting to 24. This only lengthens the `sendcmd` script;
+  the expensive part of reframing is face sampling, which has its own rate.
+- **`V18` — 3D LUTs.** `COLOR_LUT` applies a `.cube`/`.3dl` after the colour preset, for a look
+  the five presets cannot express — a house grade, or a client's brand LUT. After rather than
+  before, because a LUT maps final values; the reverse would feed its output back into a contrast
+  curve. A missing or non-LUT file is ignored rather than failing the render, since `lut3d`
+  rejects the whole filtergraph on a file it cannot parse.
+- **`V19` — eased and beat-synced zoom.** `ZOOM_EASE` replaces the linear Ken Burns ramp with a
+  smoothstep: a constant rate is the one thing a camera move never does, and on a long clip the
+  frame visibly creeps. Same start and end zoom; only the curve changes. `BEAT_SYNC_ZOOM` adds a
+  short scale bump at detected audio accents — onset detection over the energy envelope already
+  measured for `S2`, *not* beat tracking, so every bump sits on a real transient instead of an
+  estimated tempo (on speech-led footage there is often no tempo to track). The bump is a
+  *multiplier*, so it composes with Ken Burns and the opening punch instead of pushing the total
+  zoom past what either intended.
+- **`V14` — end card.** Clips ended the instant the speech did, wasting the one moment a viewer
+  has already decided to watch to the end. `END_CARD_TEXT` draws a call-to-action over the tail.
+  It is a libass event rather than `drawtext`, like every other piece of text here, so it
+  survives an ffmpeg built without freetype; it is a *standalone* ASS so it works with captions
+  off and with captions owned by the kinetic-typography engine; it does not fade out, because the
+  clip ends under it; and the hold is capped at half the clip so a 3-second clip does not become
+  an advert with a clip attached.
+
+`ZOOM_EASE`, `BEAT_SYNC_ZOOM`, `COLOR_LUT` and `END_CARD_TEXT` all default to the previously
+shipped behaviour, following the same convention as `TRANSITION_STYLE` and the `PROGRESS_BAR_*`
+settings. That is what keeps the v0.8.0 byte-parity gate meaningful: a new setting defaulting to
+on would force the goldens to be re-frozen each release and stop them detecting accidental
+change.
+
+One existing property test changed. `test_p16_split_screen_tiles_target_exactly` asserted that a
+portrait target always stacks full-width tiles, which `V6` makes false. It now checks the
+partition property layout-agnostically — non-overlapping, in-bounds, areas summing to the frame,
+which is sufficient for an exact cover — rather than pinning one arrangement.
+
 ### Added — clip selection now measures the audio and scores the opening (S2, S6, S10, S17)
 
 - **`S2` — audio energy.** One `astats` pass per source produces an RMS envelope at one reading
