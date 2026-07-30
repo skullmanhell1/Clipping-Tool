@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — clips could open mid-shot (S9)
+
+- Clip starts now snap to a nearby shot boundary. A clip beginning two seconds into a shot opens
+  on a fragment — half a gesture, the tail of a camera move — and reads as careless before the
+  viewer has heard a word. The `S1` harness showed the scale: at IoU 0.7, the threshold that asks
+  whether *boundaries* are right rather than whether the right moment was found, the selector
+  scored **zero across the board**.
+- **ffmpeg's scene score rather than PySceneDetect.** The plan names PySceneDetect and it is the
+  standard tool, but this needs one number — "is there a hard cut near here" — and ffmpeg is
+  already the dependency every other stage shells out to.
+- **Narrow windows, not a full scan.** Detection decodes video, so only a couple of seconds either
+  side of each candidate start is examined. Scanning an hour-long source to move a boundary by
+  under a second would be wildly disproportionate.
+- **Only the start moves, and only within a cap.** The ending is chosen for content reasons — a
+  punchline, a completed thought — so a shot change near it is not a reason to truncate. Beyond
+  the cap the boundary the selector chose is kept: moving a start several seconds to reach a cut
+  is not snapping, it is choosing a different moment.
+- **A documented blind spot.** ffmpeg scores scene change on luma, so a cut between two shots of
+  similar brightness is invisible to it. A test pins that deliberately so it is not later mistaken
+  for a regression. A missed cut leaves the boundary exactly where it was, which is the previous
+  behaviour.
+
+
 ### Fixed
 - **`.env.example` had drifted from the code.** `config.Settings` points at it for "the full
   list", but it documented 67 of 93 settings and carried one key —

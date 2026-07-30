@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from worker import scene_detect
 from worker import segmentation as seg
 from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
 from worker.models import ProcessingOptions
@@ -240,4 +241,6 @@ def select_moments(
     candidates.sort(key=lambda c: c.score, reverse=True)
     if max_clips is not None:
         candidates = candidates[:max_clips]
+    # S9: after capping, so a decode is only spent on clips that will actually be rendered.
+    scene_detect.snap_candidates(source_path, candidates)
     return candidates

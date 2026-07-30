@@ -201,6 +201,29 @@ class Settings(BaseSettings):
         default=60.0, description="Max wall-clock seconds for one ffprobe run; 0 = unbounded."
     )
 
+    # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
+    # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
+    # hard cuts and misses equiluminant ones - which is why every snap is capped and optional.
+    scene_snap_enabled: bool = Field(
+        default=True,
+        description="Snap clip starts to a nearby shot boundary (S9).",
+    )
+    scene_snap_threshold: float = Field(
+        default=0.3,
+        description="ffmpeg scene score above which a frame is treated as a hard cut (S9).",
+    )
+    scene_snap_window_s: float = Field(
+        default=2.0,
+        description="Seconds either side of a clip start to scan for a cut (S9). Narrow on "
+                    "purpose: detection decodes video, and scanning a whole source to move a "
+                    "boundary by under a second is disproportionate.",
+    )
+    scene_snap_max_shift_s: float = Field(
+        default=1.0,
+        description="Furthest a clip start may be moved to reach a cut (S9). Beyond this the "
+                    "boundary the selector chose is kept.",
+    )
+
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(
         default=BASE_DIR / "assets" / "emoji",
