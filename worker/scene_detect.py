@@ -83,6 +83,41 @@ def detect_cuts(
     return sorted(set(cuts))
 
 
+def scan_cuts(path: Any, *, threshold: Optional[float] = None) -> list[float]:
+    """Absolute times of every hard cut in the whole file (V4).
+
+    Distinct from :func:`detect_cuts`, which scans a narrow window around one candidate. S9
+    needs "is there a cut near here", cheaply, dozens of times; V4 needs the complete list once,
+    because reframe smooths a path across the entire clip and has to know about every cut in it.
+
+    Deliberately a separate function rather than ``detect_cuts`` with a huge window: the
+    narrow-window version exists precisely so a full decode is *avoided*, and quietly turning it
+    into one when the window is large enough would make the expensive path the easy mistake.
+
+    Returns ``[]`` on any failure, which restores the previous behaviour - smoothing straight
+    through cuts - rather than failing the clip.
+    """
+    threshold = float(settings.scene_snap_threshold if threshold is None else threshold)
+    command = [
+        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
+        "-i", str(path),
+        "-filter:v", f"select='gt(scene,{threshold:g})',metadata=print:file=-",
+        "-an", "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=900)
+    except Exception:
+        return []
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    cuts = []
+    for match in _PTS.finditer(text):
+        try:
+            cuts.append(round(float(match.group(1)), 3))
+        except ValueError:
+            continue
+    return sorted(set(cuts))
+
+
 def snap_start(
     start: float,
     end: float,

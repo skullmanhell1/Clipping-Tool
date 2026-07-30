@@ -20,13 +20,14 @@ status to the UI.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
-from worker import diarization, segmentation, visual_selection
+from worker import diarization, segmentation, subtitle_export, thumbnail, visual_selection
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 
@@ -44,6 +45,8 @@ from worker.engines.host import Engine_Host
 from worker.llm_client import BaseLLMClient
 from worker.models import ClipResult, ProcessingOptions, effective_options
 from worker.transcribe import Transcript, transcribe
+
+logger = logging.getLogger(__name__)
 
 # progress_cb(fraction: float, stage: str)
 ProgressCallback = Callable[[float, str], None]
@@ -446,9 +449,25 @@ def run_pipeline(
         # 6. thumbnail from the finished clip
         thumb = clips_dir / f"clip_{clip_id}.jpg"
         try:
-            fu.generate_thumbnail(final, thumb, at=min(1.0, c.duration / 2))
+            # V17: score a few candidate frames rather than taking a fixed position, which on a
+            # clip opening on a cut or a blink chose exactly the wrong still.
+            fu.generate_thumbnail(
+                final, thumb, at=thumbnail.choose_thumbnail_time(final, c.duration)
+            )
         except fu.FFmpegError:
             thumb = None
+
+        # 6a. O11: sidecar caption files alongside the clip, for platforms that accept uploaded
+        #     captions and for anyone who needs the text rather than the burn-in. Written from
+        #     the clip-relative words, so they are in sync with the file they sit next to.
+        if getattr(options, "subtitle_sidecar", False):
+            try:
+                subtitle_export.write_sidecars(words, final.with_suffix(""))
+            except OSError as exc:
+                # A sidecar is an extra, never a reason to lose a clip that has already cost
+                # minutes of CPU. Logged rather than swallowed, so a permissions problem is
+                # visible instead of appearing as silently missing files.
+                logger.warning("O11: could not write sidecar captions for %s: %s", final, exc)
 
         # 6b. POST-stage engines see the finished clip, then this clip's engine
         #     lifecycle is closed: durable artifacts are persisted BEFORE the
