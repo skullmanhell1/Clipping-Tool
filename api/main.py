@@ -51,6 +51,7 @@ from publishers.manager import get_publish_manager
 from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
+from worker import captions as cap
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.effects import broll, caption_presets
 
@@ -343,7 +344,16 @@ def info() -> dict[str, object]:
             "emoji_intensities": ["off", "subtle", "standard", "heavy"],
             "emoji_modes": ["keyword", "ai"],
             "caption_templates": ["karaoke", "boxed", "minimal"],
-            "caption_positions": ["bottom", "center", "top"],
+            # C13: nine positions, up from three. The original three stay first and keep their
+            # names, so a client that only knows them is unaffected.
+            "caption_positions": list(cap.VALID_CAPTION_POSITIONS),
+            # A4: the twelve vendored faces were shipped with licences and a manifest and
+            # nothing exposed them, so the only way to change a caption font was to edit a
+            # preset in source. Variable fonts are filtered out here rather than offered and
+            # then silently substituted (C1).
+            "caption_fonts": cap.available_fonts(),
+            # C12: the platform safe-area profiles a client may select.
+            "caption_safe_areas": list(cap.SAFE_AREA_INSETS.keys()),
             # Tier 1 — Creator Output Upgrade (additive; Reqs 1.4, 8.7, 22.3)
             "caption_presets": list(caption_presets.BUILTIN_PRESETS.keys()),
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],

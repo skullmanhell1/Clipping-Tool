@@ -111,6 +111,25 @@ class CaptionPreset:
     # C7: upper-case the caption text. Only the hook title was upper-cased before, so a
     # preset could not ask for the all-caps look that most short-form captions use.
     uppercase: bool = False
+    # C10: how much the active word grows, as a fraction. 0.0 disables it.
+    #
+    # A scale ramp on the spoken word was reachable only by choosing the ``pop`` *animation*,
+    # which also replaced whatever animation the preset wanted - so "karaoke sweep plus a punch
+    # on the active word", which is the mainstream short-form look, could not be expressed at
+    # all. This is a separate axis: any animation can now carry a punch, and the punch is not an
+    # animation choice.
+    punch_scale: float = 0.0
+    #: How long the punch takes to settle, in milliseconds. Short - a slow punch reads as a
+    #: zoom rather than an accent.
+    punch_ms: int = 110
+    # C15: letter-spacing and glyph scale, both hard-coded to 0/100 before.
+    #
+    # Tight tracking is a large part of why a heavy display face reads as designed rather than
+    # as default, and the condensed look several tools use is ScaleX below 100. Neither was
+    # expressible, so every preset had identical metrics whatever face it named.
+    spacing: int = 0
+    scale_x: int = 100
+    scale_y: int = 100
     # T7: how a word the model was unsure about is drawn.
     #
     # Captions assert every word with identical confidence, including the ones Whisper barely
@@ -158,6 +177,11 @@ class CaptionPreset:
             # so it would appear to work until reload and then revert with no error.
             "low_confidence_threshold": self.low_confidence_threshold,
             "low_confidence_alpha": self.low_confidence_alpha,
+            "punch_scale": self.punch_scale,
+            "punch_ms": self.punch_ms,
+            "spacing": self.spacing,
+            "scale_x": self.scale_x,
+            "scale_y": self.scale_y,
         }
 
     @classmethod
@@ -195,6 +219,11 @@ class CaptionPreset:
             low_confidence_alpha=float(
                 data.get("low_confidence_alpha", defaults.low_confidence_alpha)
             ),
+            punch_scale=float(data.get("punch_scale", defaults.punch_scale)),
+            punch_ms=int(data.get("punch_ms", defaults.punch_ms)),
+            spacing=int(data.get("spacing", defaults.spacing)),
+            scale_x=int(data.get("scale_x", defaults.scale_x)),
+            scale_y=int(data.get("scale_y", defaults.scale_y)),
         )
 
 
