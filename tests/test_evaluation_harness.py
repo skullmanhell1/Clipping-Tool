@@ -243,11 +243,13 @@ def test_random_baseline_is_seeded():
     assert [p.start for p in first] != [p.start for p in other]
 
 
-def test_longest_segment_baseline_reproduces_the_shipped_fallback():
-    """This baseline is also a measurement of a code path in production today.
+def test_longest_segment_baseline_ranks_by_duration_not_position():
+    """The longest-first floor S11's scoring has to beat.
 
-    ``worker.segmentation`` keeps the longest segments when it has to cap the count, so if the
-    LLM selector cannot beat this, the fallback is not a fallback - it is the product.
+    Until S11 this was also what the shipped fallback did when it capped the count. It no
+    longer is - the fallback now ranks on measured hook/pace/energy signals - so this baseline
+    is the *before* picture that makes S11's change measurable rather than a description of
+    current behaviour. It stays an independent implementation for exactly that reason.
     """
     segments = [Span(0, 10), Span(20, 80), Span(100, 130), Span(200, 500)]
     picked = baselines.longest_segment_baseline(segments, 2)
