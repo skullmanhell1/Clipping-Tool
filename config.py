@@ -565,6 +565,31 @@ class Settings(BaseSettings):
         default=30.0, description="TTL for cached storage area sizes; 0 = always recompute."
     )
 
+    # ---------------------------------------- caption details (C12, C22) ---
+    # C12: platform UI safe areas. The vertical caption margins were hard-coded at 220/200 and
+    # are not TikTok-aware, so a caption could sit under the username, the platform's own
+    # caption text or the action rail - unreadable, and invisible to the creator because the
+    # chrome is not in the rendered file. Empty means the generic profile, which reproduces the
+    # previous margins exactly.
+    caption_safe_area: str = Field(
+        default="",
+        description="Platform safe-area profile for caption margins (C12): tiktok | instagram "
+                    "| youtube | none. Empty uses the generic profile, which is identical to "
+                    "the previous hard-coded margins.",
+    )
+    caption_offset_px: int = Field(
+        default=0,
+        description="Extra pixels between the caption and its edge (C13). Positive only; a "
+                    "negative value would push text into the chrome the safe area avoids.",
+    )
+    # C22: burned captions are permanent, so masking is a publishing decision rather than a
+    # default - a creator whose voice is profane should not be censored by their own tool.
+    caption_mask_profanity: bool = Field(
+        default=False,
+        description="Mask profanity in burned captions (C22), keeping the first letter and the "
+                    "word's length so the sentence stays readable.",
+    )
+
     # ------------- speaker diarisation & multi-speaker reframe (v0.8.0) ----
     # Cap on distinct speakers produced by diarisation (least-represented
     # speakers are merged beyond this cap).

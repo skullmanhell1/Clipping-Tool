@@ -34,10 +34,45 @@ def test_plan_emoji_respects_spacing():
 
 
 def test_plan_emoji_heavy_allows_more():
-    words = [FakeWord(i * 0.5, i * 0.5 + 0.3, "fire") for i in range(8)]
+    """Intensity controls density.
+
+    The fixture used eight copies of the word "fire", which made this a test that spacing lets
+    more of the *same* glyph through - and A12 now deliberately forbids that, because the same
+    emoji twice in one clip is the most obvious way an automatic overlay looks automatic. The
+    keywords are distinct so the assertion is about intensity, which is what it is named for,
+    rather than about repetition.
+    """
+    keywords = ["love", "amazing", "wow", "money", "cash", "rich", "fire", "best"]
+    words = [FakeWord(i * 0.5, i * 0.5 + 0.3, k) for i, k in enumerate(keywords)]
     heavy = em.plan_emoji(words, 6.0, intensity="heavy")   # spacing 2.5s
     subtle = em.plan_emoji(words, 6.0, intensity="subtle")  # spacing 10s
     assert len(heavy) > len(subtle)
+
+
+def test_the_same_glyph_is_never_used_twice_in_one_clip():
+    """A12. Eight mentions of one topic get one emoji, not eight."""
+    words = [FakeWord(i * 4.0, i * 4.0 + 0.3, "fire") for i in range(8)]
+    cues = em.plan_emoji(words, 40.0, intensity="heavy")
+    assert len(cues) == 1, [c.char for c in cues]
+
+
+def test_the_count_is_capped_independently_of_spacing():
+    """A12. Spacing alone scales with clip length, so a long clip could satisfy every gap and
+    still carry sixty emoji."""
+    keywords = list(em.KEYWORD_EMOJI)[:60]
+    words = [FakeWord(i * 3.0, i * 3.0 + 0.3, k) for i, k in enumerate(keywords)]
+    cues = em.plan_emoji(words, 180.0, intensity="heavy")
+    assert len(cues) <= em._emoji_cap("heavy", 180.0)
+
+
+def test_the_emoji_lands_on_the_more_salient_word():
+    """A11. The old rule took whichever mapped word arrived first after the stopwatch."""
+    words = [FakeWord(0.2, 0.6, "best"), FakeWord(0.7, 1.1, "money")]
+    cues = em.plan_emoji(words, 20.0, intensity="subtle")
+    assert len(cues) == 1
+    assert cues[0].char == em.KEYWORD_EMOJI["money"], (
+        "the filler-ish word took the slot the substantive one wanted"
+    )
 
 
 def test_ai_mode_uses_llm_map():
