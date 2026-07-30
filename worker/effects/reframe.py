@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from config import settings
 
@@ -30,6 +30,7 @@ from config import settings
 # association path; importing it here keeps the module self-describing without
 # creating a hard runtime dependency cycle (diarization imports nothing from
 # this module).
+from worker import scene_detect
 from worker.diarization import Speaker_Turn
 from worker.ffmpeg_utils import ASPECT_PRESETS, FFmpegError, _run, h264_args, probe
 
@@ -85,22 +86,66 @@ def pick_main_face(faces: list[tuple[int, int, int, int]]) -> Optional[tuple[flo
     return (x + w / 2.0, y + h / 2.0)
 
 
-def ema_smooth(values: list[float], alpha: float = 0.35) -> list[float]:
-    """Exponential moving-average smoothing of a 1-D sequence."""
+def ema_smooth(
+    values: list[float],
+    alpha: float = 0.35,
+    *,
+    reset_at: Sequence[int] = (),
+) -> list[float]:
+    """Exponential moving-average smoothing of a 1-D sequence.
+
+    ``reset_at`` holds indices at which the average restarts from the incoming value instead of
+    blending with the previous one - V4's shot-change reset. Without it the EMA carries the
+    previous shot's framing across a cut and then converges on the new one over the following
+    second or so, which on screen is a slow drift immediately after every cut: the crop appears
+    to be searching for the subject. The subject did not move; the camera changed, and the right
+    response to a discontinuity in the input is a discontinuity in the output.
+    """
     if not values:
         return []
+    breaks = {int(i) for i in reset_at}
     out = [values[0]]
-    for v in values[1:]:
-        out.append(alpha * v + (1 - alpha) * out[-1])
+    for index, v in enumerate(values[1:], start=1):
+        if index in breaks:
+            out.append(v)
+        else:
+            out.append(alpha * v + (1 - alpha) * out[-1])
     return out
 
 
-def smooth_centers(samples: list[Center], alpha: float = 0.35) -> list[Center]:
-    """Smooth the x/y paths of ``samples`` independently with an EMA."""
+def cut_indices(samples: Sequence[Center], cuts: Sequence[float]) -> list[int]:
+    """Sample indices that are the first on the far side of a cut (V4).
+
+    Pure, so the mapping can be tested without ffmpeg. A cut before the first sample or after
+    the last produces no index: there is no boundary *within* the series to reset at, and index
+    0 already starts the average fresh.
+    """
+    if not samples or not cuts:
+        return []
+    indices: list[int] = []
+    for cut in sorted(float(c) for c in cuts):
+        for index in range(1, len(samples)):
+            if samples[index - 1].t < cut <= samples[index].t:
+                indices.append(index)
+                break
+    return sorted(set(indices))
+
+
+def smooth_centers(
+    samples: list[Center],
+    alpha: float = 0.35,
+    *,
+    cuts: Sequence[float] = (),
+) -> list[Center]:
+    """Smooth the x/y paths of ``samples`` independently with an EMA.
+
+    ``cuts`` are absolute shot-change times; the average restarts at each (V4).
+    """
     if not samples:
         return []
-    xs = ema_smooth([s.cx for s in samples], alpha)
-    ys = ema_smooth([s.cy for s in samples], alpha)
+    breaks = cut_indices(samples, cuts)
+    xs = ema_smooth([s.cx for s in samples], alpha, reset_at=breaks)
+    ys = ema_smooth([s.cy for s in samples], alpha, reset_at=breaks)
     return [Center(s.t, x, y) for s, x, y in zip(samples, xs, ys)]
 
 
@@ -635,7 +680,15 @@ def apply_reframe(
     if not samples:
         raise ReframeUnavailable("no faces detected")
 
-    smoothed = smooth_centers(samples, alpha=smoothing)
+    # V4: reset the smoother at every shot change, so the crop does not drift across a cut.
+    # One extra video-only decode of a clip-length file, and only when reframing is already
+    # running - which has itself just decoded the clip to find faces, so this is not the pass
+    # that makes reframe expensive.
+    cuts: list[float] = []
+    if getattr(settings, "reframe_reset_on_cut", True):
+        cuts = scene_detect.scan_cuts(video)
+
+    smoothed = smooth_centers(samples, alpha=smoothing, cuts=cuts)
     dense = resample_centers(smoothed, command_fps, info.duration)
     script = build_sendcmd(dense, crop_w, crop_h, info.width, info.height)
 

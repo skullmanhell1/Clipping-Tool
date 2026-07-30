@@ -125,12 +125,51 @@ def aac_args() -> list[str]:
 
 # Common target aspect ratios keyed by the UI values, mapped to (w, h) at a
 # canonical short-form resolution.
+#
+# These stay the 1080-class values they always were, because a great deal of code and a great
+# many tests read them as the canonical mapping. O5/O9 scale them at the point of use via
+# :func:`aspect_size`, which is the one place a resolution choice needs to exist.
 ASPECT_PRESETS: dict[str, tuple[int, int]] = {
     "9:16": (1080, 1920),
     "1:1": (1080, 1080),
     "16:9": (1920, 1080),
     "4:5": (1080, 1350),
 }
+
+#: The reference short side the values above are expressed at.
+BASE_SHORT_SIDE = 1080
+
+#: Selectable output resolutions, named by their short side (O9).
+#:
+#: 720 for a machine that cannot afford 1080 encodes, 1080 as the short-form consensus, 1440
+#: and 2160 for sources that genuinely have the detail. Anything else is rejected rather than
+#: rounded, because a resolution nobody chose is worse than an error.
+OUTPUT_SHORT_SIDES: tuple[int, ...] = (720, 1080, 1440, 2160)
+
+
+def aspect_size(aspect: str, short_side: int | None = None) -> tuple[int, int]:
+    """The output ``(width, height)`` for ``aspect`` at the configured resolution (O5, O9).
+
+    Resolution was fixed at the 1080-class values in :data:`ASPECT_PRESETS` with no way to ask
+    for anything else - so a phone-shot 4K source was downscaled with no option to keep it, and
+    a low-powered host had no way to trade quality for encode time.
+
+    Both dimensions are forced **even**, because libx264's 4:2:0 chroma subsampling requires it
+    and an odd dimension fails the encode outright rather than degrading.
+    """
+    if aspect not in ASPECT_PRESETS:
+        raise ValueError(f"Unknown aspect '{aspect}'. Valid: {sorted(ASPECT_PRESETS)}")
+    base_w, base_h = ASPECT_PRESETS[aspect]
+    if short_side is None:
+        short_side = int(getattr(settings, "output_short_side", BASE_SHORT_SIDE))
+    if short_side not in OUTPUT_SHORT_SIDES:
+        short_side = BASE_SHORT_SIDE
+    if short_side == BASE_SHORT_SIDE:
+        return base_w, base_h
+    scale = short_side / float(min(base_w, base_h))
+    width = int(round(base_w * scale))
+    height = int(round(base_h * scale))
+    return width - (width % 2), height - (height % 2)
 
 
 @dataclass
@@ -315,11 +354,62 @@ def cut_segment(
     return dest
 
 
+#: How the area around a fitted frame is filled (V11).
+#:
+#: The background used to be one hard-coded look: ``boxblur=40:1`` plus ``eq=brightness=-0.1``.
+#: It suits talking-head footage and actively hurts other things - a blurred screen recording is
+#: an unreadable smear, and gameplay footage becomes visual noise competing with the clip.
+BACKGROUND_STYLES: tuple[str, ...] = ("blur", "mirror", "black", "color", "gradient")
+
+
+def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -> str:
+    """The filter chain producing the background layer, given ``[bg]`` as its input.
+
+    Each style ends with a single ``[bgb]`` output so the caller's overlay is unchanged.
+
+    * ``blur`` - the original: cover, crop, blur, darken slightly.
+    * ``mirror`` - cover and crop, then flip horizontally. Reads as intentional where a blur
+      reads as a mistake, and it keeps the frame's own colour and motion.
+    * ``black`` - true letterbox. The honest choice for a screen recording, where any
+      derived background is a distraction from text the viewer is trying to read.
+    * ``color`` - a flat brand colour.
+    * ``gradient`` - a vertical darkening of the covered frame, so the fitted video sits in
+      light and the edges fall away. Implemented with ``geq`` on luma only, so hue is
+      untouched; a full RGB gradient would shift the source's colour.
+    """
+    cover = f"scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th}"
+    if style == "mirror":
+        return f"[bg]{cover},hflip[bgb];"
+    if style == "black":
+        # The source is discarded rather than blurred: nothing derived from it is wanted.
+        return f"[bg]scale={tw}:{th},drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[bgb];"
+    if style == "color":
+        return (
+            f"[bg]scale={tw}:{th},"
+            f"drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill[bgb];"
+        )
+    if style == "gradient":
+        return (
+            f"[bg]{cover},boxblur=luma_radius=20:luma_power=1,"
+            # Darkens with vertical position: full at the top, 45% at the bottom.
+            f"geq=lum='p(X,Y)*(1-0.55*Y/H)':cb='p(X,Y)':cr='p(X,Y)'[bgb];"
+        )
+    # blur, and the fallback for an unknown style - the previous behaviour, so an unrecognised
+    # value degrades to what shipped before rather than to no background at all.
+    return (
+        f"[bg]{cover},boxblur=luma_radius=40:luma_power=1,"
+        f"eq=brightness=-0.1[bgb];"
+    )
+
+
 def reformat_aspect(
     source: str | Path,
     dest: str | Path,
     aspect: str = "9:16",
     mode: str = "crop_blur",
+    *,
+    background: str = "blur",
+    background_color: str = "0x0F172A",
 ) -> Path:
     """Reformat ``source`` to a target ``aspect`` ratio.
 
@@ -340,11 +430,8 @@ def reformat_aspect(
     Returns:
         The ``dest`` path.
     """
-    if aspect not in ASPECT_PRESETS:
-        raise ValueError(
-            f"Unknown aspect '{aspect}'. Valid: {sorted(ASPECT_PRESETS)}"
-        )
-    tw, th = ASPECT_PRESETS[aspect]
+    # O5/O9: the size comes from the configured resolution rather than the 1080-class literal.
+    tw, th = aspect_size(aspect)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -355,14 +442,10 @@ def reformat_aspect(
             f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
         )
     elif mode == "crop_blur":
-        # Background: cover the frame with a zoomed, blurred copy.
-        # Foreground: scale to fit fully inside, overlaid centred.
-        # The two are combined with a filter graph via split.
+        # Background per V11; foreground scaled to fit fully inside and overlaid centred.
         vf = (
             f"split=2[bg][fg];"
-            f"[bg]scale={tw}:{th}:force_original_aspect_ratio=increase,"
-            f"crop={tw}:{th},boxblur=luma_radius=40:luma_power=1,"
-            f"eq=brightness=-0.1[bgb];"
+            f"{background_chain(background, tw, th, color=background_color)}"
             f"[fg]scale={tw}:{th}:force_original_aspect_ratio=decrease[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
         )

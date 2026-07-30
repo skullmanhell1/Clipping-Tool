@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the hard-coded look becomes a choice (V9, V11, V13, O5, O9, O11)
+
+- **`V11` — letterbox background styles.** The background was one look: `boxblur=40` plus a
+  slight darkening. It suits talking-head footage and actively hurts other things — a blurred
+  screen recording is an unreadable smear. Now `blur | mirror | black | color | gradient`.
+  `black` is the honest choice for a screen recording, where any derived background competes with
+  text the viewer is reading; `mirror` reads as intentional where a blur reads as a mistake.
+- **`V13` — progress bar position and style.** It was a 12px bar in one cyan, always at the
+  bottom — where on a 9:16 clip it sits directly under the captions. `top` exists for that
+  reason rather than for variety. The new `track` style adds a dim full-width rail, so how much
+  is *left* is visible and not only how much has passed.
+- **`V9` — opening transition styles**: `punch_in` (the original), `zoom_cut` (a step with no
+  easing, so it reads as an edit rather than a movement), `whip_pan` (a lateral slide that
+  decelerates into place) and `dissolve`. **Note on scope:** the plan asks for *clip-to-clip*
+  transitions, and there is nowhere in this product for one to live — every clip is an
+  independent deliverable published separately, and a transition needs two shots that meet. What
+  those named effects can be here is the treatment of a clip's own opening, which is where they
+  would be seen anyway.
+- **`O5`/`O9` — output resolution is selectable**: 720, 1080, 1440 or 2160 by short side. It was
+  fixed at the 1080-class values, so a 4K source was always downscaled and a low-powered host
+  could not trade quality for encode time. Both dimensions are forced even, since libx264's 4:2:0
+  subsampling requires it and an odd dimension fails the encode outright.
+- **`O11` — sidecar `.srt` / `.vtt` export**, alongside the burn-in rather than instead of it.
+  Burn-in is right for short-form, but it is not the only thing captions are for: a sidecar is
+  what lets a platform show selectable captions and lets a viewer using a screen reader reach the
+  text at all. Two formats because they are not interchangeable — they differ in timestamp
+  separator, a mandatory header, and escaping, and each difference breaks a player silently
+  rather than raising. Sidecar cues are grouped longer than the burned ones: three-word cues are
+  right read at full width in a glance and flicker once a second in a player's own small type.
+
+### Changed
+
+- **`V4` — reframe tracking resets at shot changes.** The EMA smoother carried the previous
+  shot's framing across a cut and converged on the new one over the following second, which reads
+  on screen as the crop *searching* for the subject after every cut. The subject did not move; the
+  camera changed, and the right response to a discontinuity in the input is a discontinuity in the
+  output.
+- **`V17` — the thumbnail frame is chosen, not assumed.** It was taken at
+  `min(1.0, duration / 2)` — a fixed position with no relationship to what is in the frame, so a
+  clip opening on a cut or a blink had exactly that as the still representing it everywhere.
+  Three candidates are now scored on sharpness (motion blur is the most common way an automatic
+  thumbnail looks bad, and unlike a dark frame it is unrecoverable) and on mid-range exposure, so
+  a blown-out frame loses as heavily as a black one. Deliberately no face detection: the only
+  detector available is the 2001-era cascade `V2` exists to replace, and its false positives on
+  texture would actively mislead this.
+
+### Fixed — the long-standing kinetic Property 12 counterexample
+
+- A synthesised caption word could ship **shorter than its documented `MIN_WORD_S` floor** — 0.0769 s
+  against 0.08 at 13 fps. The cause was not the widening arithmetic that previous analysis
+  suspected: the disjointness cursor in planner step 5 runs *after* `normalize_segments` has
+  dropped sub-minimum cues, so it could shave a cue's front down to a single frame that
+  normalisation never saw. The widening below then had nowhere to widen *into*, because the cue
+  was itself shorter than the minimum.
+- Such a cue is now dropped, matching the rule normalisation already applies. Dropping rather than
+  relaxing the floor, because a cue that short is drawn for less than one frame — nobody sees it —
+  whereas keeping it means emitting a word whose interval contradicts the contract every consumer
+  reads. Verified over an 810-configuration deterministic fps sweep (0 violations), and confirmed
+  load-bearing by reverting it.
+
 ### Changed — one name for the shared encoder arguments
 
 - Two branches independently centralised the duplicated libx264 flags, under two names:

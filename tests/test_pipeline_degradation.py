@@ -1513,6 +1513,28 @@ def test_p34_all_engines_off_reproduces_v080_exactly(p34_default_registry_restor
     """
     import worker.pipeline as pl
 
+    # V17's candidate scoring is switched off for this comparison, as the audio mastering
+    # stages already are in ``tests/test_kinetic_compositor.py``'s goldens and for the same
+    # reason: this test is a statement about *engines* being inert (Req 23.1), and it uses
+    # pass-for-pass equality with a reconstructed v0.8.0 pipeline as its mechanism. Smart
+    # thumbnail selection genuinely adds ffmpeg passes, so leaving it on would make this fail
+    # for a reason that says nothing about engines.
+    #
+    # The tradeoff, named rather than hidden: each pipeline stage switched off here is a stage
+    # this gate stops covering. V17 is covered directly by
+    # ``tests/test_visual_and_encoding.py``, including that disabling it restores the exact
+    # previous frame choice. If you would rather this gate absorb pipeline changes and act as a
+    # full-output pin, that is a defensible alternative and a small change.
+    _settings_backup = pl.settings.smart_thumbnail
+    pl.settings.smart_thumbnail = False
+    try:
+        _run_p34_body(pl, data)
+    finally:
+        pl.settings.smart_thumbnail = _settings_backup
+
+
+def _run_p34_body(pl, data):
+    """The body of P34, extracted so the settings guard above stays readable."""
     # Per-example isolation of the two process-wide engine singletons. The default
     # registry is no longer empty at rest — ``worker/pipeline.py`` imports
     # ``worker/engines/loader.py``, which registers the shipped engines
