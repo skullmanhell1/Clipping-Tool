@@ -214,6 +214,50 @@ class Settings(BaseSettings):
                     "frame rate are resampled to this, which is what keeps burned captions "
                     "in sync.",
     )
+    # O4: a VBV ceiling for delivered clips. -crf sets a quality target with no bitrate
+    # limit, so a busy clip can balloon past a platform's file-size cap and be rejected.
+    output_max_bitrate_kbps: int = Field(
+        default=12000,
+        description="Peak video bitrate for delivered clips in kbit/s (O4); -bufsize is "
+                    "twice this. Generous for 1080x1920 at 30 fps, so it only engages on "
+                    "genuinely complex footage.",
+    )
+    # AU8: neither was set anywhere, so output sample rate and channel count were whatever
+    # the source happened to be - 44.1 kHz mono from a phone, 48 kHz 5.1 from a camera.
+    output_sample_rate: int = Field(
+        default=48000, description="Output audio sample rate in Hz (AU8)."
+    )
+    output_channels: int = Field(
+        default=2, description="Output audio channel count (AU8); 2 = stereo."
+    )
+    # AU1: loudness targets. A clip quieter than the platform's target gets turned *up* on
+    # playback, which amplifies its noise floor along with the speech; one louder is turned
+    # down, losing the headroom it was mastered with.
+    loudness_target_lufs: float = Field(
+        default=-14.0,
+        description="Integrated loudness target in LUFS for platforms without a specific "
+                    "target (AU1). YouTube is about -14; TikTok and Instagram sit nearer "
+                    "-11, and are set per platform in worker.effects.audio.",
+    )
+    loudness_true_peak_db: float = Field(
+        default=-1.0,
+        description="True-peak ceiling in dBTP for loudness normalisation (AU1). -1 leaves "
+                    "headroom for the lossy encoder, which can overshoot the sample peak.",
+    )
+    # AU2: how hard the music bed is pushed down while someone is speaking.
+    # V10: filler removal joins the kept segments sample-exactly, so every seam was a step
+    # discontinuity in the waveform - the click you hear at each removed "um".
+    filler_seam_fade_ms: int = Field(
+        default=12,
+        description="Audio fade length in milliseconds at each filler-removal seam (V10). "
+                    "Long enough to remove the click, short enough not to be audible as a "
+                    "fade; 0 disables it and restores the hard cut.",
+    )
+    music_duck_ratio: float = Field(
+        default=8.0,
+        description="Compression ratio for ducking music under speech (AU2). Higher ducks "
+                    "harder; 1.0 disables ducking and restores the flat mix.",
+    )
 
     # ------------------------------------------------------------ assets ---
     emoji_assets_dir: Path = Field(

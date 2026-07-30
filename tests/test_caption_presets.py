@@ -557,3 +557,135 @@ def test_the_legacy_karaoke_sweep_and_the_preset_highlight_agree():
 
     assert captions.HIGHLIGHT_COLOUR == CaptionColors().highlight
     assert captions.HIGHLIGHT_COLOUR != "&H0000FF00", "green is the value C4 removed"
+
+
+
+# ===========================================================================
+# C11 follow-up — the budget is per cue, not per clip
+# ===========================================================================
+# The first C11 fix applied the budget to the whole word list a caller passed in. That is
+# not what emphasis means: the strongest few words in a clip tend to sit near each other, so
+# a real render (found by scripts/smoke_reel.py) put two highlights in the opening cue and
+# none in the four that followed. A viewer reads one cue at a time, so "the important word"
+# is a question about the cue in front of them.
+def _timed(words, *, step=0.45, length=0.4):
+    """Words spaced closely enough that ``words_to_cues`` groups them by its word limit.
+
+    The gap matters: ``words_to_cues`` starts a new cue on a gap over 0.6 s, so a fixture
+    spaced near that threshold groups unpredictably (floating-point noise around 0.6 puts
+    consecutive gaps on either side of it). 0.45 s keeps every gap unambiguously under.
+    """
+    return [FakeWord(i * step, i * step + length, text) for i, text in enumerate(words)]
+
+
+def test_emphasis_is_spread_across_cues_not_clustered_in_one():
+    """The defect this follow-up fixes, stated directly."""
+    from worker import captions
+    from worker.effects.caption_presets import plan_keywords
+
+    # Nine content words -> three cues at the three-word limit.
+    words = _timed([
+        "revolutionary", "changed", "everything",
+        "profits", "doubled", "overnight",
+        "nobody", "expected", "results",
+    ])
+    cues = captions.words_to_cues(words)
+    assert len(cues) == 3, [len(c.words) for c in cues]
+
+    emphasised = plan_keywords(words, use_ai=False)
+
+    # One per cue: with a clip-wide budget these nine words yielded two highlights, both in
+    # the first cue, and nothing at all in the other two.
+    per_cue = []
+    seen = 0
+    for cue in cues:
+        indices = range(seen, seen + len(cue.words))
+        per_cue.append(sum(1 for i in indices if i in emphasised))
+        seen += len(cue.words)
+    assert per_cue == [1, 1, 1], per_cue
+
+
+def test_a_cue_with_nothing_worth_emphasising_gets_nothing():
+    """The budget is a ceiling, not a quota. A cue of stopwords must stay plain."""
+    from worker.effects.caption_presets import plan_keywords
+
+    words = _timed(["and", "the", "of", "revolutionary", "profits", "doubled"])
+    emphasised = plan_keywords(words, use_ai=False)
+    assert emphasised, "the content-word cue should still be emphasised"
+    assert not (emphasised & {0, 1, 2}), "a stopword was emphasised to fill a quota"
+
+
+def test_a_lone_word_cue_must_earn_its_emphasis():
+    """Emphasis is contrast, and a one-word cue has nothing to contrast with.
+
+    Rapid speech with pauses produces runs of one-word cues. A flat floor of one highlight
+    per cue would emphasise every one of them, which is the original C11 defect - everything
+    highlighted, therefore nothing - reintroduced one cue at a time.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    # A number is emphatic in itself, so it still pops when it is the only word.
+    assert plan_keywords([FakeWord(0.0, 0.4, "$5000")], use_ai=False) == {0}
+    assert plan_keywords([FakeWord(0.0, 0.4, "NASA")], use_ai=False) == {0}
+    # Merely being a long content word is a comparative signal, and there is nothing here to
+    # compare it to.
+    assert plan_keywords([FakeWord(0.0, 0.4, "interesting")], use_ai=False) == set()
+
+
+def test_widely_spaced_weak_words_are_not_all_emphasised():
+    """The degenerate case in full: every word its own cue, none of them remarkable.
+
+    Before the lone-word rule this returned one highlight per cue - six of six words.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [FakeWord(i * 2.0, i * 2.0 + 0.4, "words") for i in range(6)]
+    emphasised = plan_keywords(words, use_ai=False)
+    assert emphasised == set(), f"{len(emphasised)} of 6 unremarkable words emphasised"
+
+
+def test_grouping_survives_words_that_cannot_be_grouped():
+    """``plan_keywords`` is total, and is handed adversarial words by the property tests.
+
+    ``words_to_cues`` reads ``.text``/``.start``/``.end`` and has no reason to survive a word
+    missing them, so grouping failure must fall back to one group rather than propagate.
+    """
+    from worker.effects.caption_presets import _cue_index_groups, plan_keywords
+
+    class Hostile:
+        text = "revolutionary"          # eligible, but no timings at all
+
+    hostile = [Hostile(), Hostile()]
+    assert _cue_index_groups(hostile) == [[0, 1]]
+    plan_keywords(hostile, use_ai=False)   # must not raise
+
+    assert _cue_index_groups([]) == [[]]
+    assert plan_keywords([], use_ai=False) == set()
+
+
+def test_empty_text_words_do_not_lose_their_cue():
+    """``words_to_cues`` drops empty-text words; the index mapping must not drift.
+
+    The indices returned are positions in the *caller's* list, and the renderer walks that
+    same list, so an off-by-one here highlights the wrong word.
+    """
+    from worker.effects.caption_presets import plan_keywords
+
+    words = [
+        FakeWord(0.00, 0.40, ""),          # dropped by words_to_cues
+        FakeWord(0.45, 0.85, "revolutionary"),
+        FakeWord(0.90, 1.30, "and"),
+    ]
+    assert plan_keywords(words, use_ai=False) == {1}
+
+
+def test_emphasis_remains_a_pure_function_of_its_input():
+    """Grouping adds a second ordering step; determinism still has to hold."""
+    from worker.effects.caption_presets import plan_keywords
+
+    words = _timed([
+        "revolutionary", "changed", "everything", "$42", "profits", "doubled", "AI", "won",
+    ])
+    first = plan_keywords(words, use_ai=False)
+    assert first
+    assert all(plan_keywords(words, use_ai=False) == first for _ in range(5))

@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — audio was never mastered (AU1, AU2, AU8)
+
+Verified absent across the whole repository before this: no `loudnorm`, no `dynaudnorm`, no
+`sidechaincompress`, no LUFS target, no `-ar`/`-ac`. Music was mixed at a flat `volume=0.12`.
+
+- **Loudness is normalised to the target platform's level** (`AU1`), two-pass: an analysis
+  pass measures the source, then one linear gain reaches the target without touching
+  dynamics. A clip quieter than the platform's target is turned *up* on playback, lifting its
+  noise floor along with the speech; a louder one is turned down, losing the headroom it was
+  mastered with. Targets are per platform because the platforms differ — YouTube about
+  −14 LUFS, TikTok and Instagram nearer −11 — with a −1 dBTP ceiling so the lossy encoder
+  has room. Failure to measure degrades to the source's own level and records
+  `loudness_degraded:unmeasurable` rather than failing the clip.
+- **Music ducks under speech** with `sidechaincompress` (`AU2`). A flat bed has no good
+  level: loud enough to hear between sentences is loud enough to fight the speech during
+  them, and quiet enough not to fight it is inaudible — no music, at the cost of an extra
+  encode. `MUSIC_DUCK_RATIO=1.0` restores the flat mix.
+- **Output sample rate and channel count are pinned** to 48 kHz stereo (`AU8`). Neither was
+  set anywhere, so output was whatever the source happened to be: 44.1 kHz mono from a
+  phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
+  decoder sees it first, if at all.
+
+### Fixed — keyword emphasis is budgeted per cue, not per clip (C11 follow-up)
+
+- The first `C11` fix replaced an absolute confidence threshold with a salience ranking and a
+  budget, but applied that budget to the whole word list a caller passed in. The strongest few
+  words in a clip tend to sit near each other, so emphasis clustered: `scripts/smoke_reel.py`
+  rendered a clip with **two highlights in the opening cue and none in the four after it**.
+  A viewer reads one cue at a time, so "the important word" is a question about the cue in
+  front of them — the budget now applies per cue, and the same clip gets one emphasis in each.
+- **A one-word cue has to earn its emphasis.** A flat floor of one highlight per cue would
+  emphasise every single-word cue, and rapid speech with pauses produces runs of them — which
+  reinstates the original defect (everything highlighted, therefore nothing) one cue at a
+  time. A number or an ALL-CAPS run still pops, because those are emphatic in themselves
+  rather than by comparison; a merely long word does not.
+- Grouping uses the renderer's own `words_to_cues`, so emphasis is budgeted against the cues
+  actually drawn. Failure to group falls back to a single group, because `plan_keywords` is
+  handed adversarial word objects by the property tests and must stay total.
+
+### Added — approve and retry are reachable from the dashboard (PB2)
+
+- `/api/publish-attempts/{id}/approve` and `/retry` existed with **zero references anywhere
+  in `frontend/src/`**. Three of the five publishers can return `review_required` — Instagram
+  and X without direct-publish approval, Whop when the upload cannot be attached to a target —
+  so an attempt in that state stopped permanently and the only way out was a hand-written HTTP
+  request. The history table now offers both actions.
+- They stay **separate controls**, not one "resume" button. Approve escalates a held
+  submission into a live post; retry re-runs it exactly as submitted, for an expired token or a
+  network blip. One button would have to guess, and guessing wrong publishes something that was
+  deliberately withheld. Approve is offered only for `review_required`; retry for
+  `review_required` and `failed`; neither for a published or in-flight attempt, since re-posting
+  a published clip duplicates it on a real account.
+- 9 frontend tests cover the state gating, that each action calls only its own endpoint, error
+  surfacing, and double-click protection.
+
+### Fixed — filler removal left audible clicks (V10)
+
+- Each kept segment now gets a few milliseconds of audio fade at its cut edges. `concat` joined
+  segments sample-exactly, so every removed "um" was a step discontinuity in the waveform —
+  measured on a continuous tone, the largest sample-to-sample jump at the seam drops from
+  **164 to 19**.
+- Deliberately **not** `acrossfade`: crossfading overlaps segments, so the result is shorter
+  than the sum of its parts at every seam, and `rebase_words` maps caption timings onto the kept
+  timeline using cumulative segment durations. An overlap would drift captions out of sync by a
+  growing amount across the clip — a worse artefact than the click. Video cuts stay hard; a jump
+  cut is normal short-form grammar.
+
+### Added — measurement (M2, M6)
+
+- **`scripts/smoke_reel.py`** renders one clip with every effect on, prints the effect markers
+  (flagging degradations) and the before/after loudness, and lists what to look at. Explicitly
+  not a test: it asserts nothing about appearance, because the defects it exists to catch —
+  a wrong font, a soft emoji, a drone instead of music — are only visible to a person.
+- **A loudness gate on rendered output** (`M6`): renders through the real compositor and fails
+  if the result is more than 1.5 LU from its platform target, in both directions.
+
+### Added — clips are checked before they are uploaded (O10)
+
+- **The only pre-flight in the publish path was `video_path.exists()`.** Nothing checked
+  aspect, duration, resolution, file size, codec or frame rate, so a clip a platform would
+  refuse was discovered *by uploading it*: the failure arrived as whatever that platform's
+  API chose to say, after spending an upload attempt and a rate-limit slot. `publishers/
+  preflight.py` now validates against per-platform limits first, and a rejected clip never
+  reaches the publisher.
+- **Errors block, warnings do not.** A wrong codec or an over-limit duration should not cost
+  an upload attempt to discover. A landscape clip going somewhere that prefers 9:16 will
+  publish letterboxed, and that is the user's call — blocking it would be us overruling them
+  on taste.
+- The limits are deliberately looser than the strictest figure each platform advertises, so
+  a *false* rejection is unlikely. They are approximations collected in one place, not a
+  specification: platform limits change without notice and differ by account tier. Since the
+  publishers have never run against a live platform (`PB1`), none of this has been confirmed
+  against a real rejection — it guards against obvious mistakes, it does not certify.
+
+### Fixed — clips no longer open on dead air (AU7)
+
+- Leading and trailing silence is trimmed from each clip by moving the **cut points**, which
+  costs no extra pass and keeps video and audio in step by construction (filtering the audio
+  alone would desynchronise them). Capped at 1.25 s per edge: `silencedetect` reports a
+  *pause*, and a pause at a boundary is often the breath before the first word or the beat
+  after a punchline. Silence in the middle of a clip is speech rhythm and is left alone.
+- Unlike `filler_removal`, this only moves boundaries and cannot cut anything out of the
+  middle, which is why it is a safe default and filler removal is not.
+
+### Fixed — a busy clip could balloon past platform size limits (O4)
+
+- `-maxrate`/`-bufsize` VBV caps on delivered clips. `-crf` sets a *quality* target with no
+  bitrate ceiling, so confetti, fast pans, grain or a gameplay scene could produce a file a
+  platform rejects on upload. Off for intermediates, which would only lose quality the final
+  pass could have used.
+
+
 ## [0.11.0] - 2026-07-29
 
 A minor bump rather than a patch: the visible output of a default run changes. No API

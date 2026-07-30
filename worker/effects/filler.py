@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import settings
-from worker.ffmpeg_utils import _run, h264_args
+from worker.ffmpeg_utils import _run, aac_args, h264_args
 
 # Disfluencies removed by default. Kept deliberately conservative so real words
 # (e.g. "like" as a verb) are never cut.
@@ -179,6 +179,37 @@ def rebase_words(words: list, keeps: list[Interval]):
     return out
 
 
+def _seam_fades(duration: float, fade_s: float, *, lead: bool, tail: bool) -> str:
+    """Short audio fades at a kept segment's cut edges (V10).
+
+    ``concat`` joins segments sample-exactly, so each seam is a step discontinuity in the
+    waveform — the click you hear at every removed "um". A few milliseconds of fade either
+    side of the join removes the step without being audible as a fade.
+
+    Deliberately *not* ``acrossfade``, which is the other obvious fix: crossfading overlaps
+    the segments, so the result is shorter than the sum of its parts by the overlap at every
+    seam. The pipeline rebases word timings and speaker turns onto the kept timeline through
+    :func:`rebase_words`, whose offsets are cumulative segment durations — an overlap would
+    desynchronise captions from speech by a growing amount across the clip, which is a worse
+    artefact than the click. Equal-length fades preserve the mapping exactly.
+
+    ``lead``/``tail`` are False at the clip's own outer edges: those are not seams, and
+    fading there would clip the first or last syllable. The compositor's own fades handle
+    the clip boundary if the user asked for them.
+    """
+    if fade_s <= 0.0:
+        return ""
+    # Both fades must fit with room to spare, or a short segment would be mostly fade.
+    if duration <= fade_s * 4:
+        return ""
+    chain = ""
+    if lead:
+        chain += f",afade=t=in:st=0:d={fade_s:.3f}"
+    if tail:
+        chain += f",afade=t=out:st={duration - fade_s:.3f}:d={fade_s:.3f}"
+    return chain
+
+
 def apply_keep_intervals(
     source: str | Path, keeps: list[Interval], dest: str | Path
 ) -> Path:
@@ -186,17 +217,28 @@ def apply_keep_intervals(
 
     Uses ``trim``/``atrim`` + ``concat``. Assumes the source has audio (clips
     produced by the pipeline always do).
+
+    Each seam gets a few milliseconds of audio fade (V10) so a removed filler word does not
+    leave an audible click. Video cuts stay hard: a jump cut is normal grammar in short-form
+    editing, and it is the audio discontinuity that reads as a defect.
     """
     source = Path(source)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    fade_s = max(0.0, float(settings.filler_seam_fade_ms) / 1000.0)
+    last = len(keeps) - 1
+
     parts: list[str] = []
     labels: list[str] = []
     for i, k in enumerate(keeps):
+        audio_chain = (
+            f"[0:a]atrim=start={k.start:.3f}:end={k.end:.3f},asetpts=PTS-STARTPTS"
+            f"{_seam_fades(k.duration, fade_s, lead=i > 0, tail=i < last)}[a{i}]"
+        )
         parts.append(
             f"[0:v]trim=start={k.start:.3f}:end={k.end:.3f},setpts=PTS-STARTPTS[v{i}];"
-            f"[0:a]atrim=start={k.start:.3f}:end={k.end:.3f},asetpts=PTS-STARTPTS[a{i}]"
+            + audio_chain
         )
         labels.append(f"[v{i}][a{i}]")
     concat = f"{''.join(labels)}concat=n={len(keeps)}:v=1:a=1[v][a]"
@@ -206,8 +248,8 @@ def apply_keep_intervals(
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-filter_complex", graph,
         "-map", "[v]", "-map", "[a]",
-        *h264_args(normalise_fps=True),
-        "-c:a", "aac", "-b:a", "128k",
+        *h264_args(normalise_fps=True, vbv_cap=True),
+        *aac_args(),
         "-movflags", "+faststart",
         str(dest),
     ]
