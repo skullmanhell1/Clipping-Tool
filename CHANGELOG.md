@@ -29,6 +29,23 @@ Verified absent across the whole repository before this: no `loudnorm`, no `dyna
   phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
   decoder sees it first, if at all.
 
+### Fixed — keyword emphasis is budgeted per cue, not per clip (C11 follow-up)
+
+- The first `C11` fix replaced an absolute confidence threshold with a salience ranking and a
+  budget, but applied that budget to the whole word list a caller passed in. The strongest few
+  words in a clip tend to sit near each other, so emphasis clustered: `scripts/smoke_reel.py`
+  rendered a clip with **two highlights in the opening cue and none in the four after it**.
+  A viewer reads one cue at a time, so "the important word" is a question about the cue in
+  front of them — the budget now applies per cue, and the same clip gets one emphasis in each.
+- **A one-word cue has to earn its emphasis.** A flat floor of one highlight per cue would
+  emphasise every single-word cue, and rapid speech with pauses produces runs of them — which
+  reinstates the original defect (everything highlighted, therefore nothing) one cue at a
+  time. A number or an ALL-CAPS run still pops, because those are emphatic in themselves
+  rather than by comparison; a merely long word does not.
+- Grouping uses the renderer's own `words_to_cues`, so emphasis is budgeted against the cues
+  actually drawn. Failure to group falls back to a single group, because `plan_keywords` is
+  handed adversarial word objects by the property tests and must stay total.
+
 ### Added — approve and retry are reachable from the dashboard (PB2)
 
 - `/api/publish-attempts/{id}/approve` and `/retry` existed with **zero references anywhere
