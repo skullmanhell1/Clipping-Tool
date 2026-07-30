@@ -146,6 +146,18 @@ class Settings(BaseSettings):
         default=".mp4,.mov,.mkv,.webm,.avi,.m4v,.mpg,.mpeg,.wmv,.flv,.ts,.m2ts,.3gp,.mp3,.wav,.m4a,.aac,.flac,.ogg",
         description="Comma-separated list of accepted upload file extensions.",
     )
+    # T8: ASR is the most expensive stage and the most repeated - re-running a source to try
+    # a different caption preset or aspect ratio re-transcribes audio that has not changed.
+    transcript_cache_dir: Path = Field(
+        default=BASE_DIR / "storage" / "transcripts",
+        description="Directory of cached transcripts (T8), keyed by source content hash and "
+                    "the ASR parameters that produced them.",
+    )
+    transcript_cache_enabled: bool = Field(
+        default=True,
+        description="Reuse a cached transcript when the source content and ASR settings "
+                    "match (T8). Turn off to force re-transcription.",
+    )
     temp_dir: Path = Field(
         default=BASE_DIR / "storage" / "temp",
         description="Scratch space for intermediate processing artefacts.",
@@ -450,6 +462,7 @@ class Settings(BaseSettings):
             self.uploads_dir,
             self.temp_dir,
             self.clips_dir,
+            self.transcript_cache_dir,
             self.emoji_assets_dir,
             self.music_dir,
             self.broll_dir,

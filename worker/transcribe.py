@@ -101,13 +101,13 @@ def _get_model():
     return model
 
 
-def transcribe(
+def transcribe_uncached(
     audio_or_video: str | Path,
     language: Optional[str] = None,
     translate: bool = False,
     beam_size: int = 5,
 ) -> Transcript:
-    """Transcribe ``audio_or_video`` and return a :class:`Transcript`.
+    """Transcribe ``audio_or_video`` and return a :class:`Transcript`, always running ASR.
 
     Args:
         audio_or_video: Path to a media file. faster-whisper decodes audio
@@ -119,6 +119,10 @@ def transcribe(
 
     Returns:
         A :class:`Transcript` with segment- and word-level timing.
+
+    :func:`transcribe` is the caching entry point (T8) and is what callers should use; this is
+    the escape hatch for forcing a fresh transcription, and the seam the cache's own tests
+    replace so they need no model.
     """
     model = _get_model()
     task = "translate" if translate else "transcribe"
@@ -154,3 +158,70 @@ def transcribe(
         )
 
     return Transcript(language=info.language, segments=segments)
+
+
+
+def transcribe(
+    audio_or_video: str | Path,
+    language: Optional[str] = None,
+    translate: bool = False,
+    beam_size: int = 5,
+    *,
+    on_hit=None,
+    on_miss=None,
+) -> Transcript:
+    """Transcribe ``audio_or_video``, reusing a cached result when one matches (T8).
+
+    Caching is the *default* rather than an opt-in variant, deliberately. ``pipeline.transcribe``
+    is an established test seam - one parity test wires a reconstructed v0.7.0 pipeline's seam to
+    this very function - so introducing a separately-named cached entry point would both break
+    that contract and leave every future caller to remember which name to use. The expensive,
+    repeated thing should be cheap by default; :func:`transcribe_uncached` is there for when it
+    must not be.
+
+    The cache key covers the source's *content* and every parameter that shapes the output -
+    model, language, task, beam size - so an upgraded model or a re-exported file misses
+    rather than silently serving a stale transcript. See :mod:`worker.transcript_cache`.
+
+    Degrades to plain transcription whenever anything about the cache is uncooperative: the
+    directory is unwritable, the file cannot be hashed, an entry is corrupt. A cache is an
+    optimisation, and a job must never fail because one was unavailable.
+
+    ``on_hit``/``on_miss`` are optional callbacks taking the cache key, for progress reporting
+    and for tests that need to prove which path ran.
+    """
+    from worker import transcript_cache
+
+    if not settings.transcript_cache_enabled:
+        return transcribe_uncached(audio_or_video, language=language, translate=translate,
+                                  beam_size=beam_size)
+
+    key: Optional[str] = None
+    try:
+        key = transcript_cache.cache_key(
+            transcript_cache.hash_source(audio_or_video),
+            model=settings.whisper_model,
+            language=language,
+            translate=translate,
+            beam_size=beam_size,
+        )
+    except OSError:
+        # Unreadable or vanished source: let the ASR call produce the real error, rather than
+        # reporting it as a cache problem.
+        key = None
+
+    if key is not None:
+        cached = transcript_cache.load(key)
+        if cached is not None:
+            if on_hit is not None:
+                on_hit(key)
+            return cached
+
+    if key is not None and on_miss is not None:
+        on_miss(key)
+
+    transcript = transcribe_uncached(audio_or_video, language=language, translate=translate,
+                                     beam_size=beam_size)
+    if key is not None:
+        transcript_cache.store(key, transcript)
+    return transcript

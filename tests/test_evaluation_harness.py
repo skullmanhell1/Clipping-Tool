@@ -503,9 +503,15 @@ def test_a_corrupt_cache_entry_is_ignored_rather_than_fatal(tmp_path):
     media.write_bytes(b"video")
     cache = tmp_path / "cache"
     cache.mkdir()
-    from evaluation.harness import _cache_path
 
-    _cache_path(cache, media).write_text("{ not json", encoding="utf-8")
+    # Keyed through the shared T8 cache, which the harness now delegates to rather than
+    # carrying its own copy.
+    from evaluation.harness import _harness_key
+    from worker import transcript_cache
+
+    transcript_cache.cache_path(_harness_key(media), cache).write_text(
+        "{ not json", encoding="utf-8"
+    )
     assert harness.load_cached_transcript(cache, media) is None
 
 

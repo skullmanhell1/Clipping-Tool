@@ -156,6 +156,8 @@ def run_pipeline(
     # --- transcribe -------------------------------------------------------
     report(0.05, "Transcribing audio")
     if info.has_audio:
+        # T8: reuses a cached transcript when the source content and ASR settings match, so
+        # re-running a source to try different effects does not re-transcribe it.
         transcript = transcribe(
             source, language=options.language, translate=options.translate
         )

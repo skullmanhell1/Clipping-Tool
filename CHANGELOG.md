@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — transcripts are cached (T8)
+
+- ASR is the most expensive stage in the pipeline and the most repeated: re-running a source to
+  try a different caption preset, aspect ratio, or any of the effect toggles re-transcribed
+  audio that had not changed. `worker/transcript_cache.py` caches by source content hash, and
+  `transcribe()` now consults it.
+- **The ASR parameters are part of the key**, not just the file. A transcript from the `base`
+  model is not interchangeable with one from `small` — which `T1` just changed — and
+  language/translate/beam size change the output too. Keying on the file alone would have
+  served stale `base` transcripts to the upgraded model silently and permanently, which is
+  worse than no cache.
+- **The file is hashed by content, not path and mtime.** Hashing a gigabyte costs seconds where
+  transcribing it costs minutes, so correctness is cheap here — and path-and-mtime keying is
+  wrong in exactly the case that matters: footage re-exported over the same filename.
+- Writes are atomic (temp file plus rename), so a job killed mid-write cannot leave a truncated
+  entry. Any cache failure — unwritable directory, unhashable source, corrupt entry — degrades
+  to plain transcription: a cache is an optimisation and must never fail a job.
+- The `S1` harness now delegates to the same module instead of carrying its own cache keyed on
+  path/size/mtime with its own JSON shape. Two caches of the same thing had been disagreeing
+  precisely where it mattered.
+
+
 ### Added — selection evaluation harness (S1)
 
 `docs/IMPROVEMENT_PLAN.md` puts this first in §3 and says why: *"Without this every change
