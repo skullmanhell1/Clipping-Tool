@@ -92,6 +92,18 @@ export const api = {
   history: (platform = "") =>
     fetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
 
+  // PB2: the approve/retry endpoints existed but nothing in the UI referenced them, so an
+  // attempt that came back `review_required` stopped permanently — three of the five
+  // publishers can return that state, and the dashboard offered no way to act on it.
+  //
+  // Approve escalates a review-mode attempt to a direct publish; retry re-runs it as it was.
+  // They are deliberately separate calls rather than one "resume": a retry must never
+  // silently turn a submission that was queued for review into a live post.
+  approvePublishAttempt: (attemptId) =>
+    fetch(`/api/publish-attempts/${attemptId}/approve`, { method: "POST" }).then(jsonOrThrow),
+  retryPublishAttempt: (attemptId) =>
+    fetch(`/api/publish-attempts/${attemptId}/retry`, { method: "POST" }).then(jsonOrThrow),
+
   // --- Phase 5: storage, profiles, updates ---
   storage: () => fetch("/api/storage").then(jsonOrThrow),
   updateStorageSettings: (settings) =>

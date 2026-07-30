@@ -61,18 +61,51 @@ class ProcessingOptions:
     schedule_at: Optional[float] = None  # UTC epoch; None = now
 
     # --- Phase 4: visual effects (all individually toggleable) -----------
-    reframe: bool = False                # face-tracking auto-reframe (vs static crop)
-    zoom: bool = False                   # slow Ken-Burns zoom
-    transitions: bool = False            # subtle punch-in intro
-    hook_title: bool = False             # burn the AI hook text at the start
+    #
+    # U1: these default ON. A default run used to enable only captions, 9:16, the ``ai``
+    # strategy and metadata, which meant the out-of-the-box output was a static centre crop
+    # with plain captions - the tool shipped looking worse than it is capable of, and every
+    # feature that makes short-form video look modern had to be discovered one checkbox at
+    # a time.
+    #
+    # Three of the thirteen features the improvement plan lists are deliberately still off,
+    # each because turning it on today would make output *worse* rather than better; see the
+    # comments at ``music``, ``broll`` and ``kinetic_typography_enabled``.
+    reframe: bool = True                 # face-tracking auto-reframe (vs static crop)
+    zoom: bool = True                    # slow Ken-Burns zoom
+    transitions: bool = True             # subtle punch-in intro
+    hook_title: bool = True              # burn the AI hook text at the start
+    # Still off (U1 lists it, A14/A15 gate it): worker/effects/audio.py does not play music,
+    # it synthesises two sine waves with tremolo per mood. assets/music is empty, so turning
+    # this on by default would add a drone to every clip. It becomes a default once real
+    # licence-clean beds ship (A14).
     music: str = ""                      # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
     music_volume: float = 0.12           # background-music level (0..1)
-    fades: bool = False                  # fade in/out (video + audio)
+    fades: bool = True                   # fade in/out (video + audio)
     color: str = ""                      # "" (off) | vivid | warm | cool | cinematic | bw
-    progress_bar: bool = False           # growing progress bar along the bottom
-    emoji: str = "off"                   # off | subtle | standard | heavy
+    progress_bar: bool = True            # growing progress bar along the bottom
+    emoji: str = "standard"              # off | subtle | standard | heavy
+    # AU1: normalise integrated loudness to the target platform's level. On by default and
+    # costs no extra pass in the default configuration, because fades already re-encode the
+    # audio; with every effect off the clip is stream-copied and there is nothing to
+    # normalise. AU2: duck the music bed under speech instead of mixing it flat.
+    loudness_normalise: bool = True      # two-pass loudnorm to the platform LUFS target
+    music_duck: bool = True              # sidechain-duck music under speech
+    # AU7: pull the cut points onto speech so a clip does not open on dead air. Unlike
+    # filler_removal this only moves the clip's *boundaries*, and by at most 1.25 s per edge -
+    # it cannot cut anything out of the middle, which is why it is a safe default and filler
+    # removal is not.
+    trim_silence: bool = True            # trim leading/trailing silence from each clip
     emoji_mode: str = "keyword"          # keyword | ai
     emoji_animate: bool = True           # pop/scale (alpha) animation on appear
+    # Still off, and this one is a deliberate departure from U1's list.
+    #
+    # Every other item there restyles the clip; this one *removes content*, and it decides
+    # what to remove from silence and filler-word detection. On footage that is quiet,
+    # music-led, or has sparse speech it cuts aggressively: a 3.0 s fixture in
+    # tests/test_pipeline_effects.py came out at 1.33 s with it on. A default that can
+    # silently discard half a clip needs to be a choice, not an inherited one - the
+    # cost of being wrong is asymmetric with the styling defaults around it.
     filler_removal: bool = False         # cut "um"/"uh"/long pauses
     caption_template: str = "karaoke"    # karaoke | boxed | minimal
     caption_position: str = "bottom"     # bottom | center | top
@@ -84,11 +117,19 @@ class ProcessingOptions:
     # Feature A — animated caption presets
     caption_preset: str = "karaoke"      # karaoke|boxed|minimal|pop|typewriter|hormozi
     caption_animation: str = ""          # "" = use preset default; else override
-    caption_keyword_highlight: bool = False  # highlight important words
+    # U1. Keyword highlighting is only worth defaulting on since C11 made it selective:
+    # the old rule emphasised any word clearing Whisper probability 0.9, which on clean
+    # audio is nearly all of them, and emphasis that applies to everything communicates
+    # nothing. ``caption_keyword_ai`` stays off because it costs an LLM call per clip.
+    caption_keyword_highlight: bool = True   # highlight important words
     caption_keyword_ai: bool = False     # AI-assisted keyword highlighting
-    caption_emoji: bool = False          # in-caption emoji glyphs
+    caption_emoji: bool = True           # in-caption emoji glyphs
     #
     # Feature B — b-roll overlays
+    # Still off (U1 lists it, A18/A21 gate it): broll.py matches keywords by
+    # case-insensitive filename-stem substring against assets/broll, which is empty, and
+    # the external downloader is explicitly not implemented. Enabling it by default would
+    # add degradation markers to every clip and nothing else.
     broll: bool = False                  # enable b-roll auto-insertion
     broll_intensity: str = "standard"    # off|subtle|standard|heavy
     asset_sourcing_mode: str = "off"     # off|local_only|local_then_external
@@ -96,7 +137,7 @@ class ProcessingOptions:
     #
     # Feature C — prompt / visual selection
     selection_prompt: str = ""           # free-text selection prompt
-    visual_selection: bool = False       # enable visual/keyframe-aided selection
+    visual_selection: bool = True        # enable visual/keyframe-aided selection (U1)
     #
     # Cross-cutting
     permissibility_mode: bool = False    # forces local_only sourcing + no added audio
@@ -117,6 +158,11 @@ class ProcessingOptions:
     # losslessly. Values are *not* validated here: unknown/malformed values are
     # coerced (and reported as substitutions) by the engine's ``resolve_options``,
     # which is also what keeps this module free of a ``worker.engines`` import.
+    # Still off (U1 lists it): this is an AV engine Feature_Flag, and when it runs it takes
+    # *ownership* of the caption layer from the standard caption path. That is a different
+    # kind of default from "switch on an effect" - it swaps out the component that draws
+    # captions - so it belongs to an opinionated profile (U2) rather than to the global
+    # default, where it would silently override caption_preset for everyone.
     kinetic_typography_enabled: bool = False   # Feature_Flag (flag_field())
     kinetic_style: str = "karaoke_fill"        # bounce|highlight_sweep|karaoke_fill|
                                                # none|pop|slide_up|typewriter
@@ -151,6 +197,12 @@ class ProcessingOptions:
     stem_model: str = "htdemucs"               # separation checkpoint name
     stem_retain_stems: bool = False            # keep per-stem WAVs as durable artifacts
 
+    # U2: the built-in profile this request was built from, "" when none. Recorded so a
+    # finished job says which bundle produced it; it never changes behaviour on its own -
+    # ``from_dict`` has already expanded the bundle into the individual fields by the time
+    # anything reads them.
+    profile: str = ""
+
     # Known value sets for enum-like string fields (used by ``from_dict``).
     _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
@@ -161,9 +213,29 @@ class ProcessingOptions:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
-        """Build options from a (possibly partial) dict, ignoring unknown keys."""
+        """Build options from a (possibly partial) dict, ignoring unknown keys.
+
+        A ``profile`` key naming a built-in profile (U2) supplies a whole coherent bundle of
+        settings, and **anything else in ``data`` overrides it**. That ordering is the reason
+        the bundle is expanded here rather than in :func:`effective_options`: at this point we
+        still know which fields the caller actually sent, so "the profile sets emoji to
+        heavy, but this request explicitly asked for subtle" resolves correctly. A dataclass
+        instance cannot express that distinction - a field holding its default is
+        indistinguishable from a field nobody mentioned.
+        """
         data = data or {}
         valid = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
+
+        profile_name = str(data.get("profile", "") or "").strip().lower()
+        profile = BUILTIN_PROFILES.get(profile_name)
+        if profile is not None:
+            # Bundle first, explicit request second.
+            valid = {**profile.settings, "profile": profile.name, **valid}
+            valid["profile"] = profile.name
+        elif "profile" in valid:
+            # An unknown profile name is dropped rather than recorded, so a job never claims
+            # to have been produced by a bundle that does not exist.
+            valid.pop("profile")
         # Normalise an empty-string language to None (auto).
         if valid.get("language") in ("", "auto", "Auto"):
             valid["language"] = None
@@ -246,6 +318,153 @@ def _external_key_configured() -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class BuiltinProfile:
+    """An opinionated bundle of :class:`ProcessingOptions` settings (U2).
+
+    ``settings`` holds only the fields the profile has an opinion about; everything else
+    keeps the global default. ``rationale`` is not decoration - a profile is a set of
+    judgement calls, and the next person to change one needs to know which effect was chosen
+    on purpose and which was simply inherited.
+    """
+
+    name: str
+    label: str
+    description: str
+    rationale: str
+    settings: dict[str, Any]
+
+
+#: U2: coherent presets, so a user picks a *kind of video* instead of thirteen toggles.
+#:
+#: The global defaults (U1) are deliberately middle-of-the-road, because they apply to
+#: footage nobody has described. These profiles are allowed to be opinionated precisely
+#: because the user has told us what they are editing - which is also why two of them turn
+#: on features the global default leaves off: ``filler_removal`` (destructive, but expected
+#: in a rambling interview) and ``kinetic_typography_enabled`` (takes ownership of the
+#: caption layer, which is a swap you would only want if you asked for that look).
+BUILTIN_PROFILES: dict[str, "BuiltinProfile"] = {
+    "podcast": BuiltinProfile(
+        name="podcast",
+        label="Podcast",
+        description="Multi-speaker conversation, cut for clarity.",
+        rationale=(
+            "The distinguishing feature of podcast footage is more than one person talking, "
+            "so diarisation and speaker-aware reframing carry this profile: a static crop on "
+            "a two-host shot frames the gap between them. Filler removal is on because an "
+            "unscripted conversation is the one place its cost is worth paying, and long "
+            "clips are the format's norm. Zoom is off - the frame already moves when the "
+            "active speaker changes, and both at once reads as restless."
+        ),
+        settings={
+            "clip_length": "60-90s",
+            "caption_preset": "karaoke",
+            "reframe": True,
+            "diarization": True,
+            "speaker_reframe": True,
+            "reframe_layout": "follow_active",
+            "reframe_intensity": "standard",
+            "filler_removal": True,
+            "zoom": False,
+            "transitions": True,
+            "fades": True,
+            "hook_title": True,
+            "progress_bar": True,
+            "emoji": "subtle",
+            "caption_keyword_highlight": True,
+            "caption_emoji": False,
+        },
+    ),
+    "gaming": BuiltinProfile(
+        name="gaming",
+        label="Gaming",
+        description="High-energy gameplay and commentary.",
+        rationale=(
+            "The loudest profile we ship, and the only one with kinetic typography on: this "
+            "is the audience that expects word-by-word animated captions, and a profile is "
+            "the right place for a feature that takes over the caption layer, because the "
+            "user asked for the look. Vivid colour and heavy emoji suit game footage, which "
+            "is already saturated and fast. Short clips, because gameplay highlights are."
+        ),
+        settings={
+            "clip_length": "<30s",
+            "caption_preset": "hormozi",
+            "caption_position": "center",
+            "kinetic_typography_enabled": True,
+            "kinetic_style": "bounce",
+            "kinetic_reveal": "word_by_word",
+            "reframe": True,
+            "zoom": True,
+            "transitions": True,
+            "fades": True,
+            "hook_title": True,
+            "progress_bar": True,
+            "color": "vivid",
+            "emoji": "heavy",
+            "caption_keyword_highlight": True,
+            "caption_emoji": True,
+        },
+    ),
+    "talking_head": BuiltinProfile(
+        name="talking_head",
+        label="Talking head",
+        description="One person to camera.",
+        rationale=(
+            "One speaker, so face-tracked reframing matters and diarisation does not - "
+            "running it would spend time to discover a single speaker. A slow zoom does the "
+            "work that speaker switching does in the podcast profile: it stops a fixed shot "
+            "of a stationary person feeling static. Punchy captions, because there is little "
+            "else on screen to hold attention."
+        ),
+        settings={
+            "clip_length": "30-60s",
+            "caption_preset": "pop",
+            "reframe": True,
+            "reframe_intensity": "standard",
+            "diarization": False,
+            "speaker_reframe": False,
+            "zoom": True,
+            "transitions": True,
+            "fades": True,
+            "hook_title": True,
+            "progress_bar": True,
+            "emoji": "standard",
+            "caption_keyword_highlight": True,
+            "caption_emoji": True,
+        },
+    ),
+    "educational": BuiltinProfile(
+        name="educational",
+        label="Educational",
+        description="Explainers and tutorials, optimised for legibility.",
+        rationale=(
+            "The only profile that deliberately does *less*. Boxed captions are the most "
+            "legible thing we render, and the movement effects are off because they compete "
+            "with content the viewer is trying to follow - a zoom during a diagram is a "
+            "distraction, not production value. Filler removal is on for the same reason it "
+            "is on for podcasts: unscripted explanation rambles. Longer clips, because an "
+            "explanation that fits in 20 seconds usually was not one."
+        ),
+        settings={
+            "clip_length": "60-90s",
+            "caption_preset": "boxed",
+            "caption_position": "bottom",
+            "reframe": True,
+            "zoom": False,
+            "transitions": False,
+            "fades": True,
+            "hook_title": True,
+            "progress_bar": True,
+            "filler_removal": True,
+            "color": "",
+            "emoji": "subtle",
+            "caption_keyword_highlight": True,
+            "caption_emoji": False,
+        },
+    ),
+}
+
+
 def effective_options(o: "ProcessingOptions") -> "ProcessingOptions":
     """Return a normalised copy of ``o`` enforcing cross-cutting rules.
 
@@ -314,6 +533,12 @@ class ClipResult:
     #   - ``broll_degraded``              b-roll disabled after a build/compose error
     #   - ``visual_selection``            visual/keyframe-aided selection was used
     #   - ``visual_degraded``             visual selection fell back to transcript-only
+    #   - ``music_degraded:synthesised``  the "music" bed is the synthesised two-tone
+    #                                    fallback, not a real track (A15). Recorded
+    #                                    alongside ``music:<mood>``, which on its own
+    #                                    cannot tell the two apart - and since
+    #                                    ``assets/music`` ships empty, in practice it was
+    #                                    always the drone.
     #
     # v0.8.0 Speaker Diarisation & Multi-Speaker Reframe introduces the
     # following markers (produced by later tasks — defined here only):

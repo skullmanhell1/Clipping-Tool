@@ -1,7 +1,7 @@
 """End-to-end pipeline test with effects (whisper/LLM stubbed out)."""
 from __future__ import annotations
 
-from tests.conftest import probe_size, requires_ffmpeg
+from tests.conftest import options_all_off, probe_size, requires_ffmpeg
 from worker.models import ProcessingOptions
 
 
@@ -64,7 +64,7 @@ def test_pipeline_no_effects_still_produces_clip(make_video, tmp_path, monkeypat
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=50.0, text="hello there")],
     )
 
-    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16")
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16")
     clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips",
                             temp_dir=tmp_path / "tmp")
     assert len(clips) == 1

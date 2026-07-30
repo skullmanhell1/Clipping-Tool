@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
-from worker import diarization, visual_selection
+from worker import diarization, segmentation, visual_selection
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 
@@ -156,6 +156,8 @@ def run_pipeline(
     # --- transcribe -------------------------------------------------------
     report(0.05, "Transcribing audio")
     if info.has_audio:
+        # T8: reuses a cached transcript when the source content and ASR settings match, so
+        # re-running a source to try different effects does not re-transcribe it.
         transcript = transcribe(
             source, language=options.language, translate=options.translate
         )
@@ -239,6 +241,17 @@ def run_pipeline(
             notes=source_diar_notes,
         )
 
+    # AU7: detect silence once for the whole source, not once per clip. Every clip's
+    # boundaries are looked up in the same measurement, and silencedetect needs a full decode
+    # - paying for that per clip would add a pass per clip for a sub-second adjustment.
+    # Best-effort: a source we cannot scan simply gets no trimming.
+    source_silences: list[tuple[float, float]] = []
+    if options.trim_silence:
+        try:
+            source_silences = segmentation.detect_silences(source)
+        except (fu.FFmpegError, OSError):
+            source_silences = []
+
     for idx, c in enumerate(candidates):
         base = _P_SELECT_END + clip_span * (idx / n)
         report(base, f"Rendering clip {idx + 1} of {n}")
@@ -261,6 +274,19 @@ def run_pipeline(
         # best-effort provenance marker rather than a strict guarantee.
         if options.visual_selection:
             applied.append("visual_selection")
+
+        # 0. AU7: pull the cut points onto speech before cutting, so the clip does not open
+        # on dead air - the first second is where a viewer decides whether to keep watching.
+        # Adjusting the window rather than filtering the audio costs no extra pass and keeps
+        # the streams in step by construction.
+        if options.trim_silence and source_silences:
+            trimmed_start, trimmed_end = segmentation.trim_edge_silence(
+                c.start, c.end, source_silences
+            )
+            if (trimmed_start, trimmed_end) != (c.start, c.end):
+                c.start, c.end = trimmed_start, trimmed_end
+                clip_duration = c.end - c.start
+                applied.append("silence_trimmed")
 
         # 1. cut the selected segment
         fu.cut_segment(source, c.start, c.end, raw)

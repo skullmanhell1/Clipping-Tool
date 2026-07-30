@@ -150,38 +150,87 @@ def test_p26_malformed_values_apply_defaults(
             assert value == ENUM_DEFAULTS[field_name]
 
 
-# --- Unit tests: defaults OFF and existing fields untouched (task 1.6) ------
-def test_new_features_default_off():
-    """Validates: Requirements 16.2, 22.1 — new features default disabled."""
+# --- Unit tests: the shipped defaults, pinned (task 1.6, U1) ----------------
+#
+# These tests pinned "every new feature defaults off", which was the right call while the
+# features were being staged: each spec landed without disturbing existing behaviour.
+#
+# U1 is the deliberate end of that staging. A default run enabled only captions, 9:16, the
+# ``ai`` strategy and metadata, so out of the box the product produced a static centre crop
+# with plain captions and every feature that makes short-form video look modern had to be
+# found one checkbox at a time. The defaults below are the shipped ones, still pinned - the
+# value of these tests is that a default cannot drift unnoticed, not that it must be False.
+def test_output_shaping_features_default_on():
+    """U1: the features that decide how a clip *looks* are on out of the box."""
     o = ProcessingOptions()
+    assert o.reframe is True            # V1: was a centre crop that decapitated speakers
+    assert o.zoom is True
+    assert o.transitions is True
+    assert o.fades is True
+    assert o.hook_title is True         # V12
+    assert o.progress_bar is True
+    assert o.emoji == "standard"
+    assert o.caption_keyword_highlight is True
+    assert o.caption_emoji is True
+    assert o.visual_selection is True
+
+
+def test_features_whose_assets_do_not_exist_yet_default_off():
+    """The three exceptions, each because enabling it today makes output *worse*.
+
+    Not oversights - turning any of these on now would add degradation, a drone, or a
+    silent component swap. Each becomes a default when the work it waits on lands.
+    """
+    o = ProcessingOptions()
+    # A14/A15: audio.py synthesises two sine waves per mood; assets/music is empty.
+    assert o.music == ""
+    # A18/A21: broll matches filename stems against assets/broll, which is empty.
     assert o.broll is False
-    assert o.visual_selection is False
-    assert o.permissibility_mode is False
-    assert o.caption_keyword_highlight is False
-    assert o.caption_keyword_ai is False
-    assert o.caption_emoji is False
-    # Sourcing / external features off by default.
     assert o.asset_sourcing_mode == "off"
     assert o.broll_provider == ""
-    assert o.broll_intensity == "standard"
-    assert o.caption_preset == "karaoke"
-    assert o.caption_animation == ""
-    assert o.selection_prompt == ""
+    # An AV engine that takes ownership of the caption layer; belongs to a profile (U2).
+    assert o.kinetic_typography_enabled is False
+    assert o.stem_inpainting_enabled is False
+    # Removes content rather than restyling it, and cuts hard on sparse-speech footage.
+    assert o.filler_removal is False
+
+
+def test_costly_or_policy_features_default_off():
+    """Defaults must not silently spend money or narrow what the tool will do."""
+    o = ProcessingOptions()
+    assert o.caption_keyword_ai is False   # an LLM call per clip
+    assert o.permissibility_mode is False  # a restriction, not a feature
+    assert o.diarization is False          # needs the ML extras to do better than degrade
+    assert o.speaker_reframe is False
 
 
 def test_preexisting_fields_keep_v060_defaults():
-    """Validates: Requirements 22.1 — v0.6.0 fields/defaults unchanged."""
+    """Validates: Requirements 22.1 — the v0.6.0 fields whose defaults U1 did not touch."""
     o = ProcessingOptions()
     assert o.aspect == "9:16"
     assert o.captions is True
     assert o.caption_template == "karaoke"
     assert o.caption_position == "bottom"
-    assert o.emoji == "off"
-    assert o.music == ""
+    assert o.caption_preset == "karaoke"
+    assert o.caption_animation == ""
+    assert o.selection_prompt == ""
+    assert o.broll_intensity == "standard"
     assert o.clip_length == "auto"
     assert o.num_clips == "auto"
     assert o.strategy == "ai"
     assert o.metadata is True
+
+
+def test_all_off_helper_covers_every_effect():
+    """The test helper that disables every effect must not fall behind the model.
+
+    ``tests/conftest.options_all_off`` is how a dozen tests say "nothing enabled" now that
+    the defaults are on. If a new default-on effect is not listed there, those tests keep
+    passing while quietly testing something else.
+    """
+    from tests.conftest import assert_effects_off_is_exhaustive
+
+    assert_effects_off_is_exhaustive()
 
 
 def test_effective_options_permissibility_mode():
@@ -359,14 +408,17 @@ def test_v080_additions_do_not_disturb_v070_defaults():
             continue
         assert getattr(o, name) == getattr(base, name), f"field {name} changed"
 
-    # Representative sanity checks on a spread of existing defaults.
+    # Representative sanity checks on a spread of existing defaults. The subject here is
+    # that the v0.8.0 toggles add fields without disturbing their neighbours, so these
+    # track the shipped defaults rather than asserting they are off; U1 turned several on
+    # deliberately, and the per-default contract lives in the three tests above.
     assert base.aspect == "9:16"
     assert base.captions is True
-    assert base.reframe is False
+    assert base.reframe is True          # U1/V1
     assert base.caption_template == "karaoke"
     assert base.caption_preset == "karaoke"
-    assert base.emoji == "off"
-    assert base.music == ""
+    assert base.emoji == "standard"      # U1
+    assert base.music == ""              # still off: A14 has not shipped real beds
     assert base.permissibility_mode is False
 
 

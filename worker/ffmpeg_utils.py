@@ -23,6 +23,106 @@ class FFmpegError(RuntimeError):
     """Raised when an ffmpeg/ffprobe invocation fails."""
 
 
+# --------------------------------------------------------------------------- #
+# H.264 output settings (O1, O2, O3)
+# --------------------------------------------------------------------------- #
+# Every encode in this repository spelled out ``-c:v libx264 -preset veryfast -crf 20``
+# and nothing else, in seven places. Three flags that decide whether a platform will
+# accept the file at all were missing everywhere:
+#
+#   O1  -pix_fmt yuv420p    Without it, ffmpeg keeps the source pixel format. A 4:2:2 or
+#                           10-bit source therefore produced a 4:2:2/10-bit H.264 file,
+#                           which Safari, many Android decoders and several upload
+#                           pipelines refuse outright - and the failure appears at upload
+#                           time, long after the render looked fine locally.
+#   O2  -profile:v high     libx264 otherwise picks a profile from the input, and it can
+#       -level 4.0          land above what older hardware decoders implement.
+#   O3  -r <fps>            A variable-frame-rate source (every screen recording, most
+#                           phone footage) has no single frame duration, so burned captions
+#                           drift against speech as the effective rate wanders.
+#
+#: The pixel format every output is written in.
+#:
+#: Without this, libx264 preserves whatever the *source* used. A 10-bit source (phone
+#: footage, OBS/NVENC, many screen recorders) therefore produced a ``yuv420p10le`` /
+#: ``High 10`` clip, and a 4:2:2 source a ``High 4:2:2`` one. Neither plays in Windows
+#: Media Player or Films & TV, QuickTime, or most browsers -- the file exists, has the
+#: right duration, and simply will not open. 8-bit 4:2:0 is the format every player and
+#: every social platform accepts.
+OUTPUT_PIX_FMT = "yuv420p"
+
+#: H.264 profile and level. ``high`` is 8-bit only, so it is the encoder-side guard that
+#: matches OUTPUT_PIX_FMT; level 4.0 covers 1080p at the frame rates used here and keeps
+#: older phones and smart TVs in scope.
+OUTPUT_PROFILE = "high"
+OUTPUT_LEVEL = "4.0"
+
+#: Container/codec flags safe to apply to any encode, intermediate or final.
+#:
+#: Deliberately *not* configurable, unlike CRF and preset: there is no good reason to ship
+#: a clip a player will refuse to open.
+H264_COMPAT_ARGS: tuple[str, ...] = (
+    "-pix_fmt", OUTPUT_PIX_FMT,
+    "-profile:v", OUTPUT_PROFILE,
+    "-level", OUTPUT_LEVEL,
+)
+
+
+def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str]:
+    """The standard libx264 arguments for an encode.
+
+    Centralised because these flags were duplicated at eight call sites across five
+    modules (``cut_segment``, ``reformat_aspect``, captions burn-in, three reframe
+    paths, filler-removal concat and the compositor). That duplication is why a missing
+    ``-pix_fmt`` went unnoticed for so long: there was no single place where the output
+    contract lived, so it could not be reviewed in one go.
+
+    ``crf`` and ``preset`` come from settings rather than literals, so quality/speed is
+    tunable without editing five files. The compatibility flags are not tunable.
+
+    ``normalise_fps`` adds ``-r`` at :data:`config.settings.output_fps`, forcing constant
+    frame rate. It is off by default because an intermediate that is about to be re-encoded
+    gains nothing from being resampled twice, and on for anything a user receives.
+
+    ``vbv_cap`` adds ``-maxrate``/``-bufsize`` (O4). ``-crf`` alone sets a *quality* target
+    with no ceiling on bitrate, so a busy clip - confetti, fast pans, grain, a gameplay
+    scene - can balloon well past a platform's file-size limit and be rejected on upload.
+    Also off for intermediates: capping a file that is about to be re-encoded throws away
+    quality the final pass could have used.
+    """
+    args = [
+        "-c:v", "libx264",
+        "-preset", str(settings.x264_preset),
+        "-crf", str(settings.x264_crf),
+        *H264_COMPAT_ARGS,
+    ]
+    if normalise_fps:
+        args += ["-r", str(int(settings.output_fps))]
+    if vbv_cap:
+        maxrate = int(settings.output_max_bitrate_kbps)
+        # A two-second buffer, the usual pairing: large enough that a brief complex passage
+        # is not visibly starved, small enough that the cap still means something.
+        args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
+    return args
+
+
+def aac_args() -> list[str]:
+    """The standard AAC arguments for an encode, including AU8's normalisation.
+
+    ``-ar``/``-ac`` were set nowhere, so output sample rate and channel count were whatever
+    the source happened to have: 44.1 kHz mono from a phone, 48 kHz 5.1 from a camera. Both
+    are legal H.264/AAC and both cause trouble downstream - a mono clip plays out of one
+    side on some players, and a surround layout is silently downmixed by whatever decoder
+    gets it first, if at all.
+    """
+    return [
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", str(int(settings.output_sample_rate)),
+        "-ac", str(int(settings.output_channels)),
+    ]
+
+
 # Common target aspect ratios keyed by the UI values, mapped to (w, h) at a
 # canonical short-form resolution.
 ASPECT_PRESETS: dict[str, tuple[int, int]] = {
@@ -42,45 +142,12 @@ class MediaInfo:
     height: int
     fps: float
     has_audio: bool
-
-
-#: The pixel format every output is written in.
-#:
-#: Without this, libx264 preserves whatever the *source* used. A 10-bit source (phone
-#: footage, OBS/NVENC, many screen recorders) therefore produced a ``yuv420p10le`` /
-#: ``High 10`` clip, and a 4:2:2 source a ``High 4:2:2`` one. Neither plays in Windows
-#: Media Player or Films & TV, QuickTime, or most browsers -- the file exists, has the
-#: right duration, and simply will not open. 8-bit 4:2:0 is the format every player and
-#: every social platform accepts.
-OUTPUT_PIX_FMT = "yuv420p"
-
-#: H.264 profile and level. ``high`` is 8-bit only, so it is the encoder-side guard that
-#: matches OUTPUT_PIX_FMT; level 4.0 covers 1080p at the frame rates used here and keeps
-#: older phones and smart TVs in scope.
-OUTPUT_PROFILE = "high"
-OUTPUT_LEVEL = "4.0"
-
-
-def video_encode_args() -> list[str]:
-    """The x264 argument list every encoding pass shares.
-
-    Centralised because these flags were duplicated at eight call sites across five
-    modules (``cut_segment``, ``reformat_aspect``, captions burn-in, three reframe
-    paths, filler-removal concat and the compositor). Duplication is why the missing
-    ``-pix_fmt`` went unnoticed: there was no single place where the output contract
-    lived, so it could not be reviewed in one go.
-
-    ``crf`` and ``preset`` come from settings rather than literals, so quality/speed is
-    tunable without editing five files.
-    """
-    return [
-        "-c:v", "libx264",
-        "-preset", str(settings.x264_preset),
-        "-crf", str(settings.x264_crf),
-        "-pix_fmt", OUTPUT_PIX_FMT,
-        "-profile:v", OUTPUT_PROFILE,
-        "-level", OUTPUT_LEVEL,
-    ]
+    # O10: needed to validate a clip against a platform's accepted codecs before upload.
+    # Defaulted and last so existing positional construction (several tests build MediaInfo
+    # directly) keeps working.
+    video_codec: str = ""
+    audio_codec: str = ""
+    size_bytes: int = 0
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -191,12 +258,20 @@ def probe(path: str | Path) -> MediaInfo:
     except (ValueError, ZeroDivisionError):
         fps = 0.0
 
+    try:
+        size_bytes = int(float(fmt.get("size") or 0))
+    except (TypeError, ValueError):
+        size_bytes = 0
+
     return MediaInfo(
         duration=duration,
         width=int(video.get("width") or 0),
         height=int(video.get("height") or 0),
         fps=round(fps, 3),
         has_audio=audio is not None,
+        video_codec=str(video.get("codec_name") or ""),
+        audio_codec=str((audio or {}).get("codec_name") or ""),
+        size_bytes=size_bytes,
     )
 
 
@@ -231,7 +306,7 @@ def cut_segment(
     cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
            "-t", f"{duration:.3f}"]
     if reencode:
-        cmd += video_encode_args() + ["-c:a", "aac", "-b:a", "128k"]
+        cmd += [*h264_args(), *aac_args()]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
@@ -297,7 +372,7 @@ def reformat_aspect(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-vf", vf,
-        *video_encode_args(),
+        *h264_args(),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(dest),

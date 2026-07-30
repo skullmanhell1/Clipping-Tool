@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — one name for the shared encoder arguments
+
+- Two branches independently centralised the duplicated libx264 flags, under two names:
+  `video_encode_args()` and `h264_args()`. They are now one function, `h264_args()`, which keeps
+  the settings-driven `-crf`/`-preset` from the first and the `normalise_fps` (O3) and `vbv_cap`
+  (O4) switches from the second. The compatibility flags (`-pix_fmt`, `-profile:v`, `-level`) live
+  in `H264_COMPAT_ARGS` and stay deliberately non-configurable: there is no good reason to ship a
+  clip a player will refuse to open.
+- Clip-start snapping (S9) now runs *before* speech-rate measurement (S4), so the features describe
+  the window the viewer actually receives rather than the one the model proposed.
+
+
 ### Fixed — clips could open mid-shot (S9)
 
 - Clip starts now snap to a nearby shot boundary. A clip beginning two seconds into a shot opens
@@ -28,6 +40,361 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   similar brightness is invisible to it. A test pins that deliberately so it is not later mistaken
   for a regression. A missed cut leaves the boundary exactly where it was, which is the previous
   behaviour.
+
+
+### Added — the first audio-derived selection signal (S4)
+
+- **There were no audio features in clip selection at all** — verified by grep: no pitch, no
+  energy, no speech rate, no laughter. The LLM saw only `[i] start-end: text` lines, so it could
+  not tell that a moment was delivered fast, slowly, or after a pause. Speech rate is the
+  cheapest of those signals because the data already existed: word timestamps are already
+  produced, so this is one pass over a list.
+- **Relative rate is the signal; absolute rate is context.** A measured lecturer and an excitable
+  streamer sit at very different words-per-second and neither figure says which *moment*
+  mattered. `relative_speech_rate` normalises against the source's own median, so 1.0 is that
+  speaker's normal pace and 2.5 is a burst.
+- The baseline is a **median, not a mean**: a silent stretch or music interlude produces near-zero
+  slices, and a mean would sink the baseline until ordinary speech read as fast — inverting the
+  signal exactly where footage is hardest.
+- A `reliable` flag distinguishes **"not measurable" from "average pace"**, since both report a
+  relative rate of 1.0. Two words in 0.3 s is 6.7 words/sec, which describes a measurement
+  artefact rather than fast speech.
+- **Nothing here changes ranking**, and there's a test asserting scores and ordering are
+  untouched. The features are attached to every candidate — including the fallback path, so the
+  two selection paths can be compared on the same terms — so that `S1` can judge whether they
+  *should* influence ranking. Choosing a weight first would make an improvement and a regression
+  look identical.
+
+
+### Fixed — invented transcript text reached captions and the selector (T3)
+
+- Whisper invents text over music, applause and silence, and gets stuck in decode loops that
+  repeat a phrase for tens of seconds. **Nothing filtered either**, so hallucinated text was fed
+  to the LLM selector as though it were speech and burned into captions.
+  `worker/transcript_filter.py` now drops segments that look invented or looped.
+- **Whisper's own two indicators are captured** — `no_speech_prob` and `avg_logprob` were being
+  discarded by `TranscriptSegment`. `no_speech_prob` is the model's estimate that a span
+  contains no speech, which is precisely the condition it hallucinates under.
+- **Every rule requires two independent signals to agree**, because the error costs are
+  asymmetric: a false positive deletes real speech and nothing downstream can notice, while a
+  missed hallucination is visible in the clip. `no_speech_prob` is never acted on alone — it
+  runs high on whispered, distant and accented speech that is entirely real.
+- **There is deliberately no boilerplate phrase list.** Whisper's inventions cluster around
+  "Thanks for watching" and "Subscribe to my channel", and those are things people genuinely
+  say — a phrase list would silently delete the outro of every video that has one.
+- **A circuit breaker**: if fewer than half the segments would survive, nothing is dropped. If
+  most of a transcript looks invented the thresholds are wrong for that audio, and emptying it
+  turns a poor transcript into no clips. Keeping a bad transcript is recoverable.
+- Filtering runs **after** the transcript cache, so tuning a threshold takes effect on the next
+  run instead of invalidating hours of ASR, and the cache stays lossless. Cache schema bumped
+  to v2 to carry the new signals.
+
+
+### Fixed — output could exceed full scale and clip (AU3)
+
+- A true-peak limiter now ends the audio chain, at `LOUDNESS_TRUE_PEAK_DB`. `loudnorm`
+  *targets* a true-peak ceiling and lowers its gain to respect one, but only on the path where
+  it runs: with normalisation disabled or the source unmeasurable, nothing constrained the
+  output. Measured on a mix of a −0.1 dBFS source and a bed, the result reached **+5.5 dBFS
+  true peak**; with the limiter, −1.0.
+- **`level=disabled` is the load-bearing argument.** `alimiter`'s `level` defaults to *on*,
+  which auto-levels output up to the ceiling — so a filter whose job is to attenuate would, in
+  its default configuration, make quiet audio *louder*. Measured: a quiet input came out 1 dB
+  hotter and 1 LU higher, which would have silently shifted every clip off the platform
+  loudness target `AU1` just set.
+- Placed after loudness normalisation, since anything that can raise a level belongs upstream
+  of the thing that catches it. No `effects_applied` marker: a limiter that does not engage is
+  inaudible, and those markers describe choices rather than guards.
+
+
+### Added — transcripts are cached (T8)
+
+- ASR is the most expensive stage in the pipeline and the most repeated: re-running a source to
+  try a different caption preset, aspect ratio, or any of the effect toggles re-transcribed
+  audio that had not changed. `worker/transcript_cache.py` caches by source content hash, and
+  `transcribe()` now consults it.
+- **The ASR parameters are part of the key**, not just the file. A transcript from the `base`
+  model is not interchangeable with one from `small` — which `T1` just changed — and
+  language/translate/beam size change the output too. Keying on the file alone would have
+  served stale `base` transcripts to the upgraded model silently and permanently, which is
+  worse than no cache.
+- **The file is hashed by content, not path and mtime.** Hashing a gigabyte costs seconds where
+  transcribing it costs minutes, so correctness is cheap here — and path-and-mtime keying is
+  wrong in exactly the case that matters: footage re-exported over the same filename.
+- Writes are atomic (temp file plus rename), so a job killed mid-write cannot leave a truncated
+  entry. Any cache failure — unwritable directory, unhashable source, corrupt entry — degrades
+  to plain transcription: a cache is an optimisation and must never fail a job.
+- The `S1` harness now delegates to the same module instead of carrying its own cache keyed on
+  path/size/mtime with its own JSON shape. Two caches of the same thing had been disagreeing
+  precisely where it mattered.
+
+
+### Added — selection evaluation harness (S1)
+
+`docs/IMPROVEMENT_PLAN.md` puts this first in §3 and says why: *"Without this every change
+below is unmeasurable."* Every proposed selection improvement — audio energy, pitch, speech
+rate, hook scoring, scene awareness — is a change to a ranking, and a ranking cannot be
+improved by inspection.
+
+- **`evaluation/`** — label format, IoU matching, precision@k / recall@k, naive baselines, and
+  a runner. **`scripts/eval_selection.py`** is the CLI: `template`, `validate`, `run`,
+  `compare`. `eval/README.md` covers how to label.
+- **Baselines run on every evaluation**, and this is the point of the design. Whether
+  precision@5 of 0.40 is good depends entirely on what picking clips *without thinking* scores
+  on the same footage, and that number is not guessable — it moves with source length and with
+  how many moments were labelled. `uniform` is the no-information floor, `random` is chance,
+  and `longest` reproduces what the shipped deterministic fallback does when it caps the count.
+  If the LLM selector cannot beat `longest`, the fallback is not a fallback — it is the product,
+  and the report says so in those terms.
+- **Matching is one-to-one.** Without that, a selector could return five near-identical clips
+  over one good moment and score five hits — rewarding exactly the redundancy S15 exists to
+  remove. IoU also uses union as its denominator, so returning the whole video scores ~0.01
+  rather than "containing" every moment.
+- **Results are reported at IoU 0.3 / 0.5 / 0.7**, because the threshold is a judgement: 0.3 is
+  "found the right part of the video", 0.7 is "got the boundaries too". A single number would
+  hide a change that improved targeting while worsening cuts.
+- **`mean best IoU` is reported separately** as the diagnostic precision cannot express. Two
+  selectors scoring zero at 0.5 are not equivalent — one landing at 0.45 is cutting the right
+  moment badly, one at 0.05 is looking in the wrong place. The report flags the first as a near
+  miss and points at S9 rather than at the scoring signals.
+- **Transcripts are cached** (keyed on path, size and mtime), so only the first run pays for
+  transcription and iterating on scoring afterwards is fast. The deterministic strategies need
+  no transcript and no Whisper model at all, so the fallback's own score can be established
+  before paying for anything.
+
+Verified end to end on real media: with `--strategy silence` the selector scores *exactly* the
+same as the `longest` baseline, which is correct — that strategy **is** the segmentation
+fallback — and is the harness detecting a tie it was built to detect.
+
+
+### Fixed — audio was never mastered (AU1, AU2, AU8)
+
+Verified absent across the whole repository before this: no `loudnorm`, no `dynaudnorm`, no
+`sidechaincompress`, no LUFS target, no `-ar`/`-ac`. Music was mixed at a flat `volume=0.12`.
+
+- **Loudness is normalised to the target platform's level** (`AU1`), two-pass: an analysis
+  pass measures the source, then one linear gain reaches the target without touching
+  dynamics. A clip quieter than the platform's target is turned *up* on playback, lifting its
+  noise floor along with the speech; a louder one is turned down, losing the headroom it was
+  mastered with. Targets are per platform because the platforms differ — YouTube about
+  −14 LUFS, TikTok and Instagram nearer −11 — with a −1 dBTP ceiling so the lossy encoder
+  has room. Failure to measure degrades to the source's own level and records
+  `loudness_degraded:unmeasurable` rather than failing the clip.
+- **Music ducks under speech** with `sidechaincompress` (`AU2`). A flat bed has no good
+  level: loud enough to hear between sentences is loud enough to fight the speech during
+  them, and quiet enough not to fight it is inaudible — no music, at the cost of an extra
+  encode. `MUSIC_DUCK_RATIO=1.0` restores the flat mix.
+- **Output sample rate and channel count are pinned** to 48 kHz stereo (`AU8`). Neither was
+  set anywhere, so output was whatever the source happened to be: 44.1 kHz mono from a
+  phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
+  decoder sees it first, if at all.
+
+### Fixed — keyword emphasis is budgeted per cue, not per clip (C11 follow-up)
+
+- The first `C11` fix replaced an absolute confidence threshold with a salience ranking and a
+  budget, but applied that budget to the whole word list a caller passed in. The strongest few
+  words in a clip tend to sit near each other, so emphasis clustered: `scripts/smoke_reel.py`
+  rendered a clip with **two highlights in the opening cue and none in the four after it**.
+  A viewer reads one cue at a time, so "the important word" is a question about the cue in
+  front of them — the budget now applies per cue, and the same clip gets one emphasis in each.
+- **A one-word cue has to earn its emphasis.** A flat floor of one highlight per cue would
+  emphasise every single-word cue, and rapid speech with pauses produces runs of them — which
+  reinstates the original defect (everything highlighted, therefore nothing) one cue at a
+  time. A number or an ALL-CAPS run still pops, because those are emphatic in themselves
+  rather than by comparison; a merely long word does not.
+- Grouping uses the renderer's own `words_to_cues`, so emphasis is budgeted against the cues
+  actually drawn. Failure to group falls back to a single group, because `plan_keywords` is
+  handed adversarial word objects by the property tests and must stay total.
+
+### Added — approve and retry are reachable from the dashboard (PB2)
+
+- `/api/publish-attempts/{id}/approve` and `/retry` existed with **zero references anywhere
+  in `frontend/src/`**. Three of the five publishers can return `review_required` — Instagram
+  and X without direct-publish approval, Whop when the upload cannot be attached to a target —
+  so an attempt in that state stopped permanently and the only way out was a hand-written HTTP
+  request. The history table now offers both actions.
+- They stay **separate controls**, not one "resume" button. Approve escalates a held
+  submission into a live post; retry re-runs it exactly as submitted, for an expired token or a
+  network blip. One button would have to guess, and guessing wrong publishes something that was
+  deliberately withheld. Approve is offered only for `review_required`; retry for
+  `review_required` and `failed`; neither for a published or in-flight attempt, since re-posting
+  a published clip duplicates it on a real account.
+- 9 frontend tests cover the state gating, that each action calls only its own endpoint, error
+  surfacing, and double-click protection.
+
+### Fixed — filler removal left audible clicks (V10)
+
+- Each kept segment now gets a few milliseconds of audio fade at its cut edges. `concat` joined
+  segments sample-exactly, so every removed "um" was a step discontinuity in the waveform —
+  measured on a continuous tone, the largest sample-to-sample jump at the seam drops from
+  **164 to 19**.
+- Deliberately **not** `acrossfade`: crossfading overlaps segments, so the result is shorter
+  than the sum of its parts at every seam, and `rebase_words` maps caption timings onto the kept
+  timeline using cumulative segment durations. An overlap would drift captions out of sync by a
+  growing amount across the clip — a worse artefact than the click. Video cuts stay hard; a jump
+  cut is normal short-form grammar.
+
+### Added — measurement (M2, M6)
+
+- **`scripts/smoke_reel.py`** renders one clip with every effect on, prints the effect markers
+  (flagging degradations) and the before/after loudness, and lists what to look at. Explicitly
+  not a test: it asserts nothing about appearance, because the defects it exists to catch —
+  a wrong font, a soft emoji, a drone instead of music — are only visible to a person.
+- **A loudness gate on rendered output** (`M6`): renders through the real compositor and fails
+  if the result is more than 1.5 LU from its platform target, in both directions.
+
+### Added — clips are checked before they are uploaded (O10)
+
+- **The only pre-flight in the publish path was `video_path.exists()`.** Nothing checked
+  aspect, duration, resolution, file size, codec or frame rate, so a clip a platform would
+  refuse was discovered *by uploading it*: the failure arrived as whatever that platform's
+  API chose to say, after spending an upload attempt and a rate-limit slot. `publishers/
+  preflight.py` now validates against per-platform limits first, and a rejected clip never
+  reaches the publisher.
+- **Errors block, warnings do not.** A wrong codec or an over-limit duration should not cost
+  an upload attempt to discover. A landscape clip going somewhere that prefers 9:16 will
+  publish letterboxed, and that is the user's call — blocking it would be us overruling them
+  on taste.
+- The limits are deliberately looser than the strictest figure each platform advertises, so
+  a *false* rejection is unlikely. They are approximations collected in one place, not a
+  specification: platform limits change without notice and differ by account tier. Since the
+  publishers have never run against a live platform (`PB1`), none of this has been confirmed
+  against a real rejection — it guards against obvious mistakes, it does not certify.
+
+### Fixed — clips no longer open on dead air (AU7)
+
+- Leading and trailing silence is trimmed from each clip by moving the **cut points**, which
+  costs no extra pass and keeps video and audio in step by construction (filtering the audio
+  alone would desynchronise them). Capped at 1.25 s per edge: `silencedetect` reports a
+  *pause*, and a pause at a boundary is often the breath before the first word or the beat
+  after a punchline. Silence in the middle of a clip is speech rhythm and is left alone.
+- Unlike `filler_removal`, this only moves boundaries and cannot cut anything out of the
+  middle, which is why it is a safe default and filler removal is not.
+
+### Fixed — a busy clip could balloon past platform size limits (O4)
+
+- `-maxrate`/`-bufsize` VBV caps on delivered clips. `-crf` sets a *quality* target with no
+  bitrate ceiling, so confetti, fast pans, grain or a gameplay scene could produce a file a
+  platform rejects on upload. Off for intermediates, which would only lose quality the final
+  pass could have used.
+
+
+## [0.11.0] - 2026-07-29
+
+A minor bump rather than a patch: the visible output of a default run changes. No API
+signature changes, no removed fields, and every new field is additive with a default - but
+a caller who relied on the shipped defaults will get different-looking clips, so it does not
+belong in a patch release.
+
+### Added — opinionated profiles (U2)
+
+- **Four shipped profiles — "Podcast", "Gaming", "Talking head", "Educational"** — each a
+  coherent bundle rather than a label. The settings panel exposes thirteen independent
+  toggles and no opinion about which combinations work together; a user editing a podcast
+  has to already know that a two-host shot needs speaker-aware reframing and that a slow
+  zoom on top of it reads as restless. Pass `profile: "<name>"` with a process request:
+  the bundle is expanded into the individual options and **anything else in the request
+  overrides it**, including an explicit `false`.
+- Two features the global defaults deliberately leave off are used deliberately here, which
+  is the point of having profiles: `filler_removal` in Podcast and Educational, where
+  unscripted speech makes it worth its cost, and `kinetic_typography_enabled` in Gaming —
+  the one audience that asks for animated captions, and a reasonable place for a feature
+  that takes ownership of the caption layer.
+- `GET /api/profiles/builtin` returns the bundles in full, with the reasoning behind each,
+  so a client can show what picking one will change. `GET /api/info` carries the names.
+  Distinct from `GET /api/profiles`, which lists profiles a *user* saved.
+
+### Changed — the synthesised music bed says what it is (A15)
+
+- **`worker/effects/audio.py` does not play music — it synthesises a drone**, two sine tones
+  with tremolo and a low-pass, identical for every clip of a given mood. Nothing recorded
+  which of its two sources a clip got, so a synthesised bed was reported as `music:upbeat`,
+  indistinguishable from a licensed track. `assets/music` ships empty, so in practice it was
+  always the drone.
+- `resolve_music_bed` now returns a `MusicBed` naming its source, and a clip using the
+  fallback is marked **`music_degraded:synthesised`** alongside `music:<mood>`.
+- `MUSIC_ALLOW_SYNTHESIS` (default on) lets an operator refuse the fallback entirely and get
+  silence instead of a drone. Real licence-clean beds (`A14`) have not shipped.
+
+### Changed — defaults (U1, V1, V12, T1)
+
+- **A default run now enables the features that decide how a clip looks**: auto-reframe
+  (`V1` — the default was a static centre crop that decapitated any off-centre speaker),
+  Ken-Burns zoom, punch-in transitions, fades, the hook title (`V12`), the progress bar,
+  emoji at `standard`, keyword highlighting, in-caption emoji and visual selection. Out of
+  the box the tool used to enable only captions, 9:16, the `ai` strategy and metadata, so it
+  shipped looking worse than it is capable of and every feature had to be found one checkbox
+  at a time.
+- Keyword highlighting is only a sane default because of the `C11` fix below; before it, the
+  rule emphasised nearly every word.
+- **Four features stay off deliberately**, each because enabling it today would make output
+  worse rather than better: background music (`A14` — `audio.py` synthesises two sine waves
+  per mood and `assets/music` is empty, so it would add a drone), b-roll (`A18`/`A21` — the
+  library is empty, so it would only add degradation markers), kinetic typography (an AV
+  engine that takes ownership of the caption layer, which belongs to a profile rather than
+  the global default) and filler removal — which, unlike the rest, removes *content*, and
+  cuts hard on sparse-speech footage: a 3.0 s fixture came out at 1.33 s.
+- `WHISPER_MODEL` defaults to `small`, not `base` (`T1`). A mis-transcribed word is burned
+  into the video, and `base` is a noticeable accuracy step down.
+
+### Fixed — captions rendered in the wrong font, at the wrong weight (C1-C5, C7, C8, C11)
+
+- **The fallback for an unavailable font was `Arial` — the font every preset requested, and
+  one installed on no Linux host.** The substitution branch replaced a missing font with the
+  same missing font, reported `font_substituted:Arial` naming the font that had *failed*, and
+  left libass to metric-alias to whatever the host had, with synthesised bold. Confirmed by
+  reading libass' own resolution: `fontselect: (Anton, 700, 0) -> NotoSans-Bold.ttf`.
+  `captions.FALLBACK_FONTS` is now an ordered ladder of faces that verifiably resolve, and
+  the marker names the font actually used — which is what `worker/models.py` always
+  documented and the code never did.
+- `subtitles_filter` passes `fontsdir`, so bundled faces work with no system install at all.
+- **A heavy face is no longer asked to be bold on top of itself** (`C3`). ASS has one bold
+  flag, libass turns it into a request for weight 700, and when the face cannot supply it
+  libass *synthesises* the emboldening — thickening a face already drawn heavy. Both the
+  broken and fixed versions resolve to the same file, so this is asserted on the requested
+  weight, not the resolved font.
+- Cues group at 3 words with sizes raised to match (`C5`); presets can ask for upper-case
+  (`C7`) and set their own outline and shadow (`C8`), replacing values inferred from the
+  animation style that were near-invisible at 1080x1920.
+- **Keyword highlighting fired on almost everything** (`C11`), which is visually identical to
+  highlighting nothing: the rule treated Whisper probability >= 0.9 as evidence a word
+  mattered, and `_word_probability` returns 1.0 for a word carrying no probability at all —
+  so a transcript without per-word confidence emphasised *every* non-stopword. Emphasis is
+  now a salience ranking with a budget.
+- The karaoke fill swept to pure green, the ASS default rather than a choice, and disagreed
+  with the preset path (`C4`). Both now share one emphasis colour.
+
+### Fixed — declared assets that were never shipped (A1-A3, A6-A8, A10)
+
+- **12 caption faces vendored** with their licences and a manifest (`assets/fonts.json`).
+- **The emoji set is vendored** (`A7`). `.gitignore` claimed "Emoji assets are downloaded at
+  build time" and nothing did that, so `assets/emoji` was empty and every render either made
+  a per-clip HTTP request or silently dropped the overlay. `scripts/fetch_emoji.py` is that
+  build step; CI fails if a glyph is missing.
+- Emoji artwork is Noto Emoji 512px rather than Twemoji 72px (`A6`), which was a 2.1x
+  upscale at the size the overlay renders. `emoji_allow_download` now defaults off.
+- **Emoji were sized against a hard-coded 1080** (`A8`) while overlay *placement* used
+  ffmpeg's real `W`, so on any other width the two disagreed about the frame.
+- **Inflected speech now matches the keyword map** (`A10`): `winning`, `wins`, `won` and
+  `fired` all missed while `win` hit.
+
+### Fixed — delivered files some platforms refused to decode (O1, O2, O3)
+
+- `-pix_fmt yuv420p`, `-profile:v high -level 4.0` and constant frame rate are now applied
+  through one shared builder instead of seven hand-written argument lists. Without them a
+  4:2:2 or 10-bit source produced a file that plays locally and is refused by Safari, many
+  Android decoders and several upload pipelines — a failure that only appears at upload
+  time. Verified by probing the output of a real 4:2:2 15 fps source.
+
+### Added — tests that assert resolved values (M7)
+
+- `tests/test_fonts_real_binary.py` checks the font libass *resolved* and the weight it
+  requested, by parsing libass' own output — an independent mechanism, in the spirit of
+  `tests/test_capabilities_real_binary.py`. Reintroducing the font defect fails four of them.
+- `tests/test_output_compat.py` asserts the probed pixel format, profile, level and frame
+  rate of a delivered file, plus a control proving the flags are what made the difference.
+- `.kiro/steering/working-agreement.md` records the gates and the "assert the resolved value,
+  not the requested one" rule that both files exist to enforce.
 
 
 ### Fixed
