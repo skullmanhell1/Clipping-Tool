@@ -11,12 +11,15 @@ expensive relative to inference.
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,6 +40,14 @@ class TranscriptSegment:
     end: float
     text: str
     words: list[Word] = field(default_factory=list)
+    # T3: Whisper's own two indicators that a segment may be invented, previously discarded.
+    # ``no_speech_prob`` is the model's estimate that the audio contains no speech at all -
+    # exactly the condition under which it hallucinates - and ``avg_logprob`` is its mean token
+    # confidence. Defaulted and appended so existing positional construction keeps working;
+    # 0.0 for both reads as "no reason to doubt this", which is the right default for a
+    # segment built by hand in a test.
+    no_speech_prob: float = 0.0
+    avg_logprob: float = 0.0
 
 
 @dataclass
@@ -154,6 +165,8 @@ def transcribe_uncached(
                 end=float(seg.end),
                 text=seg.text.strip(),
                 words=words,
+                no_speech_prob=float(getattr(seg, "no_speech_prob", 0.0) or 0.0),
+                avg_logprob=float(getattr(seg, "avg_logprob", 0.0) or 0.0),
             )
         )
 
@@ -193,8 +206,10 @@ def transcribe(
     from worker import transcript_cache
 
     if not settings.transcript_cache_enabled:
-        return transcribe_uncached(audio_or_video, language=language, translate=translate,
-                                  beam_size=beam_size)
+        return _filtered(
+            transcribe_uncached(audio_or_video, language=language, translate=translate,
+                                beam_size=beam_size)
+        )
 
     key: Optional[str] = None
     try:
@@ -215,7 +230,7 @@ def transcribe(
         if cached is not None:
             if on_hit is not None:
                 on_hit(key)
-            return cached
+            return _filtered(cached)
 
     if key is not None and on_miss is not None:
         on_miss(key)
@@ -224,4 +239,24 @@ def transcribe(
                                      beam_size=beam_size)
     if key is not None:
         transcript_cache.store(key, transcript)
-    return transcript
+    return _filtered(transcript)
+
+
+def _filtered(transcript: Transcript) -> Transcript:
+    """Apply T3's hallucination/repetition filter to ``transcript``.
+
+    Applied *after* the cache, never before it: the cache holds raw ASR output, so tuning a
+    threshold or fixing a filter rule takes effect on the next run instead of invalidating
+    hours of transcription. Filtering is microseconds; transcribing is minutes. Storing the
+    filtered form would also make the cache lossy - a segment dropped by a rule we later
+    decide was wrong could not be recovered without re-running the model.
+    """
+    from worker import transcript_filter
+
+    result = transcript_filter.filter_transcript(transcript)
+    if result.removed_count:
+        logger.info(
+            "T3: dropped %d transcript segment(s): %s",
+            result.removed_count, "; ".join(result.reasons[:5]),
+        )
+    return result.transcript

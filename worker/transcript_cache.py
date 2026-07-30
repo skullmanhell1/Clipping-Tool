@@ -32,7 +32,9 @@ from config import settings
 
 #: Bumped when the serialised shape changes, so old entries are ignored rather than
 #: mis-parsed. Cheaper and safer than migrating a cache that can always be regenerated.
-SCHEMA_VERSION = 1
+#: v2 added the per-segment ``no_speech_prob``/``avg_logprob`` that T3's filter reads - an
+#: entry without them would look like a segment with nothing to doubt.
+SCHEMA_VERSION = 2
 
 #: Read size for hashing. Large enough that the syscall overhead is irrelevant, small enough
 #: not to hold a meaningful amount of a video in memory.
@@ -90,6 +92,8 @@ def transcript_to_dict(transcript: Any) -> dict:
                 "start": float(segment.start),
                 "end": float(segment.end),
                 "text": segment.text,
+                "no_speech_prob": float(getattr(segment, "no_speech_prob", 0.0)),
+                "avg_logprob": float(getattr(segment, "avg_logprob", 0.0)),
                 "words": [
                     {
                         "start": float(word.start),
@@ -122,6 +126,8 @@ def transcript_from_dict(raw: dict):
             start=float(segment["start"]),
             end=float(segment["end"]),
             text=str(segment.get("text", "")),
+            no_speech_prob=float(segment.get("no_speech_prob", 0.0)),
+            avg_logprob=float(segment.get("avg_logprob", 0.0)),
             words=[
                 Word(
                     start=float(word["start"]),

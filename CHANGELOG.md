@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — invented transcript text reached captions and the selector (T3)
+
+- Whisper invents text over music, applause and silence, and gets stuck in decode loops that
+  repeat a phrase for tens of seconds. **Nothing filtered either**, so hallucinated text was fed
+  to the LLM selector as though it were speech and burned into captions.
+  `worker/transcript_filter.py` now drops segments that look invented or looped.
+- **Whisper's own two indicators are captured** — `no_speech_prob` and `avg_logprob` were being
+  discarded by `TranscriptSegment`. `no_speech_prob` is the model's estimate that a span
+  contains no speech, which is precisely the condition it hallucinates under.
+- **Every rule requires two independent signals to agree**, because the error costs are
+  asymmetric: a false positive deletes real speech and nothing downstream can notice, while a
+  missed hallucination is visible in the clip. `no_speech_prob` is never acted on alone — it
+  runs high on whispered, distant and accented speech that is entirely real.
+- **There is deliberately no boilerplate phrase list.** Whisper's inventions cluster around
+  "Thanks for watching" and "Subscribe to my channel", and those are things people genuinely
+  say — a phrase list would silently delete the outro of every video that has one.
+- **A circuit breaker**: if fewer than half the segments would survive, nothing is dropped. If
+  most of a transcript looks invented the thresholds are wrong for that audio, and emptying it
+  turns a poor transcript into no clips. Keeping a bad transcript is recoverable.
+- Filtering runs **after** the transcript cache, so tuning a threshold takes effect on the next
+  run instead of invalidating hours of ASR, and the cache stays lossless. Cache schema bumped
+  to v2 to carry the new signals.
+
+
 ### Fixed — output could exceed full scale and clip (AU3)
 
 - A true-peak limiter now ends the audio chain, at `LOUDNESS_TRUE_PEAK_DB`. `loudnorm`
