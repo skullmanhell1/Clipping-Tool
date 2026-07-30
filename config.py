@@ -693,6 +693,57 @@ class Settings(BaseSettings):
     split_screen_max_regions: int = Field(
         default=2, description="Max regions for split-screen reframe (default 2-up)."
     )
+    # V18: a user-supplied 3D LUT, applied after the colour preset. Empty disables it.
+    color_lut: str = Field(
+        default="",
+        description="Path to a .cube/.3dl 3D LUT applied after the colour preset (V18). "
+                    "Empty means no LUT. A missing or unreadable file is ignored rather "
+                    "than failing the render.",
+    )
+    # V19: ease the Ken Burns ramp instead of moving at a constant rate.
+    zoom_ease: bool = Field(
+        default=False,
+        description="Ease the Ken Burns push in and out instead of ramping linearly (V19). "
+                    "Same start and end zoom; only the curve between them changes. Off by "
+                    "default because it changes the rendered output, and every visual setting "
+                    "here defaults to the previously shipped behaviour so the v0.8.0 parity "
+                    "gate stays meaningful.",
+    )
+    # V19: bump the zoom on detected audio accents.
+    beat_sync_zoom: bool = Field(
+        default=False,
+        description="Add a short scale bump at detected audio onsets (V19). Off by default: "
+                    "it suits music-led footage and is a distraction on talking-head clips.",
+    )
+    beat_sync_rise_db: float = Field(
+        default=6.0,
+        description="Level rise between envelope readings that counts as an accent (V19).",
+    )
+    # V16: crop existing letterbox bars before reframing.
+    auto_deletterbox: bool = Field(
+        default=True,
+        description="Detect and crop existing letterbox/pillarbox bars before reframing (V16). "
+                    "Without this, reframing already-boxed footage centres the crop on the "
+                    "bars and bakes them into the output.",
+    )
+    # V14: a closing call-to-action over the tail of the clip. Empty disables it.
+    end_card_text: str = Field(
+        default="",
+        description="Call-to-action shown over the last seconds of every clip (V14). Empty "
+                    "disables it, which is the previous behaviour.",
+    )
+    end_card_seconds: float = Field(
+        default=2.0,
+        description="How long the end card is held (V14). Capped at half the clip so a short "
+                    "clip is not mostly call-to-action.",
+    )
+    # V8: how often the follow-active crop position is updated.
+    reframe_command_fps: float = Field(
+        default=24.0,
+        description="Crop-position updates per second for follow-active reframe (V8). Was 12, "
+                    "which is visible as stepping on fast movement. Costs only sendcmd script "
+                    "size, not decode time.",
+    )
 
     # ---------------------------------------------------------- publishers --
     history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")

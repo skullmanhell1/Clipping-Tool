@@ -128,6 +128,36 @@ def _engine_input_args(
     return args
 
 
+#: Envelope resolution used for beat detection (V19).
+#:
+#: Much finer than the 1 s window used for clip scoring: a bump has to land on the transient to
+#: read as one, and a second of slack would put it anywhere in the bar.
+BEAT_ENVELOPE_WINDOW_S = 0.1
+
+
+def _beat_times(base_clip: str | Path, options: ProcessingOptions) -> tuple[float, ...]:
+    """Audio accents to bump the zoom on, or ``()`` (V19).
+
+    Returns ``()`` unless beat sync is enabled *and* a zoom is actually running, because the
+    bump is a multiplier on the zoom expression - with no zoom there is nothing to multiply, and
+    measuring the envelope would be a decode spent on an effect that cannot appear.
+    """
+    if not getattr(settings, "beat_sync_zoom", False):
+        return ()
+    if not (options.zoom or options.transitions):
+        return ()
+    from worker import audio_features
+
+    envelope = audio_features.energy_envelope(base_clip, window=BEAT_ENVELOPE_WINDOW_S)
+    if not envelope:
+        return ()
+    return tuple(
+        audio_features.detect_onsets(
+            envelope, rise_db=float(getattr(settings, "beat_sync_rise_db", 6.0))
+        )
+    )
+
+
 def render_clip(
     base_clip: str | Path,
     dest: str | Path,
@@ -326,6 +356,11 @@ def render_clip(
         fades=options.fades, progress_bar=False, subtitles=None,
         # V9: which opening treatment `transitions` means. Default `punch_in` is what shipped.
         transition_style=str(getattr(settings, "transition_style", "punch_in")),
+        # V18: an optional 3D LUT after the preset. Empty (the default) changes nothing.
+        color_lut=str(getattr(settings, "color_lut", "") or ""),
+        # V19: eased Ken Burns, and scale bumps on real audio accents.
+        zoom_ease=bool(getattr(settings, "zoom_ease", False)),
+        beats=_beat_times(base_clip, options),
     )
     # Engine compose contributions render *below* the caption layer (Req 23.3),
     # so they sit above the look chain and any b-roll but under captions/progress
@@ -338,6 +373,20 @@ def render_clip(
             caption_chain.append(cap.subtitles_filter(contribution.subtitle_path))
     if subtitles_filter:
         caption_chain.append(subtitles_filter)
+
+    # V14: the closing call-to-action, above the captions so it is never occluded by a long
+    # final cue. Its own ASS, so it is independent of whether captions ran at all and of whether
+    # an engine took ownership of them.
+    end_card_path = cap.write_end_card_ass(
+        temp_dir / f"{base_clip.stem}.endcard.ass",
+        duration,
+        video_width=width,
+        video_height=height,
+    )
+    if end_card_path is not None:
+        caption_chain.append(cap.subtitles_filter(end_card_path))
+        applied.append("end_card")
+
     if options.progress_bar:
         # V13: position/style/colour/thickness come from settings; the defaults are exactly the
         # hard-coded values this replaces, so an unconfigured install renders the same bar.

@@ -11,6 +11,7 @@ callers can surface actionable errors.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -505,6 +506,84 @@ def reformat_aspect(
     ]
     _run(cmd)
     return dest
+
+
+#: Minimum fraction of a dimension that must be bar for a letterbox to be acted on.
+#:
+#: A couple of pixels of dark edge is normal in compressed footage and is not a letterbox.
+#: Cropping it would be a change nobody asked for, applied to every clip.
+MIN_LETTERBOX_FRACTION = 0.02
+
+
+def detect_letterbox(
+    source: str | Path,
+    *,
+    probe_seconds: float = 8.0,
+    skip_seconds: float = 1.0,
+) -> Optional[tuple[int, int, int, int]]:
+    """The content rectangle of ``source`` as ``(w, h, x, y)``, or ``None`` (V16).
+
+    Source footage is very often already letterboxed - a 16:9 video exported inside a 1:1
+    frame, a phone recording of a screen, anything re-uploaded from another platform. Reframing
+    such a source *centres the crop on the bars*: the tracker sees a smaller subject inside a
+    black border, and the output is a vertical clip with black bands baked into the middle of
+    it. Detecting the real content first is what makes reframe usable on second-hand footage.
+
+    Sampling starts at ``skip_seconds`` because the first frames are frequently a fade from
+    black, and a fade looks exactly like a fully-letterboxed frame to ``cropdetect`` - probing
+    from zero would report the whole frame as bar and crop everything.
+
+    Returns ``None`` when there is nothing worth cropping, when the detection is implausible, or
+    on any failure. Every caller treats that as "use the frame as-is", which is the previous
+    behaviour.
+    """
+    try:
+        info = probe(source)
+    except Exception:
+        return None
+    if info.width <= 0 or info.height <= 0:
+        return None
+
+    command = [
+        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
+        "-ss", f"{max(0.0, float(skip_seconds)):.3f}",
+        "-t", f"{max(0.5, float(probe_seconds)):.3f}",
+        "-i", str(source),
+        # round=2 keeps the result even, which libx264's 4:2:0 subsampling requires anyway.
+        "-vf", "cropdetect=limit=24:round=2:reset=0",
+        "-an", "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except Exception:
+        return None
+
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    matches = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", text)
+    if not matches:
+        return None
+    # The last report is the most informed: cropdetect accumulates across the window with
+    # reset=0, so earlier lines describe fewer frames.
+    width, height, x, y = (int(v) for v in matches[-1])
+
+    if width <= 0 or height <= 0:
+        return None
+    # Implausible results are ignored rather than trusted. cropdetect on a genuinely dark scene
+    # can report a tiny rectangle, and cropping a clip down to a quarter of its frame because
+    # somebody filmed at night would be far worse than leaving the bars.
+    if width > info.width or height > info.height:
+        return None
+    if width * height < info.width * info.height * 0.25:
+        return None
+
+    trimmed_x = info.width - width
+    trimmed_y = info.height - height
+    if (
+        trimmed_x < info.width * MIN_LETTERBOX_FRACTION
+        and trimmed_y < info.height * MIN_LETTERBOX_FRACTION
+    ):
+        return None
+    return width - (width % 2), height - (height % 2), x, y
 
 
 def extract_audio(source: str | Path, dest: str | Path, sample_rate: int = 16000) -> Path:

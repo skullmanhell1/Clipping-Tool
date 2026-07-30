@@ -958,6 +958,123 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return dest
 
 
+#: Fade lengths for the end card, in milliseconds.
+#:
+#: Asymmetric on purpose: it appears quickly enough to be read, and does not fade out at all -
+#: the clip ends under it, so a fade-out would only take the words away before the viewer's
+#: decision point.
+END_CARD_FADE_IN_MS = 300
+
+
+def end_card_dialogue(
+    clip_duration: float,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    text: Optional[str] = None,
+    seconds: Optional[float] = None,
+) -> str:
+    """One ASS dialogue line for the closing call-to-action, or ``""`` (V14).
+
+    Every clip currently ends the instant the speech does, which wastes the one moment the
+    viewer has already decided to watch to the end. A short "follow for more" over the tail is
+    the standard ask, and there was no way to add one without re-editing the export by hand.
+
+    Rendered as an ASS event rather than ``drawtext`` deliberately: this module renders all text
+    through libass so it works on ffmpeg builds without freetype, and a ``drawtext`` end card
+    would be the one piece of text that vanished on such a build.
+
+    Returns ``""`` when disabled, when there is no text, or when the clip is too short to give
+    the card a full appearance - a card that fades in as the video cuts is worse than none.
+    """
+    if text is None:
+        text = str(getattr(settings, "end_card_text", "") or "")
+    if seconds is None:
+        seconds = float(getattr(settings, "end_card_seconds", 2.0) or 0.0)
+    text = text.strip()
+    duration = max(0.0, float(clip_duration))
+    if not text or seconds <= 0 or duration <= 0:
+        return ""
+    # The card must fit, and still leave clip before it: on a 3 s clip a 2 s card is most of the
+    # video, which is an advert with a clip attached rather than the reverse.
+    seconds = min(float(seconds), duration / 2.0)
+    if seconds < END_CARD_FADE_IN_MS / 1000.0:
+        return ""
+
+    start = _ass_timestamp(duration - seconds)
+    end = _ass_timestamp(duration)
+    # Slide up a little as it fades in. `\move` is relative to PlayRes, so the distance scales
+    # with the output height rather than being a fixed pixel count that is invisible at 4K.
+    rise = max(12, int(round(video_height * 0.02)))
+    y_from = int(round(video_height * 0.78)) + rise
+    y_to = int(round(video_height * 0.78))
+    # Numeric, not an expression: ASS override tags take literal numbers, so `PlayResX/2` here
+    # would be parsed as a malformed argument and the card would land wherever libass recovered
+    # to rather than centred.
+    x = int(round(video_width / 2))
+    tags = (
+        f"{{\\an5\\move({x},{y_from},{x},{y_to},0,{END_CARD_FADE_IN_MS})"
+        f"\\fad({END_CARD_FADE_IN_MS},0)}}"
+    )
+    return f"Dialogue: 2,{start},{end},End,,0,0,0,,{tags}{_escape(text.upper())}"
+
+
+def write_end_card_ass(
+    dest: str | Path,
+    clip_duration: float,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    font: str = "Poppins ExtraBold",
+    font_size: int = 96,
+    text: Optional[str] = None,
+    seconds: Optional[float] = None,
+) -> Optional[Path]:
+    """Write a standalone ASS holding just the end card, or return ``None`` (V14).
+
+    Standalone rather than a line inside the caption ASS, for one reason: the card must not
+    depend on captions. It has to appear on a clip with captions turned off, and on a clip whose
+    captions are owned by the kinetic-typography engine - which writes its own ASS and would
+    never see a line added here. One file with one job covers all three cases, at the cost of a
+    second libass filter that only exists when the card is actually configured.
+    """
+    line = end_card_dialogue(
+        clip_duration,
+        video_width=video_width,
+        video_height=video_height,
+        text=text,
+        seconds=seconds,
+    )
+    if not line:
+        return None
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Alignment 5 (centred) with generous margins; the position is set per-event by \move, so
+    # this style only has to supply the look.
+    style = (
+        f"Style: End,{font},{font_size},&H00FFFFFF,&H00FFFFFF,"
+        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1"
+    )
+    dest.write_text(
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {video_width}\n"
+        f"PlayResY: {video_height}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"{style}\n"
+        "\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        f"{line}\n",
+        encoding="utf-8",
+    )
+    return dest
+
+
 def _legacy_dialogue_lines(cues: list[Cue], use_karaoke: bool) -> list[str]:
     """Render legacy (template-driven) dialogue lines (unchanged behaviour)."""
     lines: list[str] = []

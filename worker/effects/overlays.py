@@ -17,7 +17,8 @@ rather than ``drawtext`` so it works on ffmpeg builds without freetype.
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Sequence
 
 # Colour presets -> an ffmpeg `eq`/`hue` filter chain.
 COLOR_PRESETS: dict[str, str] = {
@@ -31,11 +32,59 @@ COLOR_PRESETS: dict[str, str] = {
 MUSIC_MOODS = ("upbeat", "chill", "dramatic", "corporate", "suspense")
 
 
-def color_filter(preset: str) -> Optional[str]:
-    """Return an ``eq``/``hue`` filter chain for a colour preset, or ``None``."""
-    if not preset:
+def _escape_filter_path(path: str) -> str:
+    """Escape a path for use inside an ffmpeg filter argument.
+
+    ``:`` separates filter options and ``\\`` and ``'`` are the escape characters, so a LUT
+    stored under a Windows-style path or in a directory with a colon in it silently produces a
+    filtergraph parse error rather than a wrong-looking image.
+    """
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def lut_filter(lut_path: str | None) -> Optional[str]:
+    """A ``lut3d`` filter for a user-supplied 3D LUT, or ``None`` (V18).
+
+    The five colour presets are fixed ``eq``/``curves`` strings, so a creator with a look of
+    their own - or a client's brand grade, which is nearly always delivered as a ``.cube`` -
+    could not use it. A LUT is also the only way to express a grade that is not a simple
+    per-channel curve.
+
+    Only ``.cube`` and ``.3dl`` are accepted: ffmpeg's ``lut3d`` reads those, and pointing it at
+    anything else fails the whole render rather than the effect. The file must exist for the same
+    reason - a missing LUT is a filtergraph error, so it is checked here where it can degrade to
+    no grade instead of losing the clip.
+    """
+    if not lut_path:
         return None
-    return COLOR_PRESETS.get(preset)
+    try:
+        path = Path(str(lut_path)).expanduser()
+    except (TypeError, ValueError):
+        return None
+    if path.suffix.lower() not in (".cube", ".3dl"):
+        return None
+    if not path.is_file():
+        return None
+    return f"lut3d=file='{_escape_filter_path(path.resolve())}'"
+
+
+def color_filter(preset: str, lut_path: str | None = None) -> Optional[str]:
+    """Return the colour chain for a preset, a LUT, or both (V18).
+
+    A LUT is applied *after* the preset when both are present, because a LUT is a look-up over
+    final values: grading first and then mapping through the LUT is what a colourist means by
+    applying one, whereas the reverse would feed the LUT's output back into a contrast curve and
+    produce something neither setting describes.
+    """
+    parts = []
+    if preset:
+        preset_chain = COLOR_PRESETS.get(preset)
+        if preset_chain:
+            parts.append(preset_chain)
+    lut = lut_filter(lut_path)
+    if lut:
+        parts.append(lut)
+    return ",".join(parts) if parts else None
 
 
 #: Opening-transition styles (V9).
@@ -82,6 +131,8 @@ def zoom_filter(
     punch_in: bool = False,
     *,
     style: str = "punch_in",
+    ease: bool = False,
+    beats: Sequence[float] = (),
 ) -> Optional[str]:
     """Return a ``zoompan`` filter for a slow zoom and/or a punch-in intro.
 
@@ -115,6 +166,18 @@ def zoom_filter(
     else:
         base = "1"
 
+    # V19: ease the Ken Burns ramp instead of running it linearly.
+    #
+    # `1+0.12*on/total` moves at a constant rate for the whole clip, which is the one thing a
+    # camera move never does - it reads as mechanical, and on a long clip the viewer notices the
+    # frame creeping. A smoothstep starts and ends at rest, so the move is invisible at both
+    # boundaries and only apparent in the middle, which is what a slow push is supposed to feel
+    # like. Same start and end zoom; only the curve between them changes.
+    if ken_burns and ease:
+        progress = f"(on/{total})"
+        smoothstep = f"({progress}*{progress}*(3-2*{progress}))"
+        base = f"(1+0.12*{smoothstep})"
+
     x_expr = "iw/2-(iw/zoom/2)"
     if zooming and style == "zoom_cut":
         # A step, not a ramp: held wide, then cut to base. `lt` alone gives exactly that, and
@@ -132,11 +195,59 @@ def zoom_filter(
     else:
         expr = base
 
+    # V19: add a brief scale bump at each detected accent, on top of whatever `expr` already is.
+    bump = _beat_bump_expr(beats, fps)
+    if bump:
+        expr = f"({expr})*{bump}"
+
     # zoompan pans around the centre as it zooms; d=1 keeps 1 input->1 output.
     return (
         f"zoompan=z='{expr}':d=1:fps={fps:g}:s={width}x{height}:"
         f"x='{x_expr}':y='ih/2-(ih/zoom/2)'"
     )
+
+
+#: How much a beat punch scales the frame, and how long it lasts.
+#:
+#: Small and short on purpose. A punch is an accent, and an accent that is large enough to
+#: notice as a *zoom* has stopped being one - it becomes a camera move that happens to be fast,
+#: which is the effect V19 is trying to get away from.
+BEAT_PUNCH_SCALE = 0.04
+BEAT_PUNCH_S = 0.18
+
+#: The most punches one clip may carry. Past this the effect is a strobe rather than an accent,
+#: and a busy passage can produce an onset every second.
+MAX_BEAT_PUNCHES = 12
+
+
+def _beat_bump_expr(beats: Sequence[float], fps: float) -> str:
+    """A multiplier expression that bumps the zoom briefly at each beat (V19).
+
+    Returns ``""`` for no beats, so the zoom expression is untouched and the filter string is
+    byte-identical to the pre-V19 form.
+
+    Each bump decays linearly from its peak over ``BEAT_PUNCH_S``. It is expressed as a
+    *multiplier* rather than an additive term so it composes with a Ken Burns ramp or an opening
+    punch without any of them needing to know about the others - additive terms would push the
+    total zoom past what either intended when they overlapped.
+    """
+    if not beats:
+        return ""
+    length = max(1, int(round(BEAT_PUNCH_S * max(1.0, fps))))
+    terms = []
+    for beat in sorted(set(float(b) for b in beats))[:MAX_BEAT_PUNCHES]:
+        if beat < 0:
+            continue
+        frame = int(round(beat * max(1.0, fps)))
+        # gt/lt rather than between(), because `between` is inclusive at both ends and adjacent
+        # bumps would then overlap by one frame and multiply.
+        terms.append(
+            f"if(gte(on,{frame})*lt(on,{frame + length}),"
+            f"{BEAT_PUNCH_SCALE}*(1-(on-{frame})/{length}),0)"
+        )
+    if not terms:
+        return ""
+    return "(1+" + "+".join(terms) + ")"
 
 
 def video_fade_filter(
@@ -218,6 +329,9 @@ def build_video_chain(
     progress_style: str = "bar",
     progress_color: str = "0x22D3EE",
     progress_thickness: int = 12,
+    color_lut: str = "",
+    zoom_ease: bool = False,
+    beats: Sequence[float] = (),
 ) -> list[str]:
     """Assemble the ordered list of video filters for the single look pass.
 
@@ -226,18 +340,22 @@ def build_video_chain(
     Disabled effects are omitted, so an all-off configuration yields an empty
     (or subtitles-only) chain.
 
-    The V9/V13 style arguments are keyword-only with the previous values as defaults, so every
-    existing caller - and the v0.8.0 parity gate - produces a byte-identical chain.
+    The V9/V13/V18/V19 arguments are keyword-only and default to the previous behaviour, so
+    every existing caller - and the v0.8.0 parity gate - produces a byte-identical chain. In
+    particular ``zoom_ease`` defaults to ``False`` here even though the *setting* defaults to
+    on: this function is what the frozen goldens compare against, and the setting is read one
+    layer up in the compositor.
     """
     chain: list[str] = []
 
-    c = color_filter(color)
+    c = color_filter(color, color_lut)
     if c:
         chain.append(c)
 
     z = zoom_filter(
         duration, fps, width, height,
         ken_burns=zoom, punch_in=transitions, style=transition_style,
+        ease=zoom_ease, beats=beats,
     )
     if z:
         chain.append(z)
