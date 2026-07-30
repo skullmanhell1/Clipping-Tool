@@ -44,6 +44,10 @@ class ProcessingOptions:
     num_clips: str = "auto"              # auto | 1 | 3 | 5 | 10 | max
     strategy: str = "ai"                 # ai | silence | fixed
     captions: bool = True                # burn captions
+    # O11: also write .srt/.vtt beside the clip. The burn-in is unchanged; this is
+    # for platforms that accept uploaded captions, and for anyone who needs the
+    # text rather than an image of it.
+    subtitle_sidecar: bool = False
 
     # --- Phase 2: smart selection & metadata (Advanced settings) ----------
     topic: str = ""                      # Clip Topic / Keywords to bias toward
@@ -258,6 +262,7 @@ class ProcessingOptions:
                 valid["hashtag_count"] = 5
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in ("reframe", "zoom", "transitions", "hook_title", "fades",
+                           "subtitle_sidecar",
                            "progress_bar", "emoji_animate", "filler_removal",
                            # Phase 6 / Tier 1 boolean flags
                            "caption_keyword_highlight", "caption_keyword_ai",

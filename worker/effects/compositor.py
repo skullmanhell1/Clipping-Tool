@@ -324,6 +324,8 @@ def render_clip(
         duration=duration, fps=fps, width=width, height=height,
         color=options.color, zoom=options.zoom, transitions=options.transitions,
         fades=options.fades, progress_bar=False, subtitles=None,
+        # V9: which opening treatment `transitions` means. Default `punch_in` is what shipped.
+        transition_style=str(getattr(settings, "transition_style", "punch_in")),
     )
     # Engine compose contributions render *below* the caption layer (Req 23.3),
     # so they sit above the look chain and any b-roll but under captions/progress
@@ -337,7 +339,17 @@ def render_clip(
     if subtitles_filter:
         caption_chain.append(subtitles_filter)
     if options.progress_bar:
-        caption_chain.append(overlays.progress_bar_filter(duration, width, height))
+        # V13: position/style/colour/thickness come from settings; the defaults are exactly the
+        # hard-coded values this replaces, so an unconfigured install renders the same bar.
+        caption_chain.append(
+            overlays.progress_bar_filter(
+                duration, width, height,
+                thickness=int(getattr(settings, "progress_bar_thickness", 12)),
+                color=str(getattr(settings, "progress_bar_color", "0x22D3EE")),
+                position=str(getattr(settings, "progress_bar_position", "bottom")),
+                style=str(getattr(settings, "progress_bar_style", "bar")),
+            )
+        )
 
     if options.color:
         applied.append(f"color:{options.color}")

@@ -479,6 +479,67 @@ class Settings(BaseSettings):
     reframe_sample_cap: int = Field(
         default=120, description="Max frames sampled per clip for face detection."
     )
+    # V4: restart the reframe smoother at every shot change. The EMA otherwise carries the
+    # previous shot's framing across a cut and converges on the new one over the following
+    # second, which reads on screen as the crop searching for the subject after every cut.
+    reframe_reset_on_cut: bool = Field(
+        default=True,
+        description="Reset reframe tracking at shot changes (V4). Costs one video-only decode "
+                    "per reframed clip; off restores smoothing straight through cuts.",
+    )
+
+    # ------------------------------------------- output geometry (O5, O9) --
+    # Resolution was fixed at the 1080-class values in ffmpeg_utils.ASPECT_PRESETS with no way
+    # to ask for anything else, so a 4K source was always downscaled and a low-powered host had
+    # no way to trade quality for encode time. Named by the short side; the long side follows
+    # from the aspect.
+    output_short_side: int = Field(
+        default=1080,
+        description="Output short side in pixels (O9): 720, 1080, 1440 or 2160. 1080 is the "
+                    "short-form consensus. An unrecognised value falls back to 1080.",
+    )
+
+    # ----------------------------------------------- look details (V11, V13) --
+    # V11: what fills the frame around fitted video. Was one hard-coded look (boxblur 40 plus a
+    # slight darkening), which suits talking-head footage and actively hurts other things - a
+    # blurred screen recording is an unreadable smear.
+    background_style: str = Field(
+        default="blur",
+        description="Letterbox background: blur | mirror | black | color | gradient (V11). "
+                    "'black' is the honest choice for screen recordings.",
+    )
+    background_color: str = Field(
+        default="0x0F172A",
+        description="Fill colour used when background_style is 'color' (V11).",
+    )
+    # V13: the progress bar was a 12px bar in one cyan, always at the bottom - where on a 9:16
+    # clip it sits directly under the captions and competes with them.
+    progress_bar_position: str = Field(
+        default="bottom", description="Progress bar position: bottom | top (V13)."
+    )
+    progress_bar_style: str = Field(
+        default="bar",
+        description="Progress bar style: bar | track (V13). 'track' adds a dim full-width rail "
+                    "so how much is left is visible, not only how much has passed.",
+    )
+    progress_bar_color: str = Field(
+        default="0x22D3EE", description="Progress bar fill colour (V13)."
+    )
+    progress_bar_thickness: int = Field(
+        default=12, description="Progress bar thickness in pixels (V13)."
+    )
+    # V9: which opening treatment `transitions` applies.
+    transition_style: str = Field(
+        default="punch_in",
+        description="Opening transition: punch_in | zoom_cut | whip_pan | dissolve (V9).",
+    )
+    # V17: score a few candidate frames for the thumbnail instead of taking a fixed position,
+    # which on a clip opening on a cut or a blink chose exactly the wrong still.
+    smart_thumbnail: bool = Field(
+        default=True,
+        description="Score candidate frames when choosing the thumbnail (V17). Costs a few "
+                    "small decodes per clip; off restores the fixed midpoint frame.",
+    )
     # Default number of regions for split-screen reframe (2-up).
     split_screen_max_regions: int = Field(
         default=2, description="Max regions for split-screen reframe (default 2-up)."

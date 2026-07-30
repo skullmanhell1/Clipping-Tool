@@ -475,6 +475,13 @@ export default function SettingsPanel({
             onChange={setFlag("visual_selection")}
           />
 
+          <Toggle
+            label="Subtitle files (.srt / .vtt)"
+            hint="Write caption files beside each clip as well as burning them in — for platforms that accept uploaded captions, and for anyone who needs the text rather than an image of it"
+            checked={settings.subtitle_sidecar}
+            onChange={setFlag("subtitle_sidecar")}
+          />
+
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
