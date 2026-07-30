@@ -14,10 +14,10 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
-from worker import scene_detect
+from worker import scene_detect, selection_features
 from worker import segmentation as seg
 from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
 from worker.models import ProcessingOptions
@@ -34,6 +34,11 @@ class ClipCandidate:
     reason: str = ""
     title: str = ""
     text: str = ""                # transcript text within the range
+    # S4: measured signals about this window - currently speech rate, computed from the word
+    # timings that already exist. Deliberately *not* an input to ``score``: the features are
+    # here to be measured against the S1 benchmark and fed to the model later (S10), and
+    # choosing a weight before the benchmark can judge it would be tuning blind.
+    features: dict = field(default_factory=dict)
 
     @property
     def duration(self) -> float:
@@ -176,9 +181,19 @@ def select_moments(
     min_len, max_len, _ = seg.resolve_length_range(options.clip_length)
     max_clips = seg.resolve_max_clips(options.num_clips)
 
+    def _measured(found: list[ClipCandidate]) -> list[ClipCandidate]:
+        """Attach S4 features to a result on its way out.
+
+        Applied to the fallback returns as well as the LLM path: the fallback is what runs
+        whenever there is no key or the call fails, so leaving it unmeasured would mean the
+        benchmark could not compare the two paths on the same terms.
+        """
+        selection_features.annotate_candidates(found, transcript.words, total_duration)
+        return found
+
     use_llm = options.strategy == "ai" and (client is not None or llm_available())
     if not use_llm or not transcript.segments:
-        return _fallback(source_path, total_duration, options, max_clips)
+        return _measured(_fallback(source_path, total_duration, options, max_clips))
 
     client = client or get_llm_client()
     prompt = _build_prompt(transcript.segments, options, min_len, max_len, max_clips)
@@ -186,10 +201,10 @@ def select_moments(
     try:
         data = client.complete_json(prompt, system=_SYSTEM, max_tokens=1500)
     except LLMError:
-        return _fallback(source_path, total_duration, options, max_clips)
+        return _measured(_fallback(source_path, total_duration, options, max_clips))
 
     if not isinstance(data, list):
-        return _fallback(source_path, total_duration, options, max_clips)
+        return _measured(_fallback(source_path, total_duration, options, max_clips))
 
     candidates: list[ClipCandidate] = []
     for item in data:
@@ -235,7 +250,7 @@ def select_moments(
         )
 
     if not candidates:
-        return _fallback(source_path, total_duration, options, max_clips)
+        return _measured(_fallback(source_path, total_duration, options, max_clips))
 
     # Enforce clip-count cap (candidates are LLM-ordered, but re-sort to be safe).
     candidates.sort(key=lambda c: c.score, reverse=True)
@@ -243,4 +258,7 @@ def select_moments(
         candidates = candidates[:max_clips]
     # S9: after capping, so a decode is only spent on clips that will actually be rendered.
     scene_detect.snap_candidates(source_path, candidates)
-    return candidates
+    # S4: measured after ranking, capping and boundary snapping, so it cannot influence any
+    # of them - and so the features describe the window the viewer actually gets rather than
+    # the one the model proposed.
+    return _measured(candidates)

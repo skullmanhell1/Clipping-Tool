@@ -76,6 +76,32 @@ jobs:
           python -c "import config; print('config OK', config.settings.app_name)"
           python -c "from api.main import app; print('FastAPI app OK', app.title)"
 
+      # A7: the emoji the built-in keyword map can produce must be committed, not fetched
+      # at render time. `.gitignore` previously excluded them with the comment "downloaded
+      # at build time" while no build step existed, so the directory was empty and the
+      # overlay had nothing to composite. This runs without network access on purpose --
+      # it checks the working tree, it does not fetch.
+      - name: Emoji assets are vendored
+        run: python scripts/fetch_emoji.py --check
+
+      # A1/A2: same guarantee for the caption faces. A missing font is why captions
+      # rendered in whatever the host substituted.
+      - name: Caption fonts are vendored
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(".")
+          manifest = json.loads((root / "assets" / "fonts.json").read_text())
+          missing = [
+              entry["file"]
+              for entry in manifest["fonts"]
+              if not (root / "assets" / "fonts" / entry["file"]).is_file()
+          ]
+          if missing:
+              sys.exit(f"missing vendored fonts: {missing}")
+          print(f"all {len(manifest['fonts'])} fonts vendored")
+          PY
+
       # Fails on warnings as well as failures: filterwarnings=error in pyproject.toml. The
       # capability bug that made the stem engine unreachable was invisible partly because
       # nothing in the suite objected to anything.

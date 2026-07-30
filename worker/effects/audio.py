@@ -4,10 +4,20 @@ Two sources of music, in priority order:
 
 1. **User-supplied track** — if ``settings.music_dir/<mood>.<ext>`` exists it is
    used directly (bring your own licensed music).
-2. **Synthesised bed** — otherwise a soft, copyright-free ambient pad is
-   generated on the fly with ffmpeg's ``sine`` sources (a root note + a fifth,
-   gently tremolo'd and low-passed). It is intentionally subtle so it sits under
-   speech.
+2. **Synthesised bed** — a last-resort fallback, *not* music (A15). It is two sine
+   tones (a root and a fifth) with tremolo and a low-pass: a drone, not a track. No
+   arrangement, no rhythm, no progression, identical for every clip of a given mood.
+
+The distinction matters because it was invisible. ``resolve_music`` returned a path and
+nothing recorded which of the two it was, so a clip with a synthesised drone was reported
+as ``music:upbeat`` — indistinguishable from a clip with a real bed under it. A caller had
+no way to tell that "background music" meant a tone generator, and ``assets/music`` ships
+empty, so in practice it always did.
+
+:func:`resolve_music_bed` therefore returns a :class:`MusicBed` naming the source, and the
+compositor records ``music_degraded:synthesised`` alongside the ``music:<mood>`` marker.
+Real beds (A14) have not shipped; until they do, the honest reading of an enabled music
+option is "a drone unless you supplied a track yourself".
 
 The bed is mixed under the original audio with a configurable volume and,
 optionally, matching fade in/out.
@@ -15,6 +25,9 @@ optionally, matching fade in/out.
 
 from __future__ import annotations
 
+import json
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -82,27 +95,74 @@ def synthesize_bed(mood: str, duration: float, dest: str | Path) -> Path:
         "-map", "[bed]",
         "-t", f"{max(0.1, duration):.3f}",
         "-c:a", "aac", "-b:a", "128k",
+        "-ar", str(int(settings.output_sample_rate)),
+        "-ac", str(int(settings.output_channels)),
         str(dest),
     ]
     _run(cmd)
     return dest
 
 
-def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[Path]:
-    """Return a path to a music bed for ``mood`` (user track or synthesised).
+#: ``MusicBed.source`` when the audio is a real file the user supplied.
+SOURCE_USER_TRACK = "user_track"
 
-    Returns ``None`` when ``mood`` is empty/unknown so callers can skip mixing.
+#: ``MusicBed.source`` when the audio is the synthesised two-tone drone (A15).
+SOURCE_SYNTHESISED = "synthesised"
+
+
+@dataclass(frozen=True)
+class MusicBed:
+    """A resolved music bed and, crucially, *what it is* (A15).
+
+    ``source`` is :data:`SOURCE_USER_TRACK` or :data:`SOURCE_SYNTHESISED`. Callers must
+    branch on it rather than assuming a path means music: the synthesised bed is a tone
+    generator, and reporting it as though a track were playing is what A15 removes.
+    """
+
+    path: Path
+    mood: str
+    source: str
+
+    @property
+    def synthesised(self) -> bool:
+        """Whether this bed is the fallback drone rather than a real track."""
+        return self.source == SOURCE_SYNTHESISED
+
+
+def resolve_music_bed(
+    mood: str, duration: float, temp_dir: str | Path
+) -> Optional[MusicBed]:
+    """Resolve a bed for ``mood``, reporting whether it is a real track (A15).
+
+    Returns ``None`` when ``mood`` is empty or unknown, or when synthesis is the only
+    option and ``settings.music_allow_synthesis`` is off — in which case the clip is
+    rendered without music rather than with a drone the caller did not ask for.
     """
     if not mood:
         return None
     user = find_user_track(mood)
     if user is not None:
-        return user
+        return MusicBed(path=user, mood=mood, source=SOURCE_USER_TRACK)
     if mood not in _MOOD_SYNTH:
+        return None
+    if not settings.music_allow_synthesis:
         return None
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    return synthesize_bed(mood, duration, temp_dir / f"music_{mood}.m4a")
+    dest = synthesize_bed(mood, duration, temp_dir / f"synth_bed_{mood}.m4a")
+    return MusicBed(path=dest, mood=mood, source=SOURCE_SYNTHESISED)
+
+
+def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[Path]:
+    """The path-only view of :func:`resolve_music_bed`.
+
+    Kept for callers that only need somewhere to read audio from. Anything that reports
+    what happened to a clip must use :func:`resolve_music_bed` instead — a bare path cannot
+    distinguish a licensed track from a synthesised drone, which is exactly the gap A15
+    closes.
+    """
+    bed = resolve_music_bed(mood, duration, temp_dir)
+    return None if bed is None else bed.path
 
 
 def music_mix_filter(
@@ -113,37 +173,193 @@ def music_mix_filter(
     duration: float,
     fade: bool = False,
     fade_dur: float = 0.4,
+    duck: bool = True,
 ) -> str:
     """Return a ``-filter_complex`` snippet mixing a music bed under speech.
 
-    The bed is volume-scaled (and optionally faded), then mixed with the
-    original audio without re-normalising (so speech stays at full level).
+    The bed is volume-scaled (and optionally faded), then mixed with the original audio
+    without re-normalising, so speech stays at full level.
+
+    ``duck`` (AU2) routes the bed through ``sidechaincompress`` keyed on the speech, so the
+    music drops while someone is talking and returns in the gaps. A flat ``volume=0.12`` bed
+    has no good setting: loud enough to be heard between sentences is loud enough to fight
+    the speech during them, and quiet enough not to fight it is inaudible - which is the
+    same as no music, at the cost of an extra encode. Ducking is what makes a bed audible
+    *and* out of the way, and it is the reason a mix sounds produced rather than layered.
+
+    The speech is duplicated with ``asplit``: one copy keys the compressor, the other is
+    mixed. It has to be both, and a filter output cannot be consumed twice.
     """
     vol = max(0.0, min(1.0, volume))
+    ratio = max(1.0, float(settings.music_duck_ratio))
+    ducking = duck and ratio > 1.0
+
+    parts: list[str] = []
+    out_start = max(0.0, duration - fade_dur)
+
+    # --- the bed: level, then optional fades -------------------------------
     bed_chain = f"[{music_label}]volume={vol:.3f}"
     if fade:
-        out_start = max(0.0, duration - fade_dur)
         bed_chain += (
             f",afade=t=in:st=0:d={fade_dur:.3f}"
             f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
         )
     bed_chain += "[bedv]"
+    parts.append(bed_chain)
 
-    orig = f"[{original_label}]"
+    # --- the speech: optional fades, then a split when ducking -------------
+    speech_chain = f"[{original_label}]"
     if fade:
-        out_start = max(0.0, duration - fade_dur)
-        orig = (
+        parts.append(
             f"[{original_label}]afade=t=in:st=0:d={fade_dur:.3f}"
             f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}[orig]"
         )
-        orig_label = "[orig]"
-    else:
-        orig_label = f"[{original_label}]"
+        speech_chain = "[orig]"
 
-    parts = [bed_chain]
-    if fade:
-        parts.append(orig)
+    if not ducking:
+        parts.append(
+            f"{speech_chain}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]"
+        )
+        return ";".join(parts)
+
+    parts.append(f"{speech_chain}asplit=2[sckey][spmix]")
+    # threshold is a linear amplitude, not dB: 0.03 is about -30 dBFS, low enough that
+    # ordinary speech opens the compressor and room tone does not. attack is short so the
+    # bed is already down on the first syllable; release is long so it does not pump
+    # between words - it should feel like the bed breathing, not stuttering.
     parts.append(
-        f"{orig_label}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]"
+        f"[bedv][sckey]sidechaincompress="
+        f"threshold=0.03:ratio={ratio:g}:attack=20:release=350:makeup=1[bedduck]"
+    )
+    parts.append(
+        f"[spmix][bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]"
     )
     return ";".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+# Loudness normalisation (AU1)
+# --------------------------------------------------------------------------- #
+#: Integrated-loudness targets per publish platform, in LUFS.
+#:
+#: A clip quieter than the platform's target is turned *up* on playback, which lifts its
+#: noise floor along with the speech; one that is louder is turned down, wasting the
+#: headroom it was mastered with. Either way the creator loses control of the result.
+#:
+#: Values follow the reported platform targets: YouTube normalises to about -14 LUFS, while
+#: TikTok and Instagram sit nearer -11. Anything unlisted uses
+#: ``settings.loudness_target_lufs``.
+PLATFORM_LUFS: dict[str, float] = {
+    "youtube": -14.0,
+    "tiktok": -11.0,
+    "instagram": -11.0,
+}
+
+#: Loudness range passed to ``loudnorm``. 11 LU is its own default and suits speech; a
+#: wider range lets a shouty passage stay shouty, which is usually not what a clip wants.
+_LOUDNORM_LRA = 11.0
+
+
+def platform_loudness_target(platform: str) -> float:
+    """The LUFS target for ``platform``, falling back to the configured default."""
+    return PLATFORM_LUFS.get((platform or "").strip().lower(), settings.loudness_target_lufs)
+
+
+@dataclass(frozen=True)
+class LoudnessStats:
+    """First-pass ``loudnorm`` measurements for one file."""
+
+    input_i: float
+    input_tp: float
+    input_lra: float
+    input_thresh: float
+    target_offset: float
+
+
+def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
+    """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
+
+    This is the first of the two passes. Single-pass ``loudnorm`` has to guess as it goes,
+    so it compresses dynamics to hit the target and the first seconds of a clip are
+    normalised on less information than the rest. Measuring first lets the second pass
+    apply one linear gain, which reaches the target without touching dynamics.
+
+    Decodes but encodes nothing (``-f null``). Returns ``None`` on any failure - no audio
+    track, a corrupt file, an ffmpeg without ``loudnorm`` - so the caller renders without
+    normalisation instead of failing the clip.
+    """
+    cmd = [
+        settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-i", str(source),
+        "-af", f"loudnorm=I={settings.loudness_target_lufs}:"
+               f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json",
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+
+    # loudnorm prints its JSON block at the end of stderr, after the filter's own log
+    # lines. Taking the last '{' onwards is deliberate: a path in an earlier log line can
+    # contain braces, and json.loads on the whole stderr would fail.
+    stderr = proc.stderr or ""
+    start = stderr.rfind("{")
+    end = stderr.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        data = json.loads(stderr[start : end + 1])
+        return LoudnessStats(
+            input_i=float(data["input_i"]),
+            input_tp=float(data["input_tp"]),
+            input_lra=float(data["input_lra"]),
+            input_thresh=float(data["input_thresh"]),
+            target_offset=float(data["target_offset"]),
+        )
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def true_peak_limit_filter(ceiling_db: Optional[float] = None) -> str:
+    """A true-peak limiter for the end of the audio chain (AU3).
+
+    ``loudnorm`` *targets* a true-peak ceiling, and in linear mode it reduces its gain to
+    respect one - but that only helps on the path where it runs. With normalisation disabled,
+    or when the source could not be measured, nothing constrained the output at all: a hot
+    source plus a music bed sums straight past full scale. Measured on a mix of a -0.1 dBFS
+    source and a bed, the result reached **+5.5 dBFS true peak**; with this filter, -1.0.
+
+    ``level=disabled`` is the important argument. ``alimiter``'s ``level`` defaults to *on*,
+    which auto-levels the output up to the ceiling - so the default configuration of a filter
+    whose job is to make audio quieter when necessary would instead make quiet audio *louder*,
+    undoing the loudness normalisation immediately upstream of it.
+
+    Applied unconditionally at the end of a changed audio chain rather than only when
+    normalisation is off: a limiter that never engages is inaudible, and the alternative is
+    reasoning about whether ``loudnorm``'s estimate covered inter-sample peaks.
+    """
+    ceiling = settings.loudness_true_peak_db if ceiling_db is None else ceiling_db
+    # alimiter's limit is a linear amplitude, not dB.
+    limit = 10.0 ** (float(ceiling) / 20.0)
+    limit = max(0.001, min(1.0, limit))
+    return f"alimiter=limit={limit:.4f}:level=disabled"
+
+
+def loudnorm_filter(stats: LoudnessStats, target_lufs: float) -> str:
+    """The second-pass ``loudnorm`` filter for ``stats`` (AU1).
+
+    ``linear=true`` is the point of having measured: it applies a single gain across the
+    whole clip rather than riding the level, so speech dynamics survive. ffmpeg falls back
+    to dynamic mode by itself if the measurements make linear normalisation impossible
+    (a clip whose peaks would clip the true-peak ceiling), which is the right trade in that
+    case and needs no handling here.
+    """
+    return (
+        f"loudnorm=I={target_lufs:g}:TP={settings.loudness_true_peak_db:g}"
+        f":LRA={_LOUDNORM_LRA:g}"
+        f":measured_I={stats.input_i:g}:measured_TP={stats.input_tp:g}"
+        f":measured_LRA={stats.input_lra:g}:measured_thresh={stats.input_thresh:g}"
+        f":offset={stats.target_offset:g}:linear=true:print_format=summary"
+    )

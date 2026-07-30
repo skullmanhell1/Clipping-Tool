@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 from config import settings
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
-from worker.ffmpeg_utils import _run, probe, video_encode_args
+from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import added
@@ -359,12 +359,17 @@ def render_clip(
         )
 
     # --- music bed --------------------------------------------------------
-    music_path: Optional[Path] = None
+    # A15: the bed carries its own provenance, because "there is a music input" and "music
+    # is playing" are different claims. The synthesised fallback is a two-tone drone, and
+    # reporting it as music:<mood> - indistinguishable from a real track - is what made the
+    # limitation invisible.
+    music_bed: Optional[audio.MusicBed] = None
     if options.music:
-        music_path = audio.resolve_music(options.music, duration, temp_dir)
+        music_bed = audio.resolve_music_bed(options.music, duration, temp_dir)
     if not info.has_audio:
         # No audio track to work with; ignore music/fade on audio.
-        music_path = None
+        music_bed = None
+    music_path: Optional[Path] = None if music_bed is None else music_bed.path
 
     # --- b-roll cues (already resolved via the injected resolver) ---------
     broll_cues: list = []
@@ -452,6 +457,9 @@ def render_clip(
         emoji_inputs, emoji_graph = emoji.build_overlay(
             emoji_cues, base_label=video_label, out_label="vout",
             duration=duration, animate=options.emoji_animate,
+            # A8: the real target width. build_overlay assumed 1080, so the emoji was
+            # sized for a frame the output might not have.
+            frame_width=width,
             resolver=emoji_resolver, input_offset=emoji_offset,
         )
     if emoji_graph:
@@ -476,11 +484,18 @@ def render_clip(
         graph_parts.append(
             audio.music_mix_filter("0:a", f"{music_index}:a", "aout",
                                    options.music_volume, duration,
-                                   fade=options.fades)
+                                   fade=options.fades,
+                                   duck=options.music_duck)
         )
         audio_out = "aout"
         audio_changed = True
         applied.append(f"music:{options.music}")
+        if options.music_duck:
+            applied.append("music_ducked")
+        if music_bed is not None and music_bed.synthesised:
+            # A15: a labelled last resort, not a track. Recorded next to the music marker
+            # so a clip's own record says which of the two it got.
+            applied.append("music_degraded:synthesised")
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
         graph_parts.append(
@@ -497,6 +512,41 @@ def render_clip(
         graph_parts.append(f"[{audio_out}]{','.join(engine_audio)}[aeng]")
         audio_out = "aeng"
         audio_changed = True
+
+    # --- loudness normalisation (AU1) -------------------------------------
+    # Last in the audio chain, so it measures and corrects what will actually be delivered
+    # rather than an intermediate stage of it. Only applied when something else already
+    # changed the audio: a clip with every effect off is stream-copied, and re-encoding it
+    # purely to adjust loudness would trade a generation of quality for a gain the platform
+    # would otherwise apply itself.
+    #
+    # The measurement pass runs on the *source*, because the mix does not exist yet - both
+    # happen in this one ffmpeg invocation. A bed at 0.12 with ducking moves integrated
+    # loudness by a fraction of a LU, well inside loudnorm's own tolerance, and paying for a
+    # second full encode to measure the finished mix would cost more than it corrects (O6).
+    if options.loudness_normalise and info.has_audio and audio_changed:
+        stats = audio.measure_loudness(base_clip)
+        if stats is None:
+            # No audio to measure, an ffmpeg without loudnorm, or an unparsable report.
+            # Render at the source's own level rather than failing the clip.
+            applied.append("loudness_degraded:unmeasurable")
+        else:
+            target = audio.platform_loudness_target(options.platform)
+            graph_parts.append(
+                f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]"
+            )
+            audio_out = "aloud"
+            applied.append(f"loudness:{target:g}lufs")
+
+    # --- true-peak limiting (AU3) -----------------------------------------
+    # Last, after everything that can raise a level. loudnorm targets a true-peak ceiling but
+    # only on the path where it runs; with normalisation off or unmeasurable, nothing
+    # constrained the output and a hot source plus a music bed sums past full scale (measured:
+    # +5.5 dBFS). No marker is recorded, deliberately - this is a safety stage that is
+    # inaudible when it does not engage, and "applied" markers describe choices, not guards.
+    if settings.true_peak_limit_enabled and info.has_audio and audio_changed:
+        graph_parts.append(f"[{audio_out}]{audio.true_peak_limit_filter()}[apeak]")
+        audio_out = "apeak"
 
     # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
     # the engine block was emitted with the base clip above so its indices are
@@ -523,12 +573,13 @@ def render_clip(
 
     # Codecs: re-encode only the streams we changed.
     if video_changed:
-        cmd += video_encode_args()
+        # The clip a user receives: frame rate normalised (O3) and a VBV ceiling (O4).
+        cmd += h264_args(normalise_fps=True, vbv_cap=True)
     else:
         cmd += ["-c:v", "copy"]
     if info.has_audio:
         if audio_changed:
-            cmd += ["-c:a", "aac", "-b:a", "128k"]
+            cmd += aac_args()
         else:
             cmd += ["-c:a", "copy"]
 

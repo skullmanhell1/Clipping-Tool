@@ -59,7 +59,7 @@ from worker.effects import broll, caption_presets
 from worker.engines import loader  # noqa: F401
 from worker.jobs import get_manager
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
-from worker.models import ProcessingOptions
+from worker.models import BUILTIN_PROFILES, ProcessingOptions
 from worker.watch_folder import get_watcher
 
 
@@ -322,6 +322,9 @@ def info() -> dict[str, object]:
         "platforms": list(PLATFORM_PROFILES.keys()),
         "strategies": ["ai", "silence", "fixed"],
         "regeneratable_fields": list(REGENERATABLE_FIELDS),
+        # U2: names only, so a client can offer the picker from one call. The full bundles,
+        # with the reasoning behind each, come from GET /api/profiles/builtin.
+        "builtin_profiles": list(BUILTIN_PROFILES),
         "llm_available": _llm_available_safe(),
         "effects": {
             "music_moods": ["upbeat", "chill", "dramatic", "corporate", "suspense"],
@@ -1130,6 +1133,32 @@ def delete_source(job_id: str, confirm: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 # Saved settings profiles
 # ---------------------------------------------------------------------------
+@app.get("/api/profiles/builtin", tags=["profiles"])
+def list_builtin_profiles() -> dict:
+    """The shipped opinionated profiles (U2).
+
+    Distinct from ``GET /api/profiles``, which lists profiles a *user* saved. These are
+    read-only bundles: pass ``profile: "<name>"`` alongside a process request and the bundle
+    is expanded into the individual options, with anything else in the request overriding it.
+
+    ``settings`` is returned in full rather than summarised so a client can show what
+    picking a profile will actually change, and ``rationale`` is included because a profile
+    is a set of judgement calls a user is entitled to disagree with.
+    """
+    return {
+        "profiles": [
+            {
+                "name": profile.name,
+                "label": profile.label,
+                "description": profile.description,
+                "rationale": profile.rationale,
+                "settings": dict(profile.settings),
+            }
+            for profile in BUILTIN_PROFILES.values()
+        ]
+    }
+
+
 @app.get("/api/profiles", tags=["profiles"])
 def list_profiles() -> dict:
     store = get_profile_store()

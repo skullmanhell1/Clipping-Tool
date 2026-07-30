@@ -1,7 +1,13 @@
 """Integration tests for the single-pass effect compositor."""
 from __future__ import annotations
 
-from tests.conftest import FakeWord, probe_duration, probe_size, requires_ffmpeg
+from tests.conftest import (
+    FakeWord,
+    options_all_off,
+    probe_duration,
+    probe_size,
+    requires_ffmpeg,
+)
 from worker.effects import compositor
 from worker.models import ProcessingOptions
 
@@ -14,7 +20,7 @@ def _words():
 @requires_ffmpeg
 def test_noop_returns_none(make_video, tmp_path):
     base = make_video("base.mp4", duration=2.0, w=1080, h=1920)
-    opts = ProcessingOptions(captions=False)  # nothing enabled
+    opts = options_all_off(captions=False)  # nothing enabled
     result = compositor.render_clip(base, tmp_path / "out.mp4", opts, _words(), tmp_path)
     assert result is None
 
@@ -44,10 +50,12 @@ def test_all_effects_single_pass(make_video, png_asset, tmp_path):
 @requires_ffmpeg
 def test_music_only_copies_video(make_video, tmp_path):
     base = make_video("base.mp4", duration=2.0, w=640, h=360)
-    opts = ProcessingOptions(captions=False, music="upbeat")
+    opts = options_all_off(captions=False, music="upbeat")
     result = compositor.render_clip(base, tmp_path / "m.mp4", opts, _words(), tmp_path)
     assert result is not None
-    assert result.effects_applied == ["music:upbeat"]
+    # A15: the drone is labelled. assets/music is empty in the fixture, so the bed is the
+    # synthesised fallback and the record says so - "music:upbeat" alone could not.
+    assert result.effects_applied == ["music:upbeat", "music_degraded:synthesised"]
     assert probe_duration(result.path) > 1.5
 
 
@@ -171,10 +179,12 @@ def test_stream_copy_and_noop_contract(make_video, monkeypatch, tmp_path):
     """Validates: Requirements 17.2, 17.3 — audio stream-copy + None no-op."""
     base = make_video("base.mp4", duration=2.0, w=1080, h=1920)
 
-    # Only video changes (captions) -> audio must be stream-copied.
+    # Only video changes (captions) -> audio must be stream-copied. Stated explicitly:
+    # ``fades`` defaults on since U1 and fades the *audio* too, so relying on the defaults
+    # here would make this a test about two changed streams, not one.
     calls = _spy_run(monkeypatch)
     result = compositor.render_clip(
-        base, tmp_path / "vidonly.mp4", ProcessingOptions(captions=True),
+        base, tmp_path / "vidonly.mp4", options_all_off(captions=True),
         _words(), tmp_path,
     )
     assert result is not None
@@ -183,7 +193,7 @@ def test_stream_copy_and_noop_contract(make_video, monkeypatch, tmp_path):
 
     # Everything off (even with a b-roll resolver that yields nothing) -> None.
     noop = compositor.render_clip(
-        base, tmp_path / "noop.mp4", ProcessingOptions(captions=False),
+        base, tmp_path / "noop.mp4", options_all_off(captions=False),
         _words(), tmp_path, broll_resolver=lambda: [],
     )
     assert noop is None
@@ -335,7 +345,7 @@ def test_engine_inputs_land_at_the_host_reserved_indices(tmp_path, monkeypatch):
 
     calls = _stub_ffmpeg(monkeypatch)
     result = compositor.render_clip(
-        base, tmp_path / "out.mp4", ProcessingOptions(captions=False), [],
+        base, tmp_path / "out.mp4", options_all_off(captions=False), [],
         tmp_path / "work", engine_contributions=outcome.contributions,
     )
     assert result is not None
@@ -376,8 +386,15 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     emoji_png = tmp_path / "emoji.png"
     emoji_png.write_bytes(b"stub-png")
 
-    monkeypatch.setattr(compositor.audio, "resolve_music",
-                        lambda mood, duration, temp_dir: music)
+    # A user-supplied track, so this test stays about input-index accounting rather than
+    # about the synthesised fallback. The compositor resolves through ``resolve_music_bed``
+    # now, because a bare path cannot say whether it is a real track (A15).
+    monkeypatch.setattr(
+        compositor.audio, "resolve_music_bed",
+        lambda mood, duration, temp_dir: compositor.audio.MusicBed(
+            path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
+        ),
+    )
     calls = _stub_ffmpeg(monkeypatch)
 
     opts = ProcessingOptions(captions=True, music="chill", emoji="heavy",

@@ -23,7 +23,7 @@ from typing import Any, Iterable, Optional
 
 from config import settings
 from worker.effects.caption_presets import CaptionPreset
-from worker.ffmpeg_utils import _run, video_encode_args
+from worker.ffmpeg_utils import _run, h264_args
 from worker.transcribe import Transcript, Word
 
 
@@ -781,7 +781,7 @@ def burn_captions(video: str | Path, ass: str | Path, dest: str | Path) -> Path:
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
         "-vf", subtitles_filter(ass),
-        *video_encode_args(),
+        *h264_args(normalise_fps=True),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(dest),
