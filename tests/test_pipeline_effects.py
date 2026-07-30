@@ -13,7 +13,7 @@ def test_pipeline_applies_effects(make_video, tmp_path, monkeypatch):
 
     src = make_video("source.mp4", duration=6.0, w=1280, h=720)
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         words = [Word(0.3, 0.7, "This"), Word(0.8, 1.2, "um"), Word(1.3, 1.7, "is"),
                  Word(1.8, 2.3, "fire"), Word(2.4, 2.9, "and"), Word(5.0, 5.5, "money")]
         return Transcript(language="en",
@@ -53,7 +53,7 @@ def test_pipeline_no_effects_still_produces_clip(make_video, tmp_path, monkeypat
     src = make_video("source2.mp4", duration=4.0, w=1280, h=720)
     monkeypatch.setattr(
         pl, "transcribe",
-        lambda s, language=None, translate=False: Transcript(
+        lambda s, language=None, translate=False, **_kw: Transcript(
             language="en",
             segments=[TranscriptSegment(0.0, 4.0, "hello there friend",
                                         [Word(0.2, 0.6, "hello"), Word(0.7, 1.1, "there")])],
@@ -143,7 +143,7 @@ def _stub_source_transcript(monkeypatch, pl, span):
 
     start, end = span
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         words = [Word(0.2, 0.6, "hello"), Word(0.8, 1.2, "there")]
         return Transcript(
             language="en",

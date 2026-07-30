@@ -398,7 +398,51 @@ def build_word_span(
             f"{span}"
             f"{{\\c{primary}&\\fscx100\\fscy100}}"
         )
+    elif _is_doubted(word, preset):
+        # T7: a word the model barely guessed at is dimmed rather than asserted. Applied only
+        # when the word is *not* highlighted: emphasis and doubt are contradictory claims, and
+        # a word that earned emphasis has already been judged worth stating.
+        span = f"{{{_dim_alpha_tag(preset)}}}{span}{{\\alpha&H00&}}"
     return span
+
+
+def _is_doubted(word: Any, preset: CaptionPreset) -> bool:
+    """Whether ``word`` fell below the preset's confidence floor (T7).
+
+    A word carrying no probability reads as *confident*, not as doubtful. ``_word_probability``
+    already returns 1.0 for those, and the alternative - treating "unknown" as "unsure" -
+    would dim every caption on any transcript without per-word confidence, which is the
+    failure mode C11 had for the same reason.
+    """
+    try:
+        threshold = float(getattr(preset, "low_confidence_threshold", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if threshold <= 0.0:
+        return False
+    try:
+        probability = float(getattr(word, "probability", 1.0))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if probability != probability:   # NaN
+        return False
+    return probability < threshold
+
+
+def _dim_alpha_tag(preset: CaptionPreset) -> str:
+    """The ASS alpha override for a doubted word (T7).
+
+    ASS alpha runs the opposite way to opacity: ``&H00`` is fully opaque and ``&HFF`` fully
+    transparent. Getting that backwards would make a doubted word *more* prominent than a
+    confident one, which is exactly the wrong outcome and would still look deliberate.
+    """
+    try:
+        opacity = float(getattr(preset, "low_confidence_alpha", 0.55))
+    except (TypeError, ValueError):
+        opacity = 0.55
+    opacity = max(0.0, min(1.0, opacity))
+    transparency = int(round((1.0 - opacity) * 255))
+    return f"\\alpha&H{transparency:02X}&"
 
 
 # --- In-caption emoji (independent of the overlay emoji effect, Req 4.2) ----
