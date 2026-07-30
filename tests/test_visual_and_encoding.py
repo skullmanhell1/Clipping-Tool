@@ -297,6 +297,67 @@ def test_an_unknown_background_style_falls_back_to_blur():
     assert fu.background_chain("nonsense", 1080, 1920) == fu.background_chain("blur", 1080, 1920)
 
 
+def test_the_gradient_declares_the_filter_it_needs():
+    """``geq`` is GPL-only, so a build without ``--enable-gpl`` has every other filter here and
+    not that one. Naming the dependency is what lets the style degrade instead of failing."""
+    assert fu.BACKGROUND_STYLE_FILTERS["gradient"] == "geq"
+
+
+def test_a_style_needing_no_extra_filter_is_always_available():
+    for style in ("blur", "mirror", "black", "color"):
+        assert fu.background_style_available(style) is True
+        assert fu.resolve_background_style(style) == style
+
+
+def test_an_unavailable_filter_degrades_the_style_rather_than_the_clip(monkeypatch):
+    monkeypatch.setattr(fu, "background_style_available", lambda style: False)
+    assert fu.resolve_background_style("gradient") == "blur"
+
+
+def test_the_availability_check_really_consults_the_capability_report(monkeypatch):
+    """The assertion that caught a real bug in my own first version.
+
+    It called a ``probe_capability`` function that does not exist. The ``except Exception``
+    swallowed the ``ImportError`` and returned ``True``, so the check *always* said "available"
+    and never probed anything - and it looked correct, because ``geq`` genuinely is available
+    here. A test asserting only ``is True`` would have passed on the broken version too.
+    """
+    import worker.engines.capabilities as caps
+
+    calls: list = []
+    real = caps.get_report
+
+    def recording_get_report(*args, **kwargs):
+        report = real(*args, **kwargs)
+        original_status = report.status
+
+        def status(capability_id):
+            calls.append(capability_id)
+            return original_status(capability_id)
+
+        monkeypatch.setattr(report, "status", status, raising=False)
+        return report
+
+    monkeypatch.setattr(caps, "get_report", recording_get_report)
+    fu.background_style_available("gradient")
+    assert calls == ["ffmpeg_filter:geq"], f"the report was not consulted: {calls}"
+
+
+def test_a_probe_failure_keeps_the_requested_style(monkeypatch):
+    """A probe that cannot run is not evidence the filter is missing.
+
+    Treating it as such would silently downgrade the look on every host where the capability
+    system itself is unavailable - a degradation nobody asked for and nobody would see reported.
+    """
+    import worker.engines.capabilities as caps
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("probe unavailable")
+
+    monkeypatch.setattr(caps, "get_report", explode)
+    assert fu.background_style_available("gradient") is True
+
+
 @requires_ffmpeg
 @pytest.mark.parametrize("style", list(fu.BACKGROUND_STYLES))
 def test_every_background_style_renders(style, tmp_path):
@@ -316,6 +377,11 @@ def test_every_background_style_renders(style, tmp_path):
         check=True, capture_output=True,
     )
     out = tmp_path / f"out_{style}.mp4"
+    # Renders whether or not the style's optional filter exists on this host: an unavailable
+    # filter degrades to blur, so the assertion is about the *clip* being produced rather than
+    # about which background it got. Gating the test on availability instead would make it skip,
+    # and CI treats a skip as a failure - correctly, since a guard that stops running is worse
+    # than no guard.
     fu.reformat_aspect(src, out, aspect="9:16", mode="crop_blur", background=style)
     assert out.is_file() and out.stat().st_size > 0
     info = fu.probe(out)
