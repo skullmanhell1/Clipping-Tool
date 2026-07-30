@@ -44,7 +44,7 @@ def _stub_transcribe(monkeypatch, text="hello there my friend today"):
     import worker.pipeline as pl
     from worker.transcribe import Transcript, TranscriptSegment, Word
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         words = [
             Word(0.2, 0.6, "hello"),
             Word(0.7, 1.1, "there"),
@@ -921,7 +921,7 @@ def av_ffmpeg_free_pipeline(pl, render_calls, *, spans=AV_CLIP_SPANS):
         )
         return None
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         words = [Word(0.2, 0.6, "hello"), Word(0.8, 1.2, "there"),
                  Word(2.2, 2.6, "my"), Word(2.8, 3.2, "friend")]
         return Transcript(
@@ -1371,7 +1371,7 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         av_touch(_Path(argv[-1]))
         return None
 
-    def fake_transcribe(source, language=None, translate=False):
+    def fake_transcribe(source, language=None, translate=False, **_kw):
         # "um" / "uh" are real disfluencies, so the untouched filler planner
         # reports ``changed`` and the filler stage genuinely runs when the option
         # is on — no need to stub the planner itself.

@@ -159,7 +159,11 @@ def run_pipeline(
         # T8: reuses a cached transcript when the source content and ASR settings match, so
         # re-running a source to try different effects does not re-transcribe it.
         transcript = transcribe(
-            source, language=options.language, translate=options.translate
+            source,
+            language=options.language,
+            translate=options.translate,
+            # T4: names, jargon and brands for this video specifically.
+            vocabulary=getattr(options, "vocabulary", "") or "",
         )
     else:
         transcript = Transcript(language="none", segments=[])

@@ -54,6 +54,35 @@ def hash_source(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def asr_fingerprint(vocabulary: str = "") -> str:
+    """A short hash of the ASR configuration that T4 and T5 made adjustable.
+
+    These belong in the cache key for the same reason the model does: a transcript decoded
+    with a vocabulary prompt, or with VAD tuned to keep quiet speech, is *not* interchangeable
+    with one decoded without. Leaving them out would serve the old transcript forever after a
+    setting was changed - silently, and with nothing downstream able to notice, which is worse
+    than having no cache at all.
+
+    The VAD parameters are excluded when the filter is switched off, because they have no
+    effect then and including them would cause pointless misses.
+
+    Imports :mod:`worker.transcribe` lazily to avoid a cycle, and reads *its* helpers rather
+    than the settings directly, so the value hashed here is by construction the value passed
+    to the decoder. Two hand-maintained copies would eventually disagree, and the failure that
+    produces is a cache hit across genuinely different settings.
+    """
+    from worker import transcribe as tr
+
+    payload: dict[str, Any] = {
+        "prompt": tr.resolve_initial_prompt(vocabulary) or "",
+        "vad": bool(settings.whisper_vad_filter),
+    }
+    if settings.whisper_vad_filter:
+        payload["vad_params"] = tr.vad_parameters()
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def cache_key(
     source_hash: str,
     *,
@@ -61,8 +90,16 @@ def cache_key(
     language: Optional[str],
     translate: bool,
     beam_size: int,
+    asr_config: Optional[str] = None,
 ) -> str:
-    """The cache key for a transcript: the content plus everything that shaped it."""
+    """The cache key for a transcript: the content plus everything that shaped it.
+
+    ``asr_config`` is the T4/T5 fingerprint. It defaults to :func:`asr_fingerprint` with no
+    per-job vocabulary, so a caller that does not know about it - the S1 harness - still
+    computes the same key as a production job on the same file with no vocabulary set. That
+    agreement is asserted by a test; without the default the harness and the pipeline would
+    quietly maintain two separate caches of the same thing.
+    """
     parts = (
         f"v{SCHEMA_VERSION}",
         source_hash,
@@ -70,6 +107,7 @@ def cache_key(
         language or "auto",
         "translate" if translate else "transcribe",
         str(int(beam_size)),
+        asr_config if asr_config is not None else asr_fingerprint(),
     )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 

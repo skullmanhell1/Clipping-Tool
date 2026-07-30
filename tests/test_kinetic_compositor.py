@@ -1476,6 +1476,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 3,
         "uppercase": False, "outline": 0, "shadow": 0,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
     "hormozi": {
         "name": "hormozi", "animation": "pop", "font": "Anton", "font_weight": 800, "font_size": 104,
@@ -1484,6 +1485,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "center", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": True, "border_style": 1,
         "uppercase": True, "outline": 10, "shadow": 5,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
     "karaoke": {
         "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
@@ -1492,6 +1494,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
     "minimal": {
         "name": "minimal", "animation": "none", "font": "Poppins", "font_weight": 700, "font_size": 84,
@@ -1500,6 +1503,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 6, "shadow": 3,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
     "pop": {
         "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
@@ -1508,6 +1512,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "bottom", "highlight_keywords": True, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
     "typewriter": {
         "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_weight": 700, "font_size": 96,
@@ -1516,6 +1521,7 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
+        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
     },
 }
 
@@ -1677,14 +1683,19 @@ def test_caption_preset_values_are_unchanged():
     assert caption_presets.VALID_POSITIONS == frozenset({"bottom", "center", "top"})
     assert caption_presets.FALLBACK_PRESET_NAME == "karaoke"
 
-    # ``font_weight`` (C3), ``uppercase`` (C7) and ``outline``/``shadow`` (C8) are the four
-    # fields added since v0.8.0. Each exists because the value it holds used to be implicit:
-    # the Bold flag was always -1 even for a face already drawn heavy, only the hook title
-    # was upper-cased, and outline/shadow were inferred from the animation style.
+    # ``font_weight`` (C3), ``uppercase`` (C7), ``outline``/``shadow`` (C8) and
+    # ``low_confidence_threshold``/``low_confidence_alpha`` (T7) are the six fields added since
+    # v0.8.0. Each exists because the value it holds used to be implicit: the Bold flag was
+    # always -1 even for a face already drawn heavy, only the hook title was upper-cased,
+    # outline/shadow were inferred from the animation style, and every word was asserted with
+    # identical confidence including the ones the model barely guessed at.
+    #
+    # This list is updated deliberately, which is the point of the pin: the two T7 fields
+    # default to 0.0/0.55, and 0.0 means the behaviour is off, so no existing preset changes.
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
         "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
-        "font_weight", "highlight_keywords", "highlight_scale", "name", "outline",
-        "position", "shadow", "uppercase",
+        "font_weight", "highlight_keywords", "highlight_scale", "low_confidence_alpha",
+        "low_confidence_threshold", "name", "outline", "position", "shadow", "uppercase",
     ]
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
         "box", "highlight", "outline", "primary",
