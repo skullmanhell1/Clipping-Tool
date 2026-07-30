@@ -25,6 +25,8 @@ optionally, matching fade in/out.
 
 from __future__ import annotations
 
+import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -93,6 +95,8 @@ def synthesize_bed(mood: str, duration: float, dest: str | Path) -> Path:
         "-map", "[bed]",
         "-t", f"{max(0.1, duration):.3f}",
         "-c:a", "aac", "-b:a", "128k",
+        "-ar", str(int(settings.output_sample_rate)),
+        "-ac", str(int(settings.output_channels)),
         str(dest),
     ]
     _run(cmd)
@@ -169,37 +173,168 @@ def music_mix_filter(
     duration: float,
     fade: bool = False,
     fade_dur: float = 0.4,
+    duck: bool = True,
 ) -> str:
     """Return a ``-filter_complex`` snippet mixing a music bed under speech.
 
-    The bed is volume-scaled (and optionally faded), then mixed with the
-    original audio without re-normalising (so speech stays at full level).
+    The bed is volume-scaled (and optionally faded), then mixed with the original audio
+    without re-normalising, so speech stays at full level.
+
+    ``duck`` (AU2) routes the bed through ``sidechaincompress`` keyed on the speech, so the
+    music drops while someone is talking and returns in the gaps. A flat ``volume=0.12`` bed
+    has no good setting: loud enough to be heard between sentences is loud enough to fight
+    the speech during them, and quiet enough not to fight it is inaudible - which is the
+    same as no music, at the cost of an extra encode. Ducking is what makes a bed audible
+    *and* out of the way, and it is the reason a mix sounds produced rather than layered.
+
+    The speech is duplicated with ``asplit``: one copy keys the compressor, the other is
+    mixed. It has to be both, and a filter output cannot be consumed twice.
     """
     vol = max(0.0, min(1.0, volume))
+    ratio = max(1.0, float(settings.music_duck_ratio))
+    ducking = duck and ratio > 1.0
+
+    parts: list[str] = []
+    out_start = max(0.0, duration - fade_dur)
+
+    # --- the bed: level, then optional fades -------------------------------
     bed_chain = f"[{music_label}]volume={vol:.3f}"
     if fade:
-        out_start = max(0.0, duration - fade_dur)
         bed_chain += (
             f",afade=t=in:st=0:d={fade_dur:.3f}"
             f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
         )
     bed_chain += "[bedv]"
+    parts.append(bed_chain)
 
-    orig = f"[{original_label}]"
+    # --- the speech: optional fades, then a split when ducking -------------
+    speech_chain = f"[{original_label}]"
     if fade:
-        out_start = max(0.0, duration - fade_dur)
-        orig = (
+        parts.append(
             f"[{original_label}]afade=t=in:st=0:d={fade_dur:.3f}"
             f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}[orig]"
         )
-        orig_label = "[orig]"
-    else:
-        orig_label = f"[{original_label}]"
+        speech_chain = "[orig]"
 
-    parts = [bed_chain]
-    if fade:
-        parts.append(orig)
+    if not ducking:
+        parts.append(
+            f"{speech_chain}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]"
+        )
+        return ";".join(parts)
+
+    parts.append(f"{speech_chain}asplit=2[sckey][spmix]")
+    # threshold is a linear amplitude, not dB: 0.03 is about -30 dBFS, low enough that
+    # ordinary speech opens the compressor and room tone does not. attack is short so the
+    # bed is already down on the first syllable; release is long so it does not pump
+    # between words - it should feel like the bed breathing, not stuttering.
     parts.append(
-        f"{orig_label}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]"
+        f"[bedv][sckey]sidechaincompress="
+        f"threshold=0.03:ratio={ratio:g}:attack=20:release=350:makeup=1[bedduck]"
+    )
+    parts.append(
+        f"[spmix][bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]"
     )
     return ";".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+# Loudness normalisation (AU1)
+# --------------------------------------------------------------------------- #
+#: Integrated-loudness targets per publish platform, in LUFS.
+#:
+#: A clip quieter than the platform's target is turned *up* on playback, which lifts its
+#: noise floor along with the speech; one that is louder is turned down, wasting the
+#: headroom it was mastered with. Either way the creator loses control of the result.
+#:
+#: Values follow the reported platform targets: YouTube normalises to about -14 LUFS, while
+#: TikTok and Instagram sit nearer -11. Anything unlisted uses
+#: ``settings.loudness_target_lufs``.
+PLATFORM_LUFS: dict[str, float] = {
+    "youtube": -14.0,
+    "tiktok": -11.0,
+    "instagram": -11.0,
+}
+
+#: Loudness range passed to ``loudnorm``. 11 LU is its own default and suits speech; a
+#: wider range lets a shouty passage stay shouty, which is usually not what a clip wants.
+_LOUDNORM_LRA = 11.0
+
+
+def platform_loudness_target(platform: str) -> float:
+    """The LUFS target for ``platform``, falling back to the configured default."""
+    return PLATFORM_LUFS.get((platform or "").strip().lower(), settings.loudness_target_lufs)
+
+
+@dataclass(frozen=True)
+class LoudnessStats:
+    """First-pass ``loudnorm`` measurements for one file."""
+
+    input_i: float
+    input_tp: float
+    input_lra: float
+    input_thresh: float
+    target_offset: float
+
+
+def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
+    """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
+
+    This is the first of the two passes. Single-pass ``loudnorm`` has to guess as it goes,
+    so it compresses dynamics to hit the target and the first seconds of a clip are
+    normalised on less information than the rest. Measuring first lets the second pass
+    apply one linear gain, which reaches the target without touching dynamics.
+
+    Decodes but encodes nothing (``-f null``). Returns ``None`` on any failure - no audio
+    track, a corrupt file, an ffmpeg without ``loudnorm`` - so the caller renders without
+    normalisation instead of failing the clip.
+    """
+    cmd = [
+        settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-i", str(source),
+        "-af", f"loudnorm=I={settings.loudness_target_lufs}:"
+               f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json",
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+
+    # loudnorm prints its JSON block at the end of stderr, after the filter's own log
+    # lines. Taking the last '{' onwards is deliberate: a path in an earlier log line can
+    # contain braces, and json.loads on the whole stderr would fail.
+    stderr = proc.stderr or ""
+    start = stderr.rfind("{")
+    end = stderr.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        data = json.loads(stderr[start : end + 1])
+        return LoudnessStats(
+            input_i=float(data["input_i"]),
+            input_tp=float(data["input_tp"]),
+            input_lra=float(data["input_lra"]),
+            input_thresh=float(data["input_thresh"]),
+            target_offset=float(data["target_offset"]),
+        )
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def loudnorm_filter(stats: LoudnessStats, target_lufs: float) -> str:
+    """The second-pass ``loudnorm`` filter for ``stats`` (AU1).
+
+    ``linear=true`` is the point of having measured: it applies a single gain across the
+    whole clip rather than riding the level, so speech dynamics survive. ffmpeg falls back
+    to dynamic mode by itself if the measurements make linear normalisation impossible
+    (a clip whose peaks would clip the true-peak ceiling), which is the right trade in that
+    case and needs no handling here.
+    """
+    return (
+        f"loudnorm=I={target_lufs:g}:TP={settings.loudness_true_peak_db:g}"
+        f":LRA={_LOUDNORM_LRA:g}"
+        f":measured_I={stats.input_i:g}:measured_TP={stats.input_tp:g}"
+        f":measured_LRA={stats.input_lra:g}:measured_thresh={stats.input_thresh:g}"
+        f":offset={stats.target_offset:g}:linear=true:print_format=summary"
+    )

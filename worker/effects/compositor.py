@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 from config import settings
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
-from worker.ffmpeg_utils import _run, h264_args, probe
+from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import added
@@ -484,11 +484,14 @@ def render_clip(
         graph_parts.append(
             audio.music_mix_filter("0:a", f"{music_index}:a", "aout",
                                    options.music_volume, duration,
-                                   fade=options.fades)
+                                   fade=options.fades,
+                                   duck=options.music_duck)
         )
         audio_out = "aout"
         audio_changed = True
         applied.append(f"music:{options.music}")
+        if options.music_duck:
+            applied.append("music_ducked")
         if music_bed is not None and music_bed.synthesised:
             # A15: a labelled last resort, not a track. Recorded next to the music marker
             # so a clip's own record says which of the two it got.
@@ -509,6 +512,31 @@ def render_clip(
         graph_parts.append(f"[{audio_out}]{','.join(engine_audio)}[aeng]")
         audio_out = "aeng"
         audio_changed = True
+
+    # --- loudness normalisation (AU1) -------------------------------------
+    # Last in the audio chain, so it measures and corrects what will actually be delivered
+    # rather than an intermediate stage of it. Only applied when something else already
+    # changed the audio: a clip with every effect off is stream-copied, and re-encoding it
+    # purely to adjust loudness would trade a generation of quality for a gain the platform
+    # would otherwise apply itself.
+    #
+    # The measurement pass runs on the *source*, because the mix does not exist yet - both
+    # happen in this one ffmpeg invocation. A bed at 0.12 with ducking moves integrated
+    # loudness by a fraction of a LU, well inside loudnorm's own tolerance, and paying for a
+    # second full encode to measure the finished mix would cost more than it corrects (O6).
+    if options.loudness_normalise and info.has_audio and audio_changed:
+        stats = audio.measure_loudness(base_clip)
+        if stats is None:
+            # No audio to measure, an ffmpeg without loudnorm, or an unparsable report.
+            # Render at the source's own level rather than failing the clip.
+            applied.append("loudness_degraded:unmeasurable")
+        else:
+            target = audio.platform_loudness_target(options.platform)
+            graph_parts.append(
+                f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]"
+            )
+            audio_out = "aloud"
+            applied.append(f"loudness:{target:g}lufs")
 
     # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
     # the engine block was emitted with the base clip above so its indices are
@@ -535,13 +563,13 @@ def render_clip(
 
     # Codecs: re-encode only the streams we changed.
     if video_changed:
-        # The clip a user receives, so the frame rate is normalised too (O1-O3).
-        cmd += h264_args(normalise_fps=True)
+        # The clip a user receives: frame rate normalised (O3) and a VBV ceiling (O4).
+        cmd += h264_args(normalise_fps=True, vbv_cap=True)
     else:
         cmd += ["-c:v", "copy"]
     if info.has_audio:
         if audio_changed:
-            cmd += ["-c:a", "aac", "-b:a", "128k"]
+            cmd += aac_args()
         else:
             cmd += ["-c:a", "copy"]
 

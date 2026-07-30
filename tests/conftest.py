@@ -217,6 +217,10 @@ EFFECTS_OFF: dict = {
     "speaker_reframe": False,
     "kinetic_typography_enabled": False,
     "stem_inpainting_enabled": False,
+    # AU1/AU2. Loudness normalisation only engages when something else already changed the
+    # audio, but "every effect off" has to include it or the all-off graph gains a filter.
+    "loudness_normalise": False,
+    "music_duck": False,
 }
 
 #: Boolean fields that are not effects, so :data:`EFFECTS_OFF` does not cover them.
