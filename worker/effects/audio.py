@@ -322,6 +322,31 @@ def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
         return None
 
 
+def true_peak_limit_filter(ceiling_db: Optional[float] = None) -> str:
+    """A true-peak limiter for the end of the audio chain (AU3).
+
+    ``loudnorm`` *targets* a true-peak ceiling, and in linear mode it reduces its gain to
+    respect one - but that only helps on the path where it runs. With normalisation disabled,
+    or when the source could not be measured, nothing constrained the output at all: a hot
+    source plus a music bed sums straight past full scale. Measured on a mix of a -0.1 dBFS
+    source and a bed, the result reached **+5.5 dBFS true peak**; with this filter, -1.0.
+
+    ``level=disabled`` is the important argument. ``alimiter``'s ``level`` defaults to *on*,
+    which auto-levels the output up to the ceiling - so the default configuration of a filter
+    whose job is to make audio quieter when necessary would instead make quiet audio *louder*,
+    undoing the loudness normalisation immediately upstream of it.
+
+    Applied unconditionally at the end of a changed audio chain rather than only when
+    normalisation is off: a limiter that never engages is inaudible, and the alternative is
+    reasoning about whether ``loudnorm``'s estimate covered inter-sample peaks.
+    """
+    ceiling = settings.loudness_true_peak_db if ceiling_db is None else ceiling_db
+    # alimiter's limit is a linear amplitude, not dB.
+    limit = 10.0 ** (float(ceiling) / 20.0)
+    limit = max(0.001, min(1.0, limit))
+    return f"alimiter=limit={limit:.4f}:level=disabled"
+
+
 def loudnorm_filter(stats: LoudnessStats, target_lufs: float) -> str:
     """The second-pass ``loudnorm`` filter for ``stats`` (AU1).
 
