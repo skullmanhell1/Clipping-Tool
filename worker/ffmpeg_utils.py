@@ -362,6 +362,47 @@ def cut_segment(
 BACKGROUND_STYLES: tuple[str, ...] = ("blur", "mirror", "black", "color", "gradient")
 
 
+#: The background styles that need a filter beyond the always-present set.
+#:
+#: ``gradient`` is built with ``geq``, which is a GPL-only filter: a build configured without
+#: ``--enable-gpl`` has every other filter used here and not that one. Naming the dependency
+#: rather than assuming it is what lets the style degrade instead of failing the render, and it
+#: follows the pattern the stem engine already uses for ``alimiter``.
+BACKGROUND_STYLE_FILTERS: dict[str, str] = {"gradient": "geq"}
+
+
+def background_style_available(style: str) -> bool:
+    """Whether ``style``'s required filter exists in the configured ffmpeg.
+
+    Any failure to probe answers ``True``: a probe that cannot run is not evidence the filter is
+    missing, and treating it as such would silently downgrade the look on every host where the
+    capability system itself is unavailable.
+    """
+    required = BACKGROUND_STYLE_FILTERS.get(style)
+    if not required:
+        return True
+    try:
+        # get_report() rather than calling the prober directly: it caches per capability id for
+        # the life of the process, so this costs one `ffmpeg -filters` invocation ever rather
+        # than one per clip.
+        from worker.engines.capabilities import get_report
+
+        return bool(get_report().status(f"ffmpeg_filter:{required}").available)
+    except Exception:
+        return True
+
+
+def resolve_background_style(style: str) -> str:
+    """``style`` if it can be rendered here, else ``blur`` (V11).
+
+    Degrading to the previous default is the right fallback: an unavailable filter should cost
+    the *choice*, never the clip.
+    """
+    if style in BACKGROUND_STYLES and not background_style_available(style):
+        return "blur"
+    return style
+
+
 def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -> str:
     """The filter chain producing the background layer, given ``[bg]`` as its input.
 
@@ -445,7 +486,9 @@ def reformat_aspect(
         # Background per V11; foreground scaled to fit fully inside and overlaid centred.
         vf = (
             f"split=2[bg][fg];"
-            f"{background_chain(background, tw, th, color=background_color)}"
+            # V11: resolved here rather than in background_chain, so that function stays a pure
+            # string builder with no probe in it - the tests assert its output directly.
+            f"{background_chain(resolve_background_style(background), tw, th, color=background_color)}"
             f"[fg]scale={tw}:{th}:force_original_aspect_ratio=decrease[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
         )
