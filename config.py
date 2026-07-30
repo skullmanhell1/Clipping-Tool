@@ -255,6 +255,18 @@ class Settings(BaseSettings):
     music_default_volume: float = Field(
         default=0.12, description="Default background-music volume (0..1)."
     )
+    # A15: whether the synthesised fallback bed may be used at all.
+    #
+    # It is not music - it is two sine tones with tremolo, identical for every clip of a
+    # given mood. Left on so that asking for music still produces something, but a caller
+    # who would rather have silence than a drone can turn it off, and every clip that uses
+    # it is marked music_degraded:synthesised.
+    music_allow_synthesis: bool = Field(
+        default=True,
+        description="Allow the synthesised two-tone fallback bed when no user track "
+                    "exists in music_dir. Clips using it are marked "
+                    "music_degraded:synthesised.",
+    )
 
     # ------------------------------------------- b-roll (Tier 1) ----------
     # Local b-roll library used by the LocalProvider (no network required).

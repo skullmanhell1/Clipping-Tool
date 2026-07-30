@@ -14,6 +14,36 @@ signature changes, no removed fields, and every new field is additive with a def
 a caller who relied on the shipped defaults will get different-looking clips, so it does not
 belong in a patch release.
 
+### Added — opinionated profiles (U2)
+
+- **Four shipped profiles — "Podcast", "Gaming", "Talking head", "Educational"** — each a
+  coherent bundle rather than a label. The settings panel exposes thirteen independent
+  toggles and no opinion about which combinations work together; a user editing a podcast
+  has to already know that a two-host shot needs speaker-aware reframing and that a slow
+  zoom on top of it reads as restless. Pass `profile: "<name>"` with a process request:
+  the bundle is expanded into the individual options and **anything else in the request
+  overrides it**, including an explicit `false`.
+- Two features the global defaults deliberately leave off are used deliberately here, which
+  is the point of having profiles: `filler_removal` in Podcast and Educational, where
+  unscripted speech makes it worth its cost, and `kinetic_typography_enabled` in Gaming —
+  the one audience that asks for animated captions, and a reasonable place for a feature
+  that takes ownership of the caption layer.
+- `GET /api/profiles/builtin` returns the bundles in full, with the reasoning behind each,
+  so a client can show what picking one will change. `GET /api/info` carries the names.
+  Distinct from `GET /api/profiles`, which lists profiles a *user* saved.
+
+### Changed — the synthesised music bed says what it is (A15)
+
+- **`worker/effects/audio.py` does not play music — it synthesises a drone**, two sine tones
+  with tremolo and a low-pass, identical for every clip of a given mood. Nothing recorded
+  which of its two sources a clip got, so a synthesised bed was reported as `music:upbeat`,
+  indistinguishable from a licensed track. `assets/music` ships empty, so in practice it was
+  always the drone.
+- `resolve_music_bed` now returns a `MusicBed` naming its source, and a clip using the
+  fallback is marked **`music_degraded:synthesised`** alongside `music:<mood>`.
+- `MUSIC_ALLOW_SYNTHESIS` (default on) lets an operator refuse the fallback entirely and get
+  silence instead of a drone. Real licence-clean beds (`A14`) have not shipped.
+
 ### Changed — defaults (U1, V1, V12, T1)
 
 - **A default run now enables the features that decide how a clip looks**: auto-reframe
