@@ -31,6 +31,10 @@ class JobStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    # I4: distinct from FAILED on purpose - a job the user stopped did not go
+    # wrong, and collapsing the two would both mislead the operator and inflate
+    # any failure rate computed from these records.
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -616,6 +620,12 @@ class Job:
     thumbnail: Optional[str] = None
     error: Optional[str] = None
     clips: list[ClipResult] = field(default_factory=list)
+    # U8: progress was a single coarse fraction plus a free-text stage string, so the UI could
+    # only ever show one bar and a sentence. These make the *structure* of the work visible:
+    # which stage of how many, and what each has cost so far (M5).
+    stage_index: int = 0
+    stage_total: int = 0
+    stage_timings: list[dict] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -629,6 +639,9 @@ class Job:
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
+            "stage_index": self.stage_index,
+            "stage_total": self.stage_total,
+            "stage_timings": self.stage_timings,
             "title": self.title,
             "duration": self.duration,
             "thumbnail": self.thumbnail,
@@ -668,6 +681,11 @@ class Job:
             thumbnail=data.get("thumbnail"),
             error=data.get("error"),
             clips=[ClipResult.from_dict(c) for c in (data.get("clips") or [])],
+            # U8/M5: restored so a completed job's timing report survives a restart. Coerced
+            # defensively because these come back from JSON written by a possibly older build.
+            stage_index=int(data.get("stage_index") or 0),
+            stage_total=int(data.get("stage_total") or 0),
+            stage_timings=list(data.get("stage_timings") or []),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
         )

@@ -80,6 +80,15 @@ logger = logging.getLogger(__name__)
 
 def _run_startup() -> None:
     """Ensure storage dirs exist and start the background retention sweeper."""
+    # I6: attach the job-attribution filter before anything can log. Installed here rather than
+    # at import time so a host that configures its own logging (a container platform capturing
+    # stdout) has already done so and keeps its handlers - this only adds the filter and format.
+    try:
+        from worker import observability
+
+        observability.install()
+    except Exception:  # pragma: no cover - logging setup must never stop the app booting
+        logger.exception("could not install job-scoped log context")
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
     if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
@@ -843,6 +852,57 @@ def get_job(job_id: str) -> dict:
     return job.to_dict()
 
 
+@app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])
+def cancel_job(job_id: str) -> dict:
+    """Ask a queued or running job to stop (I4).
+
+    ``409`` rather than ``404`` for a job that has already finished: the job exists, it simply
+    cannot be cancelled, and answering 404 would tell the client the wrong thing about why.
+
+    The response says ``cancelling`` for a job that was mid-render, because the worker stops at
+    its next checkpoint and a job already inside an ffmpeg pass finishes that pass first. Saying
+    "cancelled" while a render is still writing would be a claim the API cannot back.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    was_running = job.status.value == "processing"
+    if not manager.cancel(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job.status.value} and cannot be cancelled",
+        )
+    return {
+        "job_id": job_id,
+        "state": "cancelling" if was_running else "cancelled",
+        "detail": (
+            "Stopping at the next checkpoint; a pass already in progress will finish first."
+            if was_running else "Stopped before processing began."
+        ),
+    }
+
+
+@app.get("/api/jobs/{job_id}/timings", tags=["jobs"])
+def get_job_timings(job_id: str) -> dict:
+    """Per-stage render timings for a job (M5).
+
+    Read from the job record rather than from the live metrics registry, so the numbers survive
+    a restart and remain available for a job that finished long ago - which is when someone
+    actually asks where the time went.
+    """
+    job = get_manager().store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    timings = list(job.stage_timings or [])
+    return {
+        "job_id": job_id,
+        "status": job.status.value,
+        "total_seconds": round(sum(float(t.get("seconds") or 0.0) for t in timings), 3),
+        "stages": timings,
+    }
+
+
 @app.get("/api/batches/{batch_id}", tags=["jobs"])
 def get_batch(batch_id: str) -> dict:
     jobs = get_manager().store.by_batch(batch_id)
@@ -1281,18 +1341,89 @@ else:
 
     @app.get("/", response_class=HTMLResponse, tags=["ui"])
     def index() -> str:
-        """Fallback page when the frontend has not been built."""
+        """Fallback page when the frontend has not been built (U13)."""
+        return fallback_index_html()
+
+
+def fallback_index_html() -> str:
+    """Fallback page when the frontend has not been built (U13).
+
+    Reports the instance's *actual* state rather than static prose. Someone who reaches this
+    page has almost always got here by accident - a bare API, a deploy where the frontend
+    build did not run - and the questions they need answered are "is the backend healthy"
+    and "what is missing". A page that only says "the UI is not built" answers neither, and
+    sends them to read logs for facts the process already knows.
+
+    Every probe is individually guarded: this page must render when things are broken, since
+    that is precisely when it is read.
+    """
+    def _row(label: str, value: str, ok: bool = True) -> str:
+        colour = "#3fb950" if ok else "#f85149"
         return (
-            "<!doctype html><html><head><meta charset='utf-8'>"
-            "<title>AI Video Clipper</title>"
-            "<style>body{background:#0b0f17;color:#e6edf3;font-family:sans-serif;"
-            "display:flex;min-height:100vh;align-items:center;justify-content:center;"
-            "margin:0}a{color:#00d2ff}.c{max-width:560px;padding:40px}</style></head>"
-            "<body><div class='c'><h1>AI Video Clipper</h1>"
-            "<p>API is running. The React UI has not been built yet.</p>"
-            "<p>Build it with <code>cd frontend &amp;&amp; npm install &amp;&amp; "
-            "npm run build</code>, or run the dev server with "
-            "<code>npm run dev</code> (proxies to this API).</p>"
-            "<p><a href='/docs'>API docs</a> &middot; <a href='/api/info'>Info</a> "
-            "&middot; <a href='/healthz'>Health</a></p></div></body></html>"
+            f"<tr><td style='padding:4px 16px 4px 0;color:#8b949e'>{label}</td>"
+            f"<td style='color:{colour}'>{value}</td></tr>"
         )
+
+    rows = [_row("Version", APP_VERSION), _row("Environment", settings.environment)]
+
+    try:
+        import shutil
+
+        # Resolved rather than merely reported: "ffmpeg" as a configured value tells the
+        # reader nothing, and a missing binary is the single most common reason a deploy of
+        # this app does not work. shutil.which answers the question they actually have.
+        resolved = shutil.which(str(settings.ffmpeg_binary))
+        rows.append(_row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})",
+                         bool(resolved)))
+    except Exception:
+        rows.append(_row("ffmpeg", "could not be resolved", ok=False))
+
+    try:
+        rows.append(_row("Whisper model", str(settings.whisper_model)))
+        rows.append(_row("Storage backend", str(settings.storage_backend.value)))
+    except Exception:
+        pass
+
+    try:
+        jobs = get_manager().store.all()
+        active = sum(1 for j in jobs if j.status.value in ("queued", "processing"))
+        rows.append(_row("Jobs", f"{len(jobs)} known, {active} active"))
+    except Exception:
+        rows.append(_row("Jobs", "job store unavailable", ok=False))
+
+    try:
+        # _engines_info returns (engine_rows, capabilities); only the rows are wanted here.
+        # Unpacking explicitly, because iterating the tuple enumerates the capabilities mapping
+        # instead - which is how the first version of this quietly reported "could not be
+        # listed" on a perfectly healthy instance, the exact class of failure this page exists
+        # to make visible.
+        engines, _capabilities = _engines_info()
+        names = ", ".join(
+            f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}"
+            for e in engines
+        ) or "none registered"
+        rows.append(_row("Engines", names))
+    except Exception:
+        rows.append(_row("Engines", "could not be listed", ok=False))
+
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<title>{settings.app_name}</title>"
+        "<style>body{background:#0b0f17;color:#e6edf3;font-family:ui-sans-serif,sans-serif;"
+        "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}"
+        "a{color:#22d3ee}.c{max-width:640px;padding:40px}code{background:#161b22;"
+        "padding:2px 6px;border-radius:4px;font-size:13px}"
+        "table{border-collapse:collapse;font-size:14px;margin:20px 0}"
+        "h1{margin:0 0 4px;font-size:22px}.s{color:#8b949e;font-size:14px}"
+        "</style></head><body><div class='c'>"
+        f"<h1>{settings.app_name}</h1>"
+        "<p class='s'>The API is running. The React UI has not been built, so this page is "
+        "standing in for it.</p>"
+        f"<table>{''.join(rows)}</table>"
+        "<p class='s'>To get the interface: <code>cd frontend &amp;&amp; npm install "
+        "&amp;&amp; npm run build</code>, then reload. For development use "
+        "<code>npm run dev</code>, which proxies to this API.</p>"
+        "<p><a href='/docs'>API docs</a> &middot; <a href='/api/info'>Capabilities</a> "
+        "&middot; <a href='/api/jobs'>Jobs</a> &middot; <a href='/healthz'>Health</a></p>"
+        "</div></body></html>"
+    )

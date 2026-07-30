@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
 from config import settings
+from worker import cancellation, observability
 from worker import download as dl
 from worker.models import Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
@@ -28,6 +30,49 @@ logger = logging.getLogger(__name__)
 
 # Fraction of total progress reserved for downloading a URL before processing.
 _DOWNLOAD_BUDGET = 0.10
+
+#: The stages a job passes through, in order, for U8's "step N of M" display.
+#:
+#: Derived from the strings ``run_pipeline`` already reports rather than invented, so the count
+#: cannot drift from what the pipeline actually does. Matching is on a prefix because the later
+#: reports carry per-clip detail ("Rendering clip 2 of 5").
+JOB_STAGES: tuple[str, ...] = (
+    "Starting",
+    "Analyzing video",
+    "Transcribing audio",
+    "Finding the best moments",
+    "Creating",
+    "Rendering clip",
+    "Adding effects",
+    "Writing copy",
+    "Completed",
+)
+
+
+def _stage_label(stage: str) -> str:
+    """The stage name with its per-clip detail stripped, for grouping timings.
+
+    "Rendering clip 2 of 5" and "Rendering clip 3 of 5" are the same stage measured twice, not
+    two stages. Without this, a five-clip job produces five one-off rows instead of one row with
+    a count and a mean - and the mean is the number that tells you whether rendering dominates.
+    """
+    index = stage_position(stage)
+    return JOB_STAGES[index - 1] if index else (stage or "unknown")
+
+
+def stage_position(stage: str) -> int:
+    """The 1-based index of ``stage`` within :data:`JOB_STAGES`, or 0 if unrecognised.
+
+    Prefix matching, and *longest* prefix wins: "Rendering clip 2 of 5" must not match
+    "Starting" merely because the list is scanned in order, and a stage nobody anticipated
+    returns 0 so the UI shows a plain bar rather than a wrong step number.
+    """
+    text = (stage or "").strip()
+    best_index, best_length = 0, -1
+    for index, known in enumerate(JOB_STAGES, start=1):
+        if text.startswith(known) and len(known) > best_length:
+            best_index, best_length = index, len(known)
+    return best_index
 
 
 class JobStore:
@@ -187,8 +232,41 @@ class JobManager:
             title=title or (Path(source).name if input_type == "file" else source),
         )
         self.store.add(job)
+        # I4: clear any stale request under this id before the work is scheduled. Ids are short
+        # hex and a collision is unlikely rather than impossible, and inheriting a previous
+        # job's cancellation would stop a brand-new job before it started.
+        cancellation.clear(job.id)
         self._executor.submit(self._run, job.id)
         return job
+
+    # -- cancellation (I4) -------------------------------------------------
+
+    def cancel(self, job_id: str) -> bool:
+        """Ask a job to stop, returning whether it was in a cancellable state.
+
+        A queued job is marked cancelled immediately - no worker has claimed it, so there is
+        nothing to wait for and reporting it as "cancelling" would be a lie. A processing job is
+        marked cancelled *and* flagged, because the worker stops at its next checkpoint and the
+        user needs the acknowledgement now rather than whenever the current ffmpeg pass ends.
+
+        A finished job (completed, failed, already cancelled) returns ``False`` rather than
+        raising: cancelling something that already stopped is a harmless no-op, and reporting it
+        as an error would make a double-click on the button look like a failure.
+        """
+        job = self.store.get(job_id)
+        if job is None or job.status in (
+            JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED
+        ):
+            return False
+        cancellation.request_cancel(job_id)
+        self.store.update(
+            job_id,
+            status=JobStatus.CANCELLED,
+            stage="Cancelled",
+            error=None,
+        )
+        logger.info("job %s cancelled by request (was %s)", job_id, job.status.value)
+        return True
 
     def submit_batch(self, items: list[dict], options: ProcessingOptions) -> str:
         """Submit multiple items as one batch; returns the batch id.
@@ -209,18 +287,65 @@ class JobManager:
     # -- execution ---------------------------------------------------------
 
     def _run(self, job_id: str) -> None:
-        """Worker entrypoint: ingest then run the pipeline, tracking progress."""
+        """Worker entrypoint: ingest then run the pipeline, tracking progress.
+
+        The whole body runs inside :func:`worker.observability.job_context`, so every log line
+        emitted anywhere beneath it - including from third-party libraries - carries this job's
+        id (I6). Without that, two concurrent renders interleave their output and no line can be
+        attributed; with a single worker that was survivable by reading timestamps, and it stops
+        being survivable the moment I1 lands.
+        """
         job = self.store.get(job_id)
         if job is None:
             return
 
-        def progress(fraction: float, stage: str) -> None:
-            self.store.update(job_id, progress=fraction, stage=stage,
-                              status=JobStatus.PROCESSING)
+        metrics = observability.metrics_for(job_id)
+        # The stage currently being timed, so `progress` can close the previous one when the
+        # pipeline moves on. A list because the closure below rebinds it.
+        open_stage: list[Optional[tuple[str, float]]] = [None]
 
+        def close_stage() -> None:
+            entry = open_stage[0]
+            if entry is None:
+                return
+            name, started = entry
+            metrics.record(name, time.monotonic() - started)
+            open_stage[0] = None
+
+        def progress(fraction: float, stage: str) -> None:
+            # I4: the progress callback is the cancellation checkpoint. It is already invoked at
+            # every stage boundary and once per clip, so this needs no new plumbing and lands
+            # exactly where the job's state is consistent - between passes, not mid-encode.
+            cancellation.checkpoint(job_id)
+            # M5: close the previous stage and open this one. Timing is derived from the
+            # transitions the pipeline already reports rather than from new instrumentation at
+            # each site, so a stage cannot be added without its timing appearing.
+            label = _stage_label(stage)
+            current = open_stage[0]
+            if current is None or current[0] != label:
+                close_stage()
+                open_stage[0] = (label, time.monotonic())
+            self.store.update(
+                job_id, progress=fraction, stage=stage,
+                status=JobStatus.PROCESSING,
+                # U8: which step of how many, so the UI can show structure rather than one bar.
+                stage_index=stage_position(stage),
+                stage_total=len(JOB_STAGES),
+                stage_timings=metrics.to_list(),
+            )
+
+        with observability.job_context(job_id):
+            self._execute(job, job_id, progress, close_stage, metrics)
+
+    def _execute(self, job, job_id, progress, close_stage, metrics) -> None:
+        """The job body. Split out so ``_run`` is only the context and callback wiring."""
         try:
+            # I4: a queued job stops here, before any work begins - no worker has claimed it, so
+            # there is nothing to wait for.
+            cancellation.checkpoint(job_id)
             self.store.update(job_id, status=JobStatus.PROCESSING,
-                              stage="Starting", progress=0.0)
+                              stage="Starting", progress=0.0,
+                              stage_index=1, stage_total=len(JOB_STAGES))
 
             source_path = Path(job.source)
             start_progress = 0.0
@@ -286,13 +411,20 @@ class JobManager:
                 history.record_clip(job_id, clip, path, job.options.campaign_id)
                 self._store_clip(storage, write_sidecar, job_id, clip, clips_dir)
 
+            close_stage()
             self.store.update(
                 job_id,
                 clips=clips,
                 status=JobStatus.COMPLETED,
                 progress=1.0,
                 stage=f"Completed - {len(clips)} clip(s)",
+                stage_index=len(JOB_STAGES),
+                stage_total=len(JOB_STAGES),
+                stage_timings=metrics.to_list(),
             )
+            # M5: one line naming where the minutes went. Logged at completion rather than
+            # sampled, because the only comparison worth making is between whole renders.
+            logger.info("render timings - %s", metrics.summary())
 
             # Auto mode routes each finished clip through its campaign/platforms.
             if job.options.publish_mode == "auto" and job.options.publish_to:
@@ -308,16 +440,38 @@ class JobManager:
                         mode="auto",
                         schedule_at=job.options.schedule_at,
                     )
+        except cancellation.Job_Cancelled:
+            # I4: caught *before* the generic handler, and deliberately not recorded as a
+            # failure. A job the user stopped did not go wrong, and reporting it as failed would
+            # both mislead the operator and inflate any failure rate computed from these records.
+            close_stage()
+            self.store.update(
+                job_id,
+                status=JobStatus.CANCELLED,
+                stage="Cancelled",
+                error=None,
+                stage_timings=metrics.to_list(),
+            )
+            logger.info("job stopped at a checkpoint after %s", metrics.summary())
         except Exception as exc:  # capture any failure and surface it
+            close_stage()
             self.store.update(
                 job_id,
                 status=JobStatus.FAILED,
                 error=str(exc),
                 stage="Failed",
+                stage_timings=metrics.to_list(),
             )
+            # M5: timings for a *failed* render are the most useful rows in a performance
+            # report - a stage that reliably burns ninety seconds and then throws would be
+            # invisible if only successes were measured.
+            logger.warning("job failed after %s", metrics.summary(), exc_info=True)
         finally:
             # Best-effort cleanup of per-job scratch space.
             self._cleanup_temp(job_id)
+            # I4: the request has been honoured, so forget it. Left in place it would grow
+            # without bound on a long-running instance.
+            cancellation.clear(job_id)
 
     @staticmethod
     def _store_clip(storage, write_sidecar, job_id: str, clip, clips_dir: Path) -> None:
