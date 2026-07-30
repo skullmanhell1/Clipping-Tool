@@ -188,8 +188,20 @@ def segment_video(
         max_clips: Optional cap on the number of clips returned.
 
     Returns:
-        Ordered list of :class:`Segment`. When capped, the longest segments are
-        kept (a simple heuristic standing in for real scoring in later phases).
+        Ordered list of :class:`Segment`. When ``max_clips`` caps the count, the *longest*
+        segments are kept.
+
+    Note:
+        That longest-first capping is deliberately still here, and production no longer uses
+        it. This module is pure geometry with no opinion about clip quality, and length is a
+        poor proxy for it - the longest silence-delimited segment is usually the stretch where
+        nobody paused. :func:`worker.selection._fallback` therefore calls this with
+        ``max_clips=None`` and ranks the full set on measured signals instead (S11).
+
+        It is kept rather than removed because the S1 evaluation harness needs a *longest*
+        baseline to measure against, and a baseline that shares code with production would
+        stop being an independent floor. Direct callers who genuinely want length-capping,
+        including that baseline's own reference implementation, still get it.
     """
     min_len, max_len, target = resolve_length_range(clip_length)
 
