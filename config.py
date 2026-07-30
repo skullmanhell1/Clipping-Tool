@@ -153,6 +153,46 @@ class Settings(BaseSettings):
         description="Directory of cached transcripts (T8), keyed by source content hash and "
                     "the ASR parameters that produced them.",
     )
+    # T3: Whisper invents text over music, applause and silence, and gets stuck in decode
+    # loops. Every threshold here is set so that two independent signals must agree before a
+    # segment is dropped, because a false positive deletes real speech and nothing downstream
+    # can notice - while a missed hallucination is visible in the clip.
+    transcript_filter_enabled: bool = Field(
+        default=True,
+        description="Drop transcript segments that look hallucinated or looped (T3).",
+    )
+    transcript_no_speech_threshold: float = Field(
+        default=0.6,
+        description="Whisper no_speech_prob at or above which a segment is suspect (T3). "
+                    "Never acted on alone: quiet but real speech scores high here.",
+    )
+    transcript_logprob_threshold: float = Field(
+        default=-1.0,
+        description="Mean token log-probability at or below which a segment is suspect (T3). "
+                    "Must coincide with a high no_speech_prob before anything is dropped.",
+    )
+    transcript_max_token_run: int = Field(
+        default=4,
+        description="Identical consecutive tokens that mark a decode loop (T3). No speaker "
+                    "says the same word four times with nothing in between.",
+    )
+    transcript_max_segment_repeats: int = Field(
+        default=2,
+        description="Consecutive segments repeating the same phrase before the repeats are "
+                    "dropped (T3) - a loop spanning segment boundaries.",
+    )
+    transcript_min_word_probability: float = Field(
+        default=0.35,
+        description="Mean word probability below which a repetitive segment is treated as a "
+                    "loop over non-speech (T3).",
+    )
+    transcript_filter_keep_floor: float = Field(
+        default=0.5,
+        description="Minimum share of segments that must survive filtering (T3). Below it "
+                    "nothing is dropped: if most of a transcript looks invented the "
+                    "thresholds are wrong for that audio, and emptying it is worse than "
+                    "keeping a poor transcript.",
+    )
     transcript_cache_enabled: bool = Field(
         default=True,
         description="Reuse a cached transcript when the source content and ASR settings "
