@@ -29,6 +29,43 @@ Verified absent across the whole repository before this: no `loudnorm`, no `dyna
   phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
   decoder sees it first, if at all.
 
+### Added — approve and retry are reachable from the dashboard (PB2)
+
+- `/api/publish-attempts/{id}/approve` and `/retry` existed with **zero references anywhere
+  in `frontend/src/`**. Three of the five publishers can return `review_required` — Instagram
+  and X without direct-publish approval, Whop when the upload cannot be attached to a target —
+  so an attempt in that state stopped permanently and the only way out was a hand-written HTTP
+  request. The history table now offers both actions.
+- They stay **separate controls**, not one "resume" button. Approve escalates a held
+  submission into a live post; retry re-runs it exactly as submitted, for an expired token or a
+  network blip. One button would have to guess, and guessing wrong publishes something that was
+  deliberately withheld. Approve is offered only for `review_required`; retry for
+  `review_required` and `failed`; neither for a published or in-flight attempt, since re-posting
+  a published clip duplicates it on a real account.
+- 9 frontend tests cover the state gating, that each action calls only its own endpoint, error
+  surfacing, and double-click protection.
+
+### Fixed — filler removal left audible clicks (V10)
+
+- Each kept segment now gets a few milliseconds of audio fade at its cut edges. `concat` joined
+  segments sample-exactly, so every removed "um" was a step discontinuity in the waveform —
+  measured on a continuous tone, the largest sample-to-sample jump at the seam drops from
+  **164 to 19**.
+- Deliberately **not** `acrossfade`: crossfading overlaps segments, so the result is shorter
+  than the sum of its parts at every seam, and `rebase_words` maps caption timings onto the kept
+  timeline using cumulative segment durations. An overlap would drift captions out of sync by a
+  growing amount across the clip — a worse artefact than the click. Video cuts stay hard; a jump
+  cut is normal short-form grammar.
+
+### Added — measurement (M2, M6)
+
+- **`scripts/smoke_reel.py`** renders one clip with every effect on, prints the effect markers
+  (flagging degradations) and the before/after loudness, and lists what to look at. Explicitly
+  not a test: it asserts nothing about appearance, because the defects it exists to catch —
+  a wrong font, a soft emoji, a drone instead of music — are only visible to a person.
+- **A loudness gate on rendered output** (`M6`): renders through the real compositor and fails
+  if the result is more than 1.5 LU from its platform target, in both directions.
+
 ### Added — clips are checked before they are uploaded (O10)
 
 - **The only pre-flight in the publish path was `video_path.exists()`.** Nothing checked
