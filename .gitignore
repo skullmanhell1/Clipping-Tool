@@ -43,3 +43,11 @@ publisher_bridge/node_modules/
 # OS / editor
 .DS_Store
 *.swp
+
+# S1 evaluation harness: labels are committed (they are the benchmark), footage and cached
+# transcripts are not. A transcript cache is derived data keyed on file size and mtime, and
+# the footage is the user's own media - neither belongs in the repository.
+eval/cache/
+eval/media/
+eval/*.json
+!eval/labels/*.json

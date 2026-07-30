@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — selection evaluation harness (S1)
+
+`docs/IMPROVEMENT_PLAN.md` puts this first in §3 and says why: *"Without this every change
+below is unmeasurable."* Every proposed selection improvement — audio energy, pitch, speech
+rate, hook scoring, scene awareness — is a change to a ranking, and a ranking cannot be
+improved by inspection.
+
+- **`evaluation/`** — label format, IoU matching, precision@k / recall@k, naive baselines, and
+  a runner. **`scripts/eval_selection.py`** is the CLI: `template`, `validate`, `run`,
+  `compare`. `eval/README.md` covers how to label.
+- **Baselines run on every evaluation**, and this is the point of the design. Whether
+  precision@5 of 0.40 is good depends entirely on what picking clips *without thinking* scores
+  on the same footage, and that number is not guessable — it moves with source length and with
+  how many moments were labelled. `uniform` is the no-information floor, `random` is chance,
+  and `longest` reproduces what the shipped deterministic fallback does when it caps the count.
+  If the LLM selector cannot beat `longest`, the fallback is not a fallback — it is the product,
+  and the report says so in those terms.
+- **Matching is one-to-one.** Without that, a selector could return five near-identical clips
+  over one good moment and score five hits — rewarding exactly the redundancy S15 exists to
+  remove. IoU also uses union as its denominator, so returning the whole video scores ~0.01
+  rather than "containing" every moment.
+- **Results are reported at IoU 0.3 / 0.5 / 0.7**, because the threshold is a judgement: 0.3 is
+  "found the right part of the video", 0.7 is "got the boundaries too". A single number would
+  hide a change that improved targeting while worsening cuts.
+- **`mean best IoU` is reported separately** as the diagnostic precision cannot express. Two
+  selectors scoring zero at 0.5 are not equivalent — one landing at 0.45 is cutting the right
+  moment badly, one at 0.05 is looking in the wrong place. The report flags the first as a near
+  miss and points at S9 rather than at the scoring signals.
+- **Transcripts are cached** (keyed on path, size and mtime), so only the first run pays for
+  transcription and iterating on scoring afterwards is fast. The deterministic strategies need
+  no transcript and no Whisper model at all, so the fallback's own score can be established
+  before paying for anything.
+
+Verified end to end on real media: with `--strategy silence` the selector scores *exactly* the
+same as the `longest` baseline, which is correct — that strategy **is** the segmentation
+fallback — and is the harness detecting a tie it was built to detect.
+
+
 ### Fixed — audio was never mastered (AU1, AU2, AU8)
 
 Verified absent across the whole repository before this: no `loudnorm`, no `dynaudnorm`, no
