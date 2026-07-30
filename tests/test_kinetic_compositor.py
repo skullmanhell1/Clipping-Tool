@@ -1091,6 +1091,13 @@ def _matrix_options(**overrides) -> ProcessingOptions:
         emoji="off",
         broll=False,
         kinetic_typography_enabled=False,
+        # AU1/AU2, off for the same reason as every other flag here: these cases pin
+        # v0.8.0 compose parity, and loudness normalisation would add a filter and a
+        # marker to the graph being compared. It is also measured from the real file, and
+        # these renders use a stubbed ffmpeg, so the marker would record only that the
+        # stub has no audio to measure — a fact about the fixture, not the compositor.
+        loudness_normalise=False,
+        music_duck=False,
     )
     data.update(overrides)
     return ProcessingOptions(**data)

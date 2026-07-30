@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — audio was never mastered (AU1, AU2, AU8)
+
+Verified absent across the whole repository before this: no `loudnorm`, no `dynaudnorm`, no
+`sidechaincompress`, no LUFS target, no `-ar`/`-ac`. Music was mixed at a flat `volume=0.12`.
+
+- **Loudness is normalised to the target platform's level** (`AU1`), two-pass: an analysis
+  pass measures the source, then one linear gain reaches the target without touching
+  dynamics. A clip quieter than the platform's target is turned *up* on playback, lifting its
+  noise floor along with the speech; a louder one is turned down, losing the headroom it was
+  mastered with. Targets are per platform because the platforms differ — YouTube about
+  −14 LUFS, TikTok and Instagram nearer −11 — with a −1 dBTP ceiling so the lossy encoder
+  has room. Failure to measure degrades to the source's own level and records
+  `loudness_degraded:unmeasurable` rather than failing the clip.
+- **Music ducks under speech** with `sidechaincompress` (`AU2`). A flat bed has no good
+  level: loud enough to hear between sentences is loud enough to fight the speech during
+  them, and quiet enough not to fight it is inaudible — no music, at the cost of an extra
+  encode. `MUSIC_DUCK_RATIO=1.0` restores the flat mix.
+- **Output sample rate and channel count are pinned** to 48 kHz stereo (`AU8`). Neither was
+  set anywhere, so output was whatever the source happened to be: 44.1 kHz mono from a
+  phone plays out of one side on some players, and a 5.1 layout is downmixed by whatever
+  decoder sees it first, if at all.
+
+### Fixed — a busy clip could balloon past platform size limits (O4)
+
+- `-maxrate`/`-bufsize` VBV caps on delivered clips. `-crf` sets a *quality* target with no
+  bitrate ceiling, so confetti, fast pans, grain or a gameplay scene could produce a file a
+  platform rejects on upload. Off for intermediates, which would only lose quality the final
+  pass could have used.
+
+
 ## [0.11.0] - 2026-07-29
 
 A minor bump rather than a patch: the visible output of a default run changes. No API

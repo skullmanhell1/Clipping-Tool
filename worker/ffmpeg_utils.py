@@ -49,17 +49,45 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
 )
 
 
-def h264_args(*, normalise_fps: bool = False) -> list[str]:
+def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str]:
     """The standard libx264 arguments for an encode.
 
     ``normalise_fps`` adds ``-r`` at :data:`config.settings.output_fps`, forcing constant
     frame rate. It is off by default because an intermediate that is about to be re-encoded
     gains nothing from being resampled twice, and on for anything a user receives.
+
+    ``vbv_cap`` adds ``-maxrate``/``-bufsize`` (O4). ``-crf`` alone sets a *quality* target
+    with no ceiling on bitrate, so a busy clip - confetti, fast pans, grain, a gameplay
+    scene - can balloon well past a platform's file-size limit and be rejected on upload.
+    Also off for intermediates: capping a file that is about to be re-encoded throws away
+    quality the final pass could have used.
     """
     args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", *H264_COMPAT_ARGS]
     if normalise_fps:
         args += ["-r", str(int(settings.output_fps))]
+    if vbv_cap:
+        maxrate = int(settings.output_max_bitrate_kbps)
+        # A two-second buffer, the usual pairing: large enough that a brief complex passage
+        # is not visibly starved, small enough that the cap still means something.
+        args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
     return args
+
+
+def aac_args() -> list[str]:
+    """The standard AAC arguments for an encode, including AU8's normalisation.
+
+    ``-ar``/``-ac`` were set nowhere, so output sample rate and channel count were whatever
+    the source happened to have: 44.1 kHz mono from a phone, 48 kHz 5.1 from a camera. Both
+    are legal H.264/AAC and both cause trouble downstream - a mono clip plays out of one
+    side on some players, and a surround layout is silently downmixed by whatever decoder
+    gets it first, if at all.
+    """
+    return [
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", str(int(settings.output_sample_rate)),
+        "-ac", str(int(settings.output_channels)),
+    ]
 
 
 # Common target aspect ratios keyed by the UI values, mapped to (w, h) at a
@@ -231,7 +259,7 @@ def cut_segment(
     cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
            "-t", f"{duration:.3f}"]
     if reencode:
-        cmd += [*h264_args(), "-c:a", "aac", "-b:a", "128k"]
+        cmd += [*h264_args(), *aac_args()]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
