@@ -392,6 +392,11 @@ def _is_deterministic_keyword(word: Any) -> bool:
     return _keyword_salience(word) > 0
 
 
+#: The salience score at which a word is worth emphasising on its own merits - a number,
+#: a currency amount, or an ALL-CAPS run (see :func:`_keyword_salience`).
+_STRONG_SALIENCE = 3
+
+
 def _highlight_budget(count: int) -> int:
     """How many of ``count`` words may be emphasised (C11).
 
@@ -403,6 +408,64 @@ def _highlight_budget(count: int) -> int:
     return max(1, int(count * _HIGHLIGHT_RATIO))
 
 
+def _minimum_salience_for_cue(size: int) -> int:
+    """The score a word needs before it may be emphasised in a cue of ``size`` words.
+
+    Emphasis is contrast: it means "this word, not those". In a cue of one word there is
+    nothing to contrast against, so a floor of one highlight per cue would emphasise every
+    such cue - and rapid speech with pauses produces runs of one-word cues, which recreates
+    the original C11 defect (everything highlighted, which reads as nothing highlighted) one
+    cue at a time.
+
+    A lone word therefore has to earn it: a number or an ALL-CAPS run still pops, because
+    those are emphatic in themselves rather than by comparison. Anything merely long enough
+    does not.
+    """
+    return _STRONG_SALIENCE if size < 2 else 1
+
+
+def _cue_index_groups(words: list) -> list[list[int]]:
+    """Group word indices into the cues the caption renderer will actually draw.
+
+    The budget is per cue, and a cue is what the viewer reads at one time, so the grouping
+    has to be the renderer's own — ``captions.words_to_cues``, with its defaults, which is
+    what both the compositor and the kinetic engine group with.
+
+    Imported lazily because ``captions`` imports *this* module for ``CaptionPreset``; a
+    module-scope import would be circular. Any failure falls back to treating the whole list
+    as one group, which is the pre-C11-fix behaviour: ``plan_keywords`` must stay total, and
+    it is handed adversarial word objects by the property tests (missing ``start``, ``end``
+    not a number) that ``words_to_cues`` has no reason to survive.
+    """
+    from worker import captions  # noqa: PLC0415 - lazy by necessity, see above
+
+    try:
+        cues = captions.words_to_cues(words)
+    except Exception:  # noqa: BLE001 - totality matters more than the reason
+        return [list(range(len(words)))]
+
+    # Mapped by object identity: ``words_to_cues`` puts the caller's own word objects into
+    # its cues rather than copies. A list per id, popped in order, so the same object
+    # appearing twice in the input still maps to two distinct indices.
+    positions: dict[int, list[int]] = {}
+    for index, word in enumerate(words):
+        positions.setdefault(id(word), []).append(index)
+
+    groups: list[list[int]] = []
+    for cue in cues:
+        indices = []
+        for word in getattr(cue, "words", ()) or ():
+            bucket = positions.get(id(word))
+            if bucket:
+                indices.append(bucket.pop(0))
+        if indices:
+            groups.append(sorted(indices))
+
+    # ``words_to_cues`` drops empty-text words, so a list of nothing but those yields no
+    # groups at all - and an empty result here would silently mean "emphasise nothing".
+    return groups or [list(range(len(words)))]
+
+
 def _deterministic_indices(words: list) -> set[int]:
     """Deterministic highlighted-index set for ``words`` (pure).
 
@@ -410,17 +473,28 @@ def _deterministic_indices(words: list) -> set[int]:
     everything above a threshold (C11). Ties break on Whisper confidence and then on
     position, so the result is a pure function of the input — the same words in, the same
     emphasis out, which the determinism properties depend on.
+
+    The budget applies **per cue**, not across the clip. Applying it to the whole word list
+    made emphasis cluster: the strongest few words in a clip are often near each other, so a
+    smoke-reel render put two highlights in the opening cue and none in the four after it.
+    Emphasis is a per-cue signal - "this word, of the ones you are reading now" - and a
+    budget spanning the whole clip cannot express that.
     """
-    scored = [
-        (index, score, _word_probability(word))
-        for index, word in enumerate(words)
-        for score in (_keyword_salience(word),)
-        if score > 0
-    ]
-    if not scored:
-        return set()
-    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
-    return {index for index, _score, _prob in scored[: _highlight_budget(len(words))]}
+    out: set[int] = set()
+    for group in _cue_index_groups(words):
+        floor = _minimum_salience_for_cue(len(group))
+        scored = [
+            (index, score, _word_probability(words[index]))
+            for index in group
+            if 0 <= index < len(words)
+            for score in (_keyword_salience(words[index]),)
+            if score >= floor
+        ]
+        if not scored:
+            continue
+        scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+        out.update(index for index, _score, _prob in scored[: _highlight_budget(len(group))])
+    return out
 
 
 def _ai_indices(words: list, client: Any) -> set[int]:
