@@ -359,12 +359,17 @@ def render_clip(
         )
 
     # --- music bed --------------------------------------------------------
-    music_path: Optional[Path] = None
+    # A15: the bed carries its own provenance, because "there is a music input" and "music
+    # is playing" are different claims. The synthesised fallback is a two-tone drone, and
+    # reporting it as music:<mood> - indistinguishable from a real track - is what made the
+    # limitation invisible.
+    music_bed: Optional[audio.MusicBed] = None
     if options.music:
-        music_path = audio.resolve_music(options.music, duration, temp_dir)
+        music_bed = audio.resolve_music_bed(options.music, duration, temp_dir)
     if not info.has_audio:
         # No audio track to work with; ignore music/fade on audio.
-        music_path = None
+        music_bed = None
+    music_path: Optional[Path] = None if music_bed is None else music_bed.path
 
     # --- b-roll cues (already resolved via the injected resolver) ---------
     broll_cues: list = []
@@ -484,6 +489,10 @@ def render_clip(
         audio_out = "aout"
         audio_changed = True
         applied.append(f"music:{options.music}")
+        if music_bed is not None and music_bed.synthesised:
+            # A15: a labelled last resort, not a track. Recorded next to the music marker
+            # so a clip's own record says which of the two it got.
+            applied.append("music_degraded:synthesised")
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
         graph_parts.append(

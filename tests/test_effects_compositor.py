@@ -53,7 +53,9 @@ def test_music_only_copies_video(make_video, tmp_path):
     opts = options_all_off(captions=False, music="upbeat")
     result = compositor.render_clip(base, tmp_path / "m.mp4", opts, _words(), tmp_path)
     assert result is not None
-    assert result.effects_applied == ["music:upbeat"]
+    # A15: the drone is labelled. assets/music is empty in the fixture, so the bed is the
+    # synthesised fallback and the record says so - "music:upbeat" alone could not.
+    assert result.effects_applied == ["music:upbeat", "music_degraded:synthesised"]
     assert probe_duration(result.path) > 1.5
 
 
@@ -384,8 +386,15 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     emoji_png = tmp_path / "emoji.png"
     emoji_png.write_bytes(b"stub-png")
 
-    monkeypatch.setattr(compositor.audio, "resolve_music",
-                        lambda mood, duration, temp_dir: music)
+    # A user-supplied track, so this test stays about input-index accounting rather than
+    # about the synthesised fallback. The compositor resolves through ``resolve_music_bed``
+    # now, because a bare path cannot say whether it is a real track (A15).
+    monkeypatch.setattr(
+        compositor.audio, "resolve_music_bed",
+        lambda mood, duration, temp_dir: compositor.audio.MusicBed(
+            path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
+        ),
+    )
     calls = _stub_ffmpeg(monkeypatch)
 
     opts = ProcessingOptions(captions=True, music="chill", emoji="heavy",

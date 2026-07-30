@@ -4,10 +4,20 @@ Two sources of music, in priority order:
 
 1. **User-supplied track** — if ``settings.music_dir/<mood>.<ext>`` exists it is
    used directly (bring your own licensed music).
-2. **Synthesised bed** — otherwise a soft, copyright-free ambient pad is
-   generated on the fly with ffmpeg's ``sine`` sources (a root note + a fifth,
-   gently tremolo'd and low-passed). It is intentionally subtle so it sits under
-   speech.
+2. **Synthesised bed** — a last-resort fallback, *not* music (A15). It is two sine
+   tones (a root and a fifth) with tremolo and a low-pass: a drone, not a track. No
+   arrangement, no rhythm, no progression, identical for every clip of a given mood.
+
+The distinction matters because it was invisible. ``resolve_music`` returned a path and
+nothing recorded which of the two it was, so a clip with a synthesised drone was reported
+as ``music:upbeat`` — indistinguishable from a clip with a real bed under it. A caller had
+no way to tell that "background music" meant a tone generator, and ``assets/music`` ships
+empty, so in practice it always did.
+
+:func:`resolve_music_bed` therefore returns a :class:`MusicBed` naming the source, and the
+compositor records ``music_degraded:synthesised`` alongside the ``music:<mood>`` marker.
+Real beds (A14) have not shipped; until they do, the honest reading of an enabled music
+option is "a drone unless you supplied a track yourself".
 
 The bed is mixed under the original audio with a configurable volume and,
 optionally, matching fade in/out.
@@ -15,6 +25,7 @@ optionally, matching fade in/out.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -88,21 +99,66 @@ def synthesize_bed(mood: str, duration: float, dest: str | Path) -> Path:
     return dest
 
 
-def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[Path]:
-    """Return a path to a music bed for ``mood`` (user track or synthesised).
+#: ``MusicBed.source`` when the audio is a real file the user supplied.
+SOURCE_USER_TRACK = "user_track"
 
-    Returns ``None`` when ``mood`` is empty/unknown so callers can skip mixing.
+#: ``MusicBed.source`` when the audio is the synthesised two-tone drone (A15).
+SOURCE_SYNTHESISED = "synthesised"
+
+
+@dataclass(frozen=True)
+class MusicBed:
+    """A resolved music bed and, crucially, *what it is* (A15).
+
+    ``source`` is :data:`SOURCE_USER_TRACK` or :data:`SOURCE_SYNTHESISED`. Callers must
+    branch on it rather than assuming a path means music: the synthesised bed is a tone
+    generator, and reporting it as though a track were playing is what A15 removes.
+    """
+
+    path: Path
+    mood: str
+    source: str
+
+    @property
+    def synthesised(self) -> bool:
+        """Whether this bed is the fallback drone rather than a real track."""
+        return self.source == SOURCE_SYNTHESISED
+
+
+def resolve_music_bed(
+    mood: str, duration: float, temp_dir: str | Path
+) -> Optional[MusicBed]:
+    """Resolve a bed for ``mood``, reporting whether it is a real track (A15).
+
+    Returns ``None`` when ``mood`` is empty or unknown, or when synthesis is the only
+    option and ``settings.music_allow_synthesis`` is off — in which case the clip is
+    rendered without music rather than with a drone the caller did not ask for.
     """
     if not mood:
         return None
     user = find_user_track(mood)
     if user is not None:
-        return user
+        return MusicBed(path=user, mood=mood, source=SOURCE_USER_TRACK)
     if mood not in _MOOD_SYNTH:
+        return None
+    if not settings.music_allow_synthesis:
         return None
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    return synthesize_bed(mood, duration, temp_dir / f"music_{mood}.m4a")
+    dest = synthesize_bed(mood, duration, temp_dir / f"synth_bed_{mood}.m4a")
+    return MusicBed(path=dest, mood=mood, source=SOURCE_SYNTHESISED)
+
+
+def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[Path]:
+    """The path-only view of :func:`resolve_music_bed`.
+
+    Kept for callers that only need somewhere to read audio from. Anything that reports
+    what happened to a clip must use :func:`resolve_music_bed` instead — a bare path cannot
+    distinguish a licensed track from a synthesised drone, which is exactly the gap A15
+    closes.
+    """
+    bed = resolve_music_bed(mood, duration, temp_dir)
+    return None if bed is None else bed.path
 
 
 def music_mix_filter(
