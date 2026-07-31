@@ -112,11 +112,45 @@ def _get_model():
     return model
 
 
+def vad_parameters() -> dict:
+    """The Silero VAD parameters faster-whisper accepts, from settings (T5).
+
+    Split out so the values can be asserted without a model, and so the cache key and the
+    decode read the *same* dictionary rather than two hand-maintained copies - a divergence
+    there would produce cache hits across genuinely different VAD settings.
+    """
+    return {
+        "threshold": float(settings.whisper_vad_threshold),
+        "min_silence_duration_ms": int(settings.whisper_vad_min_silence_ms),
+        "min_speech_duration_ms": int(settings.whisper_vad_min_speech_ms),
+        "speech_pad_ms": int(settings.whisper_vad_speech_pad_ms),
+    }
+
+
+def resolve_initial_prompt(vocabulary: str = "") -> Optional[str]:
+    """Combine the standing prompt with this job's vocabulary (T4).
+
+    Returns ``None`` rather than ``""`` when there is nothing to say, because faster-whisper
+    treats an empty string as a real (empty) prompt rather than as absence.
+
+    The per-job vocabulary comes second so the terms most specific to this video sit closest
+    to the audio - Whisper's conditioning weakens with distance from the decode.
+    """
+    parts = [
+        (settings.whisper_initial_prompt or "").strip(),
+        (vocabulary or "").strip(),
+    ]
+    combined = " ".join(part for part in parts if part).strip()
+    return combined or None
+
+
 def transcribe_uncached(
     audio_or_video: str | Path,
     language: Optional[str] = None,
     translate: bool = False,
     beam_size: int = 5,
+    *,
+    vocabulary: str = "",
 ) -> Transcript:
     """Transcribe ``audio_or_video`` and return a :class:`Transcript`, always running ASR.
 
@@ -144,7 +178,12 @@ def transcribe_uncached(
         task=task,
         beam_size=beam_size,
         word_timestamps=True,
-        vad_filter=True,
+        # T5: was a bare `vad_filter=True` with every parameter at the library default, so
+        # none of it could be adjusted for difficult audio.
+        vad_filter=bool(settings.whisper_vad_filter),
+        vad_parameters=vad_parameters(),
+        # T4: names, jargon and brands the model has no reason to expect.
+        initial_prompt=resolve_initial_prompt(vocabulary),
     )
 
     segments: list[TranscriptSegment] = []
@@ -180,6 +219,7 @@ def transcribe(
     translate: bool = False,
     beam_size: int = 5,
     *,
+    vocabulary: str = "",
     on_hit=None,
     on_miss=None,
 ) -> Transcript:
@@ -208,7 +248,7 @@ def transcribe(
     if not settings.transcript_cache_enabled:
         return _filtered(
             transcribe_uncached(audio_or_video, language=language, translate=translate,
-                                beam_size=beam_size)
+                                beam_size=beam_size, vocabulary=vocabulary)
         )
 
     key: Optional[str] = None
@@ -219,6 +259,8 @@ def transcribe(
             language=language,
             translate=translate,
             beam_size=beam_size,
+            # T4/T5: the vocabulary prompt and VAD settings shape the output, so they key it.
+            asr_config=transcript_cache.asr_fingerprint(vocabulary),
         )
     except OSError:
         # Unreadable or vanished source: let the ASR call produce the real error, rather than
@@ -236,7 +278,7 @@ def transcribe(
         on_miss(key)
 
     transcript = transcribe_uncached(audio_or_video, language=language, translate=translate,
-                                     beam_size=beam_size)
+                                     beam_size=beam_size, vocabulary=vocabulary)
     if key is not None:
         transcript_cache.store(key, transcript)
     return _filtered(transcript)

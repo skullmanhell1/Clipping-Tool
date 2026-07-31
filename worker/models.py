@@ -39,6 +39,12 @@ class ProcessingOptions:
 
     language: Optional[str] = None       # None = auto-detect
     translate: bool = False              # translate speech to English
+    # T4: names, jargon and brands for *this* video, prepended to the ASR decode so Whisper
+    # has a reason to expect them. A recurring proper noun is otherwise mis-transcribed the
+    # same way every time it is said, and that mistake is burned into every clip's captions.
+    # Free text rather than a list: it is fed to the model as a prompt, and a comma-separated
+    # phrase reads as naturally to it as a sentence does.
+    vocabulary: str = ""
     clip_length: str = "auto"            # auto | <30s | 30-60s | 60-90s | 90s-3min
     aspect: str = "9:16"                 # 9:16 | 1:1 | 16:9 | 4:5
     num_clips: str = "auto"              # auto | 1 | 3 | 5 | 10 | max

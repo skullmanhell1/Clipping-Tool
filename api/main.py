@@ -150,6 +150,8 @@ class OptionsModel(BaseModel):
     captions: bool = True
     # Phase 2 — Advanced settings
     topic: str = ""
+    # T4: per-video names/jargon fed to the ASR decode as a prompt.
+    vocabulary: str = ""
     vibe: str = ""
     platform: str = "generic"
     hashtag_count: int = 5
@@ -623,6 +625,7 @@ async def upload(
     strategy: str = Form("ai"),
     captions: bool = Form(True),
     topic: str = Form(""),
+    vocabulary: str = Form(""),
     vibe: str = Form(""),
     platform: str = Form("generic"),
     hashtag_count: int = Form(5),
@@ -749,6 +752,7 @@ async def upload(
             "strategy": strategy,
             "captions": captions,
             "topic": topic,
+            "vocabulary": vocabulary,
             "vibe": vibe,
             "platform": platform,
             "hashtag_count": hashtag_count,
