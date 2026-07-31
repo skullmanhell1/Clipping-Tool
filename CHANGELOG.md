@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — caption typography and previewing (C6, C9, C14, C16, C17, C18, C20)
+
+- **`C6` — real line wrapping, from measured text.** Captions relied on ASS `WrapStyle: 2`, which
+  means *no automatic wrapping at all*: libass breaks only where the text already contains a `\N`,
+  and nothing inserted one. Every cue was laid out as a single line and either ran past the frame
+  edge or was shrunk by libass' own fitting, depending on the build. Neither is a decision anyone
+  made.
+
+  Width is **measured** from the vendored fonts' own advance widths, not counted in characters. A
+  character budget is the obvious fix and is wrong for these faces: in Anton a `W` is roughly three
+  times the advance of an `i`, so a 24-character budget is a comfortable line of `MINIMUM WIDTH` and
+  an overflowing one of `WWWWWWWWWWWWWWWWWWWWWWWW`.
+
+  Break positions are computed from the **plain words** and applied to the tagged spans, because a
+  single `{\kf36}` is longer than the word it decorates — measuring the joined span text would count
+  overrides as letters and break after roughly every word. Stated plainly: advance widths are not
+  shaped text, so kerning and ligatures are not applied and a measurement can be a few per cent
+  wide. That is the right error direction, and getting it exact would mean reimplementing HarfBuzz.
+- **`C16` — a line budget per preset.** `max_lines` (default 2, matching the kinetic engine) is
+  threaded through *cue building*, which is what makes C6 and C16 one feature rather than two: the
+  wrapper deliberately never drops a word, so a cue holding more text than fits simply produces more
+  lines than the budget. Measured on an 11-word sample: fitted grouping produces cues needing at most
+  2 lines, unfitted grouping produces one needing **4**.
+- **`C9` — a per-word pill.** A mainstream look with no equivalent here. Drawn as a heavy border in a
+  solid colour rather than a box layer: ASS has no per-word background, and a real rectangle needs
+  the rendered text width, which is not known where these tags are emitted. The trade is a
+  glyph-hugging shape instead of a rectangle, which is closer to the reference anyway.
+
+  Applied *inside* the highlight wrap. Both orders render acceptably — the pill sets `\3c` and the
+  highlight sets `\c`, so they do not contest the same attribute — but the documented contract is
+  that a highlight only *wraps* the plain span, and that is checked by substring. A contract enforced
+  by substring has to stay syntactically true, not merely true in spirit.
+- **`C17` — a dual stroke.** ASS carries one border width and one border colour, so a genuine
+  two-tone stroke needs the text drawn twice. The shadow slot is repurposed instead: at zero offset
+  with its own colour it renders as an outer stroke around the inner one. The honest trade, and why
+  it is opt-in: a preset cannot have both a drop shadow and an outer stroke this way. It cannot
+  produce a *gradient* stroke; nothing in libass can.
+- **`C14` — 6 presets to 14.** `pill`, `pill_green`, `sticker`, `comic`, `headline`, `subtitle`,
+  `karaoke_bold`, `spotlight`. Each is a **combination that was previously inexpressible** rather
+  than a colour change — the pill, the dual stroke and measured wrapping are what make them
+  distinguishable. Eight rather than fourteen deliberately: a preset whose only difference is a hue
+  is a colour picker pretending to be a style. Every one names a vendored face, so none can silently
+  substitute (`C1`).
+- **`C18` — a real caption preview.** `POST /api/captions/preview` renders a two-second libass
+  sample. `U5`'s picker previews in CSS, which shows the typeface, colours, case and placement and
+  cannot show the word-by-word fill, the punch, the pill, the stroke or the wrapping — which is most
+  of what a preset *is*. Two seconds rather than a still, because a still cannot show a sweep. The
+  background is a generated mid-grey field, not the user's footage: a preview should show the
+  caption, and a real frame makes it a test of that frame's legibility instead.
+- **`C20` — auto-contrast.** `CAPTION_AUTO_CONTRAST` samples three frames from the region the caption
+  will actually occupy — derived from the same position and safe-area maths the renderer uses, so it
+  measures the pixels the text sits on rather than the frame average — and picks a dark or light
+  outline. It **never** changes the fill: that is a brand decision (`U6`), and silently recolouring
+  it because a shot was bright would overrule the one thing the creator chose. One decision per clip,
+  not per cue, because an outline that changes colour partway through draws more attention than a
+  slightly suboptimal constant choice.
+
+### Fixed
+
+- **A property test that held only because a feature was unused.**
+  `test_p6_keyword_highlight_distinct_and_timing_preserving` asserted `plain in highlighted` — that a
+  keyword highlight only wraps the span a plain word would produce. `C10`'s active-word punch is
+  deliberately *suppressed* on a highlighted word (two competing `\fscx` spans would fight, and which
+  applied would depend on tag order), so the plain span carries a ramp the highlighted one does not
+  and containment cannot hold. No shipped preset set `punch_scale`, so nothing exercised it until
+  `karaoke_bold`. The test now asserts against the animation core, which is what the requirement
+  actually says.
+
 ### Added — caching, resumable jobs, and golden-output tests (I3, I5, I8, M1)
 
 - **`I3` — cache the other whole-file decodes.** `T8` cached transcription and stopped there, so
