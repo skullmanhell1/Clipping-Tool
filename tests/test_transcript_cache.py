@@ -206,7 +206,7 @@ def test_a_second_call_skips_asr_entirely(media, cache_dir, monkeypatch):
     """The whole point of T8, asserted by counting model invocations."""
     calls = {"count": 0}
 
-    def fake_transcribe(path, language=None, translate=False, beam_size=5):
+    def fake_transcribe(path, language=None, translate=False, beam_size=5, **_kw):
         calls["count"] += 1
         return _transcript()
 
@@ -224,7 +224,7 @@ def test_changing_the_model_re_transcribes(media, cache_dir, monkeypatch):
     """The stale-transcript case, end to end."""
     calls = {"count": 0}
 
-    def fake_transcribe(path, language=None, translate=False, beam_size=5):
+    def fake_transcribe(path, language=None, translate=False, beam_size=5, **_kw):
         calls["count"] += 1
         return _transcript(f"model {settings.whisper_model}")
 
@@ -242,7 +242,7 @@ def test_editing_the_source_re_transcribes(media, cache_dir, monkeypatch):
     """Footage re-exported over the same name must not reuse the old transcript."""
     calls = {"count": 0}
 
-    def fake_transcribe(path, language=None, translate=False, beam_size=5):
+    def fake_transcribe(path, language=None, translate=False, beam_size=5, **_kw):
         calls["count"] += 1
         return _transcript()
 
@@ -256,7 +256,7 @@ def test_editing_the_source_re_transcribes(media, cache_dir, monkeypatch):
 def test_the_cache_can_be_turned_off(media, cache_dir, monkeypatch):
     calls = {"count": 0}
 
-    def fake_transcribe(path, language=None, translate=False, beam_size=5):
+    def fake_transcribe(path, language=None, translate=False, beam_size=5, **_kw):
         calls["count"] += 1
         return _transcript()
 
@@ -288,7 +288,7 @@ def test_an_unreadable_source_still_reaches_asr(tmp_path, cache_dir, monkeypatch
     """
     calls = {"count": 0}
 
-    def fake_transcribe(path, language=None, translate=False, beam_size=5):
+    def fake_transcribe(path, language=None, translate=False, beam_size=5, **_kw):
         calls["count"] += 1
         return _transcript()
 

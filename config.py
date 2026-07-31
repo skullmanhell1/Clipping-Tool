@@ -117,6 +117,48 @@ class Settings(BaseSettings):
     whisper_compute_type: str = Field(
         default="int8", description="faster-whisper compute type (e.g. int8, float16)."
     )
+    # T4: a prompt prepended to the decode, which is how Whisper is told about words it has
+    # no reason to expect - people's names, product names, jargon, brands. Without it a
+    # recurring proper noun is mis-transcribed the same way every time it is said, and that
+    # mistake is then burned into the captions of every clip.
+    #
+    # Empty by default because the useful content is per-video, not per-install. Use
+    # ProcessingOptions.vocabulary for that; this is the standing list for a channel that
+    # always says the same handful of unusual words.
+    whisper_initial_prompt: str = Field(
+        default="",
+        description="Text prepended to the ASR decode to bias it towards expected "
+                    "vocabulary (T4). Per-video terms belong in the job's `vocabulary`.",
+    )
+    # ----------------------------------------------------- VAD (T5) --------
+    # Voice-activity detection was switched on with every parameter left at the library's
+    # defaults, so none of it could be adjusted for difficult audio. The defaults below are
+    # faster-whisper's own, so behaviour is unchanged until something is changed on purpose.
+    whisper_vad_filter: bool = Field(
+        default=True,
+        description="Run Silero VAD before decoding (T5). Off passes the whole track to the "
+                    "model, which is slower and hallucinates more over music and silence.",
+    )
+    whisper_vad_threshold: float = Field(
+        default=0.5,
+        description="Speech probability above which VAD calls a frame speech (T5). Lower "
+                    "keeps quiet or distant speech that the default discards; higher "
+                    "rejects more noise.",
+    )
+    whisper_vad_min_silence_ms: int = Field(
+        default=2000,
+        description="Silence this long (ms) splits speech for VAD (T5).",
+    )
+    whisper_vad_min_speech_ms: int = Field(
+        default=250,
+        description="Speech shorter than this (ms) is discarded by VAD (T5). Raising it "
+                    "drops interjections - 'yeah', a laugh - which may be the punchline.",
+    )
+    whisper_vad_speech_pad_ms: int = Field(
+        default=400,
+        description="Padding (ms) kept either side of detected speech (T5). Too little "
+                    "clips the first and last phoneme of each utterance.",
+    )
 
     # ------------------------------------------------------------- storage --
     storage_backend: StorageBackend = Field(
