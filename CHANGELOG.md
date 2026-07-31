@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — publishing reliability and scheduling (PB4, PB5, PB6, PB7)
+
+- **`PB5` — automatic retry of transient publish failures.** A publish attempt had exactly one
+  chance: any failure wrote `state=failed` and stopped until a human pressed Retry, which makes a
+  network blip indistinguishable from a rejected video and leaves an overnight batch at the mercy
+  of whichever minute the upload landed in. Transient failures are now retried with exponential
+  backoff (`PUBLISH_MAX_RETRIES`, `PUBLISH_RETRY_BASE_SECONDS`, `PUBLISH_RETRY_MAX_SECONDS`).
+
+  Three details carry it. **The default is not to retry** — an error has to be *recognised* as
+  transient to earn one, because a too-long clip or a revoked permission will fail identically
+  forever and retrying it burns quota while hiding the real problem. **Permanent patterns take
+  precedence over transient ones**, since a platform saying "video too long, please try again with
+  a shorter clip" contains "try again" while being the least retryable error there is. And the
+  backoff carries **proportional jitter**, because every attempt failing against one platform
+  outage becomes due at the same instant and would otherwise retry in lockstep.
+
+  Automatic retry never touches a `review_required` attempt — that is waiting on a person, and
+  re-queueing it would either loop or silently escalate a review-mode submission into a live post.
+- **`PB4` — token refresh and expiry.** YouTube exchanged its refresh token on *every* publish
+  while discarding the expiry Google returns, so there was one extra round trip per upload and
+  nothing in the product could say when a credential would stop working. Access tokens are now
+  cached in a new `oauth_tokens` table with their expiry and renewed just ahead of it
+  (`PUBLISH_TOKEN_REFRESH_MARGIN_SECONDS`, default 5 minutes — an upload takes tens of seconds, so
+  a token expiring mid-request costs the whole file). A 401 on a cached token triggers exactly one
+  forced refresh and retry; a second 401 is a credential problem, not a stale cache.
+
+  The other four publishers **cannot** refresh, and now say so rather than being silently
+  hopeless: TikTok, Instagram and X use long-lived tokens an operator pasted into config, Whop an
+  API key. `PublisherStatus` gained `token_kind` (`refreshable` / `static` / `none`) and
+  `token_expires_at`, so a dashboard can distinguish "nothing to expire" from "an expiry we cannot
+  see" — reporting both as "no expiry" is what tells an operator their Instagram token is fine
+  right up until the day it is not. `POST /api/publishers/{platform}/refresh` returns
+  `refreshed: false` for those four instead of pretending to act.
+- **`PB6` — per-platform caption and hashtag fitting at publish time.** Metadata is generated once
+  for one platform and the same text was sent everywhere; the per-platform limits were applied only
+  at generation, so publishers chopped the result at a character index
+  (`f"{title}\n\n{caption}"[:280]`). That cuts mid-word and removes the call to action and the
+  hashtags — the parts doing the work — and on X the title could consume the whole budget.
+
+  Copy is now *fitted* per destination: hashtags beyond the platform's count are dropped, and the
+  description is shortened at a sentence boundary, then a clause, then a word. The limit is applied
+  to the **rendered caption**, with the CTA and tags reserved first, because a per-field clamp
+  produces a caption that overflows the moment the tags are appended. The stored request keeps the
+  full text, so a retry or a re-route re-fits from the original rather than compounding.
+  `PUBLISH_TAILOR_WITH_LLM` (off by default) regenerates the description for each destination
+  instead, which is what the plan asks for and costs one model call per platform per clip.
+- **`PB7` — scheduling.** Scheduling was a single `datetime-local` input: an operator could set a
+  time and then had no way to see what was scheduled, move it, or cancel it — the only recourse for
+  a wrong time was to let it publish. Added `GET /api/schedule` (a window of attempts),
+  `PATCH /api/publish-attempts/{id}/schedule`, `POST /api/publish-attempts/{id}/cancel`,
+  `GET /api/schedule/suggestions`, and a month-calendar UI under a new **Schedule** tab.
+
+  The calendar shows every state, not only pending ones: hiding what had already gone out would
+  show an empty week the operator had in fact filled. Cancelling records the attempt as failed with
+  an explicit reason rather than deleting the row, because a row that vanishes is
+  indistinguishable from one that never existed when a post is later found missing. Rescheduling
+  into the past is recorded as `queued` rather than left `scheduled` behind the clock.
+
+  **The best-time suggestions are labelled honestly.** They are published third-party heuristics,
+  not measurements of your audience — per-account timing needs post-publish engagement data
+  (`PB8`), which this installation does not collect. The API returns a `basis` string saying so and
+  the UI renders it, because presenting a guess as an analysis is the actual harm available here.
+  Suggestions also skip slots already scheduled, since otherwise the calendar keeps recommending
+  the one best hour that is already full and following its advice stacks four posts at 7pm.
+
 ### Added — speech repair and per-platform output (AU4, AU5, O7, O12)
 
 - **`AU4` — speech de-noise.** `SPEECH_DENOISE` (off | light | standard | strong) applies
