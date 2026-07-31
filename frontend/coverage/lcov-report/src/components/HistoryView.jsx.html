@@ -1,0 +1,334 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for src/components/HistoryView.jsx</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/components</a> HistoryView.jsx</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>53/53</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">87.5% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>28/32</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">85.71% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>6/7</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>53/53</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { useCallback, useEffect, useState } from "react";
+import { api } from "../api.js";
+const fmt=t=&gt;t?new Date(t*1000).toLocaleString(<span class="branch-0 cbranch-no" title="branch not covered" >):"—";</span>
+const colors={published:"text-emerald-400",private:"text-blue-400",draft:"text-blue-400",failed:"text-rose-400",review_required:"text-amber-400",scheduled:"text-violet-400",queued:"text-slate-300",uploading:"text-cyan-400"};
+&nbsp;
+// PB2: which actions an attempt in a given state can take.
+//
+// The /approve and /retry endpoints existed with zero references anywhere in the frontend,
+// so an attempt that came back `review_required` stopped permanently: three of the five
+// publishers can return that state (Instagram and X without direct-publish approval, Whop
+// when the upload could not be attached to a target) and the dashboard offered no way to act.
+//
+// Approve and retry stay separate controls rather than one "resume" button, because they are
+// different decisions. Approve escalates a review-mode attempt into a live post; retry re-runs
+// it exactly as submitted, for transient trouble like an expired token or a missing file. A
+// single button would have to guess which the user meant, and guessing wrong publishes
+// something that was deliberately held back.
+const CAN_APPROVE = new Set(["review_required"]);
+const CAN_RETRY = new Set(["review_required", "failed"]);
+&nbsp;
+function AttemptActions({ attempt, onDone }) {
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const approvable = CAN_APPROVE.has(attempt.state);
+  const retryable = CAN_RETRY.has(attempt.state);
+  if (!approvable &amp;&amp; !retryable) return &lt;span className="text-slate-600"&gt;—&lt;/span&gt;;
+&nbsp;
+  const run = (action, call) =&gt; {
+    setBusy(action);
+    setError("");
+    call(attempt.id)
+      // Refresh from the server rather than patching local state: the attempt is queued, and
+      // the worker may already have advanced it past `queued` by the time this resolves.
+      .then(() =&gt; onDone())
+      .catch((e) =&gt; setError(e?.<span class="branch-0 cbranch-no" title="branch not covered" >message || "failed")</span>)
+      .finally(() =&gt; setBusy(""));
+  };
+&nbsp;
+  return (
+    &lt;div className="flex flex-col gap-1"&gt;
+      &lt;div className="flex gap-2"&gt;
+        {approvable &amp;&amp; (
+          &lt;button
+            type="button"
+            disabled={!!busy}
+            onClick={() =&gt; run("approve", api.approvePublishAttempt)}
+            title="Publish this attempt directly, overriding the review hold"
+            className="rounded border border-emerald-700 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
+          &gt;
+            {busy === "approve" ? "Approving…" : "Approve"}
+          &lt;/button&gt;
+        )}
+        {retryable &amp;&amp; (
+          &lt;button
+            type="button"
+            disabled={!!busy}
+            onClick={() =&gt; run("retry", api.retryPublishAttempt)}
+            title="Re-run this attempt unchanged, without escalating a review hold"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          &gt;
+            {busy === "retry" ? "Retrying…" : "Retry"}
+          &lt;/button&gt;
+        )}
+      &lt;/div&gt;
+      {error &amp;&amp; &lt;span className="text-xs text-rose-400"&gt;{error}&lt;/span&gt;}
+    &lt;/div&gt;
+  );
+}
+&nbsp;
+export default function HistoryView(){
+ const [data,setData]=useState({clips:[],publish_attempts:[]});
+ const [filter,setFilter]=useState("");
+ // I11: `load` is memoised on `filter` and the effect depends on `load` itself. Previously it
+ // was recreated every render and the effect listed only `[filter]`, so the interval closed over
+ // whichever `load` existed when the filter last changed. That happened to work — the closure
+ // captured the right filter — but it is the pattern that breaks silently as soon as `load`
+ // depends on anything else, and the lint was pointing at exactly that.
+ const load=useCallback(()=&gt;api.history(filter).then(setData).catch(()=&gt;{}),[filter]);
+ useEffect(()=&gt;{load();const i=setInterval(load,3000);return()=&gt;clearInterval(i)},[load]);
+&nbsp;
+ return &lt;section className="space-y-6"&gt;&lt;div className="flex items-center justify-between"&gt;&lt;h2 className="text-xl font-semibold"&gt;History&lt;/h2&gt;&lt;select value={filter} onChange={<span class="fstat-no" title="function not covered" >e=&gt;setFilter(e.target.value)} c</span>lassName="rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm"&gt;&lt;option value=""&gt;All platforms&lt;/option&gt;{["whop","youtube","tiktok","instagram","x"].map(p=&gt;&lt;option key={p}&gt;{p}&lt;/option&gt;)}&lt;/select&gt;&lt;/div&gt;
+ &lt;div className="overflow-x-auto rounded-xl border border-slate-800"&gt;&lt;table className="w-full text-left text-sm"&gt;&lt;thead className="bg-slate-900 text-slate-400"&gt;&lt;tr&gt;&lt;th className="p-3"&gt;Time&lt;/th&gt;&lt;th&gt;Platform&lt;/th&gt;&lt;th&gt;Campaign / Account&lt;/th&gt;&lt;th&gt;Status&lt;/th&gt;&lt;th&gt;Message&lt;/th&gt;&lt;th&gt;Link&lt;/th&gt;&lt;th&gt;Actions&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;{data.publish_attempts.map(a=&gt;&lt;tr key={a.id} className="border-t border-slate-800"&gt;&lt;td className="p-3 text-slate-500"&gt;{fmt(a.created_at)}&lt;/td&gt;&lt;td className="capitalize"&gt;{a.platform}&lt;/td&gt;&lt;td&gt;{a.campaign_id||"—"}&lt;div className="text-xs text-slate-500"&gt;{a.account_id}&lt;/div&gt;&lt;/td&gt;&lt;td className={colors[a.state<span class="branch-0 cbranch-no" title="branch not covered" >]||""}&gt;{a</span>.state}&lt;/td&gt;&lt;td className="max-w-xs text-slate-400"&gt;{a.error||a.<span class="branch-0 cbranch-no" title="branch not covered" >message||"—"}&lt;</span>/td&gt;&lt;td&gt;{a.url?&lt;a className="text-brand-accent" href={a.url} target="_blank" rel="noreferrer"&gt;Open&lt;/a&gt;:"—"}&lt;/td&gt;&lt;td&gt;&lt;AttemptActions attempt={a} onDone={load}/&gt;&lt;/td&gt;&lt;/tr&gt;)}{!data.publish_attempts.length&amp;&amp;&lt;tr&gt;&lt;td colSpan="7" className="p-8 text-center text-slate-500"&gt;No publish attempts yet.&lt;/td&gt;&lt;/tr&gt;}&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;
+ &lt;div&gt;&lt;h3 className="mb-3 font-medium"&gt;Created clips ({data.clips.length})&lt;/h3&gt;&lt;div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"&gt;{data.clips.map(c=&gt;&lt;div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3"&gt;&lt;b&gt;{c.title||c.filename}&lt;/b&gt;&lt;div className="text-xs text-slate-500"&gt;{fmt(c.created_at)} · score {Math.round(c.score||0)}&lt;/div&gt;&lt;div className="mt-1 text-xs text-slate-400"&gt;{(c.hashtags||[]).join(" ")}&lt;/div&gt;&lt;/div&gt;)}&lt;/div&gt;&lt;/div&gt;&lt;/section&gt;}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-07-31T12:40:14.704Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

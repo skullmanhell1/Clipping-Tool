@@ -30,5 +30,14 @@ export default defineConfig({
     // Only our own tests; without this vitest would also try to collect from
     // node_modules and from the build output.
     include: ["src/**/*.test.{js,jsx}"],
+    // Measured and reported, not gated - the same reasoning as the backend: a threshold
+    // nobody has agreed on becomes a number to game, so publish it first.
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**/*.{js,jsx}"],
+      // main.jsx is the mount call and has nothing to assert; test files are not subjects.
+      exclude: ["src/**/*.test.{js,jsx}", "src/main.jsx", "src/test/**"],
+    },
   },
 });
