@@ -7,6 +7,792 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
+
+- **`C21` — a caption font that can actually render what was said.** Captions were drawn in a Latin
+  display face regardless of the language. On Arabic, Hebrew, Chinese, Japanese, Korean or Thai that
+  produces a line of `.notdef` boxes — tofu — and **nothing in the pipeline can see it**: libass
+  reports no error, the ASS file is valid, the encode succeeds, and the clip record says `captions`.
+  The only symptom is in the pixels.
+
+  Coverage is decided by reading the font's own `cmap`, never by asking fontconfig. `fc-match` is a
+  *best match*, not a coverage test — it always answers, and `fc-match ':lang=ar'` on the machine
+  this was written on returns `NotoSans[wdth,wght].ttf`, which contains **no Arabic at all**.
+  Candidate families come from `fc-list :lang=xx`, which returns nothing when there is nothing, and
+  are then re-verified against each file's `cmap` anyway.
+
+  **The vendored gap is now stated rather than assumed.** The plan's note says "Noto covers CJK",
+  which is true of the Noto *project* and not of the vendored `NotoSans[wdth,wght].ttf` — CJK lives
+  in Noto Sans CJK, a separate family of ~100 MB per weight. Measured: Latin everywhere, Cyrillic
+  in four faces, Greek in two, Devanagari in four (including all three Poppins), and **nothing
+  vendored for Arabic, Hebrew, Thai, Han, Hiragana or Hangul**. `unsupported_scripts()` makes that
+  answerable without rendering a clip and looking at it.
+
+  Resolution keeps the requested font when it covers the script — a creator's chosen face is a brand
+  decision, and overriding it because a clip contains one Greek letter would be worse than the
+  problem. Otherwise a vendored face (so an offline install still works, and the manifest's
+  display-first order keeps the substitution close to the intended look), then a verified system
+  family. When nothing can render it, the requested font is kept and the clip records
+  `caption_script_unsupported:<script>`: substituting a different Latin face would not help either,
+  so the honest outcome is to render the same thing *and say so*.
+
+  Finally, **measured wrapping is switched off for shaping scripts**. C6 sums per-glyph advance
+  widths, which is a fair approximation for Latin and simply wrong for Arabic, where letters join and
+  a word's rendered width is not the sum of its isolated forms — and for Devanagari and Thai, where
+  marks reorder. Those get `WrapStyle: 0` so libass wraps them: less control, but control based on a
+  wrong measurement is worse than none. Hebrew is deliberately *not* in that set — it is RTL but
+  unjoined, so widths add up and the reordering is libass' job via FriBidi. No bidi reordering
+  happens here, or the text would be reversed twice.
+- **`V15` — captions off the speaker's mouth.** Caption position is a fixed choice and the face is
+  wherever the footage put it; on a lot of vertical footage those collide and three lines of heavy
+  display type land across the speaker's mouth. The crop is right and the captions are right — only
+  their combination is wrong, which is why nothing upstream catches it.
+
+  Three rules keep this from being a look change. It **only acts on an actual overlap**, so a
+  library of clips that had no problem comes back identical. It **only moves between the nine C13
+  positions**, keeping the horizontal alignment the preset chose — answering "bottom-left covers the
+  mouth" with "centre-top" changes two things to fix one — and never invents a pixel offset nobody
+  picked. And when **no position clears the face** (a close-up filling the frame, or a three-speaker
+  panel that occupies every band) it changes nothing and records
+  `caption_face_overlap_unavoidable`, because moving the text from the mouth to the eyes is not an
+  improvement — and that marker is what distinguishes the case from "no faces detected".
+
+  The mouth is taken as the lower third of a detected face box, generously: the cost of being wrong
+  that way is moving a caption that would have been fine. It is not mouth *detection*, and it is
+  not called that. Bands are unioned across every sampled frame, because a caption that is clear for
+  two seconds and covers the mouth for one is still wrong — and that is the case hardest to notice
+  when reviewing a still. Off by default: it costs a face-detection pass a collision-free render
+  would be paying for nothing.
+- **`AU9` — sound-effect stings on cuts and emoji.** A cut or an emoji arriving is a visual accent
+  with no audible counterpart, so the edit reads as a picture change rather than as a beat.
+
+  **What is synthesised and what is not is the substance here,** because A15 already recorded what
+  goes wrong when that is blurred. `pop` and `click` **are** generated, honestly: a pop *is* a short
+  band-passed noise burst with a fast attack, so generating one is not an approximation of the real
+  thing — hence no degradation marker, because there is no degradation. `whoosh` and `swipe` are
+  **not** generated at all: a whoosh is noise under a filter that *moves* across the sound, ffmpeg
+  cannot express a time-varying filter frequency in one pass (`bandpass` takes no expression and has
+  no `eval=frame`), and a static band-passed noise swell is a hiss. Shipping a hiss under a name
+  that promises a sweep is exactly the mislabelling A15 exists to stop, so those require a file in
+  `SFX_DIR` and record `sfx_missing:<name>` without one.
+
+  Mixed with `amix normalize=0`, which matters more than it looks: with normalisation on, `amix`
+  divides every input by the input count, so adding one sting would make the **speech** 1/n quieter
+  for the whole clip — a global change caused by a local accent, and one nobody would attribute to
+  the feature that caused it. Verified by measurement, not by reading the flag. `duration=first`
+  keeps the clip's own length, and `adelay=...:all=1` delays every channel — without `all=1` a
+  stereo sting arrives on the left and then the right, audible as a flam.
+
+  Two stings within 350 ms become one, and a **transition wins a contested slot at its own moment**:
+  a cut is structural and an emoji is decoration. Applied within the gap window rather than only at
+  exactly equal times, because a single pass keeping the earlier candidate would drop a transition at
+  1.05 s in favour of an emoji at 1.00 s.
+- **`O8` — optional hardware H.264 encoding.** Routed through the single `h264_args` builder, so an
+  encoder swap cannot reach seven of the eight encode sites and leave clips whose quality depends on
+  which stage wrote them.
+
+  **Availability is decided by actually encoding a frame,** not by reading `ffmpeg -encoders`. The
+  distinction is not hypothetical: the ffmpeg this project develops against *lists* `h264_v4l2m2m`
+  and fails the moment it is asked for a frame, and `h264_nvenc` does the same on a host with the
+  libraries and no card. Reading the list turns a missing GPU into a failed job at the point where
+  the transcription has already been paid for. The probe is cached, so it costs one frame per
+  process.
+
+  **The quality flag is not `-crf` anywhere else,** and three encoders use a different *scale*:
+  NVENC needs `-rc vbr -cq` (without `-rc vbr`, `-cq` is accepted and ignored and the encoder uses
+  its default bitrate), QSV uses `-global_quality`, VAAPI uses `-qp`, and VideoToolbox uses `-q:v` on
+  a **1–100 scale where higher is better** — inverted. Passing `-crf 20` to VideoToolbox is not an
+  error; it is ignored. Passing `20` to `-q:v` asks for near-worst quality. Either way the output is
+  wrong and nothing says so, so the mapping is a table with the scale written down. Presets are
+  translated too (`veryfast` → NVENC `p2`) or omitted, since VideoToolbox has no preset concept and
+  an unrecognised one is a hard error on some builds.
+
+  `h264_v4l2m2m` is **deliberately refused with a reason** rather than quietly absent: it has no
+  constant-quality mode, only `-b:v`, so using it would switch the whole pipeline from a quality
+  target to a bitrate target without saying so.
+
+  The default stays `libx264`, **not** `auto`. These encoders are not comparable with x264 at the
+  same nominal quality, so `auto` would change the output of every existing install the first time
+  it landed on a machine with a GPU, with no setting changed — and would make the M1 golden renders
+  machine-dependent. A *named* request that falls back records `encoder_unavailable:`, because
+  silently ignoring it is how someone spends a week believing their GPU is in use; `auto` falling
+  back records nothing, since it asked for "the best available" and software is available.
+
+### Fixed — deployment and ingest, both previously unexercised (I7, I10, I12, I13)
+
+- **`I12` — the Docker image had never been built.** A Dockerfile nobody has run is a deployment
+  story rather than a deployment. It builds, and `scripts/docker_smoke.sh` now boots the image and
+  probes it in CI, gating the deploy job. Three things can be wrong here that nothing else catches,
+  because each is invisible from a working checkout: the build failing; the build succeeding and
+  the app not starting; and both succeeding while an **asset is missing** because `.dockerignore`
+  excluded it. The last is why the check queries the fonts *through the API* rather than running
+  `fc-match` — `fc-match Anton` succeeding only proves the Dockerfile registered the faces with
+  fontconfig, not that the app's own manifest and files both arrived under `/app`. The font chain
+  has already broken exactly that way once (C1), and the only symptom was captions in a substituted
+  face in rendered output. Verified: `/healthz`, the SPA from the frontend build stage, 8 fonts,
+  14 caption presets, 326 vendored emoji.
+- **`I13` — URL ingest had never been run either.** It downloads. `download_video` is the *first*
+  thing a "paste a link" user touches and every failure inside it raises `DownloadError` carrying a
+  yt-dlp message, so four things could have been silently wrong: the format selector (a malformed
+  one falls through to `best` rather than erroring, so an ignored height cap looks exactly like one
+  that worked); `outtmpl`; the returned path; and the progress hook, where a wrong key name means
+  the UI shows nothing for the whole download — indistinguishable from a hung job.
+
+  Verified against the real network (Wikimedia Commons: metadata, a 5.6 MB download, 14 progress
+  events, the height cap honoured at both 240p and 480p) and then pinned by tests that serve the
+  media from a **local HTTP server**. yt-dlp's `generic` extractor treats a plain media URL like
+  any other input, so the local server exercises the whole path with none of the flakiness that
+  would make this test the reason CI is red.
+
+  One branch could not be reached that way and is now reachable: `prepare_filename` reports the
+  pre-post-processing name, and `merge_output_format` rewrites the container **only when a merge
+  actually happened**, so the prepared name is right for a progressive source and wrong for a
+  merged one — with both returning a plausible path and only one existing. Extracted as
+  `resolve_downloaded_path` so both halves can be tested rather than only the half a single-file
+  source happens to take.
+- **`I7` — image size: 1.83 GB → 1.48 GB.** Two findings, one of them a plain dependency bug:
+  - **Two OpenCVs were installed.** `requirements.txt` pinned `opencv-python` while mediapipe
+    depends on `opencv-contrib-python`, so pip installed both — and each ships its own ~91 MB
+    directory of near-identical native libraries. contrib is a superset in the same `cv2`
+    namespace, so dropping the explicit pin changes nothing that imports. Left implicit rather
+    than re-pinned to contrib: two places to state it is how the tree ends up with two wheels
+    again.
+  - **Node is now opt-in** (`--build-arg INSTALL_WHOP_BRIDGE=true`). Debian's `nodejs`+`npm` is
+    around 200 MB of image for one optional publisher. That exposed a real gap: the Whop
+    publisher's availability check looked for the *bridge script*, which is committed source and
+    therefore present in every image, so it reported the publisher **ready** on an image with no
+    Node and then failed at publish time with a `FileNotFoundError` from `subprocess` — the least
+    actionable place to learn that Node is missing. It now checks for the interpreter too, and the
+    message names the build arg.
+- **`I10` — the npm advisories.** 11 → 0 reported by `npm audit`, via `vite` 5→8, `vitest` 2→3 and
+  `@vitejs/plugin-react` 4→5. The chain that mattered was `esbuild`: it let any website send
+  requests to a running dev server and read the responses.
+
+  The upgrade broke all 81 component tests while `npm run build` stayed perfectly green — vitest
+  transformed `.jsx` files with the *classic* JSX runtime, so every one failed with
+  "ReferenceError: React is not defined". Fixed by stating `esbuild: { jsx: "automatic" }` in the
+  vite config, which makes both pipelines agree rather than depending on which transform sees a
+  file first. Node is pinned to 22 in CI and in the Dockerfile's frontend stage, because vite 8
+  requires `^20.19.0 || >=22.12.0` and `node:20-slim` satisfies that only on its newest patch
+  releases.
+
+  **A residual 9 advisories are deliberately not "fixed":** one `brace-expansion` DoS reachable
+  through eslint's own `minimatch` chain. Both available fixes are worse than the finding, and both
+  were tried — `npm audit fix --force` *downgrades* `eslint-plugin-react` to 7.22.0, and overriding
+  `brace-expansion` to a patched 5.x breaks `minimatch@3` so eslint crashes outright. CI therefore
+  blocks on `--audit-level=critical`, because a gate that cannot be satisfied without breaking the
+  build is a gate people learn to ignore.
+
+### Added — the asset libraries (A5, A9, A13, A17, A19, A22)
+
+- **`A9` — the emoji keyword map, 85 keywords to 1190.** On real speech the old map produced no
+  emoji at all on most clips: `standard` intensity allows one every five seconds, so a 60-second
+  clip has to contain a dozen mapped words *spread across it* to fill even half its slots. The
+  overlay was decorative on the few clips that happened to say "money" or "fire". All 326 glyphs
+  are vendored (7.3 MB), so rendering still never touches the network.
+
+  **What it deliberately does not contain** is the more interesting half. Homographs are excluded:
+  a `bank` is 🏦 or a river's edge, `spring` is a season, a coil or a verb, `wave` is water or a
+  hand, `beat` is a victory or a rhythm, `second` is a place or a duration. Each would raise the
+  keyword count and lower the hit *quality*, and an emoji illustrating the wrong sense of a word
+  reads as a machine that did not understand the sentence — the same trade C14 refused when it
+  declined to pad the caption presets with hue-only variants.
+
+  Function words are excluded too, **even where the picture is apt**. "Like" is 👍 in one sense and
+  a filler in most others; "this", "here", "there" and "off" are grammatical far more often than
+  deictic. A11 scores stopwords at zero, so such a word only ever wins a slot when nothing better
+  is in the clip — which is exactly the wrong moment for a weak match, because that clip has no
+  other emoji to distract from it. Enforced by a test against the caption stopword list rather
+  than by care, with the four that shipped that way (`yes`, `no`, `up`, `down`) named explicitly:
+  the failure mode of adding one is a plausible-looking overlay on the word "just".
+- **`A13` — Noto, Twemoji or OpenMoji.** Which artwork set appears is a *look* decision, and the
+  three read very differently over footage. Three things differ per set and each produces a 404
+  rather than an error anyone can read: the base URL, the case of the hex in the filename
+  (OpenMoji upper-cases it), and the prefix plus separator (Noto writes
+  `emoji_u1f9d1_200d_1f3eb.png` where the others write `1f9d1-200d-1f3eb.png`). Encoding all three
+  per style is what stops "switch to OpenMoji" from meaning "silently render no emoji".
+
+  **Only Noto is vendored**, and that is a decision rather than an omission: three sets over 326
+  glyphs would triple the committed asset weight to ship two looks most installs never select. The
+  others are fetched on demand or vendored once with `scripts/fetch_emoji.py --style`. A glyph
+  missing from the selected style falls back to the Noto file rather than dropping the overlay —
+  a mixed-style overlay is a cosmetic inconsistency that is visible and correctable, a missing one
+  looks like the feature is broken — and the clip records `emoji_style_degraded:<name>` when that
+  happens, because a cosmetic difference nobody is told about is a bug report later. Twemoji's
+  72px is stated in the docs as *smaller than every size this tool composites at*, so choosing it
+  is knowingly choosing a soft overlay.
+- **`A5` — operator-supplied caption fonts.** Drop a TTF into `FONT_ASSETS_DIR` and it appears in
+  the picker. A **server-side directory, not an upload endpoint**, for the reason U6 recorded for
+  the brand logo: an upload needs a storage location, a cleanup policy and a retention rule, none
+  of which exist for assets, and inventing three of them to accept a font file is a larger
+  decision than the feature.
+
+  The family name is read from the font's own `name` table, never from its filename. libass selects
+  a face by that name and answers an unknown family by *silently substituting another* — so a
+  picker offering `MyBrandFont.ttf` as "MyBrandFont" would be offering a name that resolves to
+  nothing. That is exactly the C1 defect this codebase has already shipped once, which is why a
+  font whose real name cannot be read is not offered at all, and why a bold-only file is offered as
+  "Family Bold" rather than "Family". Variable fonts are excluded for the same reason the manifest
+  excludes them.
+
+  Two smaller things fell out of it. The reported `weight` is converted from the file's OS/2 class
+  to **fontconfig's scale**, which is what `assets/fonts.json` records and what libass prints —
+  mixing the two would make a user-supplied regular face (400) look nearly twice as heavy as a
+  vendored black one (210). And a *missing or corrupt* manifest no longer empties the picker: the
+  twelve files are still on disk and readable, so the declaration failing no longer takes the
+  assets down with it.
+- **`A17` — several music tracks per mood.** One track per mood meant every clip in a batch of ten
+  carried the same bed, which is the most obvious way a set of clips reads as machine-produced.
+  Three layouts are accepted, because the natural way to hold twenty tracks is not the natural way
+  to hold one: `upbeat.mp3`, `upbeat/*.mp3`, or `upbeat_2.mp3` siblings. A separator after the mood
+  name is required, so `upbeat_2` matches and `upbeatish` does not.
+
+  Selection is **deterministic, not random**. A batch wants variety *between* clips and a re-run
+  wants the same output: the M1 golden renders depend on the second, and a creator re-rendering one
+  clip of ten to fix a typo does not want a different bed underneath it. The key is hashed from the
+  source filename, the clip's ordinal and its start time — not the clip id, which carries a
+  `uuid4`. The hash is blake2b and **not** `hash()`: Python salts string hashing per process unless
+  `PYTHONHASHSEED` is set, so a `hash(key) % len(tracks)` selection would be stable within one run
+  and different on the next — reproducible in exactly the tests that would catch it, and not in
+  production. A `music_track:2/5` marker makes the variety visible, since the path is not in the
+  clip record.
+- **`A19` — b-roll matched by tag, not by filename substring.** The old rule had three failures and
+  all three were silent. `stem in token` with a two-character stem is nearly always true, so a file
+  called `on.mp4` answered the keyword "money" and `ca.mp4` answered "car". The *first* match won
+  rather than the best, so renaming an unrelated file changed the b-roll. And a filename is not a
+  description — a stock clip is called `pexels-4276282.mp4`.
+
+  Now an optional `tags.json` describes the library, matching *scores* rather than short-circuits,
+  the best-scoring file wins with ties broken by name so two machines agree, and both sides are
+  length-filtered. A missing or malformed manifest degrades to filename matching, which is what the
+  library did before — not to a library that silently has no tags.
+
+  **The synonym source is the emoji keyword map**, inverted: ~1190 words already cluster into ~326
+  groups, so there is one word list to maintain rather than two that drift. What that table asserts
+  is narrower than synonymy, and the difference is stated rather than glossed: two words share a
+  group only when they share a *picture*, so money/wealth/fortune are one group and "cash" is in
+  another because 💰 and 💵 are different images. Expansion is therefore conservative — it adds
+  true synonyms and misses some near ones. That is the right error direction: a missed synonym
+  costs one weaker match, a wrong one puts unrelated footage on screen. Synonyms also score below
+  an explicit tag, so inference can never override something the operator actually said.
+- **`A22` — motion on b-roll stills, and a dip in the bed under b-roll.** A still that sits
+  motionless for three seconds over moving footage is the clearest sign a clip was assembled rather
+  than edited. `BROLL_KEN_BURNS` adds a slow zoom whose convergence point supplies the drift, with
+  the anchor rotating per cue so four stills in one clip do not all move identically.
+
+  The zoom is an explicit function of the output frame number, not the usual accumulating
+  `z='zoom+step'` recipe — accumulation makes the final framing depend on how many frames were
+  produced, so the same still would zoom twice as far on a 60fps render as on a 30fps one. Off by
+  default because it *is* a visible change: `zoompan` requires an explicit output size and the
+  default graph scales stills to an unknown height, so with it on stills are cover-cropped into a
+  fixed 16:9 box. Video assets already move and are never touched. Verified against a
+  half-transparent PNG that alpha survives the filter, and the box is forced even-sided because
+  4:2:0 subsampling requires it and an odd height fails the *encode*, several stages after the
+  filter string that caused it.
+
+  `BROLL_DUCK` dips the music under each b-roll window, so a visual accent has an audible one.
+  Applied to **the bed only, never the mix**: the b-roll is illustrating what is being said, so
+  ducking the speech would invert the point. Built as one `volume` expression taking the *deepest*
+  applicable dip rather than a chain of filters, because a chain multiplies and two adjacent cues
+  would drive the bed to silence. Each dip is ramped, since a hard step in level is audible as a
+  click on a sustained bed — a worse artefact than the one being fixed. Only windows that actually
+  composited duck, so a cue whose asset failed to resolve does not leave a hole in the bed with no
+  picture to explain it.
+
+### Added — what the words say, and who they say it to (C19, S7, S8, S12, T9, T10)
+
+- **`S7` — question/answer and list structure.** Selection measured how a moment was *delivered* —
+  pace, energy, how promptly it opens — and nothing about what it says. A question with its answer,
+  or an enumeration ("three things you need to know", "here's why"), is a self-contained unit by
+  construction: it opens with an implicit promise and closes by keeping it.
+
+  The ordering is the substance. An **unanswered** question scores *below* a passage with no
+  structure at all (0.25 against 0.5), because it opens a loop the clip never closes — the single
+  most common way an auto-cut moment feels unfinished. Any implementation that treats structure as
+  a bonus to be added would score it neutrally and still look like it worked.
+
+  Questions are detected from opener words as well as `?`, because Whisper omits question marks on
+  rising-intonation questions routinely, and relying on punctuation makes the signal a property of
+  Whisper's formatting rather than of the speech. Trailing conversational tags are stripped first:
+  `"we rebuilt the whole thing over one weekend, you know?"` is a statement, and reading it as an
+  unanswered question would apply the lowest score there is to the way people talk.
+- **`S8` — lexical emotional intensity.** How strongly a passage is *worded*, which is not what
+  energy (S2) measures. A shouted list of ingredients and a quietly devastating sentence sit at
+  opposite corners of the two, so both signals exist.
+
+  A **density**, not a count: a raw count ranks a three-minute passage containing two strong words
+  above a ten-second one containing the same two — higher purely for being longer, the same defect
+  S11 exists to remove. Strong terms are weighted twice the merely-emphatic ones; a grouping that
+  did not affect the score would be two word lists pretending to be one.
+- **`S12` — standalone completeness.** Whether a window makes sense without what came before. A clip
+  opening on "and *that's* why he did it" is a fragment of a conversation, and no amount of pace or
+  energy makes it publishable — this is invisible to every other signal.
+
+  The penalties are deliberately **unequal**: a stated back-reference ("as I said") 0.5, a dangling
+  conjunction 0.4, a demonstrative opener 0.15, an unfinished ending 0.1. A demonstrative is weak
+  because "this is the part where…" is a *good* clip opening — the word is as often forward-looking
+  as back-looking. An unfinished tail is lightest because it is the one failure the boundary logic
+  (S9 snapping, AU7 trimming) can still fix, whereas nothing downstream can supply missing context.
+  A back-reference in the *middle* of a clip is not penalised at all: that is a speaker recapping,
+  which usually helps the clip stand alone.
+
+  All three are **lexical rules, not model calls**, for the reason S4 records: a per-segment request
+  costs money per job, and nothing can yet tell whether a scored signal improves selection because
+  the S1 labelled dataset does not exist. A paid, unvalidated signal makes an improvement and a
+  regression indistinguishable *while charging for it*.
+
+  Weighted **below** the acoustic signals (`SELECTION_WEIGHT_STANDALONE=0.20`, `_STRUCTURE=0.15`,
+  `_INTENSITY=0.10`): these read ASR output, so they are the least certain measurements here — one
+  mis-transcribed opener makes a complete thought look like a fragment. `standalone` leads the three
+  because nothing downstream can supply context; `intensity` trails because it overlaps energy, and
+  double-counting emphasis would let one loud, strongly-worded moment dominate a whole source. They
+  also annotate the S10 prompt in **words, not numbers**, and only where the passage departs from
+  ordinary — annotating everything is the same as annotating nothing.
+- **`T9` — per-segment language detection.** Whisper reports *one* language for a whole file, so on
+  bilingual content that label is wrong for part of every transcript, and wrong **silently**: the
+  text appears, the timings are right, and the only symptom is degraded recognition on the passages
+  in the other language.
+
+  The two halves of this are not equally trustworthy and it says so. **Script switching is a fact** —
+  Devanagari, Cyrillic, Hangul, Arabic, Hebrew, Greek and Thai occupy disjoint Unicode ranges — and
+  is reported with high confidence. **Latin-script languages are only weakly separable**, from
+  function words and diacritics, which works on a sentence and is noise on three words; under six
+  words it declines to answer rather than guessing, and a tie between two languages counts as
+  evidence for neither (Spanish and Portuguese share enough function words that a count-based
+  detector would confidently pick whichever came first in the table).
+
+  **Han script deliberately returns no language.** It is used by Chinese *and* Japanese, and choosing
+  between them from characters alone is exactly the confident-and-wrong answer this exists to avoid.
+  Combining marks are excluded from the script census, or a diacritic-heavy script outweighs a Latin
+  passage of the same length and a mostly-English sentence comes back as Hindi.
+
+  It reports **suspected switches** rather than correcting them, because correcting would mean a
+  Whisper pass per segment. That belongs behind a setting, measured against M3's WER benchmark.
+- **`T10` — a translated subtitle *track*, not a replaced transcript.** `task=translate` rewrites the
+  transcript in English, so asking for a translation cost you the original-language captions
+  entirely: a Spanish creator's clip came back with English burned into the pixels. Now the burned
+  captions stay in the source language and English arrives as a second selectable track plus a
+  `clip_N.en.srt`/`.vtt` sidecar, so one render serves both audiences.
+
+  A **boolean**, not a target language (`SUBTITLE_TRANSLATION=false`): Whisper only ever translates
+  *to* English, so a target-language field would be a control that silently ignores its own value.
+
+  Both tracks are muxed in **one** ffmpeg call. `-metadata:s:s:N` numbers subtitle streams by their
+  position in the *output*, so a follow-up remux of a file that already carries a track would either
+  re-label the first one or need to know how many the input had; supplying every track at once makes
+  the indices a property of the argument list. The original-language track goes first so a player
+  defaults to it, and is now labelled with the language actually spoken rather than the hard-coded
+  `eng` the single-track path used — a menu offering two entries both called English is no menu.
+  Unknown codes become `und` ("undetermined", a real code) rather than an invalid two-letter one.
+
+  Skipped, with a `subtitle_translation:skipped_*` marker on the clip, when the source is already
+  English or `translate` was requested for the main pass — a second ASR pass to turn English into
+  English is minutes spent for nothing, and an absent track with *no explanation* is
+  indistinguishable from a broken one. A failure in the translation pass records
+  `subtitle_translation:failed` and ships the clips: it is an extra track on a job whose expensive
+  work is still ahead of it. The translated words are rebased onto the filler-removal keep plan
+  alongside the originals, or the track drifts by the total removed duration and reads as a sync bug
+  in the player.
+
+  Off by default because it costs a full second ASR pass — cached separately by T8, so re-runs are
+  free, but the first run roughly doubles transcription time.
+- **`C19` — emoji placement, agreeing with the captions.** Two halves. First, the emoji planner now
+  takes the **actual** highlighted word indices from the caption highlighter, and a highlighted word
+  outranks every unhighlighted one regardless of salience. A11 already ranked by the same salience
+  scorer the highlighter uses, which makes them agree *most* of the time — but the highlighter
+  applies a per-cue budget and a floor, so its final selection is not a pure function of salience,
+  and where they disagreed the emoji illustrated one word while the caption emphasised another. To a
+  viewer that is a bug even though both components behaved exactly as written.
+
+  Second, `EMOJI_PLACEMENT=caption` sits the glyph just clear of the caption block instead of in one
+  of three fixed frame slots — above bottom captions, below top ones — so the glyph and the word it
+  illustrates read as one element. That placement is only defensible *because* of the first half: an
+  emoji pinned beside a caption while illustrating a word three seconds earlier looks like a
+  mistake. Default stays `spread`, the shipped behaviour, so an upgrade does not move existing
+  output.
+
+### Added — caption typography and previewing (C6, C9, C14, C16, C17, C18, C20)
+
+- **`C6` — real line wrapping, from measured text.** Captions relied on ASS `WrapStyle: 2`, which
+  means *no automatic wrapping at all*: libass breaks only where the text already contains a `\N`,
+  and nothing inserted one. Every cue was laid out as a single line and either ran past the frame
+  edge or was shrunk by libass' own fitting, depending on the build. Neither is a decision anyone
+  made.
+
+  Width is **measured** from the vendored fonts' own advance widths, not counted in characters. A
+  character budget is the obvious fix and is wrong for these faces: in Anton a `W` is roughly three
+  times the advance of an `i`, so a 24-character budget is a comfortable line of `MINIMUM WIDTH` and
+  an overflowing one of `WWWWWWWWWWWWWWWWWWWWWWWW`.
+
+  Break positions are computed from the **plain words** and applied to the tagged spans, because a
+  single `{\kf36}` is longer than the word it decorates — measuring the joined span text would count
+  overrides as letters and break after roughly every word. Stated plainly: advance widths are not
+  shaped text, so kerning and ligatures are not applied and a measurement can be a few per cent
+  wide. That is the right error direction, and getting it exact would mean reimplementing HarfBuzz.
+- **`C16` — a line budget per preset.** `max_lines` (default 2, matching the kinetic engine) is
+  threaded through *cue building*, which is what makes C6 and C16 one feature rather than two: the
+  wrapper deliberately never drops a word, so a cue holding more text than fits simply produces more
+  lines than the budget. Measured on an 11-word sample: fitted grouping produces cues needing at most
+  2 lines, unfitted grouping produces one needing **4**.
+- **`C9` — a per-word pill.** A mainstream look with no equivalent here. Drawn as a heavy border in a
+  solid colour rather than a box layer: ASS has no per-word background, and a real rectangle needs
+  the rendered text width, which is not known where these tags are emitted. The trade is a
+  glyph-hugging shape instead of a rectangle, which is closer to the reference anyway.
+
+  Applied *inside* the highlight wrap. Both orders render acceptably — the pill sets `\3c` and the
+  highlight sets `\c`, so they do not contest the same attribute — but the documented contract is
+  that a highlight only *wraps* the plain span, and that is checked by substring. A contract enforced
+  by substring has to stay syntactically true, not merely true in spirit.
+- **`C17` — a dual stroke.** ASS carries one border width and one border colour, so a genuine
+  two-tone stroke needs the text drawn twice. The shadow slot is repurposed instead: at zero offset
+  with its own colour it renders as an outer stroke around the inner one. The honest trade, and why
+  it is opt-in: a preset cannot have both a drop shadow and an outer stroke this way. It cannot
+  produce a *gradient* stroke; nothing in libass can.
+- **`C14` — 6 presets to 14.** `pill`, `pill_green`, `sticker`, `comic`, `headline`, `subtitle`,
+  `karaoke_bold`, `spotlight`. Each is a **combination that was previously inexpressible** rather
+  than a colour change — the pill, the dual stroke and measured wrapping are what make them
+  distinguishable. Eight rather than fourteen deliberately: a preset whose only difference is a hue
+  is a colour picker pretending to be a style. Every one names a vendored face, so none can silently
+  substitute (`C1`).
+- **`C18` — a real caption preview.** `POST /api/captions/preview` renders a two-second libass
+  sample. `U5`'s picker previews in CSS, which shows the typeface, colours, case and placement and
+  cannot show the word-by-word fill, the punch, the pill, the stroke or the wrapping — which is most
+  of what a preset *is*. Two seconds rather than a still, because a still cannot show a sweep. The
+  background is a generated mid-grey field, not the user's footage: a preview should show the
+  caption, and a real frame makes it a test of that frame's legibility instead.
+- **`C20` — auto-contrast.** `CAPTION_AUTO_CONTRAST` samples three frames from the region the caption
+  will actually occupy — derived from the same position and safe-area maths the renderer uses, so it
+  measures the pixels the text sits on rather than the frame average — and picks a dark or light
+  outline. It **never** changes the fill: that is a brand decision (`U6`), and silently recolouring
+  it because a shot was bright would overrule the one thing the creator chose. One decision per clip,
+  not per cue, because an outline that changes colour partway through draws more attention than a
+  slightly suboptimal constant choice.
+
+### Fixed
+
+- **A property test that held only because a feature was unused.**
+  `test_p6_keyword_highlight_distinct_and_timing_preserving` asserted `plain in highlighted` — that a
+  keyword highlight only wraps the span a plain word would produce. `C10`'s active-word punch is
+  deliberately *suppressed* on a highlighted word (two competing `\fscx` spans would fight, and which
+  applied would depend on tag order), so the plain span carries a ramp the highlighted one does not
+  and containment cannot hold. No shipped preset set `punch_scale`, so nothing exercised it until
+  `karaoke_bold`. The test now asserts against the animation core, which is what the requirement
+  actually says.
+
+### Added — caching, resumable jobs, and golden-output tests (I3, I5, I8, M1)
+
+- **`I3` — cache the other whole-file decodes.** `T8` cached transcription and stopped there, so
+  three full decodes still ran on every job for the same source: silence detection
+  (`silencedetect` cannot work without decoding the audio), the energy envelope (one `astats` pass
+  over the whole file), and keyframe sampling (48 seeks at 480 px). None depends on anything a user
+  changes between runs, so re-running a source to try a different caption preset paid for all three
+  again.
+
+  Keyed on **content**, following `T8`: the usual path-and-mtime shortcut is wrong in exactly the
+  case that matters — footage re-exported over the same filename. Every parameter that shapes a
+  measurement is in the key too, because a silence map measured at −30 dB is not interchangeable
+  with one at −25, and serving the wrong one silently is worse than having no cache. An **empty**
+  result is cached like any other: "no detectable silence" is a real and expensive answer, and
+  treating it as a miss would re-decode the whole file on exactly the sources where the measurement
+  costs most.
+
+  The keyframe half needed one line to be worth anything: the sampler now skips a frame whose file
+  already exists. Without it the cache handed back a directory of correct frames and then overwrote
+  every one of them. A zero-byte file counts as absent, since a run killed mid-write leaves one.
+- **`I5` — resume a partially-completed job.** An interrupted job was marked failed *wholesale*:
+  the clips it had already rendered were on disk and listed in the record, and the only way forward
+  was to re-submit the source and pay for everything again, including re-rendering the clips that
+  had succeeded.
+
+  `Job.planned_clips` records the windows selection chose, before any rendering starts. A resume
+  then renders only the windows with no clip — reusing `U7`'s explicit-candidate path, so selection
+  does not re-run. That last part is correctness, not speed: selection is non-deterministic with an
+  LLM in it, so re-running it could leave the user with clips from two different selections.
+
+  Window matching allows a second of slack, because `AU7` silence trimming and `S9` cut snapping
+  both move a clip's boundaries *after* the plan is recorded — exact equality would re-render clips
+  that already exist. The interrupted-job message now distinguishes the two cases, since telling
+  someone to re-submit a job whose finished clips are on disk costs them the whole render twice.
+- **`I8` — frontend coverage beyond `api.js` and `Dropdown`.** 33 tests to 98, adding `ClipCard`,
+  `JobCard`, `ReviewBar`, `ClipPlayer`, `CaptionStylePicker` and `BrandKitPanel`. The `U11`
+  keyboard-shortcut tests matter most: a handler bound on the *window* is exactly the kind of code
+  that works when tried by hand and misfires in a situation nobody demonstrated. The one that would
+  hurt is typing — `a` must insert an `a` while someone edits a caption, not approve the clip behind
+  it, and that failure is silent.
+
+  Building them surfaced a real UI defect: the batch and per-clip verdict buttons had **identical
+  accessible names**, so "Approve" was ambiguous to a screen reader as well as to a test. The batch
+  ones are now "Approve selected clips".
+- **`M1` — golden-output rendering tests.** The v0.8.0 parity gate compares *filter graphs*, which
+  is blind to everything that changes pixels without changing the graph: a font resolving to a
+  different face, a LUT that silently did nothing, an overlay drawn off-frame, a colour-matrix shift
+  from an encoder upgrade.
+
+  Renders are compared by **perceptual** frame hash rather than exact hash. An exact hash is
+  reproducible for one ffmpeg build only, so a golden of exact hashes fails on every upgrade, gets
+  re-frozen without inspection, and stops meaning anything — the failure mode a golden exists to
+  prevent.
+
+  Finding a signal that actually discriminated took measuring rather than reasoning. An average hash
+  compares each cell to the frame's own mean, so it is invariant to contrast **by construction**: a
+  burned-in caption bar moved 11 bits, a contrast/saturation change moved 2. Adding the mean luma
+  did not separate them either — the graded clip moved 0.47 levels against 0.06 for a CRF 20→32
+  re-encode. The luma **spread** is what does: 49.5 unchanged, 49.5 re-encoded, 75.5 graded. All
+  three signals are stored, each covering what the others miss.
+
+  Stated plainly: this detects *visible* change, not pixel-exact equality. A one-pixel caption
+  offset or a metrically similar font substitution is below its resolution.
+
+### Added — review workflow and brand kit (U3, U5, U6, U7, U9, U11)
+
+- **`U3` — a review player instead of a playback one.** The clip surface was a bare
+  `<video controls>`, which cannot step a frame or seek to a time you can name. Judging a clip
+  means checking the specific things that go wrong in this pipeline — does it open mid-word, is the
+  caption in sync, does the reframe lose the speaker, is the last frame a blink — and every one of
+  those needs a frame you can land on and hold. Adds scrubbing, ±1 frame, ±1 second and a time
+  readout. Frame stepping assumes 30 fps, which is what output is normalised to (`O3`).
+- **`U5` — a caption style picker with a live preview.** The presets were a dropdown of six names,
+  so choosing between "pop", "typewriter" and "hormozi" meant rendering a clip to find out what you
+  had picked. `/api/info` now reports `caption_preset_details` — the presets' real values, with
+  `#RRGGBB` equivalents added alongside the ASS originals, because no colour input accepts
+  `&H00FFFFFF`.
+
+  **The preview is labelled as an approximation.** libass does the word-by-word fill, the per-word
+  punch, the outline geometry and the exact metrics; CSS reproduces none of them faithfully. What it
+  shows honestly is what decides the choice: typeface, weight, colour pair, case, box and rough
+  placement. A preview that overstates itself is trusted once and disbelieved thereafter.
+- **`U6` — a brand kit: font, colour pair, logo and standing CTA.** These lived in places that could
+  not be saved together — the caption font and colours inside a preset editable only in source, the
+  CTA regenerated per clip by the LLM (so a creator with one standing ask got different wording on
+  every clip), and no way to put a logo on a clip at all.
+
+  The kit **overrides the preset** rather than the reverse: a preset is a *look* (how captions
+  animate, where they sit), the kit is an *identity*, so `hormozi` plus a brand font should give
+  hormozi's animation in the brand's typeface. It lives inside `settings`, so saved profiles
+  persist it with machinery that already exists. Colour conversion is one named function with tests
+  because ASS stores colours **byte-reversed** (blue-green-red) and getting that wrong does not
+  fail — it renders a brand's red as its blue and reports nothing.
+
+  The logo is drawn with the `movie` source filter, **not** a second ffmpeg input: the compositor's
+  input indices are load-bearing (engine contributions, music, b-roll and emoji all compute offsets
+  from them, which is what keeps the v0.8.0 parity guarantee), so an extra input would risk all of
+  those to save nothing. It is composited above the captions and emoji — a watermark an overlay
+  could cover is not a watermark — and the logo width is forced even, since an odd width in a 4:2:0
+  frame makes ffmpeg pick a chroma alignment rather than fail.
+- **`U7` — re-render one clip instead of the whole job.** Changing a caption preset or a colour
+  grade meant resubmitting the source and paying for everything again: the download, the
+  transcription, the selection call, the metadata generation and every *other* clip. Worse, it
+  produced a **different set of clips**, because selection is not deterministic with an LLM in it.
+
+  `run_pipeline` now accepts explicit candidates, which skips selection entirely. That is a
+  parameter rather than a separate clip-render function on purpose: the per-clip path is two hundred
+  lines of filler removal, diarisation rebasing, b-roll, engine stages, captions and thumbnailing,
+  and a second copy would drift from it within a release. `Job.source_path` records the resolved
+  local file, without which a URL job's source is only a URL. Edited metadata, the review verdict
+  and the filename are all carried across — the filename because every clip URL, publish record and
+  history row already points at it. The new media replaces the old only after the render succeeds.
+- **`U9` — batch review.** A job produces up to ten clips, each had to be judged individually, and
+  there was nowhere to record "I have looked at this". A review pass over twenty clips left no trace
+  and had to be redone from the top after any interruption. Clips gain `review_state`
+  (`pending`/`approved`/`rejected`) — defaulting to `pending`, so nothing is silently approved — with
+  per-clip and batch endpoints and a tally bar. A batch with one stale id applies to the rest rather
+  than failing wholesale, because discarding the other nineteen decisions to report one missing clip
+  is the wrong trade.
+- **`U11` — keyboard shortcuts for review.** `j`/`k` move, `a`/`x` judge, `s` selects, space plays,
+  `,`/`.` step a frame, arrows skip a second. Bound on the window rather than per card, because the
+  target is "the clip I am looking at" — and deliberately inert while a text field has focus, since
+  `a` must type an `a` when someone is editing a caption. Getting that wrong would approve clips
+  while a user wrote metadata.
+
+### Added — publishing reliability and scheduling (PB4, PB5, PB6, PB7)
+
+- **`PB5` — automatic retry of transient publish failures.** A publish attempt had exactly one
+  chance: any failure wrote `state=failed` and stopped until a human pressed Retry, which makes a
+  network blip indistinguishable from a rejected video and leaves an overnight batch at the mercy
+  of whichever minute the upload landed in. Transient failures are now retried with exponential
+  backoff (`PUBLISH_MAX_RETRIES`, `PUBLISH_RETRY_BASE_SECONDS`, `PUBLISH_RETRY_MAX_SECONDS`).
+
+  Three details carry it. **The default is not to retry** — an error has to be *recognised* as
+  transient to earn one, because a too-long clip or a revoked permission will fail identically
+  forever and retrying it burns quota while hiding the real problem. **Permanent patterns take
+  precedence over transient ones**, since a platform saying "video too long, please try again with
+  a shorter clip" contains "try again" while being the least retryable error there is. And the
+  backoff carries **proportional jitter**, because every attempt failing against one platform
+  outage becomes due at the same instant and would otherwise retry in lockstep.
+
+  Automatic retry never touches a `review_required` attempt — that is waiting on a person, and
+  re-queueing it would either loop or silently escalate a review-mode submission into a live post.
+- **`PB4` — token refresh and expiry.** YouTube exchanged its refresh token on *every* publish
+  while discarding the expiry Google returns, so there was one extra round trip per upload and
+  nothing in the product could say when a credential would stop working. Access tokens are now
+  cached in a new `oauth_tokens` table with their expiry and renewed just ahead of it
+  (`PUBLISH_TOKEN_REFRESH_MARGIN_SECONDS`, default 5 minutes — an upload takes tens of seconds, so
+  a token expiring mid-request costs the whole file). A 401 on a cached token triggers exactly one
+  forced refresh and retry; a second 401 is a credential problem, not a stale cache.
+
+  The other four publishers **cannot** refresh, and now say so rather than being silently
+  hopeless: TikTok, Instagram and X use long-lived tokens an operator pasted into config, Whop an
+  API key. `PublisherStatus` gained `token_kind` (`refreshable` / `static` / `none`) and
+  `token_expires_at`, so a dashboard can distinguish "nothing to expire" from "an expiry we cannot
+  see" — reporting both as "no expiry" is what tells an operator their Instagram token is fine
+  right up until the day it is not. `POST /api/publishers/{platform}/refresh` returns
+  `refreshed: false` for those four instead of pretending to act.
+- **`PB6` — per-platform caption and hashtag fitting at publish time.** Metadata is generated once
+  for one platform and the same text was sent everywhere; the per-platform limits were applied only
+  at generation, so publishers chopped the result at a character index
+  (`f"{title}\n\n{caption}"[:280]`). That cuts mid-word and removes the call to action and the
+  hashtags — the parts doing the work — and on X the title could consume the whole budget.
+
+  Copy is now *fitted* per destination: hashtags beyond the platform's count are dropped, and the
+  description is shortened at a sentence boundary, then a clause, then a word. The limit is applied
+  to the **rendered caption**, with the CTA and tags reserved first, because a per-field clamp
+  produces a caption that overflows the moment the tags are appended. The stored request keeps the
+  full text, so a retry or a re-route re-fits from the original rather than compounding.
+  `PUBLISH_TAILOR_WITH_LLM` (off by default) regenerates the description for each destination
+  instead, which is what the plan asks for and costs one model call per platform per clip.
+- **`PB7` — scheduling.** Scheduling was a single `datetime-local` input: an operator could set a
+  time and then had no way to see what was scheduled, move it, or cancel it — the only recourse for
+  a wrong time was to let it publish. Added `GET /api/schedule` (a window of attempts),
+  `PATCH /api/publish-attempts/{id}/schedule`, `POST /api/publish-attempts/{id}/cancel`,
+  `GET /api/schedule/suggestions`, and a month-calendar UI under a new **Schedule** tab.
+
+  The calendar shows every state, not only pending ones: hiding what had already gone out would
+  show an empty week the operator had in fact filled. Cancelling records the attempt as failed with
+  an explicit reason rather than deleting the row, because a row that vanishes is
+  indistinguishable from one that never existed when a post is later found missing. Rescheduling
+  into the past is recorded as `queued` rather than left `scheduled` behind the clock.
+
+  **The best-time suggestions are labelled honestly.** They are published third-party heuristics,
+  not measurements of your audience — per-account timing needs post-publish engagement data
+  (`PB8`), which this installation does not collect. The API returns a `basis` string saying so and
+  the UI renders it, because presenting a guess as an analysis is the actual harm available here.
+  Suggestions also skip slots already scheduled, since otherwise the calendar keeps recommending
+  the one best hour that is already full and following its advice stacks four posts at 7pm.
+
+### Added — speech repair and per-platform output (AU4, AU5, O7, O12)
+
+- **`AU4` — speech de-noise.** `SPEECH_DENOISE` (off | light | standard | strong) applies
+  `afftdn` to the speech before anything is mixed into it. Off by default and conservative when
+  on: over-reduced noise leaves speech sounding underwater and gated, which is a worse defect
+  than the room tone it removed.
+
+  The plan item notes that `arnndn` "is available in ffmpeg". The *filter* is; the *capability*
+  is not, because ffmpeg ships no `.rnnn` models — they live in a separate repository. So
+  `arnndn` is used only when `SPEECH_DENOISE_MODEL` points at a real model file, and a
+  configured-but-missing model degrades to `afftdn` rather than failing the render. A test
+  asserts both halves of this, so nobody removes the `afftdn` path believing `arnndn` was ready.
+- **`AU5` — de-esser.** `DEESSER` (off | light | standard | strong) reduces sibilance on a harsh
+  or close-miked source. Even "strong" is intensity 0.6 rather than 1.0: at full intensity the
+  4–8 kHz band loses so much energy that consonants lose definition, which is a different defect
+  rather than a fix.
+
+  **The de-reverb half of AU5 is deliberately not implemented.** ffmpeg has no de-reverb filter —
+  not one this build lacks, one that does not exist upstream. Real de-reverberation needs
+  spectral deconvolution or a trained model, i.e. an external dependency. A high-pass plus a gate
+  is sometimes sold as "de-reverb"; it is not, and shipping it under that name would be worse
+  than the gap. A test asserts no such function appears and that the de-esser chain contains
+  neither filter, so the gap cannot be quietly papered over later.
+- **`O7` — per-platform output profiles.** `OUTPUT_PLATFORM` selects a destination profile
+  (`tiktok`, `instagram`, `youtube`, `youtube_shorts`, `x`, `whop`) which sets the resolution,
+  the VBV ceiling and the clip-length cap. Capping length at render time matters: a clip longer
+  than the destination accepts otherwise fails at upload having already cost a full render, and
+  the pre-flight check that catches it (`O10`) runs at the end.
+
+  Three boundaries were drawn deliberately. **The aspect is advisory only** — reported for the UI
+  to recommend, never applied, because silently re-shaping an explicit 9:16 request into 16:9
+  because a platform was named is a setting that fights the interface. **An explicit
+  `OUTPUT_SHORT_SIDE` or `OUTPUT_MAX_BITRATE_KBPS` always wins**; the profile only fills in what
+  the operator has not chosen. And **this selects one profile, not N renders** — a variant per
+  platform is N encodes, N thumbnails and N publish records per clip, a job-model change rather
+  than an encoder setting.
+
+  Duration ceilings are read *from* `publishers.preflight.PLATFORM_LIMITS` rather than restated,
+  so the encoder and the validator cannot disagree about the same number. `youtube_shorts` is the
+  one override: preflight has no Shorts entry — correctly, since a Shorts upload *is* a YouTube
+  upload and is validated as one — so reading the table gave a Shorts profile with a one-hour
+  ceiling. It is pinned to the Shorts product limit of 3 minutes.
+- **`O12` — burned-in vs soft captions.** `CAPTION_MODE` (burned | soft | both). Burned-in
+  remains the default and is right for short-form — the feeds autoplay muted and nobody enables a
+  subtitle track — but it is a permanent, untranslatable, un-hideable decision baked into the
+  pixels. `soft` adds a selectable `mov_text` track instead; `both` does each.
+
+  `mov_text` is plain text, so preset animation, per-word highlighting, glyphs and positioning
+  cannot survive in the soft track. That is a limit of what MP4 can carry, not of this tool, and
+  it is why `both` exists rather than `soft` simply replacing `burned`. The mux is a stream copy,
+  so it costs a remux rather than a re-encode — verified by comparing the video stream's MD5
+  before and after. It runs in the pipeline on the finished file rather than in the compositor,
+  because a subtitle stream added mid-pipeline would be silently dropped by any POST-stage engine
+  that replaces the media.
+
+### Fixed
+
+- **One filter-path escaper, not four.** `captions`, `overlays` and `reframe` had each grown their
+  own copy and they had *diverged*: two resolved the path and escaped backslashes, the third
+  (added with the V18 LUT) did neither and rewrote backslashes as forward slashes. Both are
+  defensible; the combination is not, since which behaviour you got depended on which effect you
+  enabled. All four now delegate to `ffmpeg_utils.escape_filter_path`.
+
+### Added — visual polish: framing, grading and motion (V5, V6, V8, V14, V16, V18, V19)
+
+- **`V16` — de-letterbox before reframing.** Source footage is very often already boxed: a 16:9
+  export inside a 1:1 frame, anything re-uploaded from another platform. Reframing that
+  *centred the crop on the bars* and baked black bands into the middle of the vertical output.
+  The content rectangle is now detected first and the crop is confined to it. Detection
+  deliberately skips the opening second, because an opening fade from black looks exactly like a
+  fully-letterboxed frame to `cropdetect` — probing from zero would crop the picture away
+  entirely. The cost of that choice is that clips shorter than the skip window go undetected,
+  which falls back to using the frame as-is.
+- **`V5` — split-screen tiles now move.** Each tile was frozen on the *mean* of its track's boxes
+  for the whole clip: a position the speaker occupied only on average, so anyone who leaned in
+  and back sat off-centre for most of the clip and anyone who moved was cropped out of their own
+  tile — while the single-speaker path has followed faces since v0.7.0. Each tile now gets its
+  own smoothed, clamped centre path.
+
+  The mechanism is worth recording. `sendcmd` addresses filters **by name**, and a split-screen
+  graph contains several `crop` filters, so the obvious implementation broadcasts every tile's
+  commands to every crop. Verified by building that version: the second tile stops moving
+  entirely. Each crop is therefore given an *instance* name (`crop@t0`, `crop@t1`).
+- **`V6` — three and four speakers.** Split-screen supported exactly two. More than two now lay
+  out as a 2-column grid rather than a stack: four tiles stacked in a 1080x1920 frame are
+  1080x480 slots — a 2.25:1 letterbox holding a crop of a face — whereas two columns give
+  540x960 portrait slots that match the shape of a head and shoulders. An odd final tile spans
+  the full width rather than leaving a black half-cell that reads as a dropped participant.
+  Landscape targets keep their side-by-side layout, which already produces portrait-shaped slots.
+- **`V8` — crop-update rate.** Was a hardcoded 12/s, visible as stepping when the subject moved
+  quickly. Now `REFRAME_COMMAND_FPS`, defaulting to 24. This only lengthens the `sendcmd` script;
+  the expensive part of reframing is face sampling, which has its own rate.
+- **`V18` — 3D LUTs.** `COLOR_LUT` applies a `.cube`/`.3dl` after the colour preset, for a look
+  the five presets cannot express — a house grade, or a client's brand LUT. After rather than
+  before, because a LUT maps final values; the reverse would feed its output back into a contrast
+  curve. A missing or non-LUT file is ignored rather than failing the render, since `lut3d`
+  rejects the whole filtergraph on a file it cannot parse.
+- **`V19` — eased and beat-synced zoom.** `ZOOM_EASE` replaces the linear Ken Burns ramp with a
+  smoothstep: a constant rate is the one thing a camera move never does, and on a long clip the
+  frame visibly creeps. Same start and end zoom; only the curve changes. `BEAT_SYNC_ZOOM` adds a
+  short scale bump at detected audio accents — onset detection over the energy envelope already
+  measured for `S2`, *not* beat tracking, so every bump sits on a real transient instead of an
+  estimated tempo (on speech-led footage there is often no tempo to track). The bump is a
+  *multiplier*, so it composes with Ken Burns and the opening punch instead of pushing the total
+  zoom past what either intended.
+- **`V14` — end card.** Clips ended the instant the speech did, wasting the one moment a viewer
+  has already decided to watch to the end. `END_CARD_TEXT` draws a call-to-action over the tail.
+  It is a libass event rather than `drawtext`, like every other piece of text here, so it
+  survives an ffmpeg built without freetype; it is a *standalone* ASS so it works with captions
+  off and with captions owned by the kinetic-typography engine; it does not fade out, because the
+  clip ends under it; and the hold is capped at half the clip so a 3-second clip does not become
+  an advert with a clip attached.
+
+`ZOOM_EASE`, `BEAT_SYNC_ZOOM`, `COLOR_LUT` and `END_CARD_TEXT` all default to the previously
+shipped behaviour, following the same convention as `TRANSITION_STYLE` and the `PROGRESS_BAR_*`
+settings. That is what keeps the v0.8.0 byte-parity gate meaningful: a new setting defaulting to
+on would force the goldens to be re-frozen each release and stop them detecting accidental
+change.
+
+One existing property test changed. `test_p16_split_screen_tiles_target_exactly` asserted that a
+portrait target always stacks full-width tiles, which `V6` makes false. It now checks the
+partition property layout-agnostically — non-overlapping, in-bounds, areas summing to the frame,
+which is sufficient for an exact cover — rather than pinning one arrangement.
+
 ### Added — clip selection now measures the audio and scores the opening (S2, S6, S10, S17)
 
 - **`S2` — audio energy.** One `astats` pass per source produces an RMS envelope at one reading
@@ -69,6 +855,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards the same error in the other direction: Jaccard over two words is noise, and acting on
   noise here deletes a moment the user wanted with no trace it was ever a candidate.
 
+
 ### Added — transcription can be told what to expect, and says when it is unsure (T4, T5, T7, M3)
 
 - **`T4` — vocabulary prompt.** Whisper has no reason to expect a person's name, a product or
@@ -109,6 +896,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still have looked entirely plausible.
 - `CaptionPreset.to_dict`/`from_dict` now carry the T7 fields, so the setting survives being
   persisted in a saved profile instead of appearing to work until reload.
+
+
+### Added — the hard-coded look becomes a choice (V9, V11, V13, O5, O9, O11)
+
+- **`V11` — letterbox background styles.** The background was one look: `boxblur=40` plus a
+  slight darkening. It suits talking-head footage and actively hurts other things — a blurred
+  screen recording is an unreadable smear. Now `blur | mirror | black | color | gradient`.
+  `black` is the honest choice for a screen recording, where any derived background competes with
+  text the viewer is reading; `mirror` reads as intentional where a blur reads as a mistake.
+- **`V13` — progress bar position and style.** It was a 12px bar in one cyan, always at the
+  bottom — where on a 9:16 clip it sits directly under the captions. `top` exists for that
+  reason rather than for variety. The new `track` style adds a dim full-width rail, so how much
+  is *left* is visible and not only how much has passed.
+- **`V9` — opening transition styles**: `punch_in` (the original), `zoom_cut` (a step with no
+  easing, so it reads as an edit rather than a movement), `whip_pan` (a lateral slide that
+  decelerates into place) and `dissolve`. **Note on scope:** the plan asks for *clip-to-clip*
+  transitions, and there is nowhere in this product for one to live — every clip is an
+  independent deliverable published separately, and a transition needs two shots that meet. What
+  those named effects can be here is the treatment of a clip's own opening, which is where they
+  would be seen anyway.
+- **`O5`/`O9` — output resolution is selectable**: 720, 1080, 1440 or 2160 by short side. It was
+  fixed at the 1080-class values, so a 4K source was always downscaled and a low-powered host
+  could not trade quality for encode time. Both dimensions are forced even, since libx264's 4:2:0
+  subsampling requires it and an odd dimension fails the encode outright.
+- **`O11` — sidecar `.srt` / `.vtt` export**, alongside the burn-in rather than instead of it.
+  Burn-in is right for short-form, but it is not the only thing captions are for: a sidecar is
+  what lets a platform show selectable captions and lets a viewer using a screen reader reach the
+  text at all. Two formats because they are not interchangeable — they differ in timestamp
+  separator, a mandatory header, and escaping, and each difference breaks a player silently
+  rather than raising. Sidecar cues are grouped longer than the burned ones: three-word cues are
+  right read at full width in a glance and flicker once a second in a player's own small type.
+
+### Changed
+
+- **`V4` — reframe tracking resets at shot changes.** The EMA smoother carried the previous
+  shot's framing across a cut and converged on the new one over the following second, which reads
+  on screen as the crop *searching* for the subject after every cut. The subject did not move; the
+  camera changed, and the right response to a discontinuity in the input is a discontinuity in the
+  output.
+- **`V17` — the thumbnail frame is chosen, not assumed.** It was taken at
+  `min(1.0, duration / 2)` — a fixed position with no relationship to what is in the frame, so a
+  clip opening on a cut or a blink had exactly that as the still representing it everywhere.
+  Three candidates are now scored on sharpness (motion blur is the most common way an automatic
+  thumbnail looks bad, and unlike a dark frame it is unrecoverable) and on mid-range exposure, so
+  a blown-out frame loses as heavily as a black one. Deliberately no face detection: the only
+  detector available is the 2001-era cascade `V2` exists to replace, and its false positives on
+  texture would actively mislead this.
+
+### Fixed — the long-standing kinetic Property 12 counterexample
+
+- A synthesised caption word could ship **shorter than its documented `MIN_WORD_S` floor** — 0.0769 s
+  against 0.08 at 13 fps. The cause was not the widening arithmetic that previous analysis
+  suspected: the disjointness cursor in planner step 5 runs *after* `normalize_segments` has
+  dropped sub-minimum cues, so it could shave a cue's front down to a single frame that
+  normalisation never saw. The widening below then had nowhere to widen *into*, because the cue
+  was itself shorter than the minimum.
+- Such a cue is now dropped, matching the rule normalisation already applies. Dropping rather than
+  relaxing the floor, because a cue that short is drawn for less than one frame — nobody sees it —
+  whereas keeping it means emitting a word whose interval contradicts the contract every consumer
+  reads. Verified over an 810-configuration deterministic fps sweep (0 violations), and confirmed
+  load-bearing by reverting it.
+
+
+### Added — jobs can be stopped, and the time they take is visible (I4, I6, M5, U8)
+
+- **`I4` — job cancellation.** There was no way to stop a running render: a job submitted by
+  mistake occupied the single worker until it finished and, because the pool is serial, held up
+  everything queued behind it. The only remedy was restarting the process, which lost every other
+  job's state. `POST /api/jobs/{id}/cancel`, and a Cancel button on the job card.
+  - **Cooperative, not pre-emptive**, and the difference is stated rather than glossed: a
+    **queued** job stops immediately, a job **between stages** stops in well under a second, and
+    a job **inside an ffmpeg pass finishes that pass first**. `subprocess.run` exposes no handle
+    to signal, so terminating mid-encode means restructuring every encode site around `Popen` —
+    a change with its own failure modes that belongs with the concurrency work (`I1`).
+  - **`cancelled` is a distinct status, not `failed`.** A job the user stopped did not go wrong,
+    and collapsing the two would both mislead the operator and inflate any failure rate computed
+    from these records.
+- **`I6` — every log line carries its job id and stage.** A line could not previously be
+  attributed to a job; survivable with one worker by reading timestamps, and not survivable at
+  all once `I1` lands and two renders interleave their output. The lines that matter most are the
+  degradation markers, which are exactly the ones needing to be traced to one clip in one job.
+- **`M5` — per-stage render timings**, on the job record, at `GET /api/jobs/{id}/timings`, and
+  behind a click on a finished job. Nobody knew where the minutes went: which stage dominates is
+  not guessable, because the pipeline performs at least three full re-encodes per clip, so on a
+  short source with a long clip list the encodes can outweigh transcription entirely. Timings are
+  recorded for **failed** stages too — a stage that reliably burns ninety seconds and then throws
+  is the most useful row in the report and would be invisible if only successes were measured.
+- **`U8` — progress shows structure.** It was one coarse fraction and a free-text stage string,
+  so the UI could only show a bar and a sentence. Jobs now report which step of how many, so a
+  long stage reads as progress rather than as a stalled bar.
+
+### Changed
+
+- **`U10` — failures and empty results explain themselves.** The raw exception text a job fails
+  with is written for a log, not a person. Recognised causes — a missing source, no ffmpeg, a
+  timeout, an undecodable file, a full disk — now carry what to do about them, with the original
+  message kept below as the evidence. A completed job with no clips gets its likely causes
+  instead of a bare "no clips were generated".
+- **`U13` — the fallback landing page reports real state**: version, whether ffmpeg actually
+  resolves, the model, the storage backend, job counts and the registered engines. Anyone reaching
+  that page got there by accident and needs "is the backend healthy" answered; a page that only
+  says "the UI is not built" answers neither that nor "what is missing".
+
+### Fixed
+
+- **`I11` — the two `exhaustive-deps` warnings are gone, and one hid a real bug.** The job-polling
+  effect depended on `jobs.length`, which does not change when a job merely goes from *processing*
+  to *completed* — so the fast 1.2 s poll continued indefinitely after everything had finished.
+  The activity check is now derived outside the effect, which both silences the warning and lets
+  the poll actually slow down.
 
 ### Changed — one name for the shared encoder arguments
 

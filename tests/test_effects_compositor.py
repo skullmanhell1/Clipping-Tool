@@ -391,7 +391,7 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     # now, because a bare path cannot say whether it is a real track (A15).
     monkeypatch.setattr(
         compositor.audio, "resolve_music_bed",
-        lambda mood, duration, temp_dir: compositor.audio.MusicBed(
+        lambda mood, duration, temp_dir, **_kw: compositor.audio.MusicBed(
             path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
         ),
     )
@@ -427,5 +427,10 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     assert inputs[1] == str(music)
     assert inputs[2:] == [str(emoji_png)] * (len(inputs) - 2)
     graph = calls[0][calls[0].index("-filter_complex") + 1]
-    assert "[1:a]volume=" in graph                     # music label unchanged
+    # A16: the music input now feeds `aloop` (loop/trim the bed to the clip) before `volume`,
+    # instead of `volume` directly. The property this line guards is that music is still input
+    # **1** — which is what the `inputs[1] == str(music)` assertion above states directly, and
+    # this restates through whichever filter happens to consume it first.
+    assert "[1:a]aloop=" in graph                       # music label unchanged
+    assert "volume=" in graph                           # and it is still levelled
     assert "[2:v]" in graph                            # first emoji input at 2

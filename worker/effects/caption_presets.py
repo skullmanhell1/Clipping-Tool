@@ -111,6 +111,52 @@ class CaptionPreset:
     # C7: upper-case the caption text. Only the hook title was upper-cased before, so a
     # preset could not ask for the all-caps look that most short-form captions use.
     uppercase: bool = False
+    # C10: how much the active word grows, as a fraction. 0.0 disables it.
+    #
+    # A scale ramp on the spoken word was reachable only by choosing the ``pop`` *animation*,
+    # which also replaced whatever animation the preset wanted - so "karaoke sweep plus a punch
+    # on the active word", which is the mainstream short-form look, could not be expressed at
+    # all. This is a separate axis: any animation can now carry a punch, and the punch is not an
+    # animation choice.
+    punch_scale: float = 0.0
+    #: How long the punch takes to settle, in milliseconds. Short - a slow punch reads as a
+    #: zoom rather than an accent.
+    punch_ms: int = 110
+    # C15: letter-spacing and glyph scale, both hard-coded to 0/100 before.
+    #
+    # Tight tracking is a large part of why a heavy display face reads as designed rather than
+    # as default, and the condensed look several tools use is ScaleX below 100. Neither was
+    # expressible, so every preset had identical metrics whatever face it named.
+    spacing: int = 0
+    scale_x: int = 100
+    scale_y: int = 100
+    # C16: how many lines a cue may occupy.
+    #
+    # Two is the short-form norm and what the kinetic engine already enforces; the legacy caption
+    # path had no equivalent because it had no wrapping at all (C6). This is a *budget*, not a
+    # target: a cue that fits on one line stays on one line.
+    max_lines: int = 2
+    # C9: a filled pill behind the active word - the mainstream look this had no equivalent of.
+    #
+    # Expressed as a per-word ``\\3c`` + ``\\bord`` swap rather than a drawn box layer. ASS has no
+    # per-word background, but a thick *border* in a solid colour reads as one, and it tracks the
+    # glyphs exactly - a drawn box would need the text width, which the renderer does not know at
+    # tag-emission time. The trade is a rounded, glyph-hugging shape rather than a rectangle, which
+    # is closer to what the reference looks like anyway.
+    #
+    # 0.0 disables it. Distinct from ``highlight_keywords``, which recolours *semantically chosen*
+    # words: this follows the word being spoken.
+    word_pill: float = 0.0
+    #: Pill colour. Defaults to empty, meaning "use the preset's highlight colour".
+    word_pill_color: str = ""
+    # C17: a second, wider outline in another colour - the "3D"/sticker look several tools offer.
+    #
+    # ASS supports one border width and one border colour, so a true dual stroke needs the text
+    # drawn twice. This is the honest single-pass approximation: the shadow is repurposed as the
+    # outer stroke, offset at zero distance and coloured independently, which gives the two-tone
+    # edge without a second event. It cannot produce a *gradient* stroke; nothing in libass can.
+    outline2: int = 0
+    outline2_color: str = "&H00000000"
     # T7: how a word the model was unsure about is drawn.
     #
     # Captions assert every word with identical confidence, including the ones Whisper barely
@@ -158,6 +204,16 @@ class CaptionPreset:
             # so it would appear to work until reload and then revert with no error.
             "low_confidence_threshold": self.low_confidence_threshold,
             "low_confidence_alpha": self.low_confidence_alpha,
+            "punch_scale": self.punch_scale,
+            "punch_ms": self.punch_ms,
+            "spacing": self.spacing,
+            "scale_x": self.scale_x,
+            "scale_y": self.scale_y,
+            "max_lines": self.max_lines,
+            "word_pill": self.word_pill,
+            "word_pill_color": self.word_pill_color,
+            "outline2": self.outline2,
+            "outline2_color": self.outline2_color,
         }
 
     @classmethod
@@ -195,6 +251,16 @@ class CaptionPreset:
             low_confidence_alpha=float(
                 data.get("low_confidence_alpha", defaults.low_confidence_alpha)
             ),
+            punch_scale=float(data.get("punch_scale", defaults.punch_scale)),
+            punch_ms=int(data.get("punch_ms", defaults.punch_ms)),
+            spacing=int(data.get("spacing", defaults.spacing)),
+            scale_x=int(data.get("scale_x", defaults.scale_x)),
+            scale_y=int(data.get("scale_y", defaults.scale_y)),
+            max_lines=int(data.get("max_lines", defaults.max_lines)),
+            word_pill=float(data.get("word_pill", defaults.word_pill)),
+            word_pill_color=str(data.get("word_pill_color", defaults.word_pill_color)),
+            outline2=int(data.get("outline2", defaults.outline2)),
+            outline2_color=str(data.get("outline2_color", defaults.outline2_color)),
         )
 
 
@@ -249,6 +315,129 @@ BUILTIN_PRESETS: dict[str, CaptionPreset] = {
         # The heaviest treatment we ship: this style is meant to dominate the frame.
         outline=10,
         shadow=5,
+    ),
+    # ----------------------------------------------------------------- C14 --
+    #
+    # Six presets, two of which were "plain", is not a style library - it is a default and some
+    # variations on it. These eight are drawn from the looks §2 of the plan names, and each is a
+    # *combination that was previously inexpressible* rather than a colour change: the per-word
+    # pill (C9), the dual stroke (C17) and measured multi-line wrapping (C6/C16) are what make them
+    # distinguishable from one another.
+    #
+    # Every one uses a vendored face, so none can silently substitute (C1). Only eight are added
+    # rather than fourteen: a preset whose only difference is a hue is a colour picker pretending to
+    # be a style, and the honest count is how many genuinely different treatments the renderer can
+    # express.
+    "pill": CaptionPreset(
+        "pill",
+        animation="none",
+        # The look this exists for: a solid pill tracking the spoken word. Nothing shipped could
+        # produce it, which is what C9 records as missing.
+        word_pill=0.55,
+        word_pill_color="&H0000E5FF",
+        font="Poppins ExtraBold",
+        uppercase=True,
+        font_size=92,
+        outline=5,
+        shadow=0,
+        position="center",
+    ),
+    "pill_green": CaptionPreset(
+        "pill_green",
+        animation="none",
+        word_pill=0.55,
+        word_pill_color="&H0022C55E",
+        font="Archivo Black",
+        font_weight=900,
+        uppercase=True,
+        font_size=88,
+        outline=5,
+        shadow=0,
+        position="center",
+    ),
+    "sticker": CaptionPreset(
+        "sticker",
+        animation="pop",
+        # C17: the two-tone edge. A thin dark inner stroke inside a wide white outer one is the
+        # "sticker" cut-out look, and it needs both borders - one alone is just a heavy outline.
+        outline=4,
+        outline2=14,
+        outline2_color="&H00FFFFFF",
+        font="Luckiest Guy",
+        font_weight=900,
+        font_size=96,
+        uppercase=True,
+        highlight_keywords=True,
+    ),
+    "comic": CaptionPreset(
+        "comic",
+        animation="pop",
+        font="Bangers",
+        font_weight=900,
+        font_size=104,
+        uppercase=True,
+        outline=6,
+        outline2=12,
+        outline2_color="&H001010F0",
+        highlight_keywords=True,
+        colors=CaptionColors(primary="&H00FFFFFF", highlight="&H0000D7FF"),
+    ),
+    "headline": CaptionPreset(
+        "headline",
+        animation="none",
+        # Bebas Neue is condensed, so it fits noticeably more per line than Poppins at the same
+        # size - which only became a usable property once wrapping measured real advance widths
+        # (C6) instead of counting characters.
+        font="Bebas Neue",
+        font_weight=700,
+        font_size=104,
+        uppercase=True,
+        spacing=2,
+        outline=6,
+        shadow=2,
+        max_lines=3,
+    ),
+    "subtitle": CaptionPreset(
+        "subtitle",
+        animation="none",
+        # A deliberately quiet, broadcast-style caption: the one look a viewer is not supposed to
+        # notice. Two lines, modest size, no emphasis.
+        font="Poppins",
+        font_weight=700,
+        font_size=72,
+        border_style=3,
+        outline=0,
+        shadow=0,
+        max_lines=2,
+        colors=CaptionColors(box="&HB4000000"),
+    ),
+    "karaoke_bold": CaptionPreset(
+        "karaoke_bold",
+        animation="karaoke_fill",
+        # The combination C10 was added for: a karaoke sweep *and* a punch on the active word,
+        # which previously required choosing the `pop` animation and so losing the sweep.
+        punch_scale=0.14,
+        font="Poppins Black",
+        font_weight=900,
+        uppercase=True,
+        font_size=96,
+        outline=8,
+        shadow=3,
+        highlight_keywords=True,
+    ),
+    "spotlight": CaptionPreset(
+        "spotlight",
+        animation="karaoke_fill",
+        # A pill *and* a sweep: the pill marks the word, the sweep shows progress through it.
+        word_pill=0.4,
+        word_pill_color="&H00000000",
+        font="Anton",
+        uppercase=True,
+        font_size=100,
+        position="center",
+        outline=4,
+        shadow=0,
+        colors=CaptionColors(primary="&H00FFFFFF", highlight="&H0000E5FF"),
     ),
 }
 

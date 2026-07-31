@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
@@ -6,6 +6,7 @@ import JobCard from "./components/JobCard.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
 import ProfilesBar from "./components/ProfilesBar.jsx";
 import PublishingPanel from "./components/PublishingPanel.jsx";
+import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
 
@@ -64,6 +65,7 @@ const DEFAULT_SETTINGS = {
   num_clips: "auto",
   strategy: "ai",
   captions: true,
+  subtitle_sidecar: false,
   topic: "",
   vocabulary: "",
   vibe: "",
@@ -90,6 +92,16 @@ const DEFAULT_SETTINGS = {
   filler_removal: false,
   // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
   caption_preset: "karaoke",
+  // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
+  // blob, so a kit is saved, applied and set as default by machinery that already exists.
+  brand_font: "",
+  brand_primary_color: "",
+  brand_highlight_color: "",
+  brand_cta: "",
+  brand_logo: "",
+  brand_logo_position: "top_right",
+  brand_logo_scale: 0.16,
+  brand_logo_opacity: 0.85,
   caption_animation: "",
   caption_keyword_highlight: false,
   caption_keyword_ai: false,
@@ -139,6 +151,7 @@ function toOptions(settings, publishing) {
     num_clips: settings.num_clips,
     strategy: settings.strategy,
     captions: settings.captions,
+    subtitle_sidecar: settings.subtitle_sidecar,
     topic: settings.topic,
     vocabulary: settings.vocabulary,
     vibe: settings.vibe,
@@ -169,6 +182,14 @@ function toOptions(settings, publishing) {
     filler_removal: settings.filler_removal,
     // Tier 1 — animated captions / b-roll / visual selection
     caption_preset: settings.caption_preset,
+    brand_font: settings.brand_font,
+    brand_primary_color: settings.brand_primary_color,
+    brand_highlight_color: settings.brand_highlight_color,
+    brand_cta: settings.brand_cta,
+    brand_logo: settings.brand_logo,
+    brand_logo_position: settings.brand_logo_position,
+    brand_logo_scale: settings.brand_logo_scale,
+    brand_logo_opacity: settings.brand_logo_opacity,
     caption_animation: settings.caption_animation,
     caption_keyword_highlight: settings.caption_keyword_highlight,
     caption_keyword_ai: settings.caption_keyword_ai,
@@ -330,16 +351,26 @@ export default function App() {
     }
   }, []);
 
+  // I11: derived outside the effect so the effect can depend on a *boolean* rather than on the
+  // jobs array. Depending on `jobs` directly would tear down and rebuild the interval on every
+  // poll, since each response is a new array; depending on `jobs.length` — the previous
+  // suppression — silently missed the case that matters, because a job going from processing to
+  // completed does not change the count, so the fast 1.2s poll continued indefinitely after
+  // everything had finished. This fixes that as well as the warning.
+  const hasActiveJobs = useMemo(
+    () => jobs.some((job) => ["queued", "processing"].includes(job.status)),
+    [jobs]
+  );
+
   useEffect(() => {
-    const active =
-      watch.enabled || jobs.some((job) => ["queued", "processing"].includes(job.status));
+    const active = watch.enabled || hasActiveJobs;
     if (pollRef.current) clearInterval(pollRef.current);
     if (trackedIds.size > 0 || watch.enabled) {
       poll();
       pollRef.current = setInterval(poll, active ? 1200 : 4000);
     }
     return () => pollRef.current && clearInterval(pollRef.current);
-  }, [trackedIds, watch.enabled, poll, jobs.length]);
+  }, [trackedIds, watch.enabled, poll, hasActiveJobs]);
 
   const handlePreview = useCallback(async (url) => {
     setPreview(null);
@@ -436,6 +467,7 @@ export default function App() {
           <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
             {[
               ["create", "Create"],
+              ["schedule", "Schedule"],
               ["history", "History"],
               ["settings", "Settings"],
             ].map(([id, label]) => (
@@ -472,6 +504,10 @@ export default function App() {
             </a>
           </div>
         )}
+
+        {/* PB7: the schedule was previously a single datetime input with no way to
+            see, move or cancel what had been scheduled. */}
+        {activeView === "schedule" && <ScheduleCalendar onError={setError} />}
 
         {activeView === "history" && <HistoryView />}
 
@@ -558,6 +594,9 @@ export default function App() {
                     publishAttempts={publishAttempts}
                     onClipUpdated={handleClipUpdated}
                     onPublished={handlePublished}
+                    // U7: a re-render applies whatever is selected in the panel right now, which
+                    // is what makes "change one setting and see it" a single click.
+                    settings={toOptions(settings, publishing)}
                   />
                 ))}
               </section>
