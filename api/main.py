@@ -263,6 +263,17 @@ class RegenerateRequest(BaseModel):
     platform: Optional[str] = None
 
 
+class CaptionPreviewModel(BaseModel):
+    """Request a rendered caption sample for a preset (C18)."""
+
+    preset: str = "karaoke"
+    text: str = ""
+    aspect: str = "9:16"
+    position: str = ""
+    #: Preset fields to override before rendering, so a panel can preview an edited style.
+    overrides: dict = {}
+
+
 class RerenderRequest(BaseModel):
     """Re-render one clip, optionally with changed settings (U7).
 
@@ -1035,6 +1046,56 @@ def resume_job(job_id: str) -> dict:
             detail="Every planned clip for this job has already been rendered.",
         )
     return manager.store.get(job_id).to_dict()
+
+
+@app.post("/api/captions/preview", tags=["metadata"])
+def caption_preview(req: CaptionPreviewModel) -> FileResponse:
+    """Render a two-second caption sample for a preset (C18).
+
+    The settings panel's style picker (U5) draws its preview in CSS, which can show the typeface,
+    colours, case and placement but *not* the things that distinguish these presets: the word-by-word
+    fill, the active-word punch, the per-word pill, the dual stroke, the measured wrapping. Those are
+    libass' work, so previewing them honestly means letting libass do it.
+
+    Returns the video inline. Two seconds rather than a still, because a still cannot show a sweep or
+    a reveal - which is most of what a preset is.
+    """
+    from worker import caption_preview as preview_module
+    from worker.ffmpeg_utils import ASPECT_PRESETS as ASPECT_CHOICES
+
+    reference: object = req.preset
+    if req.overrides:
+        # A caller that has already changed the font or colours (U6) wants to preview *that*, not
+        # the shipped preset. Merging here rather than making the client send a whole preset keeps
+        # the request small and the defaults authoritative.
+        from worker.effects.caption_presets import resolve_preset
+
+        base, _ = resolve_preset(req.preset)
+        merged = base.to_dict()
+        merged.update({k: v for k, v in req.overrides.items() if k in merged})
+        reference = merged
+
+    target = Path(settings.temp_dir) / "previews" / f"caption_{uuid.uuid4().hex[:10]}.mp4"
+    try:
+        preview_module.render_preview(
+            reference,
+            target,
+            text=req.text or preview_module.SAMPLE_TEXT,
+            aspect=req.aspect if req.aspect in ASPECT_CHOICES else "9:16",
+            position=req.position or None,
+        )
+    except Exception as exc:
+        logger.exception("C18: caption preview failed")
+        raise HTTPException(status_code=500, detail=f"Preview failed: {exc}") from exc
+
+    return FileResponse(
+        target,
+        media_type="video/mp4",
+        filename="caption-preview.mp4",
+        # The preview is disposable and named with a random id, so nothing benefits from caching it
+        # and a stale one would show the previous preset after a settings change.
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 #: Review states a clip may be moved to (U9).
