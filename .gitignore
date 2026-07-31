@@ -64,3 +64,13 @@ eval/*.json
 # Cached static ffmpeg build fetched by scripts/setup_dev_env.sh, so a re-run after a
 # recycled environment is a copy rather than a 42 MB download.
 .devtools/
+
+# Coverage and test-report artefacts. Added when CI started producing them: pytest-cov
+# writes .coverage into the repo root, and it was committed once by a `git add -A`.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+pytest-report.xml
+smoke-reel/
+frontend/coverage/

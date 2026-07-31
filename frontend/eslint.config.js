@@ -14,7 +14,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 export default [
   {
     // Build output and dependencies are not ours to lint.
-    ignores: ["dist/**", "node_modules/**"],
+    // `coverage/**` joins the generated-output list now that `npm run test:coverage` exists:
+    // vitest's lcov reporter writes its own JS, which eslint then reports on — a warning about
+    // a file nobody wrote and nobody will fix.
+    ignores: ["dist/**", "node_modules/**", "coverage/**"],
   },
   js.configs.recommended,
   {
