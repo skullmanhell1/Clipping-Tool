@@ -171,4 +171,9 @@ ignore = [
     "S311",  # non-crypto random — generating test data
     "S603",  # subprocess — running the real ffmpeg is the point
     "S607",  # partial executable path — ffmpeg/ffprobe resolved via PATH
+    # S608 looks for SQL keywords in an f-string. It fires on an *assertion message* in
+    # test_fonts_real_binary.py that says "libass cannot select its named instance" — prose about
+    # font selection, matched because it contains the word "select". Rewording an accurate
+    # sentence to satisfy a heuristic would be the wrong trade, and no test here builds SQL.
+    "S608",
 ]
