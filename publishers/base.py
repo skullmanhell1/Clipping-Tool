@@ -30,6 +30,16 @@ class PublisherStatus:
     message: str
     account_id: str = ""
     requires_approval: bool = False
+    #: PB4: when the current access token expires, as a unix timestamp, or ``None``.
+    #:
+    #: ``None`` covers two different situations and the difference is in ``token_kind``: a
+    #: publisher that mints tokens on demand has nothing to expire, whereas one using a static
+    #: long-lived token has an expiry nobody here can see. Reporting both as "no expiry" would
+    #: tell an operator their Instagram token is fine right up until the day it is not.
+    token_expires_at: Optional[float] = None
+    #: ``refreshable`` (exchanged from a refresh token), ``static`` (a long-lived token the
+    #: operator pasted in), or ``none`` (no token-based auth).
+    token_kind: str = "static"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -99,6 +109,24 @@ class BasePublisher(ABC):
     @abstractmethod
     def publish(self, request: PublishRequest) -> PublishResult:
         raise NotImplementedError
+
+    # ----------------------------------------------------------------- PB4 --
+    def refresh_credentials(self, account_id: str = "") -> bool:
+        """Renew this publisher's access token. Return whether anything was renewed.
+
+        The default is ``False`` and that is the honest answer for four of the five publishers:
+        TikTok, Instagram and X authenticate with a long-lived token the operator pasted into
+        config, and Whop with an API key. None of those can be renewed from here - when they
+        expire, a human has to obtain a new one. Returning ``False`` says exactly that, and lets
+        the scheduler skip a refresh it knows cannot help rather than retrying a 401 into the cap.
+
+        Only YouTube overrides this, because only YouTube was given a refresh token.
+        """
+        return False
+
+    def invalidate_credentials(self, account_id: str = "") -> None:
+        """Discard any cached token so the next publish obtains a new one."""
+        return None
 
     @staticmethod
     def now() -> datetime:

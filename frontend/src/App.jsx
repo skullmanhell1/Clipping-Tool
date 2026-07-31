@@ -6,6 +6,7 @@ import JobCard from "./components/JobCard.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
 import ProfilesBar from "./components/ProfilesBar.jsx";
 import PublishingPanel from "./components/PublishingPanel.jsx";
+import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
 
@@ -448,6 +449,7 @@ export default function App() {
           <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
             {[
               ["create", "Create"],
+              ["schedule", "Schedule"],
               ["history", "History"],
               ["settings", "Settings"],
             ].map(([id, label]) => (
@@ -484,6 +486,10 @@ export default function App() {
             </a>
           </div>
         )}
+
+        {/* PB7: the schedule was previously a single datetime input with no way to
+            see, move or cancel what had been scheduled. */}
+        {activeView === "schedule" && <ScheduleCalendar onError={setError} />}
 
         {activeView === "history" && <HistoryView />}
 
