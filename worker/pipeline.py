@@ -102,6 +102,7 @@ def run_pipeline(
     progress_cb: Optional[ProgressCallback] = None,
     start_progress: float = 0.0,
     llm_client: Optional[BaseLLMClient] = None,
+    explicit_candidates: Optional[list] = None,
 ) -> list[ClipResult]:
     """Run the full pipeline on ``source`` and return the produced clips.
 
@@ -114,9 +115,19 @@ def run_pipeline(
         start_progress: Fraction already consumed before this call (0..1).
         llm_client: Optional LLM client (dependency injection for tests). When
             ``None`` the configured client is used (if any).
+        explicit_candidates: Windows to render, skipping selection entirely (U7).
+            ``None`` - the default and every pre-U7 caller - selects as before.
 
     Returns:
         A list of :class:`ClipResult` ordered by virality score (best first).
+
+    The ``candidates`` argument is what makes a single clip re-renderable without
+    re-running a whole job. It is a parameter rather than a separate clip-render function
+    on purpose: the per-clip path below is two hundred lines of filler removal, diarisation
+    rebasing, b-roll, engine stages, captions and thumbnailing, and a second copy of it
+    would drift from this one within a release. Passing the window in reuses that path
+    exactly, so a re-rendered clip is byte-for-byte what a full run would have produced
+    from the same options.
     """
     cb = progress_cb or _noop
     source = Path(source)
@@ -184,7 +195,8 @@ def run_pipeline(
     # disabled or degrades (no LLM / sampling failure / unconfigured provider),
     # so behaviour is identical to before when the feature is off (Reqs 13.2,
     # 15.4).
-    candidates = visual_selection.select_moments_visual(
+    # U7: an explicit window skips selection (and its LLM call) entirely.
+    candidates = explicit_candidates or visual_selection.select_moments_visual(
         ranged if (options.range_start is not None or options.range_end is not None)
         else transcript,
         options,
