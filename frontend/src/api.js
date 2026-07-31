@@ -137,6 +137,36 @@ export const api = {
     }).then(jsonOrThrow),
   cancelPublishAttempt: (attemptId) =>
     fetch(`/api/publish-attempts/${attemptId}/cancel`, { method: "POST" }).then(jsonOrThrow),
+  // U7: re-render one clip with changed settings, instead of resubmitting the whole source.
+  // Resubmitting re-downloads, re-transcribes, re-selects and re-renders every other clip — and
+  // because selection is not deterministic with an LLM in it, you get a *different set* of clips
+  // rather than the same one restyled.
+  rerenderClip: (jobId, clipId, settings = {}) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/rerender`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    }).then(jsonOrThrow),
+
+  // U9: record a verdict on a clip, one at a time or many at once. Without this a review pass
+  // over twenty clips left no trace and had to be redone from the top after any interruption.
+  reviewClip: (jobId, clipId, reviewState, reviewNote = "") =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_state: reviewState, review_note: reviewNote }),
+    }).then(jsonOrThrow),
+  reviewClips: (jobId, clipIds, reviewState, reviewNote = "") =>
+    fetch(`/api/jobs/${jobId}/clips/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clip_ids: clipIds,
+        review_state: reviewState,
+        review_note: reviewNote,
+      }),
+    }).then(jsonOrThrow),
+
   refreshPublisherCredentials: (platform) =>
     fetch(`/api/publishers/${encodeURIComponent(platform)}/refresh`, {
       method: "POST",

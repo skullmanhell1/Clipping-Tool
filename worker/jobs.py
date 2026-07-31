@@ -367,6 +367,11 @@ class JobManager:
                 )
                 start_progress = _DOWNLOAD_BUDGET
 
+            # U7: record the resolved local file. Without it a URL job's source is only a URL,
+            # so re-rendering a single clip would have to download the video again - which is
+            # most of what makes re-running a whole job slow in the first place.
+            self.store.update(job_id, source_path=str(source_path))
+
             if not source_path.exists():
                 raise FileNotFoundError(f"Source not found: {source_path}")
 
