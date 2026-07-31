@@ -15,7 +15,11 @@
 FROM node:22-slim AS frontend
 WORKDIR /ui
 COPY frontend/package*.json ./
-RUN npm install
+# `npm ci`, not `npm install`: CI runs `npm ci` against the committed lockfile, so using
+# `npm install` here let the image resolve a *different* dependency tree than the one the
+# frontend tests passed on. `ci` also fails loudly if package.json and the lockfile have
+# drifted apart, which `install` silently reconciles.
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
@@ -25,6 +29,23 @@ FROM python:3.11-slim
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
 # - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe
+#
+# ffmpeg is deliberately NOT pinned to an apt version, and that is a considered choice
+# rather than an oversight. Debian removes superseded versions from the archive, so
+# `ffmpeg=7:5.1.6-0+deb12u1` builds fine today and fails to resolve the moment a security
+# update lands - turning a working Dockerfile into a broken one with no code change. For a
+# project that will not be actively maintained, a build that keeps working is worth more
+# than a byte-identical ffmpeg.
+#
+# What protects against filter drift instead:
+#   * `worker/engines/capabilities.py` probes ffmpeg for the filters it needs and records
+#     `unavailable:<capability>` rather than assuming
+#   * `worker/video_encoders.py` verifies an encoder by actually encoding a frame, because
+#     `-encoders` lists what was compiled in, not what works
+#   * the version is asserted at image-build time below, so a wildly different major
+#     version is visible in the build log rather than discovered in a render
+#
+# Tested against: ffmpeg 7.0.2 (static) and Debian bookworm's 5.1.x.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -32,7 +53,9 @@ RUN apt-get update \
         libglib2.0-0 \
         fonts-liberation \
         fontconfig \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ffmpeg -version | head -1 \
+    && ffprobe -version | head -1
 
 # Optional: Node, needed *only* to run the Whop publisher bridge (publisher_bridge/whop.mjs)
 # through @whop/sdk (I7).
