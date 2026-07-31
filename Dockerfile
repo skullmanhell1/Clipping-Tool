@@ -9,7 +9,10 @@
 # =============================================================================
 
 # --- Stage 1: build the frontend --------------------------------------------
-FROM node:20-slim AS frontend
+# Node 22: vite 8 requires ^20.19.0 || >=22.12.0 (I10). Pinned to the major rather than left on
+# node:20-slim, where the requirement is satisfied only by the newest 20.x patch releases - so a
+# base-image refresh could quietly stop satisfying it.
+FROM node:22-slim AS frontend
 WORKDIR /ui
 COPY frontend/package*.json ./
 RUN npm install
@@ -21,8 +24,7 @@ FROM python:3.11-slim
 
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
-# - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe (later)
-# - nodejs / npm: runs the @whop/sdk publisher bridge (publisher_bridge/whop.mjs)
+# - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -30,9 +32,23 @@ RUN apt-get update \
         libglib2.0-0 \
         fonts-liberation \
         fontconfig \
-        nodejs \
-        npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Optional: Node, needed *only* to run the Whop publisher bridge (publisher_bridge/whop.mjs)
+# through @whop/sdk (I7).
+#
+# Off by default because Debian's nodejs+npm is around 200 MB of image for one optional
+# publisher, and the Whop publisher already reports itself unavailable without it rather than
+# failing a job - it checks for the node binary as well as the bridge script, so an image built
+# without this reports "not_configured" instead of accepting a publish it cannot perform.
+#
+# Enable with:  docker build --build-arg INSTALL_WHOP_BRIDGE=true .
+ARG INSTALL_WHOP_BRIDGE=false
+RUN if [ "$INSTALL_WHOP_BRIDGE" = "true" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends nodejs npm \
+        && rm -rf /var/lib/apt/lists/* ; \
+    fi
 
 # A2: register the bundled caption faces (assets/fonts, described by fonts.json) with
 # fontconfig. Copied early and in their own layer so the cache survives source changes.
@@ -75,9 +91,12 @@ RUN if [ "$INSTALL_ML" = "true" ]; then \
             --extra-index-url https://download.pytorch.org/whl/cpu ; \
     fi
 
-# Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache.
+# Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache. Skipped along with
+# Node itself unless INSTALL_WHOP_BRIDGE=true (I7) - `npm install` needs npm.
 COPY publisher_bridge/package*.json ./publisher_bridge/
-RUN cd publisher_bridge && npm install --omit=dev
+RUN if [ "$INSTALL_WHOP_BRIDGE" = "true" ]; then \
+        cd publisher_bridge && npm install --omit=dev ; \
+    fi
 
 # Copy the application source.
 COPY . .

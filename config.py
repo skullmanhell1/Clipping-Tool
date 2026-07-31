@@ -704,6 +704,97 @@ class Settings(BaseSettings):
         default="punch_in",
         description="Opening transition: punch_in | zoom_cut | whip_pan | dissolve (V9).",
     )
+    # O8: optional hardware H.264 encoding.
+    video_encoder: str = Field(
+        default="libx264",
+        description="H.264 encoder: libx264 | auto | h264_nvenc | h264_qsv | "
+                    "h264_videotoolbox | h264_vaapi (O8). 'auto' probes for a working hardware "
+                    "encoder by actually encoding a frame - a listed encoder is not a usable "
+                    "one, and this ffmpeg lists h264_v4l2m2m while failing on the first frame. "
+                    "Anything unavailable falls back to libx264; a *named* request that falls "
+                    "back records an encoder_unavailable marker, because silently ignoring it is "
+                    "how someone spends a week believing their GPU is in use. Default is "
+                    "libx264, not auto: hardware encoders are not comparable with x264 at the "
+                    "same nominal quality, so 'auto' would change existing output the first time "
+                    "it landed on a machine with a GPU.",
+    )
+    # AU9: sound-effect stings on transitions and emoji.
+    sfx_dir: Path = Field(
+        default=BASE_DIR / "assets" / "sfx",
+        description="Directory of your own sting files as <name>.wav (pop, click, whoosh, swipe) "
+                    "(AU9). A user file always wins over the synthesised version.",
+    )
+    sfx_mode: str = Field(
+        default="off",
+        description="Where sound-effect stings are placed: off | emoji | transitions | both "
+                    "(AU9). Off by default - an audible change to every clip is not something to "
+                    "acquire by upgrading. 'pop' and 'click' are synthesised honestly, because a "
+                    "pop IS a band-passed noise burst. 'whoosh' and 'swipe' are NOT synthesised: "
+                    "a whoosh needs a filter that moves across the sound and ffmpeg cannot express "
+                    "a time-varying filter frequency in one pass, so a static band-passed noise "
+                    "swell would be a hiss shipped under a name promising a sweep. Those need a "
+                    "file in SFX_DIR; without one the sting is skipped and the clip records "
+                    "sfx_missing:<name>.",
+    )
+    sfx_volume: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Sting level relative to full scale (AU9). Mixed with amix normalize=0, so a "
+                    "sting never lowers the speech - with normalisation on, adding one accent "
+                    "would make the whole clip 1/n quieter.",
+    )
+    # V15: keep captions off the speaker's mouth.
+    caption_avoid_faces: bool = Field(
+        default=False,
+        description="Move the caption to another of the nine C13 positions when it would cover a "
+                    "detected face's mouth (V15). Off by default for two reasons: it costs a "
+                    "face-detection pass over the clip, which a render that never had a collision "
+                    "would be paying for nothing, and it changes placement on the clips it does "
+                    "act on. It only ever acts on an actual overlap, keeps the horizontal "
+                    "alignment the preset chose, and when no position clears the face - a close-up "
+                    "filling the frame - it changes nothing and records "
+                    "caption_face_overlap_unavoidable rather than moving the text from the mouth "
+                    "to the eyes.",
+    )
+    # A22: motion on b-roll stills, and a dip in the bed under b-roll.
+    broll_ken_burns: bool = Field(
+        default=False,
+        description="Slow zoom-and-drift on b-roll *stills* (A22). A still that sits motionless "
+                    "over moving footage is the clearest sign a clip was assembled rather than "
+                    "edited. Off by default because it changes the shipped look: with it on, "
+                    "stills are cover-cropped into a fixed 16:9 box (zoompan needs an explicit "
+                    "output size) instead of keeping their own aspect. Video assets already move "
+                    "and are never affected.",
+    )
+    broll_ken_burns_zoom: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=1.0,
+        description="How far a b-roll still zooms over its window, as a fraction (A22). 0.12 is "
+                    "12% over the whole window - deliberately small: motion that is noticeable "
+                    "on a 2-second overlay is distracting rather than cinematic. Zero disables "
+                    "the motion even with BROLL_KEN_BURNS on.",
+    )
+    broll_duck: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="How far the music bed dips while a b-roll overlay is on screen, as a "
+                    "fraction (A22). 0 (default) leaves the audio graph untouched; 0.35 is a "
+                    "clearly audible accent. Applied to the *bed* only, never the mix - the "
+                    "b-roll is illustrating what is being said, so ducking the speech would "
+                    "invert the point. Additional to the AU2 speech duck, not instead of it.",
+    )
+    # A13: which artwork set the emoji overlay draws from.
+    emoji_style: str = Field(
+        default="noto",
+        description="Emoji artwork set: noto | twemoji | openmoji (A13). Only Noto is vendored; "
+                    "the others are fetched on demand and so need EMOJI_ALLOW_DOWNLOAD or a "
+                    "prior 'scripts/fetch_emoji.py --style <name>'. A glyph missing from the "
+                    "selected style falls back to the vendored Noto file rather than dropping "
+                    "the overlay. An unknown value resolves to noto rather than failing the job.",
+    )
     # C19: where an emoji overlay sits relative to the captions.
     emoji_placement: str = Field(
         default="spread",

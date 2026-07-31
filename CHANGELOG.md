@@ -7,6 +7,298 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
+
+- **`C21` — a caption font that can actually render what was said.** Captions were drawn in a Latin
+  display face regardless of the language. On Arabic, Hebrew, Chinese, Japanese, Korean or Thai that
+  produces a line of `.notdef` boxes — tofu — and **nothing in the pipeline can see it**: libass
+  reports no error, the ASS file is valid, the encode succeeds, and the clip record says `captions`.
+  The only symptom is in the pixels.
+
+  Coverage is decided by reading the font's own `cmap`, never by asking fontconfig. `fc-match` is a
+  *best match*, not a coverage test — it always answers, and `fc-match ':lang=ar'` on the machine
+  this was written on returns `NotoSans[wdth,wght].ttf`, which contains **no Arabic at all**.
+  Candidate families come from `fc-list :lang=xx`, which returns nothing when there is nothing, and
+  are then re-verified against each file's `cmap` anyway.
+
+  **The vendored gap is now stated rather than assumed.** The plan's note says "Noto covers CJK",
+  which is true of the Noto *project* and not of the vendored `NotoSans[wdth,wght].ttf` — CJK lives
+  in Noto Sans CJK, a separate family of ~100 MB per weight. Measured: Latin everywhere, Cyrillic
+  in four faces, Greek in two, Devanagari in four (including all three Poppins), and **nothing
+  vendored for Arabic, Hebrew, Thai, Han, Hiragana or Hangul**. `unsupported_scripts()` makes that
+  answerable without rendering a clip and looking at it.
+
+  Resolution keeps the requested font when it covers the script — a creator's chosen face is a brand
+  decision, and overriding it because a clip contains one Greek letter would be worse than the
+  problem. Otherwise a vendored face (so an offline install still works, and the manifest's
+  display-first order keeps the substitution close to the intended look), then a verified system
+  family. When nothing can render it, the requested font is kept and the clip records
+  `caption_script_unsupported:<script>`: substituting a different Latin face would not help either,
+  so the honest outcome is to render the same thing *and say so*.
+
+  Finally, **measured wrapping is switched off for shaping scripts**. C6 sums per-glyph advance
+  widths, which is a fair approximation for Latin and simply wrong for Arabic, where letters join and
+  a word's rendered width is not the sum of its isolated forms — and for Devanagari and Thai, where
+  marks reorder. Those get `WrapStyle: 0` so libass wraps them: less control, but control based on a
+  wrong measurement is worse than none. Hebrew is deliberately *not* in that set — it is RTL but
+  unjoined, so widths add up and the reordering is libass' job via FriBidi. No bidi reordering
+  happens here, or the text would be reversed twice.
+- **`V15` — captions off the speaker's mouth.** Caption position is a fixed choice and the face is
+  wherever the footage put it; on a lot of vertical footage those collide and three lines of heavy
+  display type land across the speaker's mouth. The crop is right and the captions are right — only
+  their combination is wrong, which is why nothing upstream catches it.
+
+  Three rules keep this from being a look change. It **only acts on an actual overlap**, so a
+  library of clips that had no problem comes back identical. It **only moves between the nine C13
+  positions**, keeping the horizontal alignment the preset chose — answering "bottom-left covers the
+  mouth" with "centre-top" changes two things to fix one — and never invents a pixel offset nobody
+  picked. And when **no position clears the face** (a close-up filling the frame, or a three-speaker
+  panel that occupies every band) it changes nothing and records
+  `caption_face_overlap_unavoidable`, because moving the text from the mouth to the eyes is not an
+  improvement — and that marker is what distinguishes the case from "no faces detected".
+
+  The mouth is taken as the lower third of a detected face box, generously: the cost of being wrong
+  that way is moving a caption that would have been fine. It is not mouth *detection*, and it is
+  not called that. Bands are unioned across every sampled frame, because a caption that is clear for
+  two seconds and covers the mouth for one is still wrong — and that is the case hardest to notice
+  when reviewing a still. Off by default: it costs a face-detection pass a collision-free render
+  would be paying for nothing.
+- **`AU9` — sound-effect stings on cuts and emoji.** A cut or an emoji arriving is a visual accent
+  with no audible counterpart, so the edit reads as a picture change rather than as a beat.
+
+  **What is synthesised and what is not is the substance here,** because A15 already recorded what
+  goes wrong when that is blurred. `pop` and `click` **are** generated, honestly: a pop *is* a short
+  band-passed noise burst with a fast attack, so generating one is not an approximation of the real
+  thing — hence no degradation marker, because there is no degradation. `whoosh` and `swipe` are
+  **not** generated at all: a whoosh is noise under a filter that *moves* across the sound, ffmpeg
+  cannot express a time-varying filter frequency in one pass (`bandpass` takes no expression and has
+  no `eval=frame`), and a static band-passed noise swell is a hiss. Shipping a hiss under a name
+  that promises a sweep is exactly the mislabelling A15 exists to stop, so those require a file in
+  `SFX_DIR` and record `sfx_missing:<name>` without one.
+
+  Mixed with `amix normalize=0`, which matters more than it looks: with normalisation on, `amix`
+  divides every input by the input count, so adding one sting would make the **speech** 1/n quieter
+  for the whole clip — a global change caused by a local accent, and one nobody would attribute to
+  the feature that caused it. Verified by measurement, not by reading the flag. `duration=first`
+  keeps the clip's own length, and `adelay=...:all=1` delays every channel — without `all=1` a
+  stereo sting arrives on the left and then the right, audible as a flam.
+
+  Two stings within 350 ms become one, and a **transition wins a contested slot at its own moment**:
+  a cut is structural and an emoji is decoration. Applied within the gap window rather than only at
+  exactly equal times, because a single pass keeping the earlier candidate would drop a transition at
+  1.05 s in favour of an emoji at 1.00 s.
+- **`O8` — optional hardware H.264 encoding.** Routed through the single `h264_args` builder, so an
+  encoder swap cannot reach seven of the eight encode sites and leave clips whose quality depends on
+  which stage wrote them.
+
+  **Availability is decided by actually encoding a frame,** not by reading `ffmpeg -encoders`. The
+  distinction is not hypothetical: the ffmpeg this project develops against *lists* `h264_v4l2m2m`
+  and fails the moment it is asked for a frame, and `h264_nvenc` does the same on a host with the
+  libraries and no card. Reading the list turns a missing GPU into a failed job at the point where
+  the transcription has already been paid for. The probe is cached, so it costs one frame per
+  process.
+
+  **The quality flag is not `-crf` anywhere else,** and three encoders use a different *scale*:
+  NVENC needs `-rc vbr -cq` (without `-rc vbr`, `-cq` is accepted and ignored and the encoder uses
+  its default bitrate), QSV uses `-global_quality`, VAAPI uses `-qp`, and VideoToolbox uses `-q:v` on
+  a **1–100 scale where higher is better** — inverted. Passing `-crf 20` to VideoToolbox is not an
+  error; it is ignored. Passing `20` to `-q:v` asks for near-worst quality. Either way the output is
+  wrong and nothing says so, so the mapping is a table with the scale written down. Presets are
+  translated too (`veryfast` → NVENC `p2`) or omitted, since VideoToolbox has no preset concept and
+  an unrecognised one is a hard error on some builds.
+
+  `h264_v4l2m2m` is **deliberately refused with a reason** rather than quietly absent: it has no
+  constant-quality mode, only `-b:v`, so using it would switch the whole pipeline from a quality
+  target to a bitrate target without saying so.
+
+  The default stays `libx264`, **not** `auto`. These encoders are not comparable with x264 at the
+  same nominal quality, so `auto` would change the output of every existing install the first time
+  it landed on a machine with a GPU, with no setting changed — and would make the M1 golden renders
+  machine-dependent. A *named* request that falls back records `encoder_unavailable:`, because
+  silently ignoring it is how someone spends a week believing their GPU is in use; `auto` falling
+  back records nothing, since it asked for "the best available" and software is available.
+
+### Fixed — deployment and ingest, both previously unexercised (I7, I10, I12, I13)
+
+- **`I12` — the Docker image had never been built.** A Dockerfile nobody has run is a deployment
+  story rather than a deployment. It builds, and `scripts/docker_smoke.sh` now boots the image and
+  probes it in CI, gating the deploy job. Three things can be wrong here that nothing else catches,
+  because each is invisible from a working checkout: the build failing; the build succeeding and
+  the app not starting; and both succeeding while an **asset is missing** because `.dockerignore`
+  excluded it. The last is why the check queries the fonts *through the API* rather than running
+  `fc-match` — `fc-match Anton` succeeding only proves the Dockerfile registered the faces with
+  fontconfig, not that the app's own manifest and files both arrived under `/app`. The font chain
+  has already broken exactly that way once (C1), and the only symptom was captions in a substituted
+  face in rendered output. Verified: `/healthz`, the SPA from the frontend build stage, 8 fonts,
+  14 caption presets, 326 vendored emoji.
+- **`I13` — URL ingest had never been run either.** It downloads. `download_video` is the *first*
+  thing a "paste a link" user touches and every failure inside it raises `DownloadError` carrying a
+  yt-dlp message, so four things could have been silently wrong: the format selector (a malformed
+  one falls through to `best` rather than erroring, so an ignored height cap looks exactly like one
+  that worked); `outtmpl`; the returned path; and the progress hook, where a wrong key name means
+  the UI shows nothing for the whole download — indistinguishable from a hung job.
+
+  Verified against the real network (Wikimedia Commons: metadata, a 5.6 MB download, 14 progress
+  events, the height cap honoured at both 240p and 480p) and then pinned by tests that serve the
+  media from a **local HTTP server**. yt-dlp's `generic` extractor treats a plain media URL like
+  any other input, so the local server exercises the whole path with none of the flakiness that
+  would make this test the reason CI is red.
+
+  One branch could not be reached that way and is now reachable: `prepare_filename` reports the
+  pre-post-processing name, and `merge_output_format` rewrites the container **only when a merge
+  actually happened**, so the prepared name is right for a progressive source and wrong for a
+  merged one — with both returning a plausible path and only one existing. Extracted as
+  `resolve_downloaded_path` so both halves can be tested rather than only the half a single-file
+  source happens to take.
+- **`I7` — image size: 1.83 GB → 1.48 GB.** Two findings, one of them a plain dependency bug:
+  - **Two OpenCVs were installed.** `requirements.txt` pinned `opencv-python` while mediapipe
+    depends on `opencv-contrib-python`, so pip installed both — and each ships its own ~91 MB
+    directory of near-identical native libraries. contrib is a superset in the same `cv2`
+    namespace, so dropping the explicit pin changes nothing that imports. Left implicit rather
+    than re-pinned to contrib: two places to state it is how the tree ends up with two wheels
+    again.
+  - **Node is now opt-in** (`--build-arg INSTALL_WHOP_BRIDGE=true`). Debian's `nodejs`+`npm` is
+    around 200 MB of image for one optional publisher. That exposed a real gap: the Whop
+    publisher's availability check looked for the *bridge script*, which is committed source and
+    therefore present in every image, so it reported the publisher **ready** on an image with no
+    Node and then failed at publish time with a `FileNotFoundError` from `subprocess` — the least
+    actionable place to learn that Node is missing. It now checks for the interpreter too, and the
+    message names the build arg.
+- **`I10` — the npm advisories.** 11 → 0 reported by `npm audit`, via `vite` 5→8, `vitest` 2→3 and
+  `@vitejs/plugin-react` 4→5. The chain that mattered was `esbuild`: it let any website send
+  requests to a running dev server and read the responses.
+
+  The upgrade broke all 81 component tests while `npm run build` stayed perfectly green — vitest
+  transformed `.jsx` files with the *classic* JSX runtime, so every one failed with
+  "ReferenceError: React is not defined". Fixed by stating `esbuild: { jsx: "automatic" }` in the
+  vite config, which makes both pipelines agree rather than depending on which transform sees a
+  file first. Node is pinned to 22 in CI and in the Dockerfile's frontend stage, because vite 8
+  requires `^20.19.0 || >=22.12.0` and `node:20-slim` satisfies that only on its newest patch
+  releases.
+
+  **A residual 9 advisories are deliberately not "fixed":** one `brace-expansion` DoS reachable
+  through eslint's own `minimatch` chain. Both available fixes are worse than the finding, and both
+  were tried — `npm audit fix --force` *downgrades* `eslint-plugin-react` to 7.22.0, and overriding
+  `brace-expansion` to a patched 5.x breaks `minimatch@3` so eslint crashes outright. CI therefore
+  blocks on `--audit-level=critical`, because a gate that cannot be satisfied without breaking the
+  build is a gate people learn to ignore.
+
+### Added — the asset libraries (A5, A9, A13, A17, A19, A22)
+
+- **`A9` — the emoji keyword map, 85 keywords to 1190.** On real speech the old map produced no
+  emoji at all on most clips: `standard` intensity allows one every five seconds, so a 60-second
+  clip has to contain a dozen mapped words *spread across it* to fill even half its slots. The
+  overlay was decorative on the few clips that happened to say "money" or "fire". All 326 glyphs
+  are vendored (7.3 MB), so rendering still never touches the network.
+
+  **What it deliberately does not contain** is the more interesting half. Homographs are excluded:
+  a `bank` is 🏦 or a river's edge, `spring` is a season, a coil or a verb, `wave` is water or a
+  hand, `beat` is a victory or a rhythm, `second` is a place or a duration. Each would raise the
+  keyword count and lower the hit *quality*, and an emoji illustrating the wrong sense of a word
+  reads as a machine that did not understand the sentence — the same trade C14 refused when it
+  declined to pad the caption presets with hue-only variants.
+
+  Function words are excluded too, **even where the picture is apt**. "Like" is 👍 in one sense and
+  a filler in most others; "this", "here", "there" and "off" are grammatical far more often than
+  deictic. A11 scores stopwords at zero, so such a word only ever wins a slot when nothing better
+  is in the clip — which is exactly the wrong moment for a weak match, because that clip has no
+  other emoji to distract from it. Enforced by a test against the caption stopword list rather
+  than by care, with the four that shipped that way (`yes`, `no`, `up`, `down`) named explicitly:
+  the failure mode of adding one is a plausible-looking overlay on the word "just".
+- **`A13` — Noto, Twemoji or OpenMoji.** Which artwork set appears is a *look* decision, and the
+  three read very differently over footage. Three things differ per set and each produces a 404
+  rather than an error anyone can read: the base URL, the case of the hex in the filename
+  (OpenMoji upper-cases it), and the prefix plus separator (Noto writes
+  `emoji_u1f9d1_200d_1f3eb.png` where the others write `1f9d1-200d-1f3eb.png`). Encoding all three
+  per style is what stops "switch to OpenMoji" from meaning "silently render no emoji".
+
+  **Only Noto is vendored**, and that is a decision rather than an omission: three sets over 326
+  glyphs would triple the committed asset weight to ship two looks most installs never select. The
+  others are fetched on demand or vendored once with `scripts/fetch_emoji.py --style`. A glyph
+  missing from the selected style falls back to the Noto file rather than dropping the overlay —
+  a mixed-style overlay is a cosmetic inconsistency that is visible and correctable, a missing one
+  looks like the feature is broken — and the clip records `emoji_style_degraded:<name>` when that
+  happens, because a cosmetic difference nobody is told about is a bug report later. Twemoji's
+  72px is stated in the docs as *smaller than every size this tool composites at*, so choosing it
+  is knowingly choosing a soft overlay.
+- **`A5` — operator-supplied caption fonts.** Drop a TTF into `FONT_ASSETS_DIR` and it appears in
+  the picker. A **server-side directory, not an upload endpoint**, for the reason U6 recorded for
+  the brand logo: an upload needs a storage location, a cleanup policy and a retention rule, none
+  of which exist for assets, and inventing three of them to accept a font file is a larger
+  decision than the feature.
+
+  The family name is read from the font's own `name` table, never from its filename. libass selects
+  a face by that name and answers an unknown family by *silently substituting another* — so a
+  picker offering `MyBrandFont.ttf` as "MyBrandFont" would be offering a name that resolves to
+  nothing. That is exactly the C1 defect this codebase has already shipped once, which is why a
+  font whose real name cannot be read is not offered at all, and why a bold-only file is offered as
+  "Family Bold" rather than "Family". Variable fonts are excluded for the same reason the manifest
+  excludes them.
+
+  Two smaller things fell out of it. The reported `weight` is converted from the file's OS/2 class
+  to **fontconfig's scale**, which is what `assets/fonts.json` records and what libass prints —
+  mixing the two would make a user-supplied regular face (400) look nearly twice as heavy as a
+  vendored black one (210). And a *missing or corrupt* manifest no longer empties the picker: the
+  twelve files are still on disk and readable, so the declaration failing no longer takes the
+  assets down with it.
+- **`A17` — several music tracks per mood.** One track per mood meant every clip in a batch of ten
+  carried the same bed, which is the most obvious way a set of clips reads as machine-produced.
+  Three layouts are accepted, because the natural way to hold twenty tracks is not the natural way
+  to hold one: `upbeat.mp3`, `upbeat/*.mp3`, or `upbeat_2.mp3` siblings. A separator after the mood
+  name is required, so `upbeat_2` matches and `upbeatish` does not.
+
+  Selection is **deterministic, not random**. A batch wants variety *between* clips and a re-run
+  wants the same output: the M1 golden renders depend on the second, and a creator re-rendering one
+  clip of ten to fix a typo does not want a different bed underneath it. The key is hashed from the
+  source filename, the clip's ordinal and its start time — not the clip id, which carries a
+  `uuid4`. The hash is blake2b and **not** `hash()`: Python salts string hashing per process unless
+  `PYTHONHASHSEED` is set, so a `hash(key) % len(tracks)` selection would be stable within one run
+  and different on the next — reproducible in exactly the tests that would catch it, and not in
+  production. A `music_track:2/5` marker makes the variety visible, since the path is not in the
+  clip record.
+- **`A19` — b-roll matched by tag, not by filename substring.** The old rule had three failures and
+  all three were silent. `stem in token` with a two-character stem is nearly always true, so a file
+  called `on.mp4` answered the keyword "money" and `ca.mp4` answered "car". The *first* match won
+  rather than the best, so renaming an unrelated file changed the b-roll. And a filename is not a
+  description — a stock clip is called `pexels-4276282.mp4`.
+
+  Now an optional `tags.json` describes the library, matching *scores* rather than short-circuits,
+  the best-scoring file wins with ties broken by name so two machines agree, and both sides are
+  length-filtered. A missing or malformed manifest degrades to filename matching, which is what the
+  library did before — not to a library that silently has no tags.
+
+  **The synonym source is the emoji keyword map**, inverted: ~1190 words already cluster into ~326
+  groups, so there is one word list to maintain rather than two that drift. What that table asserts
+  is narrower than synonymy, and the difference is stated rather than glossed: two words share a
+  group only when they share a *picture*, so money/wealth/fortune are one group and "cash" is in
+  another because 💰 and 💵 are different images. Expansion is therefore conservative — it adds
+  true synonyms and misses some near ones. That is the right error direction: a missed synonym
+  costs one weaker match, a wrong one puts unrelated footage on screen. Synonyms also score below
+  an explicit tag, so inference can never override something the operator actually said.
+- **`A22` — motion on b-roll stills, and a dip in the bed under b-roll.** A still that sits
+  motionless for three seconds over moving footage is the clearest sign a clip was assembled rather
+  than edited. `BROLL_KEN_BURNS` adds a slow zoom whose convergence point supplies the drift, with
+  the anchor rotating per cue so four stills in one clip do not all move identically.
+
+  The zoom is an explicit function of the output frame number, not the usual accumulating
+  `z='zoom+step'` recipe — accumulation makes the final framing depend on how many frames were
+  produced, so the same still would zoom twice as far on a 60fps render as on a 30fps one. Off by
+  default because it *is* a visible change: `zoompan` requires an explicit output size and the
+  default graph scales stills to an unknown height, so with it on stills are cover-cropped into a
+  fixed 16:9 box. Video assets already move and are never touched. Verified against a
+  half-transparent PNG that alpha survives the filter, and the box is forced even-sided because
+  4:2:0 subsampling requires it and an odd height fails the *encode*, several stages after the
+  filter string that caused it.
+
+  `BROLL_DUCK` dips the music under each b-roll window, so a visual accent has an audible one.
+  Applied to **the bed only, never the mix**: the b-roll is illustrating what is being said, so
+  ducking the speech would invert the point. Built as one `volume` expression taking the *deepest*
+  applicable dip rather than a chain of filters, because a chain multiplies and two adjacent cues
+  would drive the bed to silence. Each dip is ramped, since a hard step in level is audible as a
+  click on a sustained bed — a worse artefact than the one being fixed. Only windows that actually
+  composited duck, so a cue whose asset failed to resolve does not leave a hole in the bed with no
+  picture to explain it.
+
 ### Added — what the words say, and who they say it to (C19, S7, S8, S12, T9, T10)
 
 - **`S7` — question/answer and list structure.** Selection measured how a moment was *delivered* —

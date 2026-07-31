@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
@@ -196,14 +197,156 @@ class AssetProvider(Protocol):
         ...
 
 
+# --------------------------------------------------------------------------- #
+# Tag matching for the local library (A19)
+# --------------------------------------------------------------------------- #
+#
+# Local assets were matched by a *substring* test against the filename: the first file whose
+# normalised stem contained a keyword token, or was contained by one, won. That has three
+# separate failures, and each of them is silent.
+#
+# 1. **Short stems match almost everything.** ``stem in token`` with a two-character stem is
+#    nearly always true - a file called ``on.mp4`` matches the keyword "money", and ``ca.mp4``
+#    matches "car". Tokens were length-filtered; stems were not.
+# 2. **First match, not best match.** Directory order decided which of five plausible files was
+#    used, so renaming an unrelated file changed the b-roll.
+# 3. **A filename is not a description.** A stock clip is called ``pexels-4276282.mp4``, and a
+#    library the operator curated by hand still cannot say that ``sunrise-timelapse.mp4`` is a
+#    reasonable answer for "morning".
+#
+# So: an optional ``tags.json`` in the library root describes each file, matching *scores* rather
+# than short-circuits, and synonyms are expanded.
+#
+# **The synonym source is the emoji keyword map.** ``KEYWORD_EMOJI`` clusters ~1190 words into
+# ~326 groups, and inverting it yields a curated, already-tested synonym table for free - rather
+# than a second hand-written word list to keep in step with the first.
+#
+# What that table actually asserts is narrower than synonymy, and the difference matters: two words
+# share a group only when they share a *picture*. So "money"/"wealth"/"fortune"/"funds" are one
+# group, and "cash" is in a different one, because 💰 and 💵 are different images. Expansion is
+# therefore **conservative** - it adds true synonyms and misses some near-synonyms. That is the
+# right error direction here: a missed synonym costs one weaker match, a wrong one puts unrelated
+# footage on screen. Synonyms also only ever *expand* the candidate set and score below an explicit
+# tag, so they can never override something the operator actually said.
+
+#: Filename of the optional tag manifest in the b-roll library root.
+TAG_MANIFEST_NAME = "tags.json"
+
+#: Minimum token length considered for matching, on both sides now.
+_MIN_MATCH_TOKEN = 3
+
+#: Score for an exact tag hit, a synonym hit, and a filename-token hit.
+#:
+#: Ordered by how much the operator *said*. A tag is a deliberate description; a synonym is this
+#: code inferring; a filename token is a coincidence that is often right. Keeping filenames as the
+#: weakest signal rather than removing them means a library with no manifest still works.
+_SCORE_TAG = 1.0
+_SCORE_SYNONYM = 0.6
+_SCORE_FILENAME = 0.3
+
+
+@lru_cache(maxsize=1)
+def _synonym_groups() -> dict[str, frozenset[str]]:
+    """``word -> the words that mean the same thing``, inverted from the emoji keyword map."""
+    try:
+        from worker.effects.emoji import KEYWORD_EMOJI
+    except Exception:      # pragma: no cover - emoji module is a hard sibling, but stay total
+        return {}
+    clusters: dict[str, set[str]] = {}
+    for word, glyph in KEYWORD_EMOJI.items():
+        clusters.setdefault(glyph, set()).add(word)
+    groups: dict[str, frozenset[str]] = {}
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        frozen = frozenset(members)
+        for word in members:
+            groups[word] = frozen
+    return groups
+
+
+def synonyms(token: str) -> frozenset[str]:
+    """Words that mean the same as ``token``, excluding itself. Empty when unknown."""
+    group = _synonym_groups().get((token or "").strip().lower())
+    if not group:
+        return frozenset()
+    return frozenset(group - {token})
+
+
+def load_tag_manifest(root: "str | Path") -> dict[str, frozenset[str]]:
+    """``filename -> tags`` from ``root/tags.json``, or ``{}``.
+
+    Accepts either ``{"file.mp4": ["money", "cash"]}`` or a space/comma-separated string per file,
+    because both are things a person writes by hand and rejecting one of them would only produce
+    a library that silently has no tags.
+
+    Never raises: a malformed manifest degrades to filename matching, which is what the library
+    did before A19.
+    """
+    path = Path(root) / TAG_MANIFEST_NAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # A nested {"assets": {...}} shape is also accepted, matching assets/fonts.json' style.
+    if "assets" in data and isinstance(data["assets"], dict):
+        data = data["assets"]
+
+    manifest: dict[str, frozenset[str]] = {}
+    for name, value in data.items():
+        if isinstance(value, str):
+            raw = _norm_tokens(value)
+        elif isinstance(value, (list, tuple)):
+            raw = [tok for item in value for tok in _norm_tokens(str(item))]
+        else:
+            continue
+        tags = frozenset(tok for tok in raw if len(tok) >= _MIN_MATCH_TOKEN)
+        if tags:
+            manifest[str(name)] = tags
+    return manifest
+
+
+def match_score(keyword: str, tags: "frozenset[str] | set[str]", filename_stem: str = "") -> float:
+    """How well ``tags`` (and, weakly, ``filename_stem``) answer ``keyword`` (A19).
+
+    Returns ``0.0`` for no match. Sums over the keyword's tokens rather than taking the best one,
+    so a two-word keyword matched on both tokens beats one matched on either - which is the whole
+    reason a keyword has more than one word.
+    """
+    tokens = [tok for tok in _norm_tokens(keyword) if len(tok) >= _MIN_MATCH_TOKEN]
+    if not tokens:
+        return 0.0
+    tag_set = {str(t).lower() for t in tags}
+    stem_tokens = {tok for tok in _norm_tokens(filename_stem) if len(tok) >= _MIN_MATCH_TOKEN}
+
+    total = 0.0
+    for token in tokens:
+        if token in tag_set:
+            total += _SCORE_TAG
+            continue
+        overlap = synonyms(token) & tag_set
+        if overlap:
+            total += _SCORE_SYNONYM
+            continue
+        # Both sides length-filtered, so a two-character stem can no longer match everything.
+        if token in stem_tokens:
+            total += _SCORE_FILENAME
+    return total
+
+
 class LocalProvider:
     """Resolves assets from an operator-supplied library folder (no network).
 
     Assets are treated as operator-supplied and therefore usable: the returned
     :class:`AssetRef` records ``provider="local"``, ``license="local"`` and the
-    source ``path`` (Req 12.2). A simple case-insensitive *contains* match on
-    the file stem is used. Images (``.png/.jpg/.jpeg/.webp``) become kind
+    source ``path`` (Req 12.2). Images (``.png/.jpg/.jpeg/.webp``) become kind
     ``"image"``; videos (``.mp4/.mov/.webm``) become kind ``"video"``.
+
+    Matching is by tag, then synonym, then filename token (A19) - see :func:`match_score`. The
+    *best* scoring file wins rather than the first one found, with ties broken by name, so the
+    result does not depend on directory order.
     """
 
     name = "local"
@@ -212,7 +355,7 @@ class LocalProvider:
         self.root = Path(root) if root is not None else Path(settings.broll_dir)
 
     def search(self, keyword: str) -> Optional[AssetRef]:
-        tokens = [t for t in _norm_tokens(keyword) if len(t) >= 3]
+        tokens = [t for t in _norm_tokens(keyword) if len(t) >= _MIN_MATCH_TOKEN]
         if not tokens:
             return None
         try:
@@ -220,6 +363,9 @@ class LocalProvider:
         except Exception:
             # Missing directory / unreadable => no local match (no network).
             return None
+
+        manifest = load_tag_manifest(self.root)
+        best: Optional[tuple[float, str, Path, str]] = None
         for path in entries:
             ext = path.suffix.lower()
             if ext in _IMAGE_EXTS:
@@ -228,19 +374,27 @@ class LocalProvider:
                 kind = "video"
             else:
                 continue
-            stem = _norm_stem(path.stem)
-            if not stem:
+            score = match_score(keyword, manifest.get(path.name, frozenset()), path.stem)
+            if score <= 0.0:
                 continue
-            if any(tok in stem or stem in tok for tok in tokens):
-                return AssetRef(
-                    path=str(path),
-                    kind=kind,
-                    provider="local",
-                    source_id="",
-                    license="local",
-                    attribution="",
-                )
-        return None
+            # Name is the tie-break, so two equally-tagged files resolve the same way on every
+            # machine regardless of how the filesystem happens to enumerate them.
+            candidate = (score, path.name, path, kind)
+            if best is None or (candidate[0], ) > (best[0], ) or (
+                candidate[0] == best[0] and candidate[1] < best[1]
+            ):
+                best = candidate
+
+        if best is None:
+            return None
+        return AssetRef(
+            path=str(best[2]),
+            kind=best[3],
+            provider="local",
+            source_id="",
+            license="local",
+            attribution="",
+        )
 
 
 def _default_external_downloader(
@@ -512,6 +666,24 @@ _BROLL_SIZE_FRAC = 0.5
 # rotated through so consecutive overlays don't stack on the exact same spot.
 _BROLL_Y_SLOTS = (0.12, 0.20, 0.10, 0.16)
 
+#: Aspect ratio a still is fitted into when Ken Burns is on (A22).
+#:
+#: A fixed box is required, not a preference: ``zoompan`` needs an explicit output size, and the
+#: default graph scales stills with ``-1`` height, so the height is not known where the filter
+#: string is built. Probing every asset for its dimensions would put an ``ffprobe`` per asset
+#: inside a documented pure string builder. 16:9 cover-cropping is what a half-frame overlay
+#: rectangle looks like anyway.
+_KEN_BURNS_ASPECT = 16 / 9
+
+#: Where the zoom converges, rotated per cue.
+#:
+#: With a *fixed* anchor and a rising zoom, the visible region drifts towards that anchor - which
+#: is the pan half of Ken Burns, for free. Rotating the anchor is what stops four stills in one
+#: clip all drifting the same way, which would read as a template.
+_KEN_BURNS_ANCHORS: tuple[tuple[float, float], ...] = (
+    (0.5, 0.5), (0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0),
+)
+
 
 def build_broll_overlay(
     cues: list[BrollCue],
@@ -522,6 +694,8 @@ def build_broll_overlay(
     height: int,
     fps: float,
     input_offset: int,
+    ken_burns: bool = False,
+    zoom: float = 0.0,
 ) -> tuple[list[str], str, list[str]]:
     """Build ffmpeg inputs + a ``-filter_complex`` snippet for b-roll overlays.
 
@@ -538,6 +712,12 @@ def build_broll_overlay(
             windows (Req 10.5).
         input_offset: ffmpeg input index of the first b-roll asset (Req 10.3);
             indices are assigned contiguously with no collision.
+        ken_burns: apply A22's slow zoom-and-drift to *still* assets. Off by default, so the
+            shipped graph and the v0.8.0 parity goldens are unchanged. Video assets already
+            move and are never affected.
+        zoom: how far a still zooms over its window, as a fraction (``0.12`` = 12%). Zero
+            disables the motion even when ``ken_burns`` is set, so one setting can turn it off
+            without the caller having to know two.
 
     Returns ``(input_args, filtergraph, applied_notes)``:
         * Image assets loop as still inputs bounded to the on-screen window
@@ -560,6 +740,12 @@ def build_broll_overlay(
     fps = float(fps) if fps and fps > 0 else 30.0
     min_dur = 1.0 / fps
     overlay_w = max(2, int(width * _BROLL_SIZE_FRAC))
+    # Even, because libx264's 4:2:0 chroma subsampling requires it and `crop` will not round for
+    # you - an odd height fails the encode rather than the filter, several stages later.
+    overlay_h = max(2, int(round(overlay_w / _KEN_BURNS_ASPECT)))
+    overlay_h -= overlay_h % 2
+    overlay_w -= overlay_w % 2
+    zoom = max(0.0, float(zoom))
 
     input_args: list[str] = []
     steps: list[str] = []
@@ -583,6 +769,30 @@ def build_broll_overlay(
                 f"[{idx}:v]trim=start=0:end={disp_dur:.3f},"
                 f"setpts=PTS-STARTPTS+{start:.3f}/TB,"
                 f"scale={overlay_w}:-1,format=rgba[bpre{i}]"
+            )
+        elif ken_burns and zoom > 0.0:
+            # A22: a still that sits motionless for three seconds over moving footage is the
+            # clearest sign a clip was assembled rather than edited. `zoompan` supplies both the
+            # zoom and - via a fixed off-centre anchor - the drift.
+            input_args += ["-loop", "1", "-t", f"{disp_dur:.3f}", "-i", asset.path]
+            frames = max(1, int(round(disp_dur * fps)))
+            anchor_x, anchor_y = _KEN_BURNS_ANCHORS[i % len(_KEN_BURNS_ANCHORS)]
+            prep = (
+                # Cover-crop into the fixed box zoompan needs an explicit size for.
+                f"[{idx}:v]scale={overlay_w}:{overlay_h}"
+                f":force_original_aspect_ratio=increase,"
+                f"crop={overlay_w}:{overlay_h},format=rgba,"
+                # Zoom as an explicit function of the output frame number, not the accumulating
+                # `z='zoom+step'` recipe: accumulation makes the final framing depend on how many
+                # frames were produced, so the same still zooms further on a 60fps render than on
+                # a 30fps one. `on/frames` is the same motion at any frame rate.
+                f"zoompan=z='1+{zoom:.4f}*on/{frames}'"
+                f":x='(iw-iw/zoom)*{anchor_x:g}':y='(ih-ih/zoom)*{anchor_y:g}'"
+                f":d=1:s={overlay_w}x{overlay_h}:fps={fps:g},"
+                # zoompan outputs yuv/rgb; the overlay below needs alpha back. Verified against
+                # a half-transparent PNG: transparency survives the round trip.
+                f"format=rgba,"
+                f"setpts=PTS-STARTPTS+{start:.3f}/TB[bpre{i}]"
             )
         else:
             # Still images loop for the window duration (like emoji), shifted so

@@ -111,9 +111,15 @@ def test_every_encode_site_uses_the_shared_builder():
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1]
+    # The two modules that *are* the builder. `video_encoders` was split out for O8 because
+    # choosing an encoder needs a probe, a per-encoder quality mapping and a fallback - too much
+    # to sit inside `h264_args` - so "libx264" legitimately appears there as the software default
+    # and the fallback target. Exempted by name rather than by pattern, so a third module cannot
+    # join the list by accident.
+    builder_modules = {"ffmpeg_utils.py", "video_encoders.py"}
     offenders: list[str] = []
     for path in sorted((root / "worker").rglob("*.py")):
-        if path.name == "ffmpeg_utils.py":   # defines the builder
+        if path.name in builder_modules:
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if re.search(r'["\']libx264["\']', line) and not line.lstrip().startswith("#"):
@@ -173,3 +179,31 @@ def test_the_missing_flags_really_were_the_difference(source_422, tmp_path):
         "proves nothing"
     )
     assert probed["r_frame_rate"] != f"{app_settings.output_fps}/1"
+
+
+
+def test_o8_the_quality_flag_is_never_hand_rolled_as_crf_outside_the_builder():
+    """`-crf` is libx264's spelling and nobody else's.
+
+    Three of the five supported encoders use a different flag *and* a different scale, so a call
+    site that appends `-crf` itself would be silently ignored by VideoToolbox (which then uses its
+    own default bitrate) and would ask NVENC for a target it does not read. The compatibility guard
+    above catches a hand-rolled `libx264`; this catches a hand-rolled rate control, which is the
+    other half of the same mistake and the half O8 introduced the possibility of.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    builder_modules = {"ffmpeg_utils.py", "video_encoders.py"}
+    offenders: list[str] = []
+    for path in sorted((root / "worker").rglob("*.py")):
+        if path.name in builder_modules:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r'["\']-crf["\']', line) and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
+    assert not offenders, (
+        "these sites spell the rate control themselves; -crf only means anything to libx264:\n"
+        + "\n".join(offenders)
+    )
