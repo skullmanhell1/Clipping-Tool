@@ -14,12 +14,19 @@ import pytest
 from worker.ass_style import (
     EVENT_FIELD_NAMES,
     EVENT_FORMAT,
+    POP_RAMP_MS,
+    SHARED_ANIMATIONS,
     STYLE_FIELD_NAMES,
     STYLE_FORMAT,
+    TYPEWRITER_RAMP_MS,
     AssStyle,
     _assert_fields_match_format,
     _snake,
+    alpha_gate_span,
+    animation_span,
+    centiseconds,
     dialogue,
+    emphasis_span,
     header,
 )
 
@@ -237,3 +244,118 @@ def test_the_defaults_are_the_legacy_karaoke_look():
         "alignment": 2, "margin_l": 80, "margin_r": 80, "margin_v": 200,
         "encoding": 1,
     }
+
+
+
+# --------------------------------------------------------------------------- #
+# Override spans                                                                #
+# --------------------------------------------------------------------------- #
+
+def test_the_shared_animations_are_the_intersection_of_the_two_vocabularies():
+    """So a style added to one vocabulary and not the other cannot silently join the shared set.
+
+    `caption_presets.VALID_ANIMATIONS` is what a preset can ask for; `kinetic.KINETIC_STYLES`
+    adds three the preset vocabulary cannot express. `SHARED_ANIMATIONS` claims to be the overlap,
+    and this is what makes that claim checkable.
+    """
+    from worker.effects.caption_presets import VALID_ANIMATIONS
+    from worker.engines.kinetic import KINETIC_STYLES
+
+    assert SHARED_ANIMATIONS == VALID_ANIMATIONS & set(KINETIC_STYLES)
+    # The three the engine keeps to itself.
+    assert set(KINETIC_STYLES) - SHARED_ANIMATIONS == {
+        "bounce", "highlight_sweep", "slide_up",
+    }
+
+
+@pytest.mark.parametrize("animation", sorted(SHARED_ANIMATIONS))
+def test_every_shared_animation_ends_in_the_escaped_text(animation):
+    """The span decorates the word; it never replaces or reorders it."""
+    span = animation_span(animation, "WORD", rel_ms=500, duration_cs=40)
+    assert span.endswith("WORD")
+
+
+@pytest.mark.parametrize("animation", sorted(SHARED_ANIMATIONS))
+def test_every_shared_animation_is_brace_balanced(animation):
+    span = animation_span(animation, "WORD", rel_ms=500, duration_cs=40)
+    assert span.count("{") == span.count("}")
+    assert "{{" not in span and "}}" not in span
+
+
+def test_none_and_unrecognised_animations_return_the_plain_word():
+    """The fall-through the kinetic engine relies on to check its own three styles first."""
+    assert animation_span("none", "WORD", rel_ms=0, duration_cs=1) == "WORD"
+    assert animation_span("bounce", "WORD", rel_ms=0, duration_cs=1) == "WORD"
+    assert animation_span("nonsense", "WORD", rel_ms=0, duration_cs=1) == "WORD"
+
+
+def test_pop_ramps_from_the_words_own_onset():
+    assert animation_span("pop", "W", rel_ms=500, duration_cs=1) == (
+        r"{\fscx60\fscy60\t(500,620,\fscx100\fscy100)}W"
+    )
+
+
+def test_typewriter_reveals_from_the_words_own_onset():
+    assert animation_span("typewriter", "W", rel_ms=500, duration_cs=1) == (
+        r"{\alpha&HFF&\t(500,530,\alpha&H00&)}W"
+    )
+
+
+def test_karaoke_fill_uses_the_duration_and_ignores_the_onset():
+    """`\\kf` is relative to the event, so a per-word offset would double-count the cue start."""
+    assert animation_span("karaoke_fill", "W", rel_ms=500, duration_cs=40) == r"{\kf40}W"
+    assert animation_span("karaoke_fill", "W", rel_ms=0, duration_cs=40) == r"{\kf40}W"
+
+
+def test_the_shared_ramps_are_not_the_engines_configurable_motion_duration():
+    """Pinned because it looks like an oversight and is not.
+
+    The four shared animations reproduce the v0.8.0 look byte for byte, and that look has these
+    ramps hard-coded. Wiring them to `motion_duration_ms` would change every existing render.
+    """
+    assert (POP_RAMP_MS, TYPEWRITER_RAMP_MS) == (120, 30)
+
+
+@pytest.mark.parametrize("seconds", [0.0, -1.0, 0.001, 0.004])
+def test_centiseconds_never_returns_zero(seconds):
+    """`\\kf0` is a fill that never advances: the sweep would start and never release."""
+    assert centiseconds(seconds) == 1
+
+
+@pytest.mark.parametrize(("seconds", "expected"), [(0.4, 40), (1.0, 100), (2.567, 257)])
+def test_centiseconds_rounds_to_the_nearest_centisecond(seconds, expected):
+    assert centiseconds(seconds) == expected
+
+
+def test_the_alpha_gate_holds_a_word_invisible_until_its_onset():
+    assert alpha_gate_span(500, 1) == r"{\alpha&HFF&\t(500,501,\alpha&H00&)}"
+
+
+def test_typewriter_is_the_alpha_gate_at_the_typewriter_ramp():
+    """The relationship the two used to express as two separate literals."""
+    assert animation_span("typewriter", "W", rel_ms=750, duration_cs=1) == (
+        alpha_gate_span(750, TYPEWRITER_RAMP_MS) + "W"
+    )
+
+
+def test_emphasis_wraps_the_span_and_closes_both_attributes():
+    out = emphasis_span(
+        "INNER", primary="&H00FFFFFF", highlight="&H0000E5FF", scale_pct=118,
+    )
+    assert out == (
+        r"{\c&H0000E5FF&\fscx118\fscy118}INNER{\c&H00FFFFFF&\fscx100\fscy100}"
+    )
+    # The documented contract: emphasis only *wraps* the span a plain word would produce.
+    assert "INNER" in out
+
+
+def test_emphasis_does_not_use_a_reset_tag():
+    """`\\r` would also reset any animation span the emphasis wraps, not just the colour."""
+    out = emphasis_span("X", primary="&H00FFFFFF", highlight="&H0000E5FF", scale_pct=118)
+    assert "\\r" not in out
+
+
+def test_emphasis_takes_a_percentage_not_a_fraction():
+    """Passing 1.18 here would render the word at 1% of its size, which is the trap."""
+    out = emphasis_span("X", primary="&H00FFFFFF", highlight="&H0000E5FF", scale_pct=118)
+    assert "\\fscx118" in out

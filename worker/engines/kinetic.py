@@ -1863,6 +1863,13 @@ def _inline_emoji(word: Any, preset: Any, options: Kinetic_Options) -> str:
 _ASS_STYLE_FORMAT = ass_style.STYLE_FORMAT
 _ASS_EVENT_FORMAT = ass_style.EVENT_FORMAT
 
+#: The ``word_by_word`` gate's ramp, in milliseconds (Req 4.9).
+#:
+#: As short as ASS allows a ``\t`` to be rather than a real fade: the gate exists to withhold a
+#: word until its onset, and a visible ramp here would compete with whatever animation the
+#: Kinetic_Style already applies.
+WORD_GATE_RAMP_MS = 1
+
 #: ``build_word_span``'s own defaults, used when a plan carries no palette.
 _DEFAULT_PRIMARY = "&H00FFFFFF"
 _DEFAULT_HIGHLIGHT = "&H0000E5FF"
@@ -1906,13 +1913,20 @@ def _style_span(
 ) -> str:
     """The per-word animation span for one Kinetic_Style (Reqs 4.2-4.6).
 
-    The four shared styles reproduce ``captions.build_word_span`` **byte for
-    byte** for the same word — including its hard-coded ``+120`` (``pop``) and
-    ``+30`` (``typewriter``) ramps, which are deliberately *not* ``motion_ms`` —
-    so a Kinetic_Plan at ``reveal="cumulative"`` renders the v0.8.0 look exactly
-    (Req 4.3). The three new styles use ``d = motion_ms`` as the design's span
-    table specifies. ``rel`` is the word's onset relative to its **cue** start in
-    milliseconds, which is the offset libass ``\\t`` expects (Req 5.3).
+    The **three engine-only** styles are built here, because the preset vocabulary
+    (``caption_presets.VALID_ANIMATIONS``) cannot express them; they use
+    ``d = motion_ms`` as the design's span table specifies.
+
+    Everything else delegates to ``ass_style.animation_span``, which is now the single
+    definition of the four shared styles. It reproduces the v0.8.0 look byte for byte —
+    including the hard-coded ``+120`` (``pop``) and ``+30`` (``typewriter``) ramps, which
+    are deliberately *not* ``motion_ms`` — so a Kinetic_Plan at ``reveal="cumulative"``
+    renders exactly what the caption path does (Req 4.3). That used to be two independent
+    spellings held together by a property test; it is now one function, and the property
+    test asserts a tautology.
+
+    ``rel`` is the word's onset relative to its **cue** start in milliseconds, which is the
+    offset libass ``\\t`` expects (Req 5.3).
 
     Well-formed by construction (Req 4.10): every ``{`` opened below is closed in
     the same f-string, and ``word.text`` was already ``_escape``-d by the planner,
@@ -1923,19 +1937,6 @@ def _style_span(
     duration_ms = int(motion_ms)
     half = duration_ms // 2
 
-    if style == "karaoke_fill":
-        dur_cs = max(1, int(round((word.end - word.start) * 100)))
-        return f"{{\\kf{dur_cs}}}{escaped}"
-    if style == "pop":
-        return (
-            f"{{\\fscx60\\fscy60\\t({rel},{rel + 120},"
-            f"\\fscx100\\fscy100)}}{escaped}"
-        )
-    if style in ("typewriter", "slide_up"):
-        # ``slide_up`` carries the event-level ``\move`` (added in
-        # :func:`_cue_event`) plus this per-word alpha gate, so its words still
-        # appear on beat rather than all at once (Req 4.5).
-        return f"{{\\alpha&HFF&\\t({rel},{rel + 30},\\alpha&H00&)}}{escaped}"
     if style == "bounce":
         return (
             f"{{\\fscx55\\fscy55"
@@ -1948,7 +1949,17 @@ def _style_span(
             f"{{\\c{highlight}&\\t({rel},{rel + duration_ms},"
             f"\\c{primary}&)}}{escaped}"
         )
-    return escaped  # "none" — the plain escaped word (Req 4.3)
+    # ``slide_up``'s per-word span *is* ``typewriter``'s alpha gate: it carries the event-level
+    # ``\move`` (added in :func:`_cue_event`) plus this gate, so its words still appear on beat
+    # rather than all at once (Req 4.5). Mapped rather than special-cased in the shared table,
+    # which has no reason to know an engine-only style name.
+    shared = "typewriter" if style == "slide_up" else style
+    # "none", and any unrecognised style, fall through to the plain escaped word (Reqs 4.3, 4.8).
+    return ass_style.animation_span(
+        shared, escaped,
+        rel_ms=rel,
+        duration_cs=ass_style.centiseconds(word.end - word.start),
+    )
 
 
 def _word_span(
@@ -1976,15 +1987,15 @@ def _word_span(
         span = f"{span} {word.emoji}"
 
     if plan.reveal == "word_by_word" and plan.style != "typewriter":
-        rel = int(word.rel_ms)
-        span = f"{{\\alpha&HFF&\\t({rel},{rel + 1},\\alpha&H00&)}}{span}"
+        # A 1 ms ramp: this gate only has to withhold the word until its onset, not animate it.
+        span = ass_style.alpha_gate_span(int(word.rel_ms), WORD_GATE_RAMP_MS) + span
 
     if word.emphasis:
-        scale = int(plan.highlight_scale)
-        span = (
-            f"{{\\c{highlight}&\\fscx{scale}\\fscy{scale}}}"
-            f"{span}"
-            f"{{\\c{primary}&\\fscx100\\fscy100}}"
+        # ``plan.highlight_scale`` is already a percentage — the planner multiplied the preset's
+        # fraction by 100 when it built the plan.
+        span = ass_style.emphasis_span(
+            span, primary=primary, highlight=highlight,
+            scale_pct=int(plan.highlight_scale),
         )
     return span
 

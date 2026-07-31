@@ -27,7 +27,10 @@ from typing import Any, Iterable, Optional
 from config import settings
 from worker import script_support, text_metrics
 from worker.ass_style import AssStyle
+from worker.ass_style import animation_span as ass_animation_span
+from worker.ass_style import centiseconds as ass_centiseconds
 from worker.ass_style import dialogue as ass_dialogue
+from worker.ass_style import emphasis_span as ass_emphasis_span
 from worker.ass_style import header as ass_header
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
@@ -627,20 +630,11 @@ def build_word_span(
     w_start, w_end = _word_bounds(word)
     rel_ms = max(0, int(round((w_start - cue_start) * 1000)))
 
-    if animation == "pop":
-        span = (
-            f"{{\\fscx60\\fscy60\\t({rel_ms},{rel_ms + 120},"
-            f"\\fscx100\\fscy100)}}{escaped}"
-        )
-    elif animation == "typewriter":
-        span = (
-            f"{{\\alpha&HFF&\\t({rel_ms},{rel_ms + 30},\\alpha&H00&)}}{escaped}"
-        )
-    elif animation == "karaoke_fill":
-        dur_cs = max(1, int(round((w_end - w_start) * 100)))
-        span = f"{{\\kf{dur_cs}}}{escaped}"
-    else:
-        span = escaped
+    span = ass_animation_span(
+        animation, escaped,
+        rel_ms=rel_ms,
+        duration_cs=ass_centiseconds(w_end - w_start),
+    )
 
     # C10: a punch on the active word, independent of the animation style. Applied *before* the
     # highlight wrap so the highlight's own scale still wins on an emphasised word - two
@@ -666,13 +660,11 @@ def build_word_span(
 
     if highlighted:
         colors = getattr(preset, "colors", None)
-        highlight = getattr(colors, "highlight", "&H0000E5FF")
-        primary = getattr(colors, "primary", "&H00FFFFFF")
-        scale = int(round(float(getattr(preset, "highlight_scale", 1.18)) * 100))
-        span = (
-            f"{{\\c{highlight}&\\fscx{scale}\\fscy{scale}}}"
-            f"{span}"
-            f"{{\\c{primary}&\\fscx100\\fscy100}}"
+        span = ass_emphasis_span(
+            span,
+            primary=getattr(colors, "primary", "&H00FFFFFF"),
+            highlight=getattr(colors, "highlight", "&H0000E5FF"),
+            scale_pct=int(round(float(getattr(preset, "highlight_scale", 1.18)) * 100)),
         )
     elif _is_doubted(word, preset):
         # T7: a word the model barely guessed at is dimmed rather than asserted. Applied only
@@ -1613,11 +1605,16 @@ def _legacy_dialogue_lines(cues: list[Cue], use_karaoke: bool) -> list[str]:
         start = _ass_timestamp(cue.start)
         end = _ass_timestamp(cue.end)
         if use_karaoke:
-            parts = []
-            for w in cue.words:
-                dur_cs = max(1, int(round((w.end - w.start) * 100)))
-                parts.append(f"{{\\kf{dur_cs}}}{_escape(w.text)}")
-            text = " ".join(parts)
+            # The third copy of the karaoke span, alongside `build_word_span` and
+            # `kinetic._style_span`. `rel_ms` is unused by this animation but is still required,
+            # so it is passed as 0 rather than defaulted away.
+            text = " ".join(
+                ass_animation_span(
+                    "karaoke_fill", _escape(w.text),
+                    rel_ms=0, duration_cs=ass_centiseconds(w.end - w.start),
+                )
+                for w in cue.words
+            )
         else:
             text = " ".join(_escape(w.text) for w in cue.words)
         lines.append(ass_dialogue(text, style="Default", start=start, end=end))

@@ -213,6 +213,109 @@ def header(
     ))
 
 
+# --------------------------------------------------------------------------- #
+# Override spans — the tag syntax inside an event's Text field                  #
+# --------------------------------------------------------------------------- #
+#
+# The records above describe the *table*; these describe the per-word overrides that go in an
+# event's text. They live in the same module for one practical reason: both
+# ``worker.captions`` and ``worker.engines.kinetic`` need them, and ``kinetic`` may not import
+# ``captions`` at module scope (it would pull ``config`` and ``pydantic` into a module that is
+# required to stay importable without them). A module that imports nothing but ``re`` and
+# ``dataclasses`` is the only place the two can meet.
+
+#: How long ``pop``'s scale ramp takes, in milliseconds.
+#:
+#: Deliberately **not** the kinetic engine's configurable ``motion_duration_ms``: the four shared
+#: animations reproduce the v0.8.0 look byte for byte, and that look has this ramp hard-coded.
+#: Making it configurable here would change every existing render.
+POP_RAMP_MS = 120
+
+#: How long ``typewriter``'s alpha reveal takes, in milliseconds. Same reasoning as
+#: :data:`POP_RAMP_MS`.
+TYPEWRITER_RAMP_MS = 30
+
+#: The four animations both the caption path and the kinetic engine can draw — the intersection of
+#: ``caption_presets.VALID_ANIMATIONS`` and ``kinetic.KINETIC_STYLES``.
+#:
+#: The engine adds ``bounce``, ``highlight_sweep`` and ``slide_up``, which the preset vocabulary
+#: cannot express and which therefore stay in the engine.
+SHARED_ANIMATIONS: frozenset[str] = frozenset({"none", "pop", "typewriter", "karaoke_fill"})
+
+
+def centiseconds(seconds: float) -> int:
+    """A duration in ASS karaoke centiseconds, floored at 1.
+
+    Floored rather than clamped: ``\\kf0`` is a fill that never advances, so a word whose timing
+    rounds to zero would hold the sweep and never release it.
+    """
+    return max(1, int(round(seconds * 100)))
+
+
+def alpha_gate_span(rel_ms: int, ramp_ms: int) -> str:
+    """``{\\alpha&HFF&\\t(rel,rel+ramp,\\alpha&H00&)}`` — a word held invisible until its onset.
+
+    Two callers with two ramps: ``typewriter``'s reveal uses :data:`TYPEWRITER_RAMP_MS`, and the
+    kinetic engine's ``word_by_word`` gate uses ``1`` (as short as possible, because it is only
+    there to withhold the word rather than to animate it).
+    """
+    return f"{{\\alpha&HFF&\\t({rel_ms},{rel_ms + ramp_ms},\\alpha&H00&)}}"
+
+
+def animation_span(
+    animation: str,
+    escaped: str,
+    *,
+    rel_ms: int,
+    duration_cs: int,
+) -> str:
+    """The per-word animation span for one of :data:`SHARED_ANIMATIONS`.
+
+    One definition of what used to be two independent spellings — ``captions.build_word_span``
+    and ``kinetic._style_span`` — whose docstrings asserted byte-for-byte equality and relied on a
+    property test to keep it true. ``karaoke_fill`` had a **third** copy, in
+    ``captions._legacy_dialogue_lines``.
+
+    ``escaped`` must already have been through ``captions._escape``; nothing here escapes it.
+    ``rel_ms`` is the word's onset relative to its **cue** start, which is the offset libass'
+    ``\\t`` expects — not relative to the clip.
+
+    ``none``, and any animation this does not recognise, return the plain escaped text. That
+    fall-through is what lets the kinetic engine check its own three styles first and delegate the
+    rest here.
+
+    Well-formed by construction: every ``{`` opened below is closed in the same f-string, so no
+    transcript text can unbalance the braces.
+    """
+    if animation == "pop":
+        return (
+            f"{{\\fscx60\\fscy60\\t({rel_ms},{rel_ms + POP_RAMP_MS},"
+            f"\\fscx100\\fscy100)}}{escaped}"
+        )
+    if animation == "typewriter":
+        return f"{alpha_gate_span(rel_ms, TYPEWRITER_RAMP_MS)}{escaped}"
+    if animation == "karaoke_fill":
+        return f"{{\\kf{duration_cs}}}{escaped}"
+    return escaped
+
+
+def emphasis_span(span: str, *, primary: str, highlight: str, scale_pct: int) -> str:
+    """Wrap ``span`` in the emphasis colour and scale, and close both after it.
+
+    ``scale_pct`` is already a percentage: the caption path multiplies ``preset.highlight_scale``
+    by 100, the kinetic planner does the same when it builds the plan. Passing the fraction here
+    would render a word at 1% of its size.
+
+    Closes with explicit ``\\c`` and ``\\fscx``/``\\fscy`` resets rather than ``\\r``, because
+    ``\\r`` would also reset any animation span this wraps.
+    """
+    return (
+        f"{{\\c{highlight}&\\fscx{scale_pct}\\fscy{scale_pct}}}"
+        f"{span}"
+        f"{{\\c{primary}&\\fscx100\\fscy100}}"
+    )
+
+
 def _assert_fields_match_format() -> None:
     """Check at import that :class:`AssStyle` matches :data:`STYLE_FIELD_NAMES`, in order.
 
