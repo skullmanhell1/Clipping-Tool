@@ -166,6 +166,82 @@ describe("upload", () => {
 });
 
 
+describe("transcript trimming requests (U4)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const stubOk = () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
+
+  it("sends the cut list as its own key, not inside settings", async () => {
+    // `settings` is filtered against the options the backend knows and unknown keys are
+    // dropped in silence, so a cut list smuggled in there would vanish without an error.
+    const fetchMock = stubOk();
+    await api.rerenderClip("job1", "c1", { zoom: true }, [{ start: 1, end: 2 }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/jobs/job1/clips/c1/rerender");
+    expect(JSON.parse(init.body)).toEqual({
+      settings: { zoom: true },
+      cuts: [{ start: 1, end: 2 }],
+    });
+  });
+
+  it("sends an empty cut list when none is given", async () => {
+    // U7's plain re-render button goes through the same call and must not trim anything.
+    const fetchMock = stubOk();
+    await api.rerenderClip("job1", "c1", { zoom: true });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      settings: { zoom: true },
+      cuts: [],
+    });
+  });
+
+  it("reads a clip transcript with a plain GET", async () => {
+    const fetchMock = stubOk();
+    await api.clipTranscript("job1", "c1");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/jobs/job1/clips/c1/transcript");
+  });
+
+  it("surfaces the reason a transcript is unavailable", async () => {
+    // A 409 here is a normal outcome, and the API's own wording is what explains it.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ detail: "No cached transcript for this clip." }),
+      }),
+    );
+    await expect(api.clipTranscript("job1", "c1")).rejects.toThrow(/no cached transcript/i);
+  });
+
+  it("sends the auth token on both U4 calls", async () => {
+    // Merge guard. Both calls were written before the shared secret existed and used bare
+    // `fetch`, which a text merge keeps happily: they would 401, the editor would say it could
+    // not load the transcript, and nothing would point at auth.
+    window.localStorage.setItem("clipper_token", "s3cret");
+    try {
+      const fetchMock = stubOk();
+      await api.clipTranscript("job1", "c1");
+      await api.rerenderClip("job1", "c1", {}, [{ start: 1, end: 2 }]);
+      expect(fetchMock.mock.calls).toHaveLength(2);
+      for (const call of fetchMock.mock.calls) {
+        expect(call[1].headers["X-API-Token"]).toBe("s3cret");
+      }
+    } finally {
+      window.localStorage.clear();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The shared secret (Phase 1 security)
 //

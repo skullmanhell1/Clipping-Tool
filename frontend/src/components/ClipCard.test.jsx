@@ -106,8 +106,10 @@ describe("ClipCard re-render (U7)", () => {
     // That is what makes "change one setting and see it" a single click rather than a resubmit.
     setup();
     await userEvent.click(screen.getByRole("button", { name: /re-render this clip/i }));
+    // The trailing empty cut list is U4's: a plain re-render must send no cuts, or pressing
+    // this button would silently re-apply whatever the transcript editor last had selected.
     await waitFor(() =>
-      expect(api.rerenderClip).toHaveBeenCalledWith("job1", "c1", { color: "vivid" }),
+      expect(api.rerenderClip).toHaveBeenCalledWith("job1", "c1", { color: "vivid" }, []),
     );
   });
 
@@ -141,6 +143,71 @@ describe("ClipCard re-render (U7)", () => {
     setup();
     await userEvent.click(screen.getByRole("button", { name: /re-render this clip/i }));
     expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
+  });
+});
+
+describe("ClipCard transcript trimming (U4)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api, "rerenderClip").mockResolvedValue({ ...CLIP, duration: 4 });
+    vi.spyOn(api, "clipTranscript").mockResolvedValue({
+      duration: 5,
+      trimmed: false,
+      max_cuts: 200,
+      words: [
+        { start: 0.0, end: 0.4, text: "keep", probability: 0.99 },
+        { start: 0.6, end: 1.0, text: "um", probability: 0.4 },
+      ],
+    });
+  });
+
+  it("does not fetch the transcript until the editor is opened", () => {
+    // One request per clip, and a grid of twenty clips is the normal case.
+    setup();
+    expect(api.clipTranscript).not.toHaveBeenCalled();
+  });
+
+  it("opens the editor on demand", async () => {
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /trim by transcript/i }));
+    expect(await screen.findByTestId("transcript-editor-c1")).toBeInTheDocument();
+    expect(api.clipTranscript).toHaveBeenCalledWith("job1", "c1");
+  });
+
+  it("re-renders with the struck word's time range and the current settings", async () => {
+    const { onUpdated } = setup();
+    await userEvent.click(screen.getByRole("button", { name: /trim by transcript/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
+    await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
+    await waitFor(() =>
+      expect(api.rerenderClip).toHaveBeenCalledWith(
+        "job1",
+        "c1",
+        { color: "vivid" },
+        [{ start: 0.6, end: 1.0 }],
+      ),
+    );
+    await waitFor(() => expect(onUpdated).toHaveBeenCalled());
+  });
+
+  it("closes the editor after a trim, so the stale selection cannot be re-applied", async () => {
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /trim by transcript/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
+    await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("transcript-editor-c1")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the editor open when the re-render fails, so the edit is not lost", async () => {
+    api.rerenderClip.mockRejectedValueOnce(new Error("Re-render exploded"));
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /trim by transcript/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
+    await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
+    expect(await screen.findByText(/re-render exploded/i)).toBeInTheDocument();
+    expect(screen.getByTestId("transcript-editor-c1")).toBeInTheDocument();
   });
 });
 

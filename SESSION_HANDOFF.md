@@ -71,8 +71,8 @@ because it looks like success.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **1900 passed, 0 skipped, 0 warnings** |
-| `npm run test:run` | **98 passed** |
+| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
+| `npm run test:run` | **141 passed** |
 | `ruff check .` | clean |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
@@ -89,13 +89,21 @@ were tried and both are worse than the finding — `npm audit fix --force` *down
 
 ## 3. What is actually left
 
-14 items. Only three are a matter of effort.
+13 items. Only two are a matter of effort.
+
+**`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
+knowing where the seams ended up, because the next person to touch trimming will meet them:
+`worker/transcript_trim.py` owns the geometry (cuts in, keeps out) and does no I/O;
+`worker/clip_transcript.py` recovers a clip's words from the T8 cache and **never runs ASR**;
+`ClipCandidate.cuts` carries the list; and the render still goes through
+`filler.apply_keep_intervals`, so there is exactly one multi-range concat in the worker. Filler
+removal and a cut list compose by union into **one** keep list and **one** re-encode — do not add a
+second pass.
 
 ### Buildable now
 
 | Item | What | Why it was left |
 | --- | --- | --- |
-| **U4** | Transcript-based trimming — click words to cut | P1 and genuinely large. The Descript-class feature; needs a frontend transcript editor plus a backend cut list. `U7`'s `run_pipeline(explicit_candidates=…)` is the seam to build on. |
 | **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
 | **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
 
@@ -216,7 +224,13 @@ caller sees.
 
 ### Small things that will bite
 
-- `ClipCandidate` lives in `worker/selection.py`, not `worker/models.py`.
+- **The transcript cache is keyed on file *content*, not path.** `transcript_cache.hash_source`
+  digests the bytes, so two tests that write the same placeholder payload to different `tmp_path`
+  files share one cache entry. A test asserting a cache *miss* then passes or fails depending on
+  whether something earlier in the session stored one — it passed in isolation and failed in the
+  full suite on U4's first run. Give each fixture unique bytes.
+- `ClipCandidate` lives in `worker/selection.py`, not `worker/models.py`. It now carries `cuts`
+  (U4), which every selection path leaves empty; only an explicit edit populates it.
 - `Transcript` / `TranscriptSegment` / `Word` live in `worker/transcribe.py`.
 - `captions.Cue` has `start`, `end`, `words` — **no `text` field**.
 - `ProcessingOptions` has no `to_dict()`; use `dataclasses.asdict`.
@@ -243,4 +257,14 @@ empty list while every unit test still passed, and two cases of one fact being s
 so that changing either had no effect.
 
 Add a spec per batch under `tests/mutations/`. `tests/mutations/example.json` is the template and
-doubles as a self-test for the tool.
+doubles as a self-test for the tool. A spec's `command` can be anything, so the frontend gets one
+too — `["npm", "--prefix", "frontend", "run", "test:run"]`; see
+`tests/mutations/u4_transcript_trim_frontend.json`.
+
+**A mutation run is only as trustworthy as the baseline underneath it.** `CAUGHT` means "some test
+failed", and it cannot tell *why*. U4's first run reported 22 of 22 caught; one order-dependent
+test in the batch was failing for its own reasons, so every mutation inherited a free `CAUGHT`.
+With that test fixed, two mutations escaped — one a test asserting against the very constant the
+mutation changed (vacuous by construction), one a genuine second source of truth. **Run the target
+tests green on unmutated code first**, and treat a suspiciously perfect first result as a reason to
+look harder rather than a result.

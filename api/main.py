@@ -41,7 +41,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.security import ClipsAuthMiddleware, rate_limit, require_api_token
 from config import settings
@@ -351,14 +351,29 @@ class CaptionPreviewModel(BaseModel):
     overrides: dict = {}
 
 
+class CutRange(BaseModel):
+    """One clip-relative range to remove (U4)."""
+
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+
+
 class RerenderRequest(BaseModel):
-    """Re-render one clip, optionally with changed settings (U7).
+    """Re-render one clip, optionally with changed settings (U7) or a cut list (U4).
 
     ``settings`` is a partial options blob; unknown keys are ignored, so a UI can send its whole
     settings object without knowing which fields this build understands.
+
+    ``cuts`` is a **separate, typed field rather than a key inside** ``settings``, for two
+    reasons. ``settings`` is filtered against ``ProcessingOptions`` fields and unknown keys are
+    dropped silently, so a cut list sent that way would be discarded without a word - the worst
+    possible failure for a destructive edit the user is watching for. And a cut list describes
+    one clip, whereas everything in ``settings`` describes the job, so putting it there would
+    invite it being applied to clips it was not drawn against.
     """
 
     settings: dict = {}
+    cuts: list[CutRange] = Field(default_factory=list)
 
 
 class ClipReviewModel(BaseModel):
@@ -1252,7 +1267,98 @@ def review_clips(job_id: str, req: BatchReviewModel) -> dict:
     return {"updated": updated, "count": len(updated)}
 
 
-@app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender", tags=["metadata"], dependencies=[Depends(rate_limit)])
+@app.get("/api/jobs/{job_id}/clips/{clip_id}/transcript", tags=["metadata"])
+def clip_transcript(job_id: str, clip_id: str) -> dict:
+    """Word-level timings for one rendered clip, for the transcript editor (U4).
+
+    Deliberately **not** rate limited, following the rule set when the limiter was added: the
+    eight expensive routes are throttled and reads are not, because the UI polls. This is a
+    cache read behind a click, and a budget on it would throttle the shipped editor rather
+    than an abuser. It is still authenticated - the app-level dependency covers every route,
+    which is why that was chosen over per-decorator wiring.
+
+    Read-only and cheap: the words come from the T8 transcript cache entry the render itself
+    consumed, so they are the words that were burned in, and no ASR runs. A miss is a **409**
+    rather than an empty list, because "this clip has no words" and "I cannot tell you this
+    clip's words" call for completely different things from the UI - the first should offer
+    nothing to edit, the second should say why.
+
+    Offsets are clip-relative, which is the frame a cut list must be expressed in. A clip
+    already tightened by filler removal is the one case where these do not line up with the
+    rendered media, and it is reported rather than papered over: see ``trimmed``.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+
+    from worker import clip_transcript as ct
+    from worker import rerender as rerender_module
+
+    try:
+        source = rerender_module.resolve_source(job)
+    except rerender_module.RerenderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    options = job.options
+    try:
+        words = ct.words_for_clip(
+            source,
+            float(clip.start),
+            float(clip.end),
+            language=getattr(options, "language", None) or None,
+            translate=bool(getattr(options, "translate", False)),
+            vocabulary=getattr(options, "vocabulary", "") or "",
+        )
+    except ct.TranscriptUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Whether the rendered media still matches these offsets. Filler removal (and a previous
+    # U4 trim) concatenated the clip, so word timings drawn from the source window are ahead
+    # of the media by the removed duration. Reported instead of corrected because the removed
+    # regions are not recorded on the clip, so there is nothing to correct *with* - and a
+    # silently misaligned editor would have the user striking the wrong words.
+    #
+    # Compared for equality against the applied marker, not by prefix: a *refused* trim
+    # records `transcript_trim_refused:<reason>`, which shares the prefix but means the media
+    # was left alone - so a prefix test would report a clip as trimmed precisely when the trim
+    # did not happen.
+    trim_mod = _trim_module()
+    effects = list(getattr(clip, "effects_applied", None) or [])
+    trimmed = any(marker in ("filler_removal", trim_mod.MARKER) for marker in effects)
+    return {
+        "job_id": job_id,
+        "clip_id": clip_id,
+        "start": float(clip.start),
+        "end": float(clip.end),
+        "duration": round(float(clip.end) - float(clip.start), 3),
+        "trimmed": trimmed,
+        "max_cuts": trim_mod.MAX_CUTS,
+        "words": [
+            {
+                "start": round(float(w.start), 3),
+                "end": round(float(w.end), 3),
+                "text": w.text,
+                "probability": round(float(getattr(w, "probability", 1.0)), 4),
+            }
+            for w in words
+        ],
+    }
+
+
+def _trim_module():
+    """The U4 trim module, imported lazily to keep the module import graph flat."""
+    from worker import transcript_trim
+
+    return transcript_trim
+
+
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/rerender",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
 def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> dict:
     """Re-render one clip, optionally with changed settings (U7).
 
@@ -1272,10 +1378,22 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
         raise HTTPException(status_code=404, detail="Job or clip not found")
 
     from worker import rerender as rerender_module
+    from worker import transcript_trim as trim
+
+    # U4: refuse an oversized cut list here, with a status and a message, rather than letting
+    # the pipeline decline it into a marker the caller has to go looking for. The request is
+    # the thing that is wrong, and the caller is a UI waiting on this response.
+    if len(req.cuts) > trim.MAX_CUTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many cuts: {len(req.cuts)} (limit {trim.MAX_CUTS}). Each cut adds a "
+                   "pair of filters to the render graph.",
+        )
 
     try:
         updated = rerender_module.rerender_clip(
-            job, clip, option_overrides=req.settings or None
+            job, clip, option_overrides=req.settings or None,
+            cuts=[(c.start, c.end) for c in req.cuts],
         )
     except rerender_module.RerenderError as exc:
         # 409 rather than 500: the request was well-formed and the state of the world is the

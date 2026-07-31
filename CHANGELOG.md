@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — transcript-based trimming (U4)
+
+- **`U4` — click words out of a clip.** The Descript-class feature: a clip's transcript is shown
+  word by word, striking words out removes them from the media, and the clip is re-rendered in
+  place with its metadata, filename and publish history intact.
+
+  **No new ffmpeg path.** A cut list and filler removal are the same operation with different
+  reasons for wanting a region gone, so both resolve to **one** keep list and **one** re-encode
+  through the existing `filler.apply_keep_intervals` (`trim`/`atrim` + `concat`, with V10's seam
+  fades). Applying them in sequence was the obvious alternative and is wrong twice over: it
+  concatenates the clip twice, and the second pass's offsets would be expressed against the first
+  pass's output timeline rather than the one the caller's cuts refer to. Where they overlap they
+  compose by **union** — both features get what they asked for, rather than the later one winning.
+
+  **Cuts are the wire format, not keeps.** A cut list is what a transcript editor produces, it needs
+  no knowledge of the duration the renderer will settle on (which AU7 edge-silence trimming can
+  still change), and an empty cut list unambiguously means "change nothing" — where an empty *keep*
+  list would mean "remove everything", so a dropped field would destroy the clip instead of no-oping.
+  Two independent keep lists also have no correct way to combine; intersecting them is right only
+  because they are complements of removals, which is the cut representation in disguise.
+
+  **The cut list is a typed field of its own, not a key inside `settings`.** `settings` is filtered
+  against `ProcessingOptions` and unknown keys are dropped in silence, which for a destructive edit
+  the user is watching for is the worst available failure. It is also per-clip, where everything in
+  `settings` is per-job.
+
+  **Refusals, not approximations**, following the rest of the pipeline. Striking every word records
+  `transcript_trim_refused:empty_result` and renders the clip untouched, because an empty keep list
+  is a `concat` with no inputs. A list longer than 200 cuts records
+  `transcript_trim_refused:too_many_cuts` — the filter graph grows linearly with the cut count, so
+  past some point the graph is the problem rather than the edit — and the API answers `422` naming
+  the limit rather than leaving the caller to find a marker. Keep segments below 200 ms are dropped:
+  rendered, a 50 ms sliver between two cuts is a frame of video and an audible click, not a word.
+
+  **Word timings come from the T8 cache, and ASR never runs to serve the editor.**
+  `GET /api/jobs/{job}/clips/{clip}/transcript` reads the cache entry the render itself consumed —
+  so the words a user clicks are the words that were burned in — and answers `409` on a miss rather
+  than blocking a UI interaction on a multi-minute transcription. The key is derived by
+  `transcribe.cache_key_for`, extracted so that the reader and the writer cannot drift apart; the
+  same fact stated in two places is a defect the mutation harness has now caught three times.
+
+  One honest gap is reported rather than papered over: a clip whose media was already tightened at
+  render time has word times that run ahead of the file being played, and the removed regions are
+  not recorded on the clip, so there is nothing to correct with. The endpoint returns `trimmed:
+  true` and the editor says so.
+
+- **Fixed: `ClipResult.duration` reported the source window, not the rendered clip.** Pre-existing
+  and visible whenever filler removal had tightened a clip — the recorded duration was
+  `end - start`, so a successful tightening was reported as having changed nothing. It is now the
+  rendered length. `start`/`end` still describe where in the source the clip came from, which is
+  what a resume matches windows on. Default runs are unaffected (`filler_removal` is off by
+  default and an absent cut list changes nothing), so the parity goldens are untouched.
 ### Fixed — three defects that only appeared outside a prepared machine
 
 - **`C1`/`C2`/`M7` — a vendored caption face is available because we ship it.** `font_available`

@@ -344,8 +344,13 @@ def test_variable_faces_are_not_claimed_from_the_bundled_dir_alone(host_fonts):
     variable = [e for e in _manifest()["fonts"] if e["variable"]]
     assert variable, "manifest has no variable faces; this test would pass vacuously"
     for entry in variable:
+        # noqa on the message, not the rule: S608 (SQL injection) fires because the prose
+        # "select its named instance from fontsdir" reads as SELECT ... FROM to the heuristic.
+        # There is no query here. Suppressed at the one line it misfires on rather than by
+        # adding S608 to the tests/* ignores, which would switch the rule off for a suite that
+        # does execute real SQL against sqlite.
         assert not captions.font_available(entry["family"]), (
-            f"{entry['family']!r} is a variable face; libass cannot select its named "
+            f"{entry['family']!r} is a variable face; libass cannot select its named "  # noqa: S608
             "instance from fontsdir, so it must not count as available on that basis"
         )
 
