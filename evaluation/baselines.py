@@ -109,9 +109,17 @@ def longest_segment_baseline(
     """The ``k`` longest ``segments``, longest first.
 
     ``segments`` are (start, end)-bearing spans - in practice the output of
-    ``worker.segmentation``, so this reproduces what the shipped fallback does when it caps the
-    count. That makes it the most interesting baseline of the three: if the LLM selector cannot
-    beat it, the fallback is not a fallback, it is the product.
+    ``worker.segmentation``.
+
+    This *used* to be what the shipped fallback did when it capped the count, which made it the
+    most interesting of the three baselines. S11 replaced that rule with measured scoring, so it
+    is now a historical floor rather than a mirror of production: it answers "is the new scoring
+    actually better than picking the longest segments?", which is the question S11 needs
+    answered and cannot answer about itself.
+
+    Deliberately still an independent implementation, importing nothing from ``worker``. A
+    baseline that shared code with the thing it measures would move whenever production moved
+    and could never report a regression.
     """
     ranked = sorted(
         (
