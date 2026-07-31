@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol, cast
 
 from config import settings
 from worker.effects.caption_presets import plan_keywords
@@ -646,7 +646,9 @@ def broll_asset_record(cue: BrollCue) -> dict:
     Returns ``{provider, source_id, license, attribution, keyword, path}``
     (Reqs 12.1, 12.2, 20.1). Assumes ``cue.asset`` is set.
     """
-    asset = cue.asset
+    # Precondition, not an assumption the checker can see: callers pass cues from the
+    # `resolved` list built in `broll_filtergraph`, or from `Broll_Engine.resolve`.
+    asset = cast(AssetRef, cue.asset)
     return {
         "provider": asset.provider,
         "source_id": asset.source_id,
@@ -753,7 +755,9 @@ def build_broll_overlay(
     current = base_label
     n = len(resolved)
     for i, cue in enumerate(resolved):
-        asset = cue.asset
+        # `resolved` was filtered on `asset is not None` above; cast keeps that invariant
+        # documented rather than adding a branch that can never be taken.
+        asset = cast(AssetRef, cue.asset)
         idx = input_offset + i
         start = max(0.0, float(cue.start))
         end = max(start, float(cue.end))

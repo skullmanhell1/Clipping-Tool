@@ -87,7 +87,7 @@ def _compat_args(encoder) -> list[str]:
     pairs = zip(H264_COMPAT_ARGS[::2], H264_COMPAT_ARGS[1::2])
     args: list[str] = []
     for flag, value in pairs:
-        if flag == "-pix_fmt" and getattr(encoder, "pix_fmt", ""):
+        if flag == "-pix_fmt" and getattr(encoder, "pix_fmt", None):
             value = encoder.pix_fmt
         elif flag == "-level" and not getattr(encoder, "accepts_level", True):
             continue

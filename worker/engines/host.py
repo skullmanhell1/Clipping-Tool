@@ -690,7 +690,9 @@ class Engine_Host:
         for engine in self._registered_for(coerced):
             result = self._invoke(
                 engine,
-                lambda bound=engine: self._build_context(
+                # The `bound=engine` default is what pins the loop variable per iteration;
+                # mypy cannot infer a lambda's type through _invoke's generic parameter.
+                lambda bound=engine: self._build_context(  # type: ignore[misc]
                     bound,
                     coerced,
                     clip_id=key,
@@ -997,7 +999,9 @@ class Engine_Host:
         self._workspaces.setdefault(clip_id, []).append(workspace)
 
         base = self.time_base()
-        notes = (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
+        notes: tuple[str, ...] = (
+            (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
+        )
         notes = notes + tuple(_as_text(note) for note in (seam_notes or ()))
         notes = notes + tuple(_as_text(note) for note in (caller_notes or ()))
         budget = coerce_float(getattr(engine, "time_budget_s", 0.0), 0.0, lo=0.0)

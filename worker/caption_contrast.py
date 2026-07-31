@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import settings
+from worker.effects.caption_presets import CaptionPreset
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,9 @@ def sample_background(
     return BackgroundSample(mean_luma=sum(readings) / len(readings), samples=len(readings))
 
 
-def apply_auto_contrast(preset, sample: Optional[BackgroundSample]) -> tuple[object, list[str]]:
+def apply_auto_contrast(
+    preset: CaptionPreset, sample: Optional[BackgroundSample]
+) -> tuple[CaptionPreset, list[str]]:
     """Return ``(preset, markers)`` with legibility colours chosen for the background (C20).
 
     Only ``outline`` and ``box`` are touched. The fill is a brand decision (U6) and silently
@@ -194,13 +197,13 @@ def apply_auto_contrast(preset, sample: Optional[BackgroundSample]) -> tuple[obj
 
 def choose_for_clip(
     video: str | Path,
-    preset,
+    preset: CaptionPreset,
     *,
     duration: float,
     video_width: int,
     video_height: int,
     position: Optional[str] = None,
-) -> tuple[object, list[str]]:
+) -> tuple[CaptionPreset, list[str]]:
     """Measure the caption region of ``video`` and adapt ``preset``'s legibility colours (C20).
 
     Off unless ``settings.caption_auto_contrast`` is set, because it costs three seeks per clip and

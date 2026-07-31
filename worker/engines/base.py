@@ -38,7 +38,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, cast, runtime_checkable
+
+if TYPE_CHECKING:
+    # Type-only imports. A runtime import would be circular — `worker.engines.artifacts` imports
+    # `Engine_Artifact` from this module — which is why these two annotations were string forward
+    # references carrying an F821 suppression. Under TYPE_CHECKING the names are real to the
+    # never imported at run time, so the cycle stays broken and the suppressions are unnecessary.
+    from worker.engines.artifacts import Engine_Workspace
+    from worker.engines.capabilities import Capability_Report
 
 from worker.engines.timebase import Time_Base
 
@@ -430,8 +438,8 @@ class Engine_Context:
     options: Any = None                   # this engine's resolved Engine_Options
     options_digest: str = ""              # Req 11.1
     seed: int = 0                         # Req 12.2 — only randomness source
-    workspace: Optional["Engine_Workspace"] = None      # noqa: F821 - worker.engines.artifacts
-    capabilities: Optional["Capability_Report"] = None  # noqa: F821 - worker.engines.capabilities
+    workspace: Optional["Engine_Workspace"] = None      # worker.engines.artifacts
+    capabilities: Optional["Capability_Report"] = None  # worker.engines.capabilities
     permissibility: bool = False          # ProcessingOptions.permissibility_mode
     deadline: float = math.inf            # time.monotonic() budget end (Req 8.6)
     time_budget_s: float = 0.0
@@ -515,7 +523,8 @@ class Engine_Context:
         """
         if not math.isfinite(self.deadline):
             return math.inf
-        current = now if _is_number(now) else time.monotonic()
+        # cast: `_is_number` establishes this but is a plain predicate, not a TypeGuard.
+        current = cast(float, now) if _is_number(now) else time.monotonic()
         if not math.isfinite(float(current)):
             return 0.0
         return max(0.0, self.deadline - float(current))

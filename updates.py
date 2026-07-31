@@ -80,7 +80,7 @@ class UpdateChecker:
     def check(self, force: bool = False) -> dict[str, Any]:
         """Return ``{current, latest, update_available, html_url, checked_at, ...}``."""
         current = get_current_version()
-        result = {
+        result: dict[str, Any] = {
             "current": current,
             "latest": None,
             "update_available": False,
@@ -104,7 +104,7 @@ class UpdateChecker:
             latest = str(data.get("tag_name") or data.get("name") or "").strip()
             result["latest"] = latest or None
             result["html_url"] = data.get("html_url") or result["html_url"]
-            result["checked_at"] = self._fetched_at
+            result["checked_at"] = self._fetched_at  # float, unlike the bool/str entries
             if latest:
                 result["update_available"] = is_newer(latest, current)
         return result

@@ -566,12 +566,15 @@ def run_pipeline(
             applied.extend(compose.markers)
 
         # 6. thumbnail from the finished clip
-        thumb = clips_dir / f"clip_{clip_id}.jpg"
+        thumb_path = clips_dir / f"clip_{clip_id}.jpg"
+        # Two jobs, two variables: `thumb_path` is where it would go, `thumb` is whether there
+        # is one. Using one name for both is what made assigning None widen the type.
+        thumb: Optional[Path] = thumb_path
         try:
             # V17: score a few candidate frames rather than taking a fixed position, which on a
             # clip opening on a cut or a blink chose exactly the wrong still.
             fu.generate_thumbnail(
-                final, thumb, at=thumbnail.choose_thumbnail_time(final, c.duration)
+                final, thumb_path, at=thumbnail.choose_thumbnail_time(final, c.duration)
             )
         except fu.FFmpegError:
             thumb = None

@@ -23,7 +23,7 @@ from typing import Any, Optional
 from config import settings
 from worker import cancellation, observability
 from worker import download as dl
-from worker.models import Job, JobStatus, ProcessingOptions
+from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ class JobStore:
             job.updated_at = time.time()
         self._persist(job)
 
-    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[object]:
+    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[ClipResult]:
         """Atomically update editable fields on one clip within a job.
 
         Only known :class:`ClipResult` attributes are updated (unknown keys are
@@ -196,7 +196,7 @@ class JobStore:
         self._persist(job)
         return clip
 
-    def get_clip(self, job_id: str, clip_id: str) -> Optional[object]:
+    def get_clip(self, job_id: str, clip_id: str) -> Optional[ClipResult]:
         """Return a single clip within a job, or ``None``."""
         with self._lock:
             job = self._jobs.get(job_id)

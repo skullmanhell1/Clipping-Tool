@@ -125,6 +125,9 @@ def detect_silences(
         "-f", "null", "-",
     ]
     # silencedetect writes to stderr; this command is expected to "succeed".
+    # The except branch below deliberately rebinds this to the error, whose stderr still
+    # carries the silencedetect output worth parsing.
+    proc: subprocess.CompletedProcess[str] | subprocess.CalledProcessError
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except FileNotFoundError as exc:

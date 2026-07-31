@@ -56,7 +56,7 @@ import struct
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence, cast
 
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -1290,7 +1290,7 @@ def plan_stems_from_context(ctx: Any) -> Stem_Plan:
     (Req 1.9, 12.5, 19.2).
     """
     return plan_stems(
-        opts=getattr(ctx, "options", None),
+        opts=cast(Any, getattr(ctx, "options", None)),
         notes=getattr(ctx, "notes", ()) or (),
         duration=getattr(ctx, "duration", 0.0),
         fmt=None,
@@ -1765,18 +1765,21 @@ def assemble_stem_set(
         for path in paths:
             _verify_stem_file(path, name, fmt, length)
 
+        # A distinct name from the `target` used by the grouping pass above, which holds a
+        # Stem_Name string rather than a path.
+        resolved_path: Path
         if not paths:
-            target = _prepared(destination / f"{name}.wav")
-            _run(runner, _silence_command(target, fmt, length), timeout_s)
+            resolved_path = _prepared(destination / f"{name}.wav")
+            _run(runner, _silence_command(resolved_path, fmt, length), timeout_s)
             details.append(f"stem_missing:{name}")
         elif len(paths) == 1:
-            target = paths[0]
+            resolved_path = paths[0]
         else:
-            target = _prepared(destination / f"{name}.wav")
-            _run(runner, _sum_command(paths, target, fmt), timeout_s)
+            resolved_path = _prepared(destination / f"{name}.wav")
+            _run(runner, _sum_command(paths, resolved_path, fmt), timeout_s)
 
-        _verify_stem_file(target, name, fmt, length)
-        stem_set[name] = target
+        _verify_stem_file(resolved_path, name, fmt, length)
+        stem_set[name] = resolved_path
 
     return stem_set, tuple(details)
 

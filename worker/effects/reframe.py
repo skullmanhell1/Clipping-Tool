@@ -419,9 +419,9 @@ def associate_faces(
     # Apply the per-label track to each turn; a turn whose assigned track has no
     # presence over its window (or whose label got no track) is unassociated.
     for i, t in enumerate(turns):
-        tid = label_track.get(t.speaker_label)
-        if tid is not None and track_by_id[tid].presence(t.start, t.end) > 0.0:
-            by_turn[i] = tid
+        turn_track = label_track.get(t.speaker_label)
+        if turn_track is not None and track_by_id[turn_track].presence(t.start, t.end) > 0.0:
+            by_turn[i] = turn_track
         else:
             by_turn[i] = None
             unassociated.append(i)
@@ -429,9 +429,11 @@ def associate_faces(
     # Rank shown tracks by total speaking duration of their associated turns.
     duration_by_track: dict[str, float] = {}
     for i, t in enumerate(turns):
-        tid = by_turn[i]
-        if tid is not None:
-            duration_by_track[tid] = duration_by_track.get(tid, 0.0) + max(0.0, t.end - t.start)
+        assigned = by_turn[i]
+        if assigned is not None:
+            duration_by_track[assigned] = (
+                duration_by_track.get(assigned, 0.0) + max(0.0, t.end - t.start)
+            )
     shown_order = sorted(
         duration_by_track,
         key=lambda tid: (-duration_by_track[tid], track_order.index(tid)),
@@ -538,7 +540,8 @@ def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, i
         faces = detector.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
         )
-        return [tuple(int(v) for v in f) for f in faces]
+        # Explicit arity: Haar returns (x, y, w, h) rows, and the declared return type says so.
+        return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
 
     return _detect
 
@@ -664,7 +667,7 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     samples: list[Center] = []
     last_center: Optional[tuple[float, float]] = None
     for t, boxes in per_frame:
-        center = pick_main_face([tuple(f) for f in boxes])
+        center = pick_main_face([(f[0], f[1], f[2], f[3]) for f in boxes])
         if center is None:
             center = last_center
         if center is not None:

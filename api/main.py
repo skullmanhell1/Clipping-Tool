@@ -35,7 +35,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -513,7 +513,7 @@ def info() -> dict[str, object]:
     }
 
 
-def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
+def _engines_info() -> tuple[list[dict[str, object]], dict[str, Any]]:
     """Return the ``(engines, capabilities)`` pair advertised by ``/api/info``.
 
     Reqs 20.1/20.2/20.6 — additive only: one row per registered AV engine in the
@@ -569,7 +569,7 @@ def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
 
 
 def _add_engine_option_domains(
-    rows: list[dict[str, object]], capabilities: dict[str, object]
+    rows: list[dict[str, object]], capabilities: dict[str, Any]
 ) -> None:
     """Advertise engine-specific option domains inside the ``capabilities`` block.
 
@@ -1144,7 +1144,10 @@ def resume_job(job_id: str) -> dict:
             status_code=409,
             detail="Every planned clip for this job has already been rendered.",
         )
-    return manager.store.get(job_id).to_dict()
+    resumed = manager.store.get(job_id)
+    if resumed is None:  # pragma: no cover - resume() just confirmed it exists
+        raise HTTPException(status_code=404, detail="Job not found")
+    return resumed.to_dict()
 
 
 @app.post("/api/captions/preview", tags=["metadata"], dependencies=[Depends(rate_limit)])
@@ -1332,6 +1335,8 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
         raise HTTPException(status_code=502, detail=f"Regeneration failed: {exc}") from exc
 
     updated = manager.store.update_clip(job_id, clip_id, {req.field: value})
+    if updated is None:  # pragma: no cover - the clip was located immediately above
+        raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, updated)
     return {"field": req.field, "value": value, "clip": updated.to_dict()}
 
