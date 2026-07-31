@@ -353,9 +353,27 @@ def test_an_unrecognised_backend_resolves_to_haar_without_raising(value):
     assert detector is not None
 
 
+def _released(detector):
+    """Close a resolved detector if it holds a native graph.
+
+    Every test here that resolves ``mediapipe`` for real must do this. MediaPipe's
+    ``FaceDetector`` is finalised at interpreter shutdown if nothing closed it, and by then its
+    own C shim is already torn down -- which surfaces as
+    ``TypeError: 'NoneType' object is not callable`` from a teardown handler, long after pytest
+    has printed its summary. A leak here is not a warning; it is a confusing crash in an
+    unrelated place.
+    """
+    close = getattr(detector, "close", None)
+    if close is not None:
+        close()
+
+
 def test_backend_names_are_case_and_space_insensitive():
-    _detector, label = resolve_detector("  MediaPipe  ")
-    assert label in {"mediapipe", "substituted:mediapipe:haar"}
+    detector, label = resolve_detector("  MediaPipe  ")
+    try:
+        assert label in {"mediapipe", "substituted:mediapipe:haar"}
+    finally:
+        _released(detector)
 
 
 def test_an_injected_detector_resolves_to_injected_and_is_used():
@@ -446,10 +464,13 @@ def test_the_resolved_label_never_names_a_backend_that_did_not_run(tmp_path):
     """
     for backend in ("haar", "mediapipe", "nonsense"):
         for model_dir in (None, tmp_path):
-            _d, label = resolve_detector(backend, model_dir=model_dir)
-            marker = detector_marker_for(label)
-            if label.startswith("substituted:"):
-                assert marker == "face_detector_substituted:mediapipe:haar"
-            else:
-                assert label in {"haar", "mediapipe", "injected"}
-                assert marker == f"face_detector:{label}"
+            detector, label = resolve_detector(backend, model_dir=model_dir)
+            try:
+                marker = detector_marker_for(label)
+                if label.startswith("substituted:"):
+                    assert marker == "face_detector_substituted:mediapipe:haar"
+                else:
+                    assert label in {"haar", "mediapipe", "injected"}
+                    assert marker == f"face_detector:{label}"
+            finally:
+                _released(detector)

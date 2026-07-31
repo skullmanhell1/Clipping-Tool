@@ -476,6 +476,7 @@ def run_pipeline(
                     layout=options.reframe_layout,
                     intensity=options.reframe_intensity,
                     detector=FACE_DETECTOR, sampler=FRAME_SAMPLER,
+                    backend=options.face_detector, notes=applied,
                 )
                 # Record the applied-layout marker (Req 14.5) and attach the
                 # per-source diarisation provenance notes (Reqs 4.2/4.4/16.5).
@@ -486,13 +487,21 @@ def run_pipeline(
                 # crop-blur (Reqs 14.1-14.4).
                 applied.append("speaker_reframe_degraded")
                 try:
-                    reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                    reframe.apply_reframe(
+                        raw, geo, aspect=options.aspect,
+                        backend=options.face_detector, detector=FACE_DETECTOR,
+                        notes=applied,
+                    )
                     applied.append("reframe")
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
                     fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
         elif options.reframe:
             try:
-                reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                reframe.apply_reframe(
+                    raw, geo, aspect=options.aspect,
+                    backend=options.face_detector, detector=FACE_DETECTOR,
+                    notes=applied,
+                )
                 applied.append("reframe")
             except (reframe.ReframeUnavailable, fu.FFmpegError):
                 fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")

@@ -270,6 +270,22 @@ def _as_detection(item: object) -> Optional[Detection]:
     """
     if isinstance(item, Detection):
         return item
+    # Anything carrying x/y/w/h attributes -- chiefly :class:`FaceBox`, which the
+    # speaker-aware path deals in. FaceBox is *not* a 4-tuple: it carries a leading ``t``, so
+    # tuple unpacking below silently rejects it. Without this branch every FaceBox is dropped
+    # and the speaker path's coverage is always 0.0 -- reported as "this footage has no faces"
+    # for footage the same run just tracked successfully.
+    if all(hasattr(item, attr) for attr in ("x", "y", "w", "h")):
+        try:
+            return Detection(
+                int(item.x),  # type: ignore[attr-defined]
+                int(item.y),  # type: ignore[attr-defined]
+                int(item.w),  # type: ignore[attr-defined]
+                int(item.h),  # type: ignore[attr-defined]
+                score=getattr(item, "score", None),
+            )
+        except (TypeError, ValueError):
+            return None
     try:
         x, y, w, h = item  # type: ignore[misc]
     except (TypeError, ValueError):
@@ -1160,6 +1176,64 @@ def _sample_face_boxes(
     ).as_tuples()
 
 
+def detect_faces_report(
+    video: str | Path,
+    *,
+    sample_fps: Optional[float] = None,
+    max_samples: Optional[int] = None,
+    detector: Optional[Callable] = None,
+    backend: Optional[str] = None,
+) -> tuple[list[list[FaceBox]], Sample_Report]:
+    """All face boxes per sampled frame, **and** what was learned finding them.
+
+    The additive sibling of :func:`detect_faces`, in the same direction as the other two pairs
+    in this module: the reporting form is the implementation and the original is a wrapper, so
+    the original's signature cannot drift out from under its callers.
+    """
+    if sample_fps is None:
+        sample_fps = settings.reframe_sample_fps
+    if max_samples is None:
+        max_samples = settings.reframe_sample_cap
+
+    report = sample_face_report(
+        video,
+        sample_fps=sample_fps,
+        max_samples=max_samples,
+        detector=detector,
+        backend=backend,
+    )
+    result: list[list[FaceBox]] = []
+    for t, boxes in report.samples:
+        result.append(
+            [FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h) for d in boxes]
+        )
+    return result, report
+
+
+def synthetic_report(
+    per_frame: Sequence[Sequence[object]], label: str, requested_fps: float
+) -> Sample_Report:
+    """A :class:`Sample_Report` describing samples that came from an injected sampler.
+
+    An injected sampler bypasses detection entirely, so there is no backend to name and no
+    measured rate. Rather than reporting nothing -- which would leave the speaker-aware path
+    silent where the single-speaker path speaks, and the requirement is that both report
+    identically -- this records ``injected`` and computes coverage from the boxes the sampler
+    actually produced. ``effective_fps`` is set to the requested rate so the cap never reads as
+    having bound: nothing was sampled, so nothing was capped.
+    """
+    samples = [
+        (float(index), [d for d in (_as_detection(b) for b in boxes) if d is not None])
+        for index, boxes in enumerate(per_frame)
+    ]
+    return Sample_Report(
+        samples=samples,
+        resolved_backend=label,
+        effective_fps=float(requested_fps),
+        requested_fps=float(requested_fps),
+    )
+
+
 def detect_faces(
     video: str | Path,
     *,
@@ -1178,26 +1252,71 @@ def detect_faces(
     (Reqs 5.3, 5.4). CPU-only. ``detector`` is an injected callable
     ``frame -> list[(x, y, w, h)]`` (defaults to the lazy Haar cascade).
     """
-    if sample_fps is None:
-        sample_fps = settings.reframe_sample_fps
-    if max_samples is None:
-        max_samples = settings.reframe_sample_cap
-
-    per_frame = _sample_face_boxes(
+    return detect_faces_report(
         video, sample_fps=sample_fps, max_samples=max_samples, detector=detector
-    )
+    )[0]
 
-    result: list[list[FaceBox]] = []
-    for t, boxes in per_frame:
-        frame_boxes: list[FaceBox] = []
-        for b in boxes:
-            try:
-                x, y, w, h = b
-            except (TypeError, ValueError):
-                continue
-            frame_boxes.append(FaceBox(round(float(t), 3), int(x), int(y), int(w), int(h)))
-        result.append(frame_boxes)
-    return result
+
+def detector_notes(report: Sample_Report) -> list[str]:
+    """The Effects_Applied markers a :class:`Sample_Report` earns, in a fixed order.
+
+    One function so both geometry paths report identically -- the requirement is that
+    single-speaker reframe and speaker-aware reframe say the same things, and the way to
+    guarantee that is for there to be one implementation rather than two that agree today.
+
+    Three rules are encoded here rather than at the call sites:
+
+    * the resolved-backend marker is always present, because a caller cannot otherwise tell a
+      requested backend from the one that ran;
+    * the sampling-rate marker appears **only when the cap actually bound**, since its purpose
+      is to explain a *reduced* rate and emitting it always would make it noise;
+    * the low-confidence marker appears only when coverage is below the floor **and at least
+      one detection was found**. Zero coverage is already reported by the existing no-faces
+      degradation, and emitting ``reframe_low_confidence:0.00`` beside it would be a second
+      name for one condition -- the duplicated-fact pattern mutation testing has caught twice
+      in this repository.
+    """
+    notes = [detector_marker_for(report.resolved_backend)]
+    if report.capped:
+        notes.append(sample_rate_marker(report.effective_fps))
+    coverage = report.coverage
+    if coverage > 0.0 and coverage < float(settings.reframe_coverage_floor):
+        notes.append(low_confidence_marker(coverage))
+    return notes
+
+
+def track_faces_report(
+    video: str | Path,
+    sample_fps: float = 5.0,
+    *,
+    backend: Optional[str] = None,
+    detector: Optional[Callable] = None,
+    max_samples: Optional[int] = None,
+) -> tuple[list[Center], Sample_Report]:
+    """The main-face centre path **and** what was learned finding it.
+
+    The additive sibling of :func:`track_faces`, in the same direction as
+    :func:`sample_face_report` is of :func:`_sample_face_boxes`: the reporting version is the
+    implementation and the original is a thin wrapper, so the original's signature -- which
+    tests and the pipeline both depend on -- cannot drift.
+    """
+    report = sample_face_report(
+        video,
+        sample_fps=sample_fps,
+        max_samples=max_samples,
+        detector=detector,
+        backend=backend,
+    )
+    samples: list[Center] = []
+    last_center: Optional[tuple[float, float]] = None
+    for t, boxes in report.samples:
+        center = pick_main_face(boxes)
+        if center is None:
+            center = last_center
+        if center is not None:
+            samples.append(Center(round(t, 3), center[0], center[1]))
+            last_center = center
+    return samples, report
 
 
 def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
@@ -1209,21 +1328,11 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     unchanged v0.7.0 single-speaker behaviour: it keeps only the dominant face
     per sampled frame and holds the last known centre through frames with no
     detection.
-    """
-    per_frame = _sample_face_boxes(video, sample_fps=sample_fps)
-    if not per_frame:
-        return []
 
-    samples: list[Center] = []
-    last_center: Optional[tuple[float, float]] = None
-    for t, boxes in per_frame:
-        center = pick_main_face([tuple(f) for f in boxes])
-        if center is None:
-            center = last_center
-        if center is not None:
-            samples.append(Center(round(t, 3), center[0], center[1]))
-            last_center = center
-    return samples
+    A thin wrapper over :func:`track_faces_report` since the detection-confidence work; the
+    signature and return type are unchanged because existing callers and tests depend on them.
+    """
+    return track_faces_report(video, sample_fps=sample_fps)[0]
 
 
 #: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
@@ -1257,12 +1366,25 @@ def apply_reframe(
     sample_fps: float = 5.0,
     command_fps: Optional[float] = None,
     smoothing: float = 0.35,
+    *,
+    backend: Optional[str] = None,
+    detector: Optional[Callable] = None,
+    notes: Optional[list[str]] = None,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
     Raises :class:`ReframeUnavailable` when no usable face path is found or the
     aspect is not narrower than the source (nothing to track) so the caller can
     fall back to the static reformat.
+
+    ``backend`` selects the Face_Detector_Backend (``None`` means the configured default, which
+    is ``haar``); ``detector`` injects one outright, for tests.
+
+    ``notes`` is an **out-parameter**: when a list is passed, the detector and confidence
+    markers are appended to it. An out-parameter rather than a changed return type because the
+    return is ``Path`` and every caller and test relies on that; and appended only **after the
+    render has succeeded**, so a clip that falls back to the static reformat does not carry a
+    marker claiming a detector framed it.
     """
     if aspect not in ASPECT_PRESETS:
         raise ReframeUnavailable(f"Unknown aspect '{aspect}'")
@@ -1288,7 +1410,9 @@ def apply_reframe(
         # Target isn't a tighter crop than the source; nothing to follow.
         raise ReframeUnavailable("target aspect is not narrower than source")
 
-    samples = track_faces(video, sample_fps=sample_fps)
+    samples, sample_report = track_faces_report(
+        video, sample_fps=sample_fps, backend=backend, detector=detector
+    )
     if not samples:
         raise ReframeUnavailable("no faces detected")
 
@@ -1334,6 +1458,12 @@ def apply_reframe(
         raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
     finally:
         cmd_file.unlink(missing_ok=True)
+    # Only now: the render succeeded, so the markers describe a clip that exists. Appending
+    # them earlier would leave a `face_detector:*` marker on a clip that went on to fail and
+    # fall back to the static reformat, which is the marker naming a backend that framed
+    # nothing.
+    if notes is not None:
+        notes.extend(detector_notes(sample_report))
     return dest
 
 
@@ -1901,6 +2031,8 @@ def apply_speaker_reframe(
     intensity: str = "standard",
     detector: Optional[Callable] = None,
     sampler: Optional[Callable] = None,
+    backend: Optional[str] = None,
+    notes: Optional[list[str]] = None,
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -1938,8 +2070,16 @@ def apply_speaker_reframe(
     # Sample + detect faces (injected sampler overrides frame->box production).
     if sampler is not None:
         per_frame = sampler(video)
+        # An injected sampler bypassed detection, so there is no backend to name and no
+        # measured rate; the report records `injected` and computes coverage from what the
+        # sampler produced, so this path reports in the same vocabulary as the other.
+        sample_report = synthetic_report(
+            per_frame, "injected", float(settings.reframe_sample_fps)
+        )
     else:
-        per_frame = detect_faces(video, detector=detector)
+        per_frame, sample_report = detect_faces_report(
+            video, detector=detector, backend=backend
+        )
 
     tracks = build_face_tracks(per_frame)
     if not tracks:
@@ -1993,6 +2133,8 @@ def apply_speaker_reframe(
             # output directory with one file per speaker per clip.
             for tile in tile_files:
                 tile.unlink(missing_ok=True)
+        if notes is not None:
+            notes.extend(detector_notes(sample_report))
         return dest
 
     # follow_active
@@ -2027,4 +2169,6 @@ def apply_speaker_reframe(
         raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
     finally:
         cmd_file.unlink(missing_ok=True)
+    if notes is not None:
+        notes.extend(detector_notes(sample_report))
     return dest

@@ -179,28 +179,28 @@ running.
     - **Property 6** — for any options dict, `face_detector` survives `from_dict(asdict(...))`, and any unrecognised value resolves to `haar` without raising.
     - _Requirements: 10.2, 1.4_ · _Properties: P6_
 
-- [ ] 6. Pipeline integration and markers
-  - [ ] 6.1 Thread the resolved backend and coverage into `apply_reframe`
+- [x] 6. Pipeline integration and markers
+  - [x] 6.1 Thread the resolved backend and coverage into `apply_reframe`
     - Record `face_detector:{resolved}` or the substitution marker; record `reframe_low_confidence:{coverage:.2f}` when coverage is below `reframe_coverage_floor` **and** at least one detection was found; record `reframe_sample_rate:{fps:.1f}` only when the cap bound. Leave `faces_none`, `reframe`, and the existing static fallback markers spelled exactly as they are.
     - _Requirements: 3.1, 3.2, 6.2, 6.3, 6.4, 8.1, 8.4, 9.5_
 
-  - [ ] 6.2 Thread the same markers through `apply_speaker_reframe`
+  - [x] 6.2 Thread the same markers through `apply_speaker_reframe`
     - Both geometry paths report identically; `speaker_reframe_degraded` is unchanged.
     - _Requirements: 6.5, 9.5_
 
-  - [ ] 6.3 Confirm the geometry stage is otherwise untouched
+  - [x] 6.3 Confirm the geometry stage is otherwise untouched
     - No change to the filter graph shape, the `sendcmd` script for a given crop path, or the ffmpeg pass count.
     - _Requirements: 9.3, 9.4_
 
-  - [ ] 6.4* Unit tests: markers on both geometry paths → `tests/test_speaker_reframe.py`, `tests/test_reframe_geometry.py`
+  - [x] 6.4* Unit tests: markers on both geometry paths → `tests/test_speaker_reframe.py`, `tests/test_reframe_geometry.py`
     - Assert the resolved-backend marker names what ran for default, opt-in, injected, and substituted cases; assert `reframe_low_confidence` appears below the floor and not at or above it; assert `faces_none` and `reframe_low_confidence` are never both present; assert the sampling marker appears only when the cap bound.
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 6.2, 6.3, 6.4, 6.5, 8.1, 8.4, 11.3_
 
-  - [ ] 6.5* Integration tests: the five-rung degradation ladder → `tests/test_pipeline_degradation.py`
+  - [x] 6.5* Integration tests: the five-rung degradation ladder → `tests/test_pipeline_degradation.py`
     - One test per rung: injected; mediapipe constructible; mediapipe unimportable → haar substitution; haar; nothing constructible → zero samples → Static_Reformat with the job still completing. Assert no rung raises out of the geometry stage.
     - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6_
 
-  - [ ] 6.6* Integration test: geometry output is unchanged on the default backend → `tests/test_reframe_geometry.py`
+  - [x] 6.6* Integration test: geometry output is unchanged on the default backend → `tests/test_reframe_geometry.py`
     - With `face_detector="haar"` and an injected detector, assert the produced `sendcmd` script and crop dimensions are identical to the current expected values.
     - _Requirements: 9.1, 9.3, 9.4_
 

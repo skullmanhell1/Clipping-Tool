@@ -59,11 +59,18 @@ def test_apply_reframe_with_synthetic_track(make_video, tmp_path, monkeypatch):
     """
     src = make_video("land.mp4", duration=2.0, w=1280, h=720)
 
-    def fake_track(video, sample_fps=5.0):
-        return [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360),
-                rf.Center(2.0, 980, 360)]
+    # Patches ``track_faces_report`` rather than ``track_faces``: since the
+    # detection-confidence work, ``apply_reframe`` needs the centre path *and* the coverage
+    # measured from the same sampling pass (a second pass could disagree with the first, and the
+    # disagreement would be invisible), so it calls the reporting sibling. ``track_faces`` keeps
+    # its signature and remains the public single-speaker entry point.
+    def fake_track_report(video, sample_fps=5.0, **_kwargs):
+        centres = [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360),
+                   rf.Center(2.0, 980, 360)]
+        report = rf.synthetic_report([[(0, 0, 10, 10)]] * 3, "injected", sample_fps)
+        return centres, report
 
-    monkeypatch.setattr(rf, "track_faces", fake_track)
+    monkeypatch.setattr(rf, "track_faces_report", fake_track_report)
     dest = tmp_path / "reframed.mp4"
     rf.apply_reframe(src, dest, aspect="9:16")
     assert dest.exists()
@@ -73,7 +80,12 @@ def test_apply_reframe_with_synthetic_track(make_video, tmp_path, monkeypatch):
 @requires_ffmpeg
 def test_apply_reframe_no_faces_raises(make_video, tmp_path, monkeypatch):
     src = make_video("land2.mp4", duration=1.0, w=1280, h=720)
-    monkeypatch.setattr(rf, "track_faces", lambda *a, **k: [])
+    # See the note above on why the reporting sibling is the patch point.
+    monkeypatch.setattr(
+        rf,
+        "track_faces_report",
+        lambda *a, **k: ([], rf.synthetic_report([], "injected", 5.0)),
+    )
     with pytest.raises(rf.ReframeUnavailable):
         rf.apply_reframe(src, tmp_path / "out.mp4", aspect="9:16")
 
