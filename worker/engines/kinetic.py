@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from worker import ass_style
 from worker.effects import caption_presets
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -1385,46 +1386,42 @@ def _style_line(
 ) -> str:
     """The ``Style: Default`` line: v0.8.0 look, Safe_Area margins (Reqs 7.2, 10.4).
 
-    Every look field comes from ``captions._preset_style_line`` — *reused*, not
-    re-spelled, so colours, border style and the karaoke-thickened outline/shadow
-    can never drift from the existing caption path — and only the three margin
-    columns are replaced with the Safe_Area values computed by
-    :func:`safe_area_margins`.
+    Every look field comes from ``captions.preset_style`` — *reused*, not re-spelled, so colours,
+    border style and the karaoke-thickened outline/shadow can never drift from the existing
+    caption path — and only the three margin columns are replaced with the Safe_Area values
+    computed by :func:`safe_area_margins`.
+
+    Those three columns used to be replaced by splitting the serialised line on commas and
+    assigning to indices 19, 20 and 21, guarded by ``if len(fields) == 23`` with a silent
+    fall-through when the count did not match. That guard was the problem it looked like a
+    solution to: a 23-field line with the wrong *field order* passes it, and a line that failed it
+    was returned with the Safe_Area margins simply dropped — captions rendered at the caption
+    path's margins instead, with nothing raised.
     """
-    base = _captions()._preset_style_line(preset, font, font_size, align, margin_v)
-    fields = base.split(",")
-    # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour,
-    # OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX,
-    # ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL,
-    # MarginR, MarginV, Encoding  -> 23 fields, margins at indices 19..21.
-    if len(fields) == 23:
-        fields[19] = str(int(margin_l))
-        fields[20] = str(int(margin_r))
-        fields[21] = str(int(margin_v))
-        return ",".join(fields)
-    return base  # pragma: no cover - the shape is pinned by task 15.2
+    return (
+        _captions()
+        .preset_style(preset, font, font_size, align, margin_v)
+        .with_margins(int(margin_l), int(margin_r), int(margin_v))
+        .serialise()
+    )
 
 
 def _hook_style_line(font: str, hook_font_size: int, bold: int = -1) -> str:
-    """The ``Style: Hook`` line, identical in shape to ``build_ass``'s (Req 3.3).
+    """The ``Style: Hook`` line, byte-identical to ``build_ass``'s (Req 3.3).
 
-    ``captions`` keeps this definition as a literal inside ``build_ass`` /
-    ``_preset_header_styles`` rather than a reusable helper, and
-    ``_preset_header_styles`` cannot be called from a *pure* planner because it
-    probes the host font list (``fc-list``, a subprocess). The numbers are
-    therefore repeated verbatim here; task 8.10's property test asserts the two
-    spellings stay identical.
+    Now delegated to ``captions.hook_style`` rather than re-spelled here. It previously had to be
+    repeated verbatim because the only definitions in ``captions`` were literals inside
+    ``build_ass`` and ``_preset_header_styles``, and the latter cannot be called from a *pure*
+    planner — it probes the host font list via ``fc-list``. ``captions.hook_style`` is the pure
+    extraction of that literal, so the repetition is no longer necessary and task 8.10's property
+    test now asserts a tautology rather than holding a duplication in place.
 
-    ``bold`` is the ASS Bold field, which C3 made a property of the preset's face rather
-    than a constant: a face that is already heavy must not be asked for bold on top, or
-    libass synthesises the emboldening. The planner passes
-    ``captions.ass_bold_flag(preset)``. The default is the pre-C3 value, and is used only
-    by :func:`emit_ass`'s fallback for a hand-built plan that carries no ``hook_style``.
+    Kept as a wrapper rather than removed: it coerces, and ``captions.hook_style`` deliberately
+    does not. Every numeric field crossing this boundary goes through ``int()`` because a plan can
+    be rebuilt from JSON, where a font size may arrive as ``110.0`` and would otherwise serialise
+    as ``"110.0"`` — which libass reads as a malformed number and defaults.
     """
-    return (
-        f"Style: Hook,{font},{int(hook_font_size)},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,{int(bold)},0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
-    )
+    return _captions().hook_style(font, int(hook_font_size), int(bold))
 
 
 def plan_kinetic(
@@ -1860,21 +1857,11 @@ def _inline_emoji(word: Any, preset: Any, options: Kinetic_Options) -> str:
 # :class:`Kinetic_Word` already carries its escaped text, its ``rel_ms`` onset,
 # its emphasis flag and its inline emoji glyph. Nothing is re-derived here.
 
-#: The ``[V4+ Styles]`` ``Format:`` line — byte-identical to ``captions.build_ass``
-#: so libass parses the 23 style columns the same way (Req 7.5).
-_ASS_STYLE_FORMAT = (
-    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
-    "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
-    "MarginR, MarginV, Encoding"
-)
-
-#: The ``[Events]`` ``Format:`` line — byte-identical to ``captions.build_ass``:
-#: nine comma-separated fields before the free-form ``Text`` field (Req 4.10).
-_ASS_EVENT_FORMAT = (
-    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
-    "Effect, Text"
-)
+#: The two ``Format:`` lines, byte-identical to ``captions.build_ass``'s because they are now the
+#: same objects (Reqs 7.5, 4.10). ``worker.ass_style`` imports nothing but ``re`` and
+#: ``dataclasses``, so this does not breach the module's import discipline — see ``_captions``.
+_ASS_STYLE_FORMAT = ass_style.STYLE_FORMAT
+_ASS_EVENT_FORMAT = ass_style.EVENT_FORMAT
 
 #: ``build_word_span``'s own defaults, used when a plan carries no palette.
 _DEFAULT_PRIMARY = "&H00FFFFFF"
@@ -2099,8 +2086,8 @@ def _cue_event(
     else:
         prefix = ""
 
-    return (
-        f"Dialogue: 0,{stamp(start)},{stamp(end)},Default,,0,0,0,,{prefix}{text}"
+    return ass_style.dialogue(
+        f"{prefix}{text}", style="Default", start=stamp(start), end=stamp(end),
     )
 
 
@@ -2119,7 +2106,11 @@ def _hook_event(plan: Kinetic_Plan) -> str | None:
     start = captions._ass_timestamp(0.0)
     end = captions._ass_timestamp(max(0.5, float(plan.hook_duration_s)))
     escaped = captions._escape(hook.upper())
-    return f"Dialogue: 1,{start},{end},Hook,,0,0,0,,{{\\fad(250,350)}}{escaped}"
+    fade_in, fade_out = captions.HOOK_FADE_MS
+    return ass_style.dialogue(
+        f"{{\\fad({fade_in},{fade_out})}}{escaped}",
+        style="Hook", start=start, end=end, layer=1,
+    )
 
 
 def _fallback_style_line(plan: Kinetic_Plan) -> str:
@@ -2130,11 +2121,21 @@ def _fallback_style_line(plan: Kinetic_Plan) -> str:
     ``Dialogue:`` line still names a style declared in ``[V4+ Styles]`` (Req 4.10).
     """
     primary, highlight = _plan_palette(plan)
-    return (
-        f"Style: Default,{plan.font},{int(plan.font_size)},{primary},{highlight},"
-        f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,1,{int(plan.align)},"
-        f"{int(plan.margin_l)},{int(plan.margin_r)},{int(plan.margin_v)},1"
-    )
+    # Coerced field by field because a plan can arrive from `from_dict`, where every number may be
+    # a float or a string; `ass_style` deliberately does not coerce.
+    return ass_style.AssStyle(
+        name="Default",
+        fontname=plan.font,
+        fontsize=int(plan.font_size),
+        primary_colour=primary,
+        secondary_colour=highlight,
+        outline_colour="&H00000000",
+        back_colour="&H64000000",
+        alignment=int(plan.align),
+        margin_l=int(plan.margin_l),
+        margin_r=int(plan.margin_r),
+        margin_v=int(plan.margin_v),
+    ).serialise()
 
 
 def emit_ass(plan: Any) -> str:
@@ -2185,21 +2186,18 @@ def emit_ass(plan: Any) -> str:
         if event:
             events.append(event)
 
+    # `WrapStyle` is left at the shared default of 2: the engine measures its own line breaks and
+    # emits them as `\N` (Req 7.5), so libass must not also wrap. Unlike `captions.build_ass` this
+    # does not drop to 0 for a shaping script, because the engine has no script plan to consult.
     lines: list[str] = [
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {int(record.play_res_x)}",
-        f"PlayResY: {int(record.play_res_y)}",
-        "WrapStyle: 2",
-        "ScaledBorderAndShadow: yes",
-        "",
-        "[V4+ Styles]",
-        _ASS_STYLE_FORMAT,
-        record.style_line or _fallback_style_line(record),
-        record.hook_style or _hook_style_line(record.font, 110),
-        "",
-        "[Events]",
-        _ASS_EVENT_FORMAT,
+        ass_style.header(
+            play_res_x=int(record.play_res_x),
+            play_res_y=int(record.play_res_y),
+            styles=(
+                record.style_line or _fallback_style_line(record),
+                record.hook_style or _hook_style_line(record.font, 110),
+            ),
+        )
     ]
     lines.extend(events)
     return "\n".join(lines) + "\n"

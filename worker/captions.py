@@ -26,6 +26,9 @@ from typing import Any, Iterable, Optional
 
 from config import settings
 from worker import script_support, text_metrics
+from worker.ass_style import AssStyle
+from worker.ass_style import dialogue as ass_dialogue
+from worker.ass_style import header as ass_header
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -322,25 +325,40 @@ def _caption_style(
     black = "&H00000000"
     box = "&H80000000"  # semi-transparent black background/shadow
 
+    # Written out per template rather than sharing a kwargs dict, so the three looks can be read
+    # side by side: what differs between them is the four colours and the border/outline/shadow
+    # triple, and that is exactly what shows up below.
     if template == "boxed":
-        # BorderStyle 3 draws an opaque box behind the text (uses OutlineColour).
-        style = (
-            f"Style: Default,{font},{font_size},{white},{white},{box},{box},"
-            f"-1,0,0,0,100,100,0,0,3,0,0,{align},80,80,{margin_v},1"
+        # BorderStyle 3 draws an opaque box behind the text, using OutlineColour. Outline and
+        # shadow are 0 because the box *is* the border; a non-zero outline would draw a second
+        # stroke around the box's own edge.
+        style = AssStyle(
+            name="Default", fontname=font, fontsize=font_size,
+            primary_colour=white, secondary_colour=white,
+            outline_colour=box, back_colour=box,
+            border_style=3, outline=0, shadow=0,
+            alignment=align, margin_v=margin_v,
         )
-        return style, align, False
+        return style.serialise(), align, False
     if template == "minimal":
-        style = (
-            f"Style: Default,{font},{font_size},{white},{white},{black},&H64000000,"
-            f"-1,0,0,0,100,100,0,0,1,2,1,{align},80,80,{margin_v},1"
+        style = AssStyle(
+            name="Default", fontname=font, fontsize=font_size,
+            primary_colour=white, secondary_colour=white,
+            outline_colour=black, back_colour="&H64000000",
+            border_style=1, outline=2, shadow=1,
+            alignment=align, margin_v=margin_v,
         )
-        return style, align, False
-    # Default: karaoke.
-    style = (
-        f"Style: Default,{font},{font_size},{white},{highlight},{black},&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
+        return style.serialise(), align, False
+    # Default: karaoke. SecondaryColour is the colour `\kf` sweeps *from*, so the highlight goes
+    # there and the sweep lands on white — the reverse of what the field name suggests.
+    style = AssStyle(
+        name="Default", fontname=font, fontsize=font_size,
+        primary_colour=white, secondary_colour=highlight,
+        outline_colour=black, back_colour="&H64000000",
+        border_style=1, outline=4, shadow=2,
+        alignment=align, margin_v=margin_v,
     )
-    return style, align, True
+    return style.serialise(), align, True
 
 
 # --- Preset-driven ASS spans (Feature A) ------------------------------------
@@ -1195,18 +1213,24 @@ def _glyph_scale(value: Any) -> int:
     return max(MIN_GLYPH_SCALE, min(MAX_GLYPH_SCALE, abs(scale)))
 
 
-def _preset_style_line(
+def preset_style(
     preset: CaptionPreset,
     font: str,
     font_size: int,
     align: int,
     margin_v: int,
     margin_h: int = 80,
-) -> str:
-    """Build the ``Style: Default`` line from a :class:`CaptionPreset`.
+) -> AssStyle:
+    """Build the ``Style: Default`` record from a :class:`CaptionPreset`.
 
     Colours, border style, font and size all come from the preset (Req 5.1).
     ``font`` is the already-resolved (post-substitution) family name.
+
+    Returns the :class:`AssStyle` rather than its serialised form because
+    ``worker.engines.kinetic`` needs the same look with different margins, and used to get it by
+    splitting the finished line on commas and assigning to indices 19-21. See
+    :meth:`AssStyle.with_margins`. :func:`_preset_style_line` is the string-returning wrapper the
+    caption path and its tests use.
     """
     colors = preset.colors
     primary = colors.primary
@@ -1242,12 +1266,85 @@ def _preset_style_line(
         spacing = int(getattr(preset, "spacing", 0) or 0)
     except (TypeError, ValueError):
         spacing = 0
-    return (
-        f"Style: Default,{font},{font_size},{primary},{secondary},{outline_col},"
-        f"{back_col},{ass_bold_flag(preset)},0,0,0,{scale_x},{scale_y},{spacing},0,"
-        f"{preset.border_style},"
-        f"{outline_w},{shadow},{align},{margin_h},{margin_h},{margin_v},1"
+    return AssStyle(
+        name="Default",
+        fontname=font,
+        fontsize=font_size,
+        primary_colour=primary,
+        secondary_colour=secondary,
+        outline_colour=outline_col,
+        back_colour=back_col,
+        bold=ass_bold_flag(preset),
+        scale_x=scale_x,
+        scale_y=scale_y,
+        spacing=spacing,
+        border_style=preset.border_style,
+        outline=outline_w,
+        shadow=shadow,
+        alignment=align,
+        margin_l=margin_h,
+        margin_r=margin_h,
+        margin_v=margin_v,
     )
+
+
+def _preset_style_line(
+    preset: CaptionPreset,
+    font: str,
+    font_size: int,
+    align: int,
+    margin_v: int,
+    margin_h: int = 80,
+) -> str:
+    """:func:`preset_style`, serialised. Kept as the name the caption path and its tests use."""
+    return preset_style(preset, font, font_size, align, margin_v, margin_h).serialise()
+
+
+#: The hook title's fixed look. Not preset-driven, and deliberately so: the hook is a fixed
+#: editorial element (amber, top-anchored, heavy stroke) rather than part of the caption style, so
+#: a preset changing the caption colour must not change the hook's.
+HOOK_COLOUR = "&H0000E5FF"
+
+#: The hook title's ``\fad`` in/out, in milliseconds.
+#:
+#: Named because ``worker.engines.kinetic`` emits the same hook event and its docstring commits to
+#: the two being byte-identical; as two pairs of literals that was a promise with nothing holding
+#: it up.
+HOOK_FADE_MS: tuple[int, int] = (250, 350)
+
+
+def hook_style(font: str, hook_font_size: object, bold: object = -1) -> str:
+    """The ``Style: Hook`` line.
+
+    One definition for what used to be three byte-identical f-strings — the legacy path in
+    :func:`build_ass`, the preset path in :func:`_preset_header_styles`, and a third copy in
+    ``worker.engines.kinetic`` whose docstring asserted equality with the other two and relied on
+    a property test to keep it true.
+
+    Pure on purpose. ``kinetic`` needs this from a planner that must not touch the host, which is
+    why it could not simply call :func:`_preset_header_styles` (that probes ``fc-list``). Nothing
+    here resolves a font; ``font`` is whatever the caller already resolved.
+
+    ``bold`` is the ASS Bold field, which is a property of the chosen face rather than a constant
+    — see :func:`ass_bold_flag`. The ``-1`` default is the pre-C3 value and is used only by
+    ``kinetic.emit_ass``'s fallback for a hand-built plan that carries no hook style.
+    """
+    return AssStyle(
+        name="Hook",
+        fontname=font,
+        fontsize=hook_font_size,
+        primary_colour=HOOK_COLOUR,
+        secondary_colour=HOOK_COLOUR,
+        outline_colour="&H00000000",
+        back_colour="&H64000000",
+        bold=bold,
+        outline=5,
+        shadow=2,
+        alignment=8,  # top-centre
+        margin_l=60,
+        margin_r=60,
+        margin_v=160,
+    ).serialise()
 
 
 def build_ass(
@@ -1322,7 +1419,7 @@ def build_ass(
         font = script_plan.font
 
     if preset is not None:
-        style_line, hook_style = _preset_header_styles(
+        style_line, hook_style_line = _preset_header_styles(
             preset, position, hook_font_size, notes,
             video_width=video_width, video_height=video_height,
             # C12/C13: both inert unless configured, so an unconfigured render is byte-identical.
@@ -1346,43 +1443,36 @@ def build_ass(
             template, legacy_position, font, font_size
         )
         use_karaoke = template_karaoke if karaoke is None else karaoke
-        # A dedicated top-anchored style for the hook title (alignment 8 = top).
-        hook_style = (
-            f"Style: Hook,{font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-            f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
-        )
+        # A dedicated top-anchored style for the hook title. The legacy path has no preset, so
+        # the Bold flag stays at its pre-C3 default rather than being derived from a face weight.
+        hook_style_line = hook_style(font, hook_font_size)
         body = _legacy_dialogue_lines(cues, use_karaoke)
 
     # C21: 2 means "no automatic wrapping", which C6's measured `\N` breaks depend on. A shaping
     # script gets 0 instead, so libass wraps it - an Arabic word's rendered width is not the sum of
     # its letters' isolated advances, so the number C6 would break on is simply wrong there.
     wrap_style = script_support.wrap_style(script_plan)
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {video_width}
-PlayResY: {video_height}
-WrapStyle: {wrap_style}
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{style_line}
-{hook_style}
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+    # The trailing newline keeps the joined output byte-identical to the previous triple-quoted
+    # f-string, which ended with one.
+    header = ass_header(
+        play_res_x=video_width,
+        play_res_y=video_height,
+        styles=(style_line, hook_style_line),
+        wrap_style=wrap_style,
+    ) + "\n"
 
     lines = [header]
 
     # Optional hook title at the very start with a soft fade.
     if hook_text.strip():
-        h_start = _ass_timestamp(0.0)
-        h_end = _ass_timestamp(max(0.5, hook_duration))
         hook = _escape(hook_text.strip().upper())
-        lines.append(
-            f"Dialogue: 1,{h_start},{h_end},Hook,,0,0,0,,{{\\fad(250,350)}}{hook}"
-        )
+        lines.append(ass_dialogue(
+            f"{{\\fad({HOOK_FADE_MS[0]},{HOOK_FADE_MS[1]})}}{hook}",
+            style="Hook",
+            start=_ass_timestamp(0.0),
+            end=_ass_timestamp(max(0.5, hook_duration)),
+            layer=1,
+        ))
 
     lines.extend(body)
 
@@ -1448,7 +1538,10 @@ def end_card_dialogue(
         f"{{\\an5\\move({x},{y_from},{x},{y_to},0,{END_CARD_FADE_IN_MS})"
         f"\\fad({END_CARD_FADE_IN_MS},0)}}"
     )
-    return f"Dialogue: 2,{start},{end},End,,0,0,0,,{tags}{_escape(text.upper())}"
+    # Layer 2 so the card draws above both captions (layer 0) and a hook title (layer 1).
+    return ass_dialogue(
+        f"{tags}{_escape(text.upper())}", style="End", start=start, end=end, layer=2,
+    )
 
 
 def write_end_card_ass(
@@ -1482,26 +1575,30 @@ def write_end_card_ass(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Alignment 5 (centred) with generous margins; the position is set per-event by \move, so
-    # this style only has to supply the look.
-    style = (
-        f"Style: End,{font},{font_size},&H00FFFFFF,&H00FFFFFF,"
-        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1"
+    # this style only has to supply the look. The back colour is more opaque than the caption
+    # styles' (&H96 vs &H64) because the card sits over whatever the clip ends on rather than over
+    # a speaker, so its shadow has to carry more of the separation.
+    style = AssStyle(
+        name="End",
+        fontname=font,
+        fontsize=font_size,
+        primary_colour="&H00FFFFFF",
+        secondary_colour="&H00FFFFFF",
+        outline_colour="&H00000000",
+        back_colour="&H96000000",
+        outline=4,
+        shadow=2,
+        alignment=5,
+        margin_l=60,
+        margin_r=60,
+        margin_v=60,
     )
     dest.write_text(
-        "[Script Info]\n"
-        "ScriptType: v4.00+\n"
-        f"PlayResX: {video_width}\n"
-        f"PlayResY: {video_height}\n"
-        "WrapStyle: 2\n"
-        "ScaledBorderAndShadow: yes\n"
-        "\n[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
-        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
-        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"{style}\n"
-        "\n[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        f"{line}\n",
+        ass_header(
+            play_res_x=video_width,
+            play_res_y=video_height,
+            styles=(style.serialise(),),
+        ) + f"\n{line}\n",
         encoding="utf-8",
     )
     return dest
@@ -1523,7 +1620,7 @@ def _legacy_dialogue_lines(cues: list[Cue], use_karaoke: bool) -> list[str]:
             text = " ".join(parts)
         else:
             text = " ".join(_escape(w.text) for w in cue.words)
-        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+        lines.append(ass_dialogue(text, style="Default", start=start, end=end))
     return lines
 
 
@@ -1575,12 +1672,9 @@ def _preset_header_styles(
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v, margin_h
     )
-    hook_style = (
-        f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,{ass_bold_flag(preset)},0,0,0,100,100,0,0,1,5,2,8,"
-        f"60,60,160,1"
-    )
-    return style_line, hook_style
+    # The *resolved* font, not the preset's requested one: if the caption fell back to another
+    # family the hook has to fall back with it, or the two read as different clips.
+    return style_line, hook_style(resolved_font, hook_font_size, ass_bold_flag(preset))
 
 
 def _preset_dialogue_lines(
@@ -1667,7 +1761,7 @@ def _preset_dialogue_lines(
             )
         else:
             text = " ".join(parts)
-        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+        lines.append(ass_dialogue(text, style="Default", start=start, end=end))
     return lines
 
 
