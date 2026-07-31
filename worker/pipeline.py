@@ -27,7 +27,14 @@ from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
-from worker import diarization, segmentation, subtitle_export, thumbnail, visual_selection
+from worker import (
+    diarization,
+    intermediate_cache,
+    segmentation,
+    subtitle_export,
+    thumbnail,
+    visual_selection,
+)
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 
@@ -103,6 +110,7 @@ def run_pipeline(
     start_progress: float = 0.0,
     llm_client: Optional[BaseLLMClient] = None,
     explicit_candidates: Optional[list] = None,
+    on_plan: Optional[Callable[[list], None]] = None,
 ) -> list[ClipResult]:
     """Run the full pipeline on ``source`` and return the produced clips.
 
@@ -210,6 +218,17 @@ def run_pipeline(
         for c in candidates:
             c.start = max(c.start, options.range_start)
 
+    # I5: publish the plan before any rendering starts. A job interrupted halfway can then be
+    # resumed against the windows it actually chose, instead of re-running a selection that -
+    # with an LLM in it - is not deterministic and could return different moments, leaving the
+    # user with clips from two different selections.
+    if on_plan is not None:
+        try:
+            on_plan(list(candidates))
+        except Exception:
+            # The plan is an aid to resuming, never a precondition for rendering.
+            logger.warning("I5: could not record the clip plan", exc_info=True)
+
     report(_P_SELECT_END, f"Creating {len(candidates)} clip(s)")
     if not candidates:
         report(1.0, "Done")
@@ -267,7 +286,17 @@ def run_pipeline(
     source_silences: list[tuple[float, float]] = []
     if options.trim_silence:
         try:
-            source_silences = segmentation.detect_silences(source)
+            # I3: cached by source content. `silencedetect` needs a whole-file decode, and the
+            # answer depends on nothing a user changes between runs of the same video - so a
+            # re-run to try a different caption preset was paying for this again.
+            source_silences = [
+                (float(a), float(b))
+                for a, b in intermediate_cache.memoise(
+                    "silences",
+                    source,
+                    lambda: [list(pair) for pair in segmentation.detect_silences(source)],
+                )
+            ]
         except (fu.FFmpegError, OSError):
             source_silences = []
 

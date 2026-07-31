@@ -1003,6 +1003,40 @@ def _preset_detail(preset) -> dict:
     return data
 
 
+@app.post("/api/jobs/{job_id}/resume", tags=["jobs"])
+def resume_job(job_id: str) -> dict:
+    """Render a failed job's unfinished clips, keeping the ones it already produced (I5).
+
+    An interrupted job was marked failed *wholesale*: the clips it had already rendered were on
+    disk and listed in the record, and the only way forward was to re-submit the source and pay for
+    everything again - including re-rendering the clips that had succeeded.
+
+    ``409`` names why a job cannot be resumed rather than silently starting a full re-run, because
+    a full re-run is exactly the expensive thing the caller was trying to avoid.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status.value not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job.status.value!r}; only a failed or cancelled job can be resumed",
+        )
+    if not job.planned_clips:
+        raise HTTPException(
+            status_code=409,
+            detail="This job was interrupted before it chose its clips, so there is nothing to "
+                   "resume. Re-submit the source.",
+        )
+    if not manager.resume(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Every planned clip for this job has already been rendered.",
+        )
+    return manager.store.get(job_id).to_dict()
+
+
 #: Review states a clip may be moved to (U9).
 REVIEW_STATES = frozenset({"pending", "approved", "rejected"})
 

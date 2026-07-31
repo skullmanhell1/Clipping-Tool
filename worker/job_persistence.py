@@ -49,6 +49,16 @@ INTERRUPTED_ERROR = (
     "Re-submit the source to try again."
 )
 
+#: Error text for an interrupted job that *can* be resumed (I5).
+#:
+#: Distinct from the message above because the two call for different actions, and telling someone
+#: to re-submit a job whose finished clips are sitting on disk is advice that costs them the whole
+#: render a second time.
+INTERRUPTED_RESUMABLE_ERROR = (
+    "The server restarted while this job was running. {done} of {planned} clip(s) were "
+    "finished; resume the job to render the rest."
+)
+
 
 class Job_Persistence:
     """SQLite-backed durable store for job records."""
@@ -171,7 +181,15 @@ class Job_Persistence:
             if str(data.get("status") or "") in INTERRUPTED_STATUSES:
                 job.status = JobStatus.FAILED
                 job.stage = INTERRUPTED_STAGE
-                job.error = INTERRUPTED_ERROR
+                # I5: say whether resuming is possible, and how much is already done. A job that
+                # recorded its plan can render only the missing clips; one interrupted before
+                # selection finished genuinely has to start over.
+                planned = len(job.planned_clips or [])
+                done = len(job.clips or [])
+                if planned and done < planned:
+                    job.error = INTERRUPTED_RESUMABLE_ERROR.format(done=done, planned=planned)
+                else:
+                    job.error = INTERRUPTED_ERROR
                 job.updated_at = time.time()
                 interrupted.append(job)
             jobs.append(job)
