@@ -115,9 +115,10 @@ describe("ClipCard re-render (U7)", () => {
     // A re-render is minutes of CPU that overwrites the clip file; two at once race to write it.
     let release;
     api.rerenderClip.mockImplementation(
-      () => new Promise((resolve) => {
-        release = resolve;
-      }),
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
     );
     setup();
     const button = screen.getByRole("button", { name: /re-render this clip/i });

@@ -11,6 +11,7 @@ from worker.watch_folder import get_watcher
 #: than repeated on each decorator.
 router = APIRouter(tags=["watch"])
 
+
 # ---------------------------------------------------------------------------
 # Watch folder
 # ---------------------------------------------------------------------------

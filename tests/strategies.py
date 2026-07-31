@@ -33,13 +33,15 @@ stem property test imports: ``st_stem_options``, ``st_stem_gains``, ``st_mix_pre
 ``st_audio_format``, ``st_pcm_frames``, ``st_backend_stem_sets``, ``st_gate_scenarios``,
 ``st_failure_points`` and ``st_tiny_clip``.
 """
+
 from __future__ import annotations
 
 import math
 import string
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any
 
 from hypothesis import strategies as st
 
@@ -115,7 +117,7 @@ __all__ = [
 #: The capability kinds of ``worker.engines.capabilities.Capability_Kind``, kept as plain
 #: strings (not imported) so this tranche stays importable before that module lands. Keep
 #: this tuple in sync with the enum when a kind is added.
-CAPABILITY_KINDS: Tuple[str, ...] = (
+CAPABILITY_KINDS: tuple[str, ...] = (
     "python_pkg",
     "binary",
     "ffmpeg_filter",
@@ -128,7 +130,7 @@ CAPABILITY_KINDS: Tuple[str, ...] = (
 LLM_CAPABILITY = "llm"
 
 #: Sample rates worth exercising, including the engines' documented default.
-SAMPLE_RATES: Tuple[int, ...] = (8000, 16000, 22050, 44100, DEFAULT_SAMPLE_RATE, 96000)
+SAMPLE_RATES: tuple[int, ...] = (8000, 16000, 22050, 44100, DEFAULT_SAMPLE_RATE, 96000)
 
 #: Clip duration :func:`st_segment_records` generates *valid* records against. Callers
 #: that pass a different ``duration=`` must hand the same value to ``normalize_segments``.
@@ -205,7 +207,7 @@ def st_capability_id() -> st.SearchStrategy[str]:
     return st.one_of(st_well_formed_capability_id(), st_malformed_capability_id())
 
 
-def st_availability_map(*, max_size: int = 8) -> st.SearchStrategy[Dict[str, bool]]:
+def st_availability_map(*, max_size: int = 8) -> st.SearchStrategy[dict[str, bool]]:
     """Capability id -> availability mappings for ``StaticProber``; consumed by P11, P12
     and P13."""
     return st.dictionaries(st_capability_id(), st.booleans(), max_size=max_size)
@@ -216,7 +218,7 @@ def st_availability_map(*, max_size: int = 8) -> st.SearchStrategy[Dict[str, boo
 # --------------------------------------------------------------------------- #
 #: Option keys engines plausibly read, so hostile mappings sometimes hit a real field
 #: instead of always landing on an unknown key.
-_PLAUSIBLE_OPTION_KEYS: Tuple[str, ...] = (
+_PLAUSIBLE_OPTION_KEYS: tuple[str, ...] = (
     "enabled",
     "engine_enabled",
     "stem_separation_enabled",
@@ -237,7 +239,7 @@ _PLAUSIBLE_OPTION_KEYS: Tuple[str, ...] = (
 
 #: String payloads that *look* numeric/boolean/null but are not, plus empty and
 #: whitespace-only values — the classic coercion traps.
-_NASTY_STRINGS: Tuple[str, ...] = (
+_NASTY_STRINGS: tuple[str, ...] = (
     "",
     " ",
     "\t\n",
@@ -279,7 +281,7 @@ def _st_hostile_scalar() -> st.SearchStrategy[Any]:
     return st.one_of(
         st.none(),
         st.booleans(),
-        st.integers(min_value=-(10 ** 30), max_value=10 ** 30),
+        st.integers(min_value=-(10**30), max_value=10**30),
         st.floats(allow_nan=True, allow_infinity=True),
         st.sampled_from(_NASTY_STRINGS),
         st.text(max_size=24),
@@ -298,7 +300,7 @@ def st_hostile_value() -> st.SearchStrategy[Any]:
     )
 
 
-def st_options_mapping(*, max_size: int = 6) -> st.SearchStrategy[Dict[str, Any]]:
+def st_options_mapping(*, max_size: int = 6) -> st.SearchStrategy[dict[str, Any]]:
     """Adversarial JSON-ish option mappings (wrong types, ``None``, nested structures,
     NaN-like strings, empty strings, huge numbers, unknown keys); consumed by P2, P16,
     P17, P18, P19, P20, P34 and P35 — this is the generator that proves parsing is
@@ -327,10 +329,22 @@ def _copied(record: Any) -> Any:
 @st.composite
 def _st_valid_segment_record(draw, duration: float):
     """One well-formed, in-bounds, non-degenerate ``{"start", "end"}`` record."""
-    start = draw(st.floats(min_value=0.0, max_value=max(duration - 0.05, 0.0),
-                           allow_nan=False, allow_infinity=False))
-    length = draw(st.floats(min_value=0.05, max_value=max(duration / 2.0, 0.1),
-                            allow_nan=False, allow_infinity=False))
+    start = draw(
+        st.floats(
+            min_value=0.0,
+            max_value=max(duration - 0.05, 0.0),
+            allow_nan=False,
+            allow_infinity=False,
+        )
+    )
+    length = draw(
+        st.floats(
+            min_value=0.05,
+            max_value=max(duration / 2.0, 0.1),
+            allow_nan=False,
+            allow_infinity=False,
+        )
+    )
     return {"start": round(start, 3), "end": round(min(start + length, duration), 3)}
 
 
@@ -344,10 +358,9 @@ def _st_inverted_segment_record(draw, duration: float):
 def _st_degenerate_segment_record(duration: float) -> st.SearchStrategy[Any]:
     """Zero-length, out-of-range, NaN/inf, non-numeric, missing-key and wrong-type
     records — everything ``normalize_segments`` has to reject or clamp."""
-    zero_length = st.floats(min_value=0.0, max_value=duration,
-                            allow_nan=False, allow_infinity=False).map(
-        lambda t: {"start": round(t, 3), "end": round(t, 3)}
-    )
+    zero_length = st.floats(
+        min_value=0.0, max_value=duration, allow_nan=False, allow_infinity=False
+    ).map(lambda t: {"start": round(t, 3), "end": round(t, 3)})
     out_of_range = st.sampled_from(
         [
             {"start": -5.0, "end": 1.0},
@@ -410,7 +423,7 @@ def st_segment_records(
     Returns a plain ``list`` of arbitrary objects in arbitrary order. Pass the same
     ``duration`` to ``normalize_segments`` that you passed here.
     """
-    records: List[Any] = draw(
+    records: list[Any] = draw(
         st.lists(
             st.one_of(
                 _st_valid_segment_record(duration),
@@ -457,21 +470,24 @@ def st_word_timeline(
     by ``start``.
     """
     n = draw(st.integers(min_value=min_words, max_value=max_words))
-    words: List[FakeWord] = []
-    cursor = draw(st.floats(min_value=0.0, max_value=0.5,
-                            allow_nan=False, allow_infinity=False))
+    words: list[FakeWord] = []
+    cursor = draw(st.floats(min_value=0.0, max_value=0.5, allow_nan=False, allow_infinity=False))
     for _ in range(n):
-        gap = draw(st.floats(min_value=0.0, max_value=0.6,
-                             allow_nan=False, allow_infinity=False))
-        length = draw(st.floats(min_value=0.05, max_value=0.9,
-                                allow_nan=False, allow_infinity=False))
+        gap = draw(st.floats(min_value=0.0, max_value=0.6, allow_nan=False, allow_infinity=False))
+        length = draw(
+            st.floats(min_value=0.05, max_value=0.9, allow_nan=False, allow_infinity=False)
+        )
         start = cursor + gap
         end = start + length
-        words.append(FakeWord(round(start, 3), round(end, 3),
-                              draw(st.sampled_from(["so", "like", "hello", "um", "word"]))))
+        words.append(
+            FakeWord(
+                round(start, 3),
+                round(end, 3),
+                draw(st.sampled_from(["so", "like", "hello", "um", "word"])),
+            )
+        )
         cursor = end
-    tail = draw(st.floats(min_value=0.0, max_value=1.0,
-                          allow_nan=False, allow_infinity=False))
+    tail = draw(st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False))
     duration = round(cursor + tail, 3)
     return words, duration
 
@@ -486,10 +502,8 @@ def st_time_base(draw, *, sample_rates: Sequence[int] = SAMPLE_RATES):
     both ``fps_substituted`` states; consumed by P21, P22 and P23."""
     fps = draw(
         st.one_of(
-            st.floats(min_value=MIN_FPS, max_value=MAX_FPS,
-                      allow_nan=False, allow_infinity=False),
-            st.sampled_from([MIN_FPS, 23.976, 24.0, 25.0, DEFAULT_FPS, 50.0, 59.94,
-                             60.0, MAX_FPS]),
+            st.floats(min_value=MIN_FPS, max_value=MAX_FPS, allow_nan=False, allow_infinity=False),
+            st.sampled_from([MIN_FPS, 23.976, 24.0, 25.0, DEFAULT_FPS, 50.0, 59.94, 60.0, MAX_FPS]),
         )
     )
     return Time_Base(
@@ -506,10 +520,10 @@ def st_invalid_fps() -> st.SearchStrategy[Any]:
     return st.one_of(
         st.none(),
         st.just(0.0),
-        st.floats(min_value=-1000.0, max_value=0.0, allow_nan=False,
-                  allow_infinity=False),
-        st.sampled_from([float("nan"), float("inf"), float("-inf"),
-                         MIN_FPS - 0.001, MAX_FPS + 0.001, 1e9, -1e9]),
+        st.floats(min_value=-1000.0, max_value=0.0, allow_nan=False, allow_infinity=False),
+        st.sampled_from(
+            [float("nan"), float("inf"), float("-inf"), MIN_FPS - 0.001, MAX_FPS + 0.001, 1e9, -1e9]
+        ),
     )
 
 
@@ -568,12 +582,11 @@ def st_hostile_component() -> st.SearchStrategy[str]:
     return st.one_of(fixtures, st.text(max_size=64), st.text(min_size=200, max_size=300))
 
 
-
 # --------------------------------------------------------------------------- #
 # Tranche 2 (task 3.4): generators that depend on the engine contract           #
 # --------------------------------------------------------------------------- #
 #: Media types an ``Engine_Artifact`` declares (mirrors the ``base`` docstring).
-_ARTIFACT_MEDIA_TYPES: Tuple[str, ...] = (
+_ARTIFACT_MEDIA_TYPES: tuple[str, ...] = (
     "video",
     "audio",
     "image",
@@ -582,7 +595,7 @@ _ARTIFACT_MEDIA_TYPES: Tuple[str, ...] = (
 )
 
 #: Exception classes engines realistically raise; the host must isolate all of them.
-_ENGINE_EXCEPTIONS: Tuple[type, ...] = (
+_ENGINE_EXCEPTIONS: tuple[type, ...] = (
     RuntimeError,
     ValueError,
     TypeError,
@@ -622,7 +635,7 @@ def st_registrations(
     error.
     """
     n = draw(st.integers(min_value=min_size, max_value=max_size))
-    records: List[Tuple[str, Engine_Stage, int]] = []
+    records: list[tuple[str, Engine_Stage, int]] = []
     seen: set = set()
     for _ in range(n):
         engine_id = draw(st_engine_id(max_words=2))
@@ -702,14 +715,14 @@ def st_engine_outcomes(
         st.sampled_from(["applied", "skipped", "degraded", "timeout", "fallback", "cached"]),
         st.text(alphabet=_SNAKE_ALPHABET + "_", min_size=1, max_size=10),
     )
-    markers: List[str] = draw(
+    markers: list[str] = draw(
         st.lists(
             st.one_of(details.map(lambda d: f"engine:{eid}:{d}"), details),
             max_size=max_markers,
         )
     )
     if markers and draw(st.booleans()):
-        markers.append(markers[0])          # duplicate -> exercises merge_markers dedup
+        markers.append(markers[0])  # duplicate -> exercises merge_markers dedup
 
     artifacts = draw(st.lists(_st_engine_artifact(), max_size=max_artifacts))
 
@@ -728,8 +741,9 @@ def st_engine_outcomes(
                 st.sampled_from(["segments", "cues", "intensity", "model", "seed"]),
                 st.one_of(
                     st.integers(min_value=-1000, max_value=1000),
-                    st.floats(min_value=-100.0, max_value=100.0,
-                              allow_nan=False, allow_infinity=False),
+                    st.floats(
+                        min_value=-100.0, max_value=100.0, allow_nan=False, allow_infinity=False
+                    ),
                     st.booleans(),
                     st.text(max_size=8),
                 ),
@@ -739,7 +753,6 @@ def st_engine_outcomes(
         "detail": draw(st.text(max_size=24)),
         "exception": exception,
     }
-
 
 
 # --------------------------------------------------------------------------- #
@@ -777,7 +790,7 @@ def st_engine_outcomes(
 # probabilities) or set ``.probability`` on the words itself.
 
 #: The 7 Kinetic_Styles, sorted — duplicated from kinetic task 3.1 (see note above).
-KINETIC_STYLES: Tuple[str, ...] = (
+KINETIC_STYLES: tuple[str, ...] = (
     "bounce",
     "highlight_sweep",
     "karaoke_fill",
@@ -788,11 +801,11 @@ KINETIC_STYLES: Tuple[str, ...] = (
 )
 
 #: The 2 Reveal_Modes, sorted — duplicated from kinetic task 3.1 (see note above).
-REVEAL_MODES: Tuple[str, ...] = ("cumulative", "word_by_word")
+REVEAL_MODES: tuple[str, ...] = ("cumulative", "word_by_word")
 
 #: Caption positions (``worker.effects.caption_presets.VALID_POSITIONS``); ``""`` means
 #: "inherit the Base_Preset position" (Req 7.4), so it is a legal option value too.
-_KINETIC_POSITIONS: Tuple[str, ...] = ("bottom", "center", "top")
+_KINETIC_POSITIONS: tuple[str, ...] = ("bottom", "center", "top")
 
 #: The documented last rung of the font ladder, mirroring
 #: ``worker.engines.kinetic.FALLBACK_FONT`` and ``worker.captions.FALLBACK_FONTS[-1]``.
@@ -806,7 +819,7 @@ _FALLBACK_FONT = "Liberation Sans"
 
 #: Built-in Caption_Preset names (``caption_presets.BUILTIN_PRESETS``), kept as plain
 #: strings so this module imports without the preset registry.
-_PRESET_NAMES: Tuple[str, ...] = (
+_PRESET_NAMES: tuple[str, ...] = (
     "karaoke",
     "boxed",
     "minimal",
@@ -817,7 +830,7 @@ _PRESET_NAMES: Tuple[str, ...] = (
 
 #: Font families worth putting on the ladder: realistic families, families that are never
 #: installed in CI, and hostile-ish spellings the probe must survive.
-_FONT_FAMILIES: Tuple[str, ...] = (
+_FONT_FAMILIES: tuple[str, ...] = (
     "Arial",
     "Impact",
     "Inter",
@@ -886,9 +899,7 @@ def st_kinetic_options(
         "reveal": draw(pick(list(reveals))),
         # --- look, inherited from the Base_Preset ---
         "preset_name": draw(pick(list(_PRESET_NAMES))),
-        "font_override": draw(
-            st.one_of(st.just(""), pick(list(_FONT_FAMILIES)))
-        ),
+        "font_override": draw(st.one_of(st.just(""), pick(list(_FONT_FAMILIES)))),
         "preset_font": draw(pick(list(_FONT_FAMILIES))),
         "font_size": draw(st.integers(min_value=12, max_value=200)),
         "position": draw(pick(list(positions))),
@@ -896,12 +907,10 @@ def st_kinetic_options(
         "max_lines": draw(st.integers(min_value=1, max_value=4)),
         "max_line_width": draw(st.integers(min_value=6, max_value=80)),
         "safe_area_x_pct": draw(
-            st.floats(min_value=0.0, max_value=25.0,
-                      allow_nan=False, allow_infinity=False)
+            st.floats(min_value=0.0, max_value=25.0, allow_nan=False, allow_infinity=False)
         ),
         "safe_area_y_pct": draw(
-            st.floats(min_value=0.0, max_value=40.0,
-                      allow_nan=False, allow_infinity=False)
+            st.floats(min_value=0.0, max_value=40.0, allow_nan=False, allow_infinity=False)
         ),
         # --- motion + emphasis ---
         "motion_duration_ms": draw(st.integers(min_value=20, max_value=1000)),
@@ -909,19 +918,15 @@ def st_kinetic_options(
         "keyword_ai": draw(st.booleans()),
         "emoji_inline": draw(st.booleans()),
         "confidence_floor": draw(
-            st.floats(min_value=0.0, max_value=1.0,
-                      allow_nan=False, allow_infinity=False)
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
         ),
         # --- carried context ---
         "captions_enabled": (
             draw(st.booleans()) if captions_enabled is None else bool(captions_enabled)
         ),
-        "hook_enabled": (
-            draw(st.booleans()) if hook_enabled is None else bool(hook_enabled)
-        ),
+        "hook_enabled": (draw(st.booleans()) if hook_enabled is None else bool(hook_enabled)),
         "hook_duration_s": draw(
-            st.floats(min_value=0.0, max_value=6.0,
-                      allow_nan=False, allow_infinity=False)
+            st.floats(min_value=0.0, max_value=6.0, allow_nan=False, allow_infinity=False)
         ),
         "hook_font_size": draw(st.integers(min_value=12, max_value=240)),
         "durable_subtitle": draw(st.booleans()),
@@ -944,42 +949,42 @@ def st_reveal_mode() -> st.SearchStrategy[str]:
 # --------------------------------------------------------------------------- #
 #: Space-free wide scripts: Han, Hiragana, Katakana, Hangul. Every code point here is
 #: East_Asian_Width ``W``/``F``, i.e. 2 Display_Width units per character.
-_WIDE_TOKENS: Tuple[str, ...] = (
-    "漢字",            # Han
-    "日本語",          # Han
-    "中文字幕",        # Han
-    "ひらがな",        # Hiragana
-    "こんにちは",      # Hiragana
-    "カタカナ",        # Katakana
-    "テスト",          # Katakana
-    "한국어",          # Hangul
-    "안녕하세요",      # Hangul
+_WIDE_TOKENS: tuple[str, ...] = (
+    "漢字",  # Han
+    "日本語",  # Han
+    "中文字幕",  # Han
+    "ひらがな",  # Hiragana
+    "こんにちは",  # Hiragana
+    "カタカナ",  # Katakana
+    "テスト",  # Katakana
+    "한국어",  # Hangul
+    "안녕하세요",  # Hangul
     "ｆｕｌｌｗｉｄｔｈ",  # fullwidth Latin (East_Asian_Width F)
 )
 
 #: Right-to-left scripts: Arabic and Hebrew, with and without vowel points.
-_RTL_TOKENS: Tuple[str, ...] = (
+_RTL_TOKENS: tuple[str, ...] = (
     "مرحبا",
     "العربية",
-    "كَلِمَة",          # Arabic + combining harakat
+    "كَلِمَة",  # Arabic + combining harakat
     "שלום",
     "עברית",
-    "בְּרֵאשִׁית",       # Hebrew + combining niqqud
+    "בְּרֵאשִׁית",  # Hebrew + combining niqqud
 )
 
 #: Tokens carrying combining marks (Unicode categories ``Mn``/``Me``) — decomposed
 #: sequences that must count 0 Display_Width units for the mark itself.
-_COMBINING_TOKENS: Tuple[str, ...] = (
-    "e\u0301",                 # e + COMBINING ACUTE
-    "cafe\u0301",              # café, decomposed
-    "nai\u0308ve",             # naïve, decomposed
-    "a\u0301\u0300\u0302",     # stacked marks
-    "\u0915\u094d\u0937",      # Devanagari conjunct
-    "o\u20dd",                 # COMBINING ENCLOSING CIRCLE (Me)
+_COMBINING_TOKENS: tuple[str, ...] = (
+    "e\u0301",  # e + COMBINING ACUTE
+    "cafe\u0301",  # café, decomposed
+    "nai\u0308ve",  # naïve, decomposed
+    "a\u0301\u0300\u0302",  # stacked marks
+    "\u0915\u094d\u0937",  # Devanagari conjunct
+    "o\u20dd",  # COMBINING ENCLOSING CIRCLE (Me)
 )
 
 #: Emoji tokens: plain, skin-tone modified, ZWJ sequences, and flags.
-_EMOJI_TOKENS: Tuple[str, ...] = (
+_EMOJI_TOKENS: tuple[str, ...] = (
     "🎬",
     "🔥",
     "👍🏽",
@@ -991,18 +996,18 @@ _EMOJI_TOKENS: Tuple[str, ...] = (
 #: Single tokens whose Display_Width provably exceeds *any* legal ``max_line_width``
 #: (the declared maximum is 80 units), so the "one over-long word sits alone on its line
 #: and is never split" branch of layout is always reachable.
-_OVER_LONG_TOKENS: Tuple[str, ...] = (
-    "日" * 45,                 # 90 units (wide, 2 each)
-    "ｗ" * 50,                 # 100 units (fullwidth)
-    "A" * 90,                  # 90 units (narrow)
-    "supercalifragilisticexpialidocious" * 3,   # 102 units
-    "🔥" * 41,                 # 82 units (emoji, 2 each)
-    "한글" * 25,               # 100 units
+_OVER_LONG_TOKENS: tuple[str, ...] = (
+    "日" * 45,  # 90 units (wide, 2 each)
+    "ｗ" * 50,  # 100 units (fullwidth)
+    "A" * 90,  # 90 units (narrow)
+    "supercalifragilisticexpialidocious" * 3,  # 102 units
+    "🔥" * 41,  # 82 units (emoji, 2 each)
+    "한글" * 25,  # 100 units
 )
 
 #: Ordinary Latin tokens, so an i18n timeline is a realistic *mixture* rather than
 #: uniformly exotic.
-_LATIN_TOKENS: Tuple[str, ...] = ("this", "changed", "everything", "ok", "I")
+_LATIN_TOKENS: tuple[str, ...] = ("this", "changed", "everything", "ok", "I")
 
 
 def _st_i18n_token(*, include_over_long: bool = True) -> st.SearchStrategy[str]:
@@ -1045,17 +1050,14 @@ def st_i18n_word_timeline(
 
     Consumed by kinetic Properties 7 and 14.
     """
-    skeleton, duration = draw(
-        st_word_timeline(min_words=min_words, max_words=max_words)
-    )
+    skeleton, duration = draw(st_word_timeline(min_words=min_words, max_words=max_words))
     token = _st_i18n_token(include_over_long=include_over_long)
-    words: List[FakeWord] = [
+    words: list[FakeWord] = [
         _word(
             w.start,
             w.end,
             draw(token),
-            draw(st.floats(min_value=0.0, max_value=1.0,
-                           allow_nan=False, allow_infinity=False)),
+            draw(st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)),
         )
         for w in skeleton
     ]
@@ -1075,7 +1077,7 @@ def st_i18n_word_timeline(
 # --------------------------------------------------------------------------- #
 #: Non-numeric bound payloads: ``captions._word_bounds`` must coerce every one of these
 #: to ``0.0`` rather than raise.
-_NON_NUMERIC_BOUNDS: Tuple[Any, ...] = (
+_NON_NUMERIC_BOUNDS: tuple[Any, ...] = (
     None,
     "",
     " ",
@@ -1093,7 +1095,7 @@ _NON_NUMERIC_BOUNDS: Tuple[Any, ...] = (
 )
 
 #: Empty / whitespace-only word texts, which sanitisation must drop entirely.
-_BLANK_TEXTS: Tuple[str, ...] = ("", " ", "   ", "\t", "\n", "\r\n", "\u00a0", "\u3000")
+_BLANK_TEXTS: tuple[str, ...] = ("", " ", "   ", "\t", "\n", "\r\n", "\u00a0", "\u3000")
 
 
 def _break_missing_end(word: FakeWord) -> FakeWord:
@@ -1133,14 +1135,11 @@ def st_broken_word_timeline(
 
     Consumed by kinetic Property 12.
     """
-    skeleton, duration = draw(
-        st_word_timeline(min_words=min_words, max_words=max_words)
-    )
-    words: List[FakeWord] = []
+    skeleton, duration = draw(st_word_timeline(min_words=min_words, max_words=max_words))
+    words: list[FakeWord] = []
     for source in skeleton:
         probability = draw(
-            st.floats(min_value=0.0, max_value=1.0,
-                      allow_nan=False, allow_infinity=False)
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
         )
         base = _word(source.start, source.end, source.text, probability)
         kind = draw(
@@ -1244,27 +1243,23 @@ def st_font_availability(
     font_override = draw(st.one_of(st.just(""), st.sampled_from(list(fonts))))
     preset_font = draw(st.sampled_from(list(fonts)))
 
-    ladder: List[str] = []
+    ladder: list[str] = []
     for family in (font_override, preset_font, _FALLBACK_FONT):
         if family and family not in ladder:
             ladder.append(family)
 
-    flags = draw(
-        st.lists(st.booleans(), min_size=len(ladder), max_size=len(ladder))
-    )
+    flags = draw(st.lists(st.booleans(), min_size=len(ladder), max_size=len(ladder)))
     if not allow_none_available and not any(flags):
         flags[draw(st.integers(min_value=0, max_value=len(ladder) - 1))] = True
 
     noise_strategy = st_availability_map(max_size=4) if noise is None else noise
-    availability: Dict[str, bool] = dict(draw(noise_strategy))
+    availability: dict[str, bool] = dict(draw(noise_strategy))
     # The ladder's own answers are authoritative; noise must not shadow them.
     availability.update(
-        {f"font:{family}": bool(flag) for family, flag in zip(ladder, flags)}
+        {f"font:{family}": bool(flag) for family, flag in zip(ladder, flags, strict=False)}
     )
 
-    available_families = tuple(
-        family for family, flag in zip(ladder, flags) if flag
-    )
+    available_families = tuple(family for family, flag in zip(ladder, flags, strict=False) if flag)
     expected_font = available_families[0] if available_families else _FALLBACK_FONT
 
     return {
@@ -1278,7 +1273,6 @@ def st_font_availability(
         "expected_font": expected_font,
         "expected_marked": expected_font != ladder[0],
     }
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1319,10 +1313,10 @@ def st_font_availability(
 # ``st_tiny_clip`` yields only the *kwargs* for the ``make_video`` fixture, never a file.
 
 #: The three Stem_Names, sorted — duplicated from stem task 4.1 (see note above).
-STEM_NAMES: Tuple[str, ...] = ("music", "other", "vocals")
+STEM_NAMES: tuple[str, ...] = ("music", "other", "vocals")
 
 #: Backend_Stem name -> Stem_Name; ``drums`` and ``bass`` both collapse into ``music``.
-STEM_MAPPING: Dict[str, str] = {
+STEM_MAPPING: dict[str, str] = {
     "vocals": "vocals",
     "drums": "music",
     "bass": "music",
@@ -1330,7 +1324,7 @@ STEM_MAPPING: Dict[str, str] = {
 }
 
 #: The three non-``custom`` Mix_Presets and their documented gain bundles.
-MIX_PRESETS: Dict[str, Dict[str, float]] = {
+MIX_PRESETS: dict[str, dict[str, float]] = {
     "speech_focus": {"vocals": 1.0, "music": 0.25, "other": 0.6},
     "music_focus": {"vocals": 0.25, "music": 1.0, "other": 0.8},
     "clean_speech": {"vocals": 1.0, "music": 0.0, "other": 0.0},
@@ -1338,13 +1332,13 @@ MIX_PRESETS: Dict[str, Dict[str, float]] = {
 
 #: Every legal ``mix_preset`` option value, sorted: the three bundles plus ``custom``,
 #: which means "use the individual gain fields".
-MIX_PRESET_CHOICES: Tuple[str, ...] = tuple(sorted(("custom", *MIX_PRESETS)))
+MIX_PRESET_CHOICES: tuple[str, ...] = tuple(sorted(("custom", *MIX_PRESETS)))
 
 #: The three Repair_Modes, in the design's declared order.
-REPAIR_MODES: Tuple[str, ...] = ("off", "crossfade", "spectral")
+REPAIR_MODES: tuple[str, ...] = ("off", "crossfade", "spectral")
 
 #: The three ``backend`` option values; a *resolved* backend is only ``ml`` or ``ffmpeg``.
-BACKEND_IDS: Tuple[str, ...] = ("auto", "ml", "ffmpeg")
+BACKEND_IDS: tuple[str, ...] = ("auto", "ml", "ffmpeg")
 
 #: Gain bounds, inclusive, and the value a rejected gain falls back to.
 GAIN_MIN, GAIN_MAX, GAIN_DEFAULT = 0.0, 4.0, 1.0
@@ -1354,7 +1348,7 @@ WINDOW_MIN_MS, WINDOW_MAX_MS, WINDOW_DEFAULT_MS = 2, 120, 12
 
 #: The Capability_Ids the stem engine declares (one required, the rest optional) plus
 #: ``ffmpeg_filter:volume``, which the gain chain of every resolved path needs.
-_STEM_CAPABILITIES: Tuple[str, ...] = (
+_STEM_CAPABILITIES: tuple[str, ...] = (
     "binary:ffmpeg",
     "ffmpeg_filter:acrossfade",
     "ffmpeg_filter:afade",
@@ -1370,32 +1364,31 @@ _STEM_CAPABILITIES: Tuple[str, ...] = (
 #: Budget gate thresholds (stem task 4.1's step reserves/minimums). Mirrored here only so
 #: :func:`st_gate_scenarios` can straddle every one of them.
 _REPAIR_MIN_S, _REMUX_MIN_S = 3.0, 2.0
-_SEPARATION_MIN_S: Dict[str, float] = {"ml": 20.0, "ffmpeg": 4.0}
+_SEPARATION_MIN_S: dict[str, float] = {"ml": 20.0, "ffmpeg": 4.0}
 
 #: Remaining-budget values that sit just below / on / just above each gate threshold, so
 #: no rung of the ladder is reachable only by luck.
-_BUDGET_BREAKPOINTS: Tuple[float, ...] = (
+_BUDGET_BREAKPOINTS: tuple[float, ...] = (
     0.0,
     0.5,
     1.0,
-    _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,        # 4.999 -> rung 6 (abandon)
-    _REPAIR_MIN_S + _REMUX_MIN_S,                # 5.0   -> repair-only is affordable
+    _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,  # 4.999 -> rung 6 (abandon)
+    _REPAIR_MIN_S + _REMUX_MIN_S,  # 5.0   -> repair-only is affordable
     _REPAIR_MIN_S + _REMUX_MIN_S + 0.001,
-    _SEPARATION_MIN_S["ffmpeg"] + _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,   # 8.999
-    _SEPARATION_MIN_S["ffmpeg"] + _REPAIR_MIN_S + _REMUX_MIN_S,           # 9.0
-    _SEPARATION_MIN_S["ml"] + _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,       # 24.999
-    _SEPARATION_MIN_S["ml"] + _REPAIR_MIN_S + _REMUX_MIN_S,               # 25.0
+    _SEPARATION_MIN_S["ffmpeg"] + _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,  # 8.999
+    _SEPARATION_MIN_S["ffmpeg"] + _REPAIR_MIN_S + _REMUX_MIN_S,  # 9.0
+    _SEPARATION_MIN_S["ml"] + _REPAIR_MIN_S + _REMUX_MIN_S - 0.001,  # 24.999
+    _SEPARATION_MIN_S["ml"] + _REPAIR_MIN_S + _REMUX_MIN_S,  # 25.0
     45.0,
-    90.0,                                        # the declared time_budget_s
+    90.0,  # the declared time_budget_s
 )
 
 #: Model names worth drawing: the documented default, a plausible sibling, and the empty
 #: string (a legal JSON scalar that must not crash resolution).
-_STEM_MODELS: Tuple[str, ...] = ("htdemucs", "htdemucs_ft", "mdx_extra", "")
+_STEM_MODELS: tuple[str, ...] = ("htdemucs", "htdemucs_ft", "mdx_extra", "")
 
 #: The Seam_Note prefix the engine reads. No other prefix is ever parsed.
 _SEAM_PREFIX = "filler_seam:"
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1415,8 +1408,7 @@ def _st_gain(*, allow_zero: bool = True) -> st.SearchStrategy[float]:
         landmarks.insert(0, GAIN_MIN)
     return st.one_of(
         st.sampled_from(landmarks),
-        st.floats(min_value=lowest, max_value=GAIN_MAX,
-                  allow_nan=False, allow_infinity=False),
+        st.floats(min_value=lowest, max_value=GAIN_MAX, allow_nan=False, allow_infinity=False),
     )
 
 
@@ -1451,7 +1443,7 @@ def st_stem_options(
 
     Consumed by stem Properties 3, 5, 8, 13, 14, 15, 16, 19, 20.
     """
-    options: Dict[str, Any] = {
+    options: dict[str, Any] = {
         "mix_preset": draw(st.sampled_from(list(mix_presets))),
         "gain_vocals": draw(_st_gain()),
         "gain_music": draw(_st_gain()),
@@ -1496,17 +1488,16 @@ def st_stem_gains(
     Consumed by stem Properties 11, 12, 18.
     """
     names = list(stems)
-    gains: Dict[str, float] = {
-        name: draw(_st_gain(allow_zero=allow_zero)) for name in names
-    }
+    gains: dict[str, float] = {name: draw(_st_gain(allow_zero=allow_zero)) for name in names}
     if names and allow_zero and draw(st.booleans()):
         gains[draw(st.sampled_from(names))] = GAIN_MIN
     if names and allow_boost and draw(st.booleans()):
         gains[draw(st.sampled_from(names))] = draw(
             st.one_of(
                 st.sampled_from([1.5, 2.0, GAIN_MAX]),
-                st.floats(min_value=1.001, max_value=GAIN_MAX,
-                          allow_nan=False, allow_infinity=False),
+                st.floats(
+                    min_value=1.001, max_value=GAIN_MAX, allow_nan=False, allow_infinity=False
+                ),
             )
         )
     return gains
@@ -1529,16 +1520,16 @@ def st_repair_mode() -> st.SearchStrategy[str]:
 #: ``repair_window_ms`` payloads that are *not* in-range integers: out of range on both
 #: sides, non-integral, non-numeric, non-finite and wrong-typed. ``coerce_int`` + clamp
 #: must turn every one of these into an integer inside ``[2, 120]`` without raising.
-_HOSTILE_WINDOW_MS: Tuple[Any, ...] = (
-    WINDOW_MIN_MS - 1,            # 1  -> clamps up
+_HOSTILE_WINDOW_MS: tuple[Any, ...] = (
+    WINDOW_MIN_MS - 1,  # 1  -> clamps up
     0,
     -1,
     -1000,
-    WINDOW_MAX_MS + 1,            # 121 -> clamps down
+    WINDOW_MAX_MS + 1,  # 121 -> clamps down
     1000,
-    10 ** 9,
-    -(10 ** 9),
-    True,                         # bool is an int subclass: a classic coercion trap
+    10**9,
+    -(10**9),
+    True,  # bool is an int subclass: a classic coercion trap
     False,
     2.4,
     119.6,
@@ -1554,7 +1545,7 @@ _HOSTILE_WINDOW_MS: Tuple[Any, ...] = (
     "nan",
     "inf",
     "1e400",
-    "١٢",                         # Arabic-Indic digits
+    "١٢",  # Arabic-Indic digits
     [12],
     (12,),
     {"repair_window_ms": 12},
@@ -1583,7 +1574,6 @@ def st_repair_window_ms(*, valid_only: bool = False) -> st.SearchStrategy[Any]:
         return in_range
     hostile = st.sampled_from(list(_HOSTILE_WINDOW_MS)).map(_copied)
     return st.one_of(in_range, hostile)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1621,18 +1611,15 @@ def st_keep_plan(
     Consumed by stem Property 6.
     """
     n = draw(st.integers(min_value=min_keeps, max_value=max_keeps))
-    gap_pool = [st.floats(min_value=0.01, max_value=0.8,
-                          allow_nan=False, allow_infinity=False)]
+    gap_pool = [st.floats(min_value=0.01, max_value=0.8, allow_nan=False, allow_infinity=False)]
     if allow_adjacent:
         gap_pool.append(st.just(0.0))
-    length_pool = [st.floats(min_value=0.02, max_value=2.0,
-                             allow_nan=False, allow_infinity=False)]
+    length_pool = [st.floats(min_value=0.02, max_value=2.0, allow_nan=False, allow_infinity=False)]
     if allow_zero_length:
         length_pool.append(st.just(0.0))
 
-    keeps: List[Interval] = []
-    cursor = draw(st.floats(min_value=0.0, max_value=0.5,
-                            allow_nan=False, allow_infinity=False))
+    keeps: list[Interval] = []
+    cursor = draw(st.floats(min_value=0.0, max_value=0.5, allow_nan=False, allow_infinity=False))
     removed = 0.0
     for _ in range(n):
         gap = draw(st.one_of(gap_pool))
@@ -1651,7 +1638,7 @@ def st_keep_plan(
 
 #: Notes emitted by *other* producers: the host's own markers, sibling engines' markers
 #: and the existing pipeline's effect names. The stem engine must read none of them.
-_FOREIGN_NOTES: Tuple[str, ...] = (
+_FOREIGN_NOTES: tuple[str, ...] = (
     "",
     " ",
     "filler_removal",
@@ -1668,7 +1655,7 @@ _FOREIGN_NOTES: Tuple[str, ...] = (
 
 #: Notes whose *prefix* is malformed: wrong separator, wrong case, wrong spelling,
 #: leading/trailing whitespace, missing or unparseable payload, doubled payload.
-_MALFORMED_SEAM_NOTES: Tuple[str, ...] = (
+_MALFORMED_SEAM_NOTES: tuple[str, ...] = (
     "filler_seam",
     "filler_seam:",
     "filler_seam::1.000",
@@ -1693,7 +1680,7 @@ _MALFORMED_SEAM_NOTES: Tuple[str, ...] = (
 
 #: Notes with the *right* prefix and a non-finite or negative payload — each one must be
 #: discarded individually, leaving its well-formed neighbours alone.
-_NON_FINITE_SEAM_NOTES: Tuple[str, ...] = (
+_NON_FINITE_SEAM_NOTES: tuple[str, ...] = (
     "filler_seam:nan",
     "filler_seam:NaN",
     "filler_seam:-nan",
@@ -1719,7 +1706,7 @@ def _seam_value(note: Any, duration: float) -> float | None:
     if not isinstance(note, str) or not note.startswith(_SEAM_PREFIX):
         return None
     try:
-        value = float(note[len(_SEAM_PREFIX):])
+        value = float(note[len(_SEAM_PREFIX) :])
     except (TypeError, ValueError):
         return None
     if not math.isfinite(value) or value < 0.0 or value > duration:
@@ -1765,8 +1752,9 @@ def st_seam_notes(
     Consumed by stem Properties 7, 12, 18.
     """
     span = (
-        round(draw(st.floats(min_value=0.5, max_value=60.0,
-                             allow_nan=False, allow_infinity=False)), 3)
+        round(
+            draw(st.floats(min_value=0.5, max_value=60.0, allow_nan=False, allow_infinity=False)), 3
+        )
         if duration is None
         else float(duration)
     )
@@ -1774,13 +1762,12 @@ def st_seam_notes(
     def _note(value: float) -> str:
         return f"{_SEAM_PREFIX}{value:.3f}"
 
-    valid: List[str] = [
+    valid: list[str] = [
         _note(value)
         for value in draw(
             st.lists(
                 st.one_of(
-                    st.floats(min_value=0.0, max_value=span,
-                              allow_nan=False, allow_infinity=False),
+                    st.floats(min_value=0.0, max_value=span, allow_nan=False, allow_infinity=False),
                     st.sampled_from([0.0, span, round(span / 2.0, 3)]),
                 ),
                 min_size=min_valid,
@@ -1788,9 +1775,9 @@ def st_seam_notes(
             )
         )
     ]
-    notes: List[str] = list(valid)
+    notes: list[str] = list(valid)
     if valid and draw(st.booleans()):
-        notes.append(draw(st.sampled_from(valid)))      # duplicate seam
+        notes.append(draw(st.sampled_from(valid)))  # duplicate seam
 
     if include_hostile:
         out_of_bounds = st.sampled_from(
@@ -1818,9 +1805,7 @@ def st_seam_notes(
 
     ordered = tuple(draw(st.permutations(notes)))
     expected = tuple(
-        value
-        for value in (_seam_value(note, span) for note in ordered)
-        if value is not None
+        value for value in (_seam_value(note, span) for note in ordered) if value is not None
     )
     return {
         "notes": ordered,
@@ -1830,12 +1815,11 @@ def st_seam_notes(
     }
 
 
-
 # --------------------------------------------------------------------------- #
 # Audio format mappings and tiny PCM buffers                                    #
 # --------------------------------------------------------------------------- #
 #: Audio codec names ``ffprobe`` realistically reports for a short-form clip.
-_AUDIO_CODECS: Tuple[str, ...] = (
+_AUDIO_CODECS: tuple[str, ...] = (
     "aac",
     "pcm_s16le",
     "mp3",
@@ -1846,22 +1830,68 @@ _AUDIO_CODECS: Tuple[str, ...] = (
 )
 
 #: Channel counts worth exercising: mono, stereo and one surround layout.
-_AUDIO_CHANNELS: Tuple[int, ...] = (1, 2, 6)
+_AUDIO_CHANNELS: tuple[int, ...] = (1, 2, 6)
 
 #: The four ``Audio_Format`` field names, in the order ``ffprobe`` is asked for them.
-_AUDIO_FORMAT_FIELDS: Tuple[str, ...] = ("sample_rate", "channels", "codec", "start_time")
+_AUDIO_FORMAT_FIELDS: tuple[str, ...] = ("sample_rate", "channels", "codec", "start_time")
 
 #: Per-field hostile payloads. ``ffprobe`` hands every value back as a JSON *string*, so
 #: ``"44100"`` is realistic rather than exotic; the rest are the missing / zero /
 #: negative / non-finite / wrong-type traps Req 17.5 has to survive.
-_HOSTILE_AUDIO_VALUES: Dict[str, Tuple[Any, ...]] = {
-    "sample_rate": (0, -1, -44100, 0.0, 44100.5, "44100", "0", "-48000", "", "N/A",
-                    "abc", None, True, float("nan"), float("inf"), 10 ** 12, [44100]),
-    "channels": (0, -1, -2, 0.0, 2.5, "2", "0", "-1", "", "N/A", "abc", None, True,
-                 float("nan"), float("inf"), 10 ** 6, {"channels": 2}),
+_HOSTILE_AUDIO_VALUES: dict[str, tuple[Any, ...]] = {
+    "sample_rate": (
+        0,
+        -1,
+        -44100,
+        0.0,
+        44100.5,
+        "44100",
+        "0",
+        "-48000",
+        "",
+        "N/A",
+        "abc",
+        None,
+        True,
+        float("nan"),
+        float("inf"),
+        10**12,
+        [44100],
+    ),
+    "channels": (
+        0,
+        -1,
+        -2,
+        0.0,
+        2.5,
+        "2",
+        "0",
+        "-1",
+        "",
+        "N/A",
+        "abc",
+        None,
+        True,
+        float("nan"),
+        float("inf"),
+        10**6,
+        {"channels": 2},
+    ),
     "codec": ("", " ", "N/A", "unknown", None, 0, 1, True, [], {}, "🎬", "a" * 200),
-    "start_time": (-1.0, -0.5, "0.000000", "N/A", "", None, True, float("nan"),
-                   float("inf"), float("-inf"), 10 ** 9, [0.0]),
+    "start_time": (
+        -1.0,
+        -0.5,
+        "0.000000",
+        "N/A",
+        "",
+        None,
+        True,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        10**9,
+        [0.0],
+    ),
 }
 
 
@@ -1896,7 +1926,7 @@ def st_audio_format(
 
     Consumed by stem Properties 10, 15, 18.
     """
-    fmt: Dict[str, Any] = {
+    fmt: dict[str, Any] = {
         "sample_rate": draw(st.sampled_from(list(sample_rates))),
         "channels": draw(st.sampled_from(list(channels))),
         "codec": draw(st.sampled_from(list(codecs))),
@@ -1904,8 +1934,7 @@ def st_audio_format(
             st.one_of(
                 st.just(0.0),
                 st.sampled_from([0.0, 0.001, 0.023, 0.5]),
-                st.floats(min_value=0.0, max_value=2.0,
-                          allow_nan=False, allow_infinity=False),
+                st.floats(min_value=0.0, max_value=2.0, allow_nan=False, allow_infinity=False),
             )
         ),
     }
@@ -1930,7 +1959,7 @@ def st_audio_format(
 #: by ``c1 == -c0``, which is exactly the content the ffmpeg backend's ``pan`` mid
 #: extraction cancels to silence); ``silence`` is the Req 16.7 "silence in ⇒ silence out"
 #: case; ``full_scale`` sits on ±1.0 so any gain > 1.0 must be shown not to wrap.
-_PCM_KINDS: Tuple[str, ...] = (
+_PCM_KINDS: tuple[str, ...] = (
     "silence",
     "dc_offset",
     "full_scale",
@@ -1976,14 +2005,15 @@ def st_pcm_frames(
     Consumed by stem Properties 10, 12, 19, 20.
     """
     kind = draw(st.sampled_from(list(kinds)))
-    count = 2 if kind == "anti_phase" else (
-        channels if channels is not None else draw(st.sampled_from(list(_AUDIO_CHANNELS)))
+    count = (
+        2
+        if kind == "anti_phase"
+        else (channels if channels is not None else draw(st.sampled_from(list(_AUDIO_CHANNELS))))
     )
     length = draw(st.integers(min_value=1, max_value=max_frames))
-    sample = st.floats(min_value=-1.0, max_value=1.0,
-                       allow_nan=False, allow_infinity=False)
+    sample = st.floats(min_value=-1.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 
-    frames: List[Tuple[float, ...]] = []
+    frames: list[tuple[float, ...]] = []
     if kind == "silence":
         frames = [(0.0,) * count for _ in range(length)]
     elif kind == "dc_offset":
@@ -1991,33 +2021,24 @@ def st_pcm_frames(
         frames = [(level,) * count for _ in range(length)]
     elif kind == "full_scale":
         frames = [
-            ((1.0,) * count if index % 2 == 0 else (-1.0,) * count)
-            for index in range(length)
+            ((1.0,) * count if index % 2 == 0 else (-1.0,) * count) for index in range(length)
         ]
     elif kind == "anti_phase":
         values = draw(st.lists(sample, min_size=length, max_size=length))
         frames = [(value, -value) for value in values]
     elif kind == "impulse":
         hit = draw(st.integers(min_value=0, max_value=length - 1))
-        frames = [
-            ((1.0,) * count if index == hit else (0.0,) * count)
-            for index in range(length)
-        ]
+        frames = [((1.0,) * count if index == hit else (0.0,) * count) for index in range(length)]
     elif kind == "ramp":
-        frames = [
-            ((-1.0 + 2.0 * index / max(length - 1, 1)),) * count
-            for index in range(length)
-        ]
+        frames = [((-1.0 + 2.0 * index / max(length - 1, 1)),) * count for index in range(length)]
     elif kind == "alternating":
         level = draw(sample)
         frames = [
-            ((level,) * count if index % 2 == 0 else (-level,) * count)
-            for index in range(length)
+            ((level,) * count if index % 2 == 0 else (-level,) * count) for index in range(length)
         ]
-    else:                                   # "drawn": arbitrary in-range content
+    else:  # "drawn": arbitrary in-range content
         frames = [
-            tuple(draw(st.lists(sample, min_size=count, max_size=count)))
-            for _ in range(length)
+            tuple(draw(st.lists(sample, min_size=count, max_size=count))) for _ in range(length)
         ]
 
     buffer = tuple(frames)
@@ -2035,21 +2056,21 @@ def st_pcm_frames(
 # Backend stem mappings                                                         #
 # --------------------------------------------------------------------------- #
 #: The four Backend_Stems ``htdemucs`` emits, sorted.
-_FOUR_STEM_NAMES: Tuple[str, ...] = ("bass", "drums", "other", "vocals")
+_FOUR_STEM_NAMES: tuple[str, ...] = ("bass", "drums", "other", "vocals")
 
 #: The two-Backend_Stem shapes, both spellings (see the DIVERGENCE note in
 #: :func:`st_backend_stem_sets`): the design's ffmpeg adapter emits ``vocals`` + ``music``
 #: and omits ``other``, while ``tests.fakes.Missing_Stem_Backend(missing=("bass",
 #: "drums"))`` — documented there as "the ffmpeg adapter's two-stem shape" — leaves
 #: ``vocals`` + ``other``. Both are drawn, so a property is blind to neither.
-_TWO_STEM_SHAPES: Tuple[Tuple[str, ...], ...] = (
+_TWO_STEM_SHAPES: tuple[tuple[str, ...], ...] = (
     ("music", "vocals"),
     ("other", "vocals"),
 )
 
 #: Backend_Stem names outside :data:`STEM_MAPPING`: other separators' vocabularies, case
 #: and whitespace variants, and outright junk. None of them may reach the Stem_Set.
-_UNKNOWN_STEM_NAMES: Tuple[str, ...] = (
+_UNKNOWN_STEM_NAMES: tuple[str, ...] = (
     "guitar",
     "piano",
     "accompaniment",
@@ -2142,14 +2163,15 @@ def st_backend_stem_sets(
         )
         names += draw(
             st.lists(
-                st.sampled_from(list(_UNKNOWN_STEM_NAMES) if include_unknown
-                                else list(_FOUR_STEM_NAMES)),
+                st.sampled_from(
+                    list(_UNKNOWN_STEM_NAMES) if include_unknown else list(_FOUR_STEM_NAMES)
+                ),
                 min_size=1,
                 max_size=3,
                 unique=True,
             )
         )
-    else:                                   # "omission": an arbitrary subset, maybe empty
+    else:  # "omission": an arbitrary subset, maybe empty
         names = draw(
             st.lists(
                 st.sampled_from(list(_FOUR_STEM_NAMES)),
@@ -2160,13 +2182,13 @@ def st_backend_stem_sets(
         )
 
     ordered = list(draw(st.permutations(list(dict.fromkeys(names)))))
-    raw: Dict[str, Path] = {name: dest / f"{name}.wav" for name in ordered}
+    raw: dict[str, Path] = {name: dest / f"{name}.wav" for name in ordered}
 
-    contributors: Dict[str, List[str]] = {}
+    contributors: dict[str, list[str]] = {}
     for name in ordered:
         target = _stem_target(name)
         if target is None:
-            continue                        # unknown Backend_Stem: contributes nothing
+            continue  # unknown Backend_Stem: contributes nothing
         contributors.setdefault(target, []).append(name)
 
     return {
@@ -2175,12 +2197,9 @@ def st_backend_stem_sets(
         "expected_contributors": {
             stem: tuple(sorted(sources)) for stem, sources in sorted(contributors.items())
         },
-        "expected_missing": tuple(
-            stem for stem in STEM_NAMES if stem not in contributors
-        ),
+        "expected_missing": tuple(stem for stem in STEM_NAMES if stem not in contributors),
         "expected_keys": STEM_NAMES,
     }
-
 
 
 # --------------------------------------------------------------------------- #
@@ -2189,7 +2208,7 @@ def st_backend_stem_sets(
 #: Every documented forced failure point, mapped to the rung it must land on. ``oserror``
 #: is the one row of the error table that does **not** change the status: the engine
 #: records it in ``Engine_Result.detail`` and keeps going (Req 11.6).
-_FAILURE_KINDS: Tuple[str, ...] = (
+_FAILURE_KINDS: tuple[str, ...] = (
     "backend_raises",
     "backend_truncates",
     "backend_non_audio",
@@ -2286,9 +2305,7 @@ def st_failure_points(
         call_index = draw(st.integers(min_value=0, max_value=max_call_index))
         double = "Recording_Command_Runner"
 
-    expected_status = "degraded" if kind == "timeout" else (
-        None if kind == "oserror" else "failed"
-    )
+    expected_status = "degraded" if kind == "timeout" else (None if kind == "oserror" else "failed")
     expected_marker = {"timeout": "timeout", "oserror": None}.get(kind, "failed")
     return {
         "kind": kind,
@@ -2354,15 +2371,10 @@ def st_gate_scenarios(
 
     Consumed by stem Properties 15 and 17.
     """
-    availability: Dict[str, bool] = dict(
+    availability: dict[str, bool] = dict(
         draw(st_availability_map(max_size=4) if noise is None else noise)
     )
-    availability.update(
-        {
-            capability: draw(st.booleans())
-            for capability in capabilities
-        }
-    )
+    availability.update({capability: draw(st.booleans()) for capability in capabilities})
     has_audio = draw(st.booleans())
     return {
         "enabled": draw(st.booleans()) if enabled is None else bool(enabled),
@@ -2371,8 +2383,7 @@ def st_gate_scenarios(
         "remaining_s": draw(
             st.one_of(
                 st.sampled_from(list(_BUDGET_BREAKPOINTS)),
-                st.floats(min_value=0.0, max_value=120.0,
-                          allow_nan=False, allow_infinity=False),
+                st.floats(min_value=0.0, max_value=120.0, allow_nan=False, allow_infinity=False),
             )
         ),
         "permissibility": draw(st.booleans()),
@@ -2380,11 +2391,7 @@ def st_gate_scenarios(
         "has_audio": has_audio,
         "audio_format": draw(st_audio_format()) if has_audio else None,
         "options": draw(st_stem_options()),
-        "failure": (
-            draw(st.one_of(st.none(), st_failure_points()))
-            if allow_failure
-            else None
-        ),
+        "failure": (draw(st.one_of(st.none(), st_failure_points())) if allow_failure else None),
     }
 
 
@@ -2393,11 +2400,11 @@ def st_gate_scenarios(
 # --------------------------------------------------------------------------- #
 #: File names the ``make_video`` fixture can write under ``tmp_path``: plain, portable,
 #: always ``.mp4`` (the fixture encodes H.264 + AAC).
-_TINY_CLIP_NAMES: Tuple[str, ...] = ("src.mp4", "clip.mp4", "tiny.mp4", "in.mp4")
+_TINY_CLIP_NAMES: tuple[str, ...] = ("src.mp4", "clip.mp4", "tiny.mp4", "in.mp4")
 
 #: ``(width, height)`` pairs — every value even, as ``yuv420p`` requires: tiny landscape,
 #: square, 16:9 and 9:16 portrait (the short-form target).
-_TINY_CLIP_SIZES: Tuple[Tuple[int, int], ...] = (
+_TINY_CLIP_SIZES: tuple[tuple[int, int], ...] = (
     (128, 128),
     (160, 120),
     (192, 108),
@@ -2413,7 +2420,7 @@ def st_tiny_clip(
     draw,
     *,
     names: Sequence[str] = _TINY_CLIP_NAMES,
-    sizes: Sequence[Tuple[int, int]] = _TINY_CLIP_SIZES,
+    sizes: Sequence[tuple[int, int]] = _TINY_CLIP_SIZES,
     audio: bool = None,
     min_duration: float = 0.3,
     max_duration: float = 2.0,
@@ -2441,11 +2448,20 @@ def st_tiny_clip(
     width, height = draw(st.sampled_from(list(sizes)))
     duration = draw(
         st.one_of(
-            st.sampled_from([value for value in (0.3, 0.5, 1.0, 1.5, 2.0)
-                             if min_duration <= value <= max_duration]
-                            or [min_duration]),
-            st.floats(min_value=min_duration, max_value=max_duration,
-                      allow_nan=False, allow_infinity=False),
+            st.sampled_from(
+                [
+                    value
+                    for value in (0.3, 0.5, 1.0, 1.5, 2.0)
+                    if min_duration <= value <= max_duration
+                ]
+                or [min_duration]
+            ),
+            st.floats(
+                min_value=min_duration,
+                max_value=max_duration,
+                allow_nan=False,
+                allow_infinity=False,
+            ),
         )
     )
     return {

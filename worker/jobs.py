@@ -18,7 +18,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 from worker import cancellation, observability
@@ -124,7 +124,7 @@ class JobStore:
         except Exception:  # pragma: no cover - defensive
             logger.exception("failed to restore persisted jobs")
 
-    def _persist(self, job: Optional[Job]) -> None:
+    def _persist(self, job: Job | None) -> None:
         """Mirror ``job`` into the durable store, if one is configured.
 
         Swallows every failure. This runs on the hot path of a live render — a progress
@@ -146,7 +146,7 @@ class JobStore:
         # serialise every API poll behind a disk write.
         self._persist(job)
 
-    def get(self, job_id: str) -> Optional[Job]:
+    def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -172,7 +172,7 @@ class JobStore:
             job.updated_at = time.time()
         self._persist(job)
 
-    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[ClipResult]:
+    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> ClipResult | None:
         """Atomically update editable fields on one clip within a job.
 
         Only known :class:`ClipResult` attributes are updated (unknown keys are
@@ -196,7 +196,7 @@ class JobStore:
         self._persist(job)
         return clip
 
-    def get_clip(self, job_id: str, clip_id: str) -> Optional[ClipResult]:
+    def get_clip(self, job_id: str, clip_id: str) -> ClipResult | None:
         """Return a single clip within a job, or ``None``."""
         with self._lock:
             job = self._jobs.get(job_id)
@@ -208,7 +208,7 @@ class JobStore:
 class JobManager:
     """Owns the worker pool and drives jobs through the pipeline."""
 
-    def __init__(self, store: Optional[JobStore] = None, max_workers: int = 1) -> None:
+    def __init__(self, store: JobStore | None = None, max_workers: int = 1) -> None:
         self.store = store or JobStore()
         # A single worker => batch items processed one after another, in order.
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -220,7 +220,7 @@ class JobManager:
         input_type: str,
         source: str,
         options: ProcessingOptions,
-        batch_id: Optional[str] = None,
+        batch_id: str | None = None,
         title: str = "",
     ) -> Job:
         """Create a job, store it as queued, and schedule it for processing."""
@@ -255,7 +255,9 @@ class JobManager:
         """
         job = self.store.get(job_id)
         if job is None or job.status in (
-            JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
         ):
             return False
         cancellation.request_cancel(job_id)
@@ -302,7 +304,7 @@ class JobManager:
         metrics = observability.metrics_for(job_id)
         # The stage currently being timed, so `progress` can close the previous one when the
         # pipeline moves on. A list because the closure below rebinds it.
-        open_stage: list[Optional[tuple[str, float]]] = [None]
+        open_stage: list[tuple[str, float] | None] = [None]
 
         def close_stage() -> None:
             entry = open_stage[0]
@@ -326,7 +328,9 @@ class JobManager:
                 close_stage()
                 open_stage[0] = (label, time.monotonic())
             self.store.update(
-                job_id, progress=fraction, stage=stage,
+                job_id,
+                progress=fraction,
+                stage=stage,
                 status=JobStatus.PROCESSING,
                 # U8: which step of how many, so the UI can show structure rather than one bar.
                 stage_index=stage_position(stage),
@@ -345,7 +349,7 @@ class JobManager:
     #: adjustment and far smaller than the gap between two distinct moments.
     WINDOW_MATCH_TOLERANCE_S = 1.0
 
-    def _missing_windows(self, job) -> Optional[list]:
+    def _missing_windows(self, job) -> list | None:
         """The planned windows with no rendered clip, as candidates. ``None`` when unknowable.
 
         Returning ``None`` means "no usable plan", and the caller then renders normally - which is
@@ -417,18 +421,28 @@ class JobManager:
             # I4: a queued job stops here, before any work begins - no worker has claimed it, so
             # there is nothing to wait for.
             cancellation.checkpoint(job_id)
-            self.store.update(job_id, status=JobStatus.PROCESSING,
-                              stage="Starting", progress=0.0,
-                              stage_index=1, stage_total=len(JOB_STAGES))
+            self.store.update(
+                job_id,
+                status=JobStatus.PROCESSING,
+                stage="Starting",
+                progress=0.0,
+                stage_index=1,
+                stage_total=len(JOB_STAGES),
+            )
 
             source_path = Path(job.source)
             start_progress = 0.0
 
             # URL inputs are downloaded first (reserving a slice of progress).
             if job.input_type == "url":
+
                 def dl_progress(frac: float, msg: str) -> None:
-                    self.store.update(job_id, progress=frac * _DOWNLOAD_BUDGET,
-                                      stage=msg, status=JobStatus.PROCESSING)
+                    self.store.update(
+                        job_id,
+                        progress=frac * _DOWNLOAD_BUDGET,
+                        stage=msg,
+                        status=JobStatus.PROCESSING,
+                    )
 
                 source_path, meta = dl.download_video(
                     job.source, settings.uploads_dir, progress_cb=dl_progress
@@ -462,7 +476,9 @@ class JobManager:
                     # is about to fail too, and that is worth seeing in the log.
                     logger.warning(
                         "could not probe duration for job %s (%s)",
-                        job_id, source_path, exc_info=True,
+                        job_id,
+                        source_path,
+                        exc_info=True,
                     )
 
             clips_dir = Path(settings.clips_dir) / job_id
@@ -509,6 +525,7 @@ class JobManager:
             from publishers.history import get_history
             from storage_backends import get_storage
             from storage_backends.retention import write_sidecar
+
             history = get_history()
             storage = get_storage()
             for clip in clips:
@@ -534,6 +551,7 @@ class JobManager:
             # Auto mode routes each finished clip through its campaign/platforms.
             if job.options.publish_mode == "auto" and job.options.publish_to:
                 from publishers.manager import get_publish_manager
+
                 publisher = get_publish_manager()
                 for clip in clips:
                     publisher.submit(
@@ -616,7 +634,8 @@ class JobManager:
             # would believe the clips were backed up when they were not.
             logger.exception(
                 "failed to mirror clip %s of job %s to the %s storage backend",
-                getattr(clip, "filename", "?"), job_id,
+                getattr(clip, "filename", "?"),
+                job_id,
                 getattr(storage, "name", "unknown"),
             )
 
@@ -627,6 +646,7 @@ class JobManager:
 
         try:
             from runtime_config import get_runtime_config
+
             if not get_runtime_config().auto_delete_temp:
                 return
         except Exception:
@@ -637,7 +657,7 @@ class JobManager:
 
 
 # --- process-wide singleton -------------------------------------------------
-_manager: Optional[JobManager] = None
+_manager: JobManager | None = None
 _manager_lock = threading.Lock()
 
 

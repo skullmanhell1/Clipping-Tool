@@ -265,9 +265,7 @@ const engineHint = (engine) => {
       ? `Unavailable — missing ${missing.join(", ")}`
       : "Unavailable on this install";
   }
-  return engine?.requires_network
-    ? "Requires network access (blocked in permissibility mode)"
-    : "";
+  return engine?.requires_network ? "Requires network access (blocked in permissibility mode)" : "";
 };
 
 // A small labelled checkbox toggle used across the effects section.
@@ -315,12 +313,12 @@ export default function SettingsPanel({
   const reframeLayoutOptions = labelledOptions(
     effects?.reframe_layouts,
     REFRAME_LAYOUT_LABELS,
-    REFRAME_LAYOUTS
+    REFRAME_LAYOUTS,
   );
   const reframeIntensityOptions = labelledOptions(
     effects?.reframe_intensities,
     REFRAME_INTENSITY_LABELS,
-    REFRAME_INTENSITIES
+    REFRAME_INTENSITIES,
   );
   const engineRows = Array.isArray(engines) ? engines : [];
   // Kinetic typography: the option domains ride in /api/info's `capabilities`
@@ -333,12 +331,12 @@ export default function SettingsPanel({
   const kineticStyleOptions = labelledOptions(
     kineticDomains?.styles,
     KINETIC_STYLE_LABELS,
-    KINETIC_STYLES
+    KINETIC_STYLES,
   );
   const kineticRevealOptions = labelledOptions(
     kineticDomains?.reveal_modes,
     KINETIC_REVEAL_LABELS,
-    KINETIC_REVEALS
+    KINETIC_REVEALS,
   );
   // Stem inpainting: same arrangement as kinetic typography — the option domains and the
   // slider bounds ride in `capabilities` under the Engine_Id, while availability is on the
@@ -350,12 +348,12 @@ export default function SettingsPanel({
   const stemMixPresetOptions = labelledOptions(
     stemDomains?.mix_presets,
     STEM_MIX_PRESET_LABELS,
-    STEM_MIX_PRESETS
+    STEM_MIX_PRESETS,
   );
   const stemBackendOptions = labelledOptions(
     stemDomains?.backends,
     STEM_BACKEND_LABELS,
-    STEM_BACKENDS
+    STEM_BACKENDS,
   );
   // `spectral` needs real stems, so it needs the local checkpoint. When /api/info reports
   // `model:htdemucs` unavailable the option is shown **disabled with a reason** rather than
@@ -365,15 +363,14 @@ export default function SettingsPanel({
   const stemRepairModeOptions = labelledOptions(
     stemDomains?.repair_modes,
     STEM_REPAIR_MODE_LABELS,
-    STEM_REPAIR_MODES
+    STEM_REPAIR_MODES,
   ).map((option) =>
     option.value === "spectral" && !stemModelAvailable
       ? { ...option, label: `${option.label} — needs local model`, disabled: true }
-      : option
+      : option,
   );
   const stemGainBounds = stemDomains?.gain || { min: 0.0, max: 4.0, default: 1.0 };
-  const stemWindowBounds =
-    stemDomains?.repair_window_ms || { min: 2, max: 120, default: 12 };
+  const stemWindowBounds = stemDomains?.repair_window_ms || { min: 2, max: 120, default: 12 };
   // The gain sliders are only meaningful under `custom`: a named Mix_Preset overrides the
   // individual fields on the backend (Req 5.2), so leaving them live would show values that
   // do not describe what will actually happen.
@@ -394,10 +391,30 @@ export default function SettingsPanel({
         Settings
       </h3>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Dropdown label="Language" value={settings.language} onChange={set("language")} options={LANGUAGES} />
-        <Dropdown label="Clip Length" value={settings.clip_length} onChange={set("clip_length")} options={CLIP_LENGTHS} />
-        <Dropdown label="Aspect Ratio" value={settings.aspect} onChange={set("aspect")} options={ASPECTS} />
-        <Dropdown label="Number of Clips" value={settings.num_clips} onChange={set("num_clips")} options={CLIP_COUNTS} />
+        <Dropdown
+          label="Language"
+          value={settings.language}
+          onChange={set("language")}
+          options={LANGUAGES}
+        />
+        <Dropdown
+          label="Clip Length"
+          value={settings.clip_length}
+          onChange={set("clip_length")}
+          options={CLIP_LENGTHS}
+        />
+        <Dropdown
+          label="Aspect Ratio"
+          value={settings.aspect}
+          onChange={set("aspect")}
+          options={ASPECTS}
+        />
+        <Dropdown
+          label="Number of Clips"
+          value={settings.num_clips}
+          onChange={set("num_clips")}
+          options={CLIP_COUNTS}
+        />
       </div>
 
       <button
@@ -411,9 +428,24 @@ export default function SettingsPanel({
       {showAdvanced && (
         <div className="mt-4 space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Dropdown label="Selection" value={settings.strategy} onChange={set("strategy")} options={STRATEGIES} />
-            <Dropdown label="Platform" value={settings.platform} onChange={set("platform")} options={PLATFORMS} />
-            <Dropdown label="Vibe / Tone" value={settings.vibe} onChange={set("vibe")} options={VIBES} />
+            <Dropdown
+              label="Selection"
+              value={settings.strategy}
+              onChange={set("strategy")}
+              options={STRATEGIES}
+            />
+            <Dropdown
+              label="Platform"
+              value={settings.platform}
+              onChange={set("platform")}
+              options={PLATFORMS}
+            />
+            <Dropdown
+              label="Vibe / Tone"
+              value={settings.vibe}
+              onChange={set("vibe")}
+              options={VIBES}
+            />
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="text-slate-400">Hashtag count</span>
               <input
@@ -449,8 +481,8 @@ export default function SettingsPanel({
             />
             <span className="text-xs text-slate-500">
               Unusual words in this video. Transcription has no reason to expect a name or a
-              product, so it mis-hears the same one the same way every time &mdash; and that
-              mistake is burned into every clip&apos;s captions.
+              product, so it mis-hears the same one the same way every time &mdash; and that mistake
+              is burned into every clip&apos;s captions.
             </span>
           </label>
 
@@ -546,12 +578,27 @@ export default function SettingsPanel({
             ) : null}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {presetDetails.length === 0 ? (
-                <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} />
+                <Dropdown
+                  label="Caption preset"
+                  value={settings.caption_preset}
+                  onChange={set("caption_preset")}
+                  options={CAPTION_PRESETS}
+                />
               ) : null}
-              <Dropdown label="Caption Position" value={settings.caption_position} onChange={set("caption_position")} options={CAPTION_POSITIONS} />
+              <Dropdown
+                label="Caption Position"
+                value={settings.caption_position}
+                onChange={set("caption_position")}
+                options={CAPTION_POSITIONS}
+              />
             </div>
             <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Dropdown label="Caption Template (legacy)" value={settings.caption_template} onChange={set("caption_template")} options={CAPTION_TEMPLATES} />
+              <Dropdown
+                label="Caption Template (legacy)"
+                value={settings.caption_template}
+                onChange={set("caption_template")}
+                options={CAPTION_TEMPLATES}
+              />
             </div>
             <p className="mt-2 text-xs text-slate-500">
               The caption preset supersedes the legacy template when set to a non-default value.
@@ -585,10 +632,7 @@ export default function SettingsPanel({
           {/* Kinetic typography (Req 17.6) — an unavailable engine disables the
               whole group so a creator cannot enable a silent degradation. A
               native <fieldset disabled> also disables every control inside it. */}
-          <fieldset
-            disabled={!kineticAvailable}
-            className={kineticAvailable ? "" : "opacity-60"}
-          >
+          <fieldset disabled={!kineticAvailable} className={kineticAvailable ? "" : "opacity-60"}>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               Kinetic typography
             </div>
@@ -629,10 +673,7 @@ export default function SettingsPanel({
 
           {/* Stem repair (Req 18.4) — an unavailable engine disables the whole group, so a
               creator cannot enable something that would silently degrade. */}
-          <fieldset
-            disabled={!stemAvailable}
-            className={stemAvailable ? "" : "opacity-60"}
-          >
+          <fieldset disabled={!stemAvailable} className={stemAvailable ? "" : "opacity-60"}>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               Stem repair
             </div>
@@ -673,9 +714,7 @@ export default function SettingsPanel({
                   <span className="text-slate-400">
                     {name} gain (
                     {Number(
-                      settings[key] === undefined
-                        ? stemGainBounds.default
-                        : settings[key]
+                      settings[key] === undefined ? stemGainBounds.default : settings[key],
                     ).toFixed(2)}
                     ×)
                   </span>
@@ -684,15 +723,9 @@ export default function SettingsPanel({
                     min={stemGainBounds.min}
                     max={stemGainBounds.max}
                     step="0.05"
-                    value={
-                      settings[key] === undefined
-                        ? stemGainBounds.default
-                        : settings[key]
-                    }
+                    value={settings[key] === undefined ? stemGainBounds.default : settings[key]}
                     disabled={!stemGainsEditable}
-                    onChange={(e) =>
-                      onChange({ ...settings, [key]: Number(e.target.value) })
-                    }
+                    onChange={(e) => onChange({ ...settings, [key]: Number(e.target.value) })}
                     className="accent-emerald-500 disabled:opacity-40"
                   />
                 </label>
@@ -700,27 +733,22 @@ export default function SettingsPanel({
             </div>
             {!stemGainsEditable && (
               <p className="mt-1 text-xs text-slate-500">
-                The “{STEM_MIX_PRESET_LABELS[settings.stem_mix_preset] ||
-                  settings.stem_mix_preset}” preset sets the gains; choose “Custom” to
-                adjust them yourself.
+                The “{STEM_MIX_PRESET_LABELS[settings.stem_mix_preset] || settings.stem_mix_preset}”
+                preset sets the gains; choose “Custom” to adjust them yourself.
               </p>
             )}
 
             <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm">
                 <span className="text-slate-400">
-                  Repair window ({settings.stem_repair_window_ms ??
-                    stemWindowBounds.default}{" "}
-                  ms)
+                  Repair window ({settings.stem_repair_window_ms ?? stemWindowBounds.default} ms)
                 </span>
                 <input
                   type="range"
                   min={stemWindowBounds.min}
                   max={stemWindowBounds.max}
                   step="1"
-                  value={
-                    settings.stem_repair_window_ms ?? stemWindowBounds.default
-                  }
+                  value={settings.stem_repair_window_ms ?? stemWindowBounds.default}
                   disabled={settings.stem_repair_mode === "off"}
                   onChange={(e) =>
                     onChange({
@@ -758,8 +786,8 @@ export default function SettingsPanel({
               {!stemAvailable
                 ? engineHint(stemEngine) || "Unavailable on this install."
                 : !stemModelAvailable
-                ? "No local separation model found, so a real split is unavailable — the ffmpeg approximation will be used and reported."
-                : "Off by default. Repair fixes the audible clicks that filler-word removal leaves behind."}
+                  ? "No local separation model found, so a real split is unavailable — the ffmpeg approximation will be used and reported."
+                  : "Off by default. Repair fixes the audible clicks that filler-word removal leaves behind."}
             </p>
           </fieldset>
 
@@ -777,8 +805,18 @@ export default function SettingsPanel({
               />
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Dropdown label="B-roll intensity" value={settings.broll_intensity} onChange={set("broll_intensity")} options={BROLL_INTENSITIES} />
-              <Dropdown label="Asset sourcing" value={settings.asset_sourcing_mode} onChange={set("asset_sourcing_mode")} options={ASSET_SOURCING_MODES} />
+              <Dropdown
+                label="B-roll intensity"
+                value={settings.broll_intensity}
+                onChange={set("broll_intensity")}
+                options={BROLL_INTENSITIES}
+              />
+              <Dropdown
+                label="Asset sourcing"
+                value={settings.asset_sourcing_mode}
+                onChange={set("asset_sourcing_mode")}
+                options={ASSET_SOURCING_MODES}
+              />
               <label className="flex flex-col gap-1.5 text-sm">
                 <span className="text-slate-400">Provider</span>
                 <input
@@ -802,8 +840,18 @@ export default function SettingsPanel({
               Look &amp; sound
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Dropdown label="Color grade" value={settings.color} onChange={set("color")} options={COLOR_PRESETS} />
-              <Dropdown label="Background music" value={settings.music} onChange={set("music")} options={MUSIC_MOODS} />
+              <Dropdown
+                label="Color grade"
+                value={settings.color}
+                onChange={set("color")}
+                options={COLOR_PRESETS}
+              />
+              <Dropdown
+                label="Background music"
+                value={settings.music}
+                onChange={set("music")}
+                options={MUSIC_MOODS}
+              />
               <label className="flex flex-col gap-1.5 text-sm">
                 <span className="text-slate-400">
                   Music volume ({Math.round((Number(settings.music_volume) || 0) * 100)}%)
@@ -836,8 +884,18 @@ export default function SettingsPanel({
               Auto-emoji
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Dropdown label="Intensity" value={settings.emoji} onChange={set("emoji")} options={EMOJI_INTENSITIES} />
-              <Dropdown label="Mode" value={settings.emoji_mode} onChange={set("emoji_mode")} options={EMOJI_MODES} />
+              <Dropdown
+                label="Intensity"
+                value={settings.emoji}
+                onChange={set("emoji")}
+                options={EMOJI_INTENSITIES}
+              />
+              <Dropdown
+                label="Mode"
+                value={settings.emoji_mode}
+                onChange={set("emoji_mode")}
+                options={EMOJI_MODES}
+              />
               <div className="flex items-end pb-2">
                 <Toggle
                   label="Pop animation"
@@ -873,10 +931,23 @@ export default function SettingsPanel({
                 onChange={setFlag("diarization")}
               />
               <Toggle label="Zoom / Ken Burns" checked={settings.zoom} onChange={setFlag("zoom")} />
-              <Toggle label="Punch-in intro" checked={settings.transitions} onChange={setFlag("transitions")} />
-              <Toggle label="Hook title overlay" hint="Burns the AI hook text at the start" checked={settings.hook_title} onChange={setFlag("hook_title")} />
+              <Toggle
+                label="Punch-in intro"
+                checked={settings.transitions}
+                onChange={setFlag("transitions")}
+              />
+              <Toggle
+                label="Hook title overlay"
+                hint="Burns the AI hook text at the start"
+                checked={settings.hook_title}
+                onChange={setFlag("hook_title")}
+              />
               <Toggle label="Fade in / out" checked={settings.fades} onChange={setFlag("fades")} />
-              <Toggle label="Progress bar" checked={settings.progress_bar} onChange={setFlag("progress_bar")} />
+              <Toggle
+                label="Progress bar"
+                checked={settings.progress_bar}
+                onChange={setFlag("progress_bar")}
+              />
               <Toggle
                 label="Filler-word removal"
                 hint='Cuts "um"/"uh" and long pauses'
@@ -901,8 +972,8 @@ export default function SettingsPanel({
           </div>
 
           <p className="text-xs text-slate-500">
-            Frame-by-frame effects (reframe, zoom, emoji) are optional and add
-            render time. Everything here is applied per clip in a single pass.
+            Frame-by-frame effects (reframe, zoom, emoji) are optional and add render time.
+            Everything here is applied per clip in a single pass.
           </p>
         </div>
       )}

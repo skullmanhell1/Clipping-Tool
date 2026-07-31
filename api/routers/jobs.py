@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -23,6 +22,7 @@ from worker.models import ProcessingOptions
 #: Every route below carries the ``jobs`` tag, supplied here rather
 #: than repeated on each decorator.
 router = APIRouter(tags=["jobs"])
+
 
 # ---------------------------------------------------------------------------
 # Job submission
@@ -108,8 +108,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
                     raise HTTPException(
                         status_code=413,
                         detail=(
-                            f"{safe_name!r} exceeds the maximum upload size of "
-                            f"{limit} bytes"
+                            f"{safe_name!r} exceeds the maximum upload size of " f"{limit} bytes"
                         ),
                     )
                 out.write(chunk)
@@ -128,7 +127,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
 @router.post("/api/upload", dependencies=[Depends(rate_limit)])
 async def upload(
     files: list[UploadFile] = File(...),
-    language: Optional[str] = Form(None),
+    language: str | None = Form(None),
     translate: bool = Form(False),
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
@@ -141,13 +140,13 @@ async def upload(
     vibe: str = Form(""),
     platform: str = Form("generic"),
     hashtag_count: int = Form(5),
-    range_start: Optional[float] = Form(None),
-    range_end: Optional[float] = Form(None),
+    range_start: float | None = Form(None),
+    range_end: float | None = Form(None),
     metadata: bool = Form(True),
     publish_to: str = Form(""),
     campaign_id: str = Form(""),
     publish_mode: str = Form("review"),
-    schedule_at: Optional[float] = Form(None),
+    schedule_at: float | None = Form(None),
     # Phase 4 — visual effects
     reframe: bool = Form(False),
     zoom: bool = Form(False),
@@ -194,31 +193,31 @@ async def upload(
     # "not supplied", so the field keeps its ``ProcessingOptions`` default;
     # anything else is normalised by ``ProcessingOptions.from_dict`` (the flag)
     # or coerced by the engine's ``resolve_options`` (every other field).
-    kinetic_typography_enabled: Optional[str] = Form(None),
-    kinetic_style: Optional[str] = Form(None),
-    kinetic_reveal: Optional[str] = Form(None),
-    kinetic_font: Optional[str] = Form(None),
-    kinetic_max_lines: Optional[str] = Form(None),
-    kinetic_max_line_width: Optional[str] = Form(None),
-    kinetic_safe_area_x_pct: Optional[str] = Form(None),
-    kinetic_safe_area_y_pct: Optional[str] = Form(None),
-    kinetic_motion_ms: Optional[str] = Form(None),
-    kinetic_confidence_floor: Optional[str] = Form(None),
+    kinetic_typography_enabled: str | None = Form(None),
+    kinetic_style: str | None = Form(None),
+    kinetic_reveal: str | None = Form(None),
+    kinetic_font: str | None = Form(None),
+    kinetic_max_lines: str | None = Form(None),
+    kinetic_max_line_width: str | None = Form(None),
+    kinetic_safe_area_x_pct: str | None = Form(None),
+    kinetic_safe_area_y_pct: str | None = Form(None),
+    kinetic_motion_ms: str | None = Form(None),
+    kinetic_confidence_floor: str | None = Form(None),
     # Stem inpainting engine (default OFF). Loose optional strings for exactly the
     # reason the kinetic fields above are: a typed Form parameter makes FastAPI reject
     # an unrecognised payload with 422, but an unrecognised value must never fail the
     # job — it must fall back to the documented default (Reqs 18.1, 18.5).
-    stem_inpainting_enabled: Optional[str] = Form(None),
-    stem_mix_preset: Optional[str] = Form(None),
-    stem_gain_vocals: Optional[str] = Form(None),
-    stem_gain_music: Optional[str] = Form(None),
-    stem_gain_other: Optional[str] = Form(None),
-    stem_repair_mode: Optional[str] = Form(None),
-    stem_repair_window_ms: Optional[str] = Form(None),
-    stem_declick: Optional[str] = Form(None),
-    stem_backend: Optional[str] = Form(None),
-    stem_model: Optional[str] = Form(None),
-    stem_retain_stems: Optional[str] = Form(None),
+    stem_inpainting_enabled: str | None = Form(None),
+    stem_mix_preset: str | None = Form(None),
+    stem_gain_vocals: str | None = Form(None),
+    stem_gain_music: str | None = Form(None),
+    stem_gain_other: str | None = Form(None),
+    stem_repair_mode: str | None = Form(None),
+    stem_repair_window_ms: str | None = Form(None),
+    stem_declick: str | None = Form(None),
+    stem_backend: str | None = Form(None),
+    stem_model: str | None = Form(None),
+    stem_retain_stems: str | None = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -230,7 +229,7 @@ async def upload(
 
     # Kinetic typography fields, forwarded only when actually supplied so an
     # omitted field keeps its documented ProcessingOptions default (Req 17.4).
-    kinetic_form: dict[str, Optional[str]] = {
+    kinetic_form: dict[str, str | None] = {
         "kinetic_typography_enabled": kinetic_typography_enabled,
         "kinetic_style": kinetic_style,
         "kinetic_reveal": kinetic_reveal,
@@ -328,9 +327,7 @@ async def upload(
 
     manager = deps.get_manager()
     if len(saved) == 1:
-        job = manager.submit(
-            "file", saved[0]["source"], options, title=saved[0]["title"]
-        )
+        job = manager.submit("file", saved[0]["source"], options, title=saved[0]["title"])
         return {"jobs": [job.to_dict()]}
 
     batch_id = manager.submit_batch(saved, options)
@@ -380,7 +377,8 @@ def cancel_job(job_id: str) -> dict:
         "state": "cancelling" if was_running else "cancelled",
         "detail": (
             "Stopping at the next checkpoint; a pass already in progress will finish first."
-            if was_running else "Stopped before processing began."
+            if was_running
+            else "Stopped before processing began."
         ),
     }
 
@@ -437,7 +435,7 @@ def resume_job(job_id: str) -> dict:
         raise HTTPException(
             status_code=409,
             detail="This job was interrupted before it chose its clips, so there is nothing to "
-                   "resume. Re-submit the source.",
+            "resume. Re-submit the source.",
         )
     if not manager.resume(job_id):
         raise HTTPException(

@@ -1,4 +1,5 @@
 """Tests for auto-emoji planning, asset resolution, and overlay building."""
+
 from __future__ import annotations
 
 import re
@@ -23,9 +24,9 @@ def test_plan_emoji_off_returns_nothing():
 
 def test_plan_emoji_respects_spacing():
     words = [
-        FakeWord(0.5, 0.9, "money"),   # 💰
-        FakeWord(1.0, 1.4, "fire"),    # 🔥 but within 5s spacing -> skipped
-        FakeWord(6.0, 6.4, "love"),    # ❤️ far enough -> kept
+        FakeWord(0.5, 0.9, "money"),  # 💰
+        FakeWord(1.0, 1.4, "fire"),  # 🔥 but within 5s spacing -> skipped
+        FakeWord(6.0, 6.4, "love"),  # ❤️ far enough -> kept
     ]
     cues = em.plan_emoji(words, 8.0, intensity="standard")  # spacing 5s
     assert [c.char for c in cues] == ["💰", "❤️"]
@@ -44,7 +45,7 @@ def test_plan_emoji_heavy_allows_more():
     """
     keywords = ["love", "amazing", "wow", "money", "cash", "rich", "fire", "best"]
     words = [FakeWord(i * 0.5, i * 0.5 + 0.3, k) for i, k in enumerate(keywords)]
-    heavy = em.plan_emoji(words, 6.0, intensity="heavy")   # spacing 2.5s
+    heavy = em.plan_emoji(words, 6.0, intensity="heavy")  # spacing 2.5s
     subtle = em.plan_emoji(words, 6.0, intensity="subtle")  # spacing 10s
     assert len(heavy) > len(subtle)
 
@@ -70,9 +71,9 @@ def test_the_emoji_lands_on_the_more_salient_word():
     words = [FakeWord(0.2, 0.6, "best"), FakeWord(0.7, 1.1, "money")]
     cues = em.plan_emoji(words, 20.0, intensity="subtle")
     assert len(cues) == 1
-    assert cues[0].char == em.KEYWORD_EMOJI["money"], (
-        "the filler-ish word took the slot the substantive one wanted"
-    )
+    assert (
+        cues[0].char == em.KEYWORD_EMOJI["money"]
+    ), "the filler-ish word took the slot the substantive one wanted"
 
 
 def test_ai_mode_uses_llm_map():
@@ -111,8 +112,7 @@ def test_resolve_asset_returns_none_when_download_fails(tmp_path, monkeypatch):
 
 def test_build_overlay_skips_unresolved():
     cues = [em.EmojiCue("🔥", 0.0, 1.0, 0)]
-    inputs, graph = em.build_overlay(cues, "0:v", "vout", duration=2.0,
-                                     resolver=lambda c: None)
+    inputs, graph = em.build_overlay(cues, "0:v", "vout", duration=2.0, resolver=lambda c: None)
     assert inputs == [] and graph == ""
 
 
@@ -125,18 +125,39 @@ def test_emoji_overlay_renders(make_video, png_asset, tmp_path):
     asset = png_asset("e.png")
     cues = [em.EmojiCue("💰", 0.2, 1.2, 0), em.EmojiCue("🔥", 1.0, 1.8, 1)]
     inputs, graph = em.build_overlay(
-        cues, base_label="0:v", out_label="vout", duration=2.0, animate=True,
-        resolver=lambda c: asset, input_offset=1,
+        cues,
+        base_label="0:v",
+        out_label="vout",
+        duration=2.0,
+        animate=True,
+        resolver=lambda c: asset,
+        input_offset=1,
     )
     assert graph and len(inputs) == 12  # 2 emoji * ["-loop","1","-t",D,"-i",path]
 
     dest = tmp_path / "emoji_out.mp4"
-    _run([settings.ffmpeg_binary, "-y", "-i", str(src), *inputs,
-          "-filter_complex", graph, "-map", "[vout]", "-map", "0:a",
-          "-c:v", "libx264", "-c:a", "copy", str(dest)])
+    _run(
+        [
+            settings.ffmpeg_binary,
+            "-y",
+            "-i",
+            str(src),
+            *inputs,
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
+            str(dest),
+        ]
+    )
     assert dest.exists()
     assert probe_duration(dest) > 1.5
-
 
 
 # ===========================================================================
@@ -156,7 +177,8 @@ def test_every_built_in_keyword_emoji_is_vendored():
     this is the one that fails the suite.
     """
     missing = [
-        glyph for glyph in sorted(set(em.KEYWORD_EMOJI.values()))
+        glyph
+        for glyph in sorted(set(em.KEYWORD_EMOJI.values()))
         if not (_ASSETS_DIR / em.emoji_filename(glyph)).is_file()
     ]
     assert not missing, (
@@ -222,7 +244,8 @@ def test_emoji_assets_are_tracked_by_git():
     sample = _ASSETS_DIR / em.emoji_filename(em.KEYWORD_EMOJI["fire"])
     proc = subprocess.run(
         ["git", "check-ignore", "-q", str(sample)],
-        cwd=repo_root, capture_output=True,
+        cwd=repo_root,
+        capture_output=True,
     )
     # git check-ignore exits 0 when the path IS ignored, 1 when it is not.
     assert proc.returncode != 0, f"{sample.name} is git-ignored; the assets will not ship"
@@ -280,11 +303,19 @@ def test_emoji_scale_width_is_even_and_positive():
     ("spoken", "base"),
     [
         # The four misses the improvement plan verified by hand.
-        ("winning", "win"), ("wins", "win"), ("won", "win"), ("fired", "fire"),
+        ("winning", "win"),
+        ("wins", "win"),
+        ("won", "win"),
+        ("fired", "fire"),
         # And the same shape across the rest of the rule set.
-        ("firing", "fire"), ("ideas", "idea"), ("looked", "look"),
-        ("stopping", "stop"), ("parties", "party"), ("richest", "rich"),
-        ("celebrating", "celebrate"), ("growing", "grow"),
+        ("firing", "fire"),
+        ("ideas", "idea"),
+        ("looked", "look"),
+        ("stopping", "stop"),
+        ("parties", "party"),
+        ("richest", "rich"),
+        ("celebrating", "celebrate"),
+        ("growing", "grow"),
     ],
 )
 def test_inflected_words_find_their_base_form(spoken, base):
@@ -317,7 +348,7 @@ def test_plan_emoji_matches_inflected_speech_end_to_end():
     """The planner, not just the lookup helper, benefits from A10."""
     words = [
         FakeWord(0.0, 0.5, "we"),
-        FakeWord(0.5, 1.0, "won"),          # missed entirely before A10
+        FakeWord(0.5, 1.0, "won"),  # missed entirely before A10
         FakeWord(1.0, 1.5, "everything"),
     ]
     cues = em.plan_emoji(words, duration=3.0, intensity="heavy")

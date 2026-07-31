@@ -44,13 +44,32 @@ def _tone_clip(path, *, seconds=6.0, freq=440, volume=1.0):
     """
     subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"testsrc=s=320x240:d={seconds}:r=30",
-            "-f", "lavfi", "-i", f"sine=f={freq}:d={seconds}:sample_rate={_RATE}",
-            "-af", f"volume={volume}",
-            "-shortest", "-c:v", "libx264", "-c:a", "aac", "-y", str(path),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=s=320x240:d={seconds}:r=30",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f={freq}:d={seconds}:sample_rate={_RATE}",
+            "-af",
+            f"volume={volume}",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-y",
+            str(path),
         ],
-        check=True, capture_output=True, timeout=180,
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
     return path
 
@@ -63,9 +82,24 @@ def _max_sample_step(media, at_seconds: float, window_ms: float = 3.0) -> int:
     """
     wav = media.with_suffix(".probe.wav")
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(media),
-         "-ac", "1", "-ar", str(_RATE), "-y", str(wav)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(media),
+            "-ac",
+            "1",
+            "-ar",
+            str(_RATE),
+            "-y",
+            str(wav),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     with wave.open(str(wav)) as handle:
         frames = handle.readframes(handle.getnframes())
@@ -159,9 +193,19 @@ def test_seam_fades_do_not_change_the_clip_duration(tmp_path, monkeypatch):
         monkeypatch.setattr(app_settings, "filler_seam_fade_ms", fade_ms)
         out = apply_keep_intervals(source, keeps, tmp_path / f"out{fade_ms}.mp4")
         probe = subprocess.run(
-            [shutil.which("ffprobe"), "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=nw=1:nk=1", str(out)],
-            capture_output=True, text=True, timeout=60,
+            [
+                shutil.which("ffprobe"),
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         durations.append(float(probe.stdout.strip()))
 
@@ -186,9 +230,7 @@ LOUDNESS_TOLERANCE_LU = 1.5
     ("platform", "source_volume"),
     [("tiktok", 0.05), ("youtube", 0.05), ("tiktok", 0.7)],
 )
-def test_a_rendered_clip_lands_on_its_platform_loudness_target(
-    platform, source_volume, tmp_path
-):
+def test_a_rendered_clip_lands_on_its_platform_loudness_target(platform, source_volume, tmp_path):
     """M6: measure LUFS after a real render and fail outside tolerance.
 
     Goes through ``compositor.render_clip`` with the shipped defaults rather than applying
@@ -218,9 +260,9 @@ def test_a_rendered_clip_lands_on_its_platform_loudness_target(
         f"{platform}: rendered at {after.input_i:.2f} LUFS, target {target} "
         f"(source was {before.input_i:.2f})"
     )
-    assert after.input_tp <= app_settings.loudness_true_peak_db + 0.5, (
-        f"true peak {after.input_tp:.2f} dBTP exceeds the ceiling; the clip will clip"
-    )
+    assert (
+        after.input_tp <= app_settings.loudness_true_peak_db + 0.5
+    ), f"true peak {after.input_tp:.2f} dBTP exceeds the ceiling; the clip will clip"
 
 
 @requires_ffmpeg
@@ -235,9 +277,22 @@ def test_an_unmeasurable_source_is_recorded_rather_than_fatal(tmp_path):
 
     silent = tmp_path / "novideo.mp4"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "color=black:s=320x240:d=2:r=30", "-y", str(silent)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=320x240:d=2:r=30",
+            "-y",
+            str(silent),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     assert audio.measure_loudness(silent) is None, "fixture must have no measurable audio"
 
@@ -248,6 +303,6 @@ def test_an_unmeasurable_source_is_recorded_rather_than_fatal(tmp_path):
     # A source with no audio track never reaches the loudness stage at all; either way the
     # render must succeed and must not claim a normalisation it did not perform.
     assert result is not None
-    assert not any(m.startswith("loudness:") for m in result.effects_applied), (
-        result.effects_applied
-    )
+    assert not any(
+        m.startswith("loudness:") for m in result.effects_applied
+    ), result.effects_applied

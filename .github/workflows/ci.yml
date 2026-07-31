@@ -65,11 +65,16 @@ jobs:
       # older releases). The rule set is now pinned in pyproject.toml, which is what makes
       # blocking on it meaningful.
       #
-      # Formatting is deliberately not enforced: black is in requirements-dev but has never
-      # run, and adopting it would reformat essentially every file. That is a standalone
-      # change, not a CI fix.
       - name: Lint (ruff)
         run: ruff check .
+
+      # Blocking, and new. `black` had been a declared dev dependency with no configuration and
+      # no CI step since before pyproject.toml existed: 187 of 211 files were unformatted. A
+      # formatter nobody runs is worse than none, because every diff becomes a negotiation about
+      # whitespace. Configured to line-length 100 in pyproject.toml so it agrees with ruff rather
+      # than fighting it.
+      - name: Format (black)
+        run: black --check --diff .
 
       - name: Import & boot smoke test
         run: |
@@ -242,6 +247,12 @@ jobs:
       # could not lint.
       - name: Lint (eslint)
         run: npm run lint
+
+      # The JavaScript counterpart to `black` on the Python side. eslint was configured for
+      # correctness rules only and had nothing to say about layout, so the frontend had the same
+      # problem the backend did: no agreed formatting, and therefore whitespace in every diff.
+      - name: Format (prettier)
+        run: npm run format:check
 
       - name: Tests (vitest)
         run: npm run test:run

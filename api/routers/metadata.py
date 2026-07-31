@@ -29,6 +29,7 @@ router = APIRouter(tags=["metadata"])
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Clip metadata editing + per-field regeneration
 # ---------------------------------------------------------------------------
@@ -121,9 +122,7 @@ def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list
         else:
             updated.append(clip.to_dict())
     if missing and not updated:
-        raise HTTPException(
-            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=404, detail=f"No such clip(s): {', '.join(missing)}")
     # A partial result is reported rather than raised: the point of a batch action is to get
     # through a list, and failing the whole call because one clip has since been deleted would
     # discard the decisions the user made about all the others.
@@ -172,9 +171,7 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     from worker import rerender as rerender_module
 
     try:
-        updated = rerender_module.rerender_clip(
-            job, clip, option_overrides=req.settings or None
-        )
+        updated = rerender_module.rerender_clip(job, clip, option_overrides=req.settings or None)
     except rerender_module.RerenderError as exc:
         # 409 rather than 500: the request was well-formed and the state of the world is the
         # problem (a deleted source, most often), which the message names.

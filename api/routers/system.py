@@ -26,6 +26,7 @@ from worker.models import BUILTIN_PROFILES, ProcessingOptions
 #: than repeated on each decorator.
 router = APIRouter(tags=["system"])
 
+
 # ---------------------------------------------------------------------------
 # System
 # ---------------------------------------------------------------------------
@@ -75,8 +76,7 @@ def info() -> dict[str, object]:
             # before spending a render finding out. Colours are added in `#RRGGBB` form
             # alongside the ASS originals, because a colour input cannot display `&H00FFFFFF`.
             "caption_preset_details": [
-                _preset_detail(preset)
-                for preset in caption_presets.BUILTIN_PRESETS.values()
+                _preset_detail(preset) for preset in caption_presets.BUILTIN_PRESETS.values()
             ],
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
@@ -88,9 +88,7 @@ def info() -> dict[str, object]:
             "reframe_layouts": list(ProcessingOptions._REFRAME_LAYOUTS),
             "reframe_intensities": list(ProcessingOptions._REFRAME_INTENSITIES),
         },
-        "broll_available": bool(
-            settings.broll_provider_api_key and settings.broll_allow_download
-        ),
+        "broll_available": bool(settings.broll_provider_api_key and settings.broll_allow_download),
         "storage_backend": settings.storage_backend.value,
         "retention_choices": list(RETENTION_CHOICES),
         # Advanced AV engines foundation (additive; Reqs 20.1, 20.2, 20.6).

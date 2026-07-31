@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from worker.ffmpeg_utils import FFmpegError, MediaInfo, probe
 
@@ -131,7 +130,7 @@ class PreflightReport:
     platform: str
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    info: Optional[MediaInfo] = None
+    info: MediaInfo | None = None
 
     @property
     def ok(self) -> bool:

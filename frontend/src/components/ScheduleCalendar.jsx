@@ -257,9 +257,7 @@ export default function ScheduleCalendar({ onError }) {
 
       {suggestions.length ? (
         <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/50 p-2">
-          <h4 className="text-xs font-semibold text-slate-200">
-            Suggested times for {platform}
-          </h4>
+          <h4 className="text-xs font-semibold text-slate-200">Suggested times for {platform}</h4>
           {/* The basis is rendered, not hidden: these are published heuristics, not this
               account's measured engagement. */}
           {basis ? <p className="mt-1 text-[10px] leading-snug text-slate-500">{basis}</p> : null}

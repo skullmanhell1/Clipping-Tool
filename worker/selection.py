@@ -14,9 +14,10 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, cast
 
 from config import settings
 from worker import (
@@ -40,10 +41,10 @@ class ClipCandidate:
 
     start: float
     end: float
-    score: float = 0.0            # virality score, 0..100
+    score: float = 0.0  # virality score, 0..100
     reason: str = ""
     title: str = ""
-    text: str = ""                # transcript text within the range
+    text: str = ""  # transcript text within the range
     # Measured signals about this window: speech rate (S4), audio energy (S2) and a hook
     # score for the opening seconds (S6).
     #
@@ -74,8 +75,8 @@ def _segment_annotation(
     words: Sequence[Any],
     envelope: Sequence[Any],
     *,
-    pace_baseline: Optional[float],
-    energy_baseline: Optional[float],
+    pace_baseline: float | None,
+    energy_baseline: float | None,
 ) -> str:
     """A short human-readable tag describing how a segment was *delivered* (S10).
 
@@ -88,9 +89,7 @@ def _segment_annotation(
     """
     tags: list[str] = []
 
-    rate = selection_features.speech_rate(
-        words, segment.start, segment.end, baseline=pace_baseline
-    )
+    rate = selection_features.speech_rate(words, segment.start, segment.end, baseline=pace_baseline)
     if rate.reliable and pace_baseline:
         if rate.relative_speech_rate >= 1.25:
             tags.append("fast")
@@ -148,8 +147,11 @@ def _format_transcript(
         tag = ""
         if annotate:
             tag = _segment_annotation(
-                s, words, envelope,
-                pace_baseline=pace_baseline, energy_baseline=energy_baseline,
+                s,
+                words,
+                envelope,
+                pace_baseline=pace_baseline,
+                energy_baseline=energy_baseline,
             )
         lines.append(f"[{i}] {s.start:.1f}-{s.end:.1f}{tag}: {s.text.strip()}")
     return "\n".join(lines)
@@ -160,7 +162,7 @@ def _build_prompt(
     options: ProcessingOptions,
     min_len: float,
     max_len: float,
-    max_clips: Optional[int],
+    max_clips: int | None,
     *,
     words: Sequence[Any] = (),
     envelope: Sequence[Any] = (),
@@ -177,13 +179,9 @@ def _build_prompt(
         else "Select as many strong moments as you find (up to 10)."
     )
     topic_instr = (
-        f"Strongly prefer moments about: {options.topic}."
-        if options.topic.strip()
-        else ""
+        f"Strongly prefer moments about: {options.topic}." if options.topic.strip() else ""
     )
-    vibe_instr = (
-        f"Favor a {options.vibe} tone/vibe." if options.vibe.strip() else ""
-    )
+    vibe_instr = f"Favor a {options.vibe} tone/vibe." if options.vibe.strip() else ""
 
     delivery_instr = ""
     if words and getattr(settings, "selection_features_in_prompt", True):
@@ -254,11 +252,11 @@ def _fallback(
     path: str | Path,
     total_duration: float,
     options: ProcessingOptions,
-    max_clips: Optional[int],
+    max_clips: int | None,
     *,
     words: Sequence[Any] = (),
     envelope: Sequence[Any] = (),
-    segments: Optional[list[TranscriptSegment]] = None,
+    segments: list[TranscriptSegment] | None = None,
 ) -> list[ClipCandidate]:
     """Deterministic fallback, now with real scoring rather than "keep the longest" (S11).
 
@@ -319,7 +317,7 @@ def select_moments(
     options: ProcessingOptions,
     source_path: str | Path,
     total_duration: float,
-    client: Optional[BaseLLMClient] = None,
+    client: BaseLLMClient | None = None,
 ) -> list[ClipCandidate]:
     """Return scored clip candidates for a video.
 
@@ -352,9 +350,7 @@ def select_moments(
             source_path,
             lambda: [
                 list(reading)
-                for reading in audio_features.energy_envelope(
-                    source_path, window=envelope_window
-                )
+                for reading in audio_features.energy_envelope(source_path, window=envelope_window)
             ],
             {"window": envelope_window},
         )
@@ -378,8 +374,13 @@ def select_moments(
     def _fallback_result() -> list[ClipCandidate]:
         return _measured(
             _fallback(
-                source_path, total_duration, options, max_clips,
-                words=transcript.words, envelope=envelope, segments=transcript.segments,
+                source_path,
+                total_duration,
+                options,
+                max_clips,
+                words=transcript.words,
+                envelope=envelope,
+                segments=transcript.segments,
             )
         )
 
@@ -389,8 +390,13 @@ def select_moments(
 
     client = client or get_llm_client()
     prompt = _build_prompt(
-        transcript.segments, options, min_len, max_len, max_clips,
-        words=transcript.words, envelope=envelope,
+        transcript.segments,
+        options,
+        min_len,
+        max_len,
+        max_clips,
+        words=transcript.words,
+        envelope=envelope,
     )
 
     try:

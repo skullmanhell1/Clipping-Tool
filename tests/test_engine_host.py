@@ -41,14 +41,16 @@ than the function-scoped ``tmp_path`` fixture, which hypothesis would share acro
 example of one test), and every filesystem-touching property uses
 ``@settings(deadline=None)``.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import logging
 import socket
 import tempfile
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -86,7 +88,7 @@ from worker.engines.registry import Engine_Registry, reset_registry
 
 #: Every stage a host can be asked about, so "for every stage" assertions are
 #: exhaustive rather than sampled.
-ALL_STAGES: Tuple[Engine_Stage, ...] = tuple(Engine_Stage)
+ALL_STAGES: tuple[Engine_Stage, ...] = tuple(Engine_Stage)
 
 #: The job id every host in this module uses (already a safe path component).
 JOB_ID = "job_engine_host"
@@ -153,12 +155,10 @@ def media_info(
     has_audio: bool = True,
 ) -> fu.MediaInfo:
     """A hand-built ``MediaInfo``, so no ffprobe pass is ever needed."""
-    return fu.MediaInfo(
-        duration=duration, width=width, height=height, fps=fps, has_audio=has_audio
-    )
+    return fu.MediaInfo(duration=duration, width=width, height=height, fps=fps, has_audio=has_audio)
 
 
-def options_for(flags: Mapping[str, bool], *, permissibility: bool = False) -> Dict[str, Any]:
+def options_for(flags: Mapping[str, bool], *, permissibility: bool = False) -> dict[str, Any]:
     """Processing_Options stand-in: ``{"<engine_id>_enabled": bool, ...}``.
 
     A plain mapping is used deliberately. ``AV_Engine.is_enabled`` reads its
@@ -166,16 +166,15 @@ def options_for(flags: Mapping[str, bool], *, permissibility: bool = False) -> D
     no engine flags yet (this spec registers no engines), so a mapping is the only way
     to drive arbitrary generated Engine_Ids through the real gating path.
     """
-    options: Dict[str, Any] = {"permissibility_mode": bool(permissibility)}
+    options: dict[str, Any] = {"permissibility_mode": bool(permissibility)}
     for engine_id, enabled in dict(flags).items():
         options[f"{engine_id}_enabled"] = bool(enabled)
     return options
 
 
-def all_enabled(engine_ids: Iterable[str], *, permissibility: bool = False) -> Dict[str, Any]:
+def all_enabled(engine_ids: Iterable[str], *, permissibility: bool = False) -> dict[str, Any]:
     """Options enabling every one of ``engine_ids``."""
-    return options_for({engine_id: True for engine_id in engine_ids},
-                       permissibility=permissibility)
+    return options_for({engine_id: True for engine_id in engine_ids}, permissibility=permissibility)
 
 
 def registry_of(engines: Iterable[Any]) -> Engine_Registry:
@@ -186,11 +185,11 @@ def registry_of(engines: Iterable[Any]) -> Engine_Registry:
     return registry
 
 
-def build_host(temp_dir: Path, registry: Engine_Registry, options: Any, **kwargs: Any) -> Engine_Host:
+def build_host(
+    temp_dir: Path, registry: Engine_Registry, options: Any, **kwargs: Any
+) -> Engine_Host:
     """An :class:`Engine_Host` on ``temp_dir`` with every collaborator injected."""
-    return Engine_Host(
-        options, job_id=JOB_ID, temp_dir=temp_dir, registry=registry, **kwargs
-    )
+    return Engine_Host(options, job_id=JOB_ID, temp_dir=temp_dir, registry=registry, **kwargs)
 
 
 def run_every_stage(
@@ -200,8 +199,8 @@ def run_every_stage(
     source: str = "/media/source.mp4",
     clip_path: Path | None = None,
     duration: float = 6.0,
-    words: Tuple[Any, ...] = (),
-) -> Dict[Engine_Stage, Any]:
+    words: tuple[Any, ...] = (),
+) -> dict[Engine_Stage, Any]:
     """Invoke every stage once for one clip, returning the Stage_Outcomes by stage."""
     return {
         stage: host.run_stage(
@@ -218,7 +217,7 @@ def run_every_stage(
     }
 
 
-def workspace_leaf_names(temp_dir: Path, *, job_id: str = JOB_ID) -> List[str]:
+def workspace_leaf_names(temp_dir: Path, *, job_id: str = JOB_ID) -> list[str]:
     """The ``<engine>__<digest>`` directory names that exist beneath the job root."""
     root = Path(temp_dir) / ENGINE_TEMP_ROOT / sanitize_component(job_id, fallback="job")
     if not root.is_dir():
@@ -238,7 +237,7 @@ def result_for(outcomes: Mapping[Engine_Stage, Any], engine_id: str):
     return found[0]
 
 
-def namespaced(engine_id: str, markers: Iterable[str]) -> List[str]:
+def namespaced(engine_id: str, markers: Iterable[str]) -> list[str]:
     """Independent restatement of the host's namespacing rule (Req 3.3)."""
     prefix = f"engine:{engine_id}:"
     return [entry if entry.startswith(prefix) else prefix + entry for entry in markers]
@@ -285,7 +284,7 @@ def test_p7_marker_merge_is_namespaced_ordered_deduplicated(registrations, data)
         order = [engine.engine_id for engine in registry.for_stage(stage)]
 
         # Independent expectation: registry order, namespaced, skips silent, deduped.
-        expected: List[str] = []
+        expected: list[str] = []
         seen: set = set()
         for engine_id in order:
             drawn = outcomes_by_id[engine_id]
@@ -297,7 +296,7 @@ def test_p7_marker_merge_is_namespaced_ordered_deduplicated(registrations, data)
                 seen.add(entry)
                 expected.append(entry)
 
-        assert outcome.markers == expected                       # 3.2, 3.6
+        assert outcome.markers == expected  # 3.2, 3.6
         assert len(outcome.markers) == len(set(outcome.markers))  # 3.6
         # Every marker is attributable to exactly one invoked engine (3.3).
         for entry in outcome.markers:
@@ -345,9 +344,9 @@ def test_p8_source_engines_run_once_per_source_and_are_reused(clip_count, outcom
         outcomes = [host.run_source("/media/source.mp4", info) for _ in range(clip_count)]
         cached = [host.source_result("source_probe") for _ in range(clip_count)]
 
-    assert engine.run_count == 1                                  # 3.5, 19.3
-    assert all(item is outcomes[0] for item in outcomes)          # same Stage_Outcome
-    assert all(item is cached[0] for item in cached)              # same Engine_Result
+    assert engine.run_count == 1  # 3.5, 19.3
+    assert all(item is outcomes[0] for item in outcomes)  # same Stage_Outcome
+    assert all(item is cached[0] for item in cached)  # same Engine_Result
     assert cached[0] is outcomes[0].result_for("source_probe")
     assert cached[0].engine_id == "source_probe"
 
@@ -394,7 +393,7 @@ def test_p9_disabled_engines_cost_nothing(registrations, data):
         leaves = workspace_leaf_names(temp_dir)
 
     invoked = {engine_id for engine_id, engine in engines.items() if engine.run_count}
-    assert invoked == {engine_id for engine_id, on in flags.items() if on}    # 4.1
+    assert invoked == {engine_id for engine_id, on in flags.items() if on}  # 4.1
 
     for engine_id, on in flags.items():
         capability = capability_of[engine_id]
@@ -403,12 +402,12 @@ def test_p9_disabled_engines_cost_nothing(registrations, data):
             assert prober.count_for(capability) == 1
             assert has_workspace
         else:
-            assert prober.count_for(capability) == 0             # 4.2 — no probe
-            assert not has_workspace                             # 4.2 — no workspace
+            assert prober.count_for(capability) == 0  # 4.2 — no probe
+            assert not has_workspace  # 4.2 — no workspace
             assert result_for(stage_outcomes, engine_id).status is Engine_Status.SKIPPED
 
     if not any(flags.values()):
-        assert prober.total == 0                                 # 4.2, 19.5
+        assert prober.total == 0  # 4.2, 19.5
         assert leaves == []
         # No media replacement, so no additional media pass is ever needed (19.5).
         assert all(outcome.media is None for outcome in stage_outcomes.values())
@@ -441,16 +440,18 @@ def test_p12_missing_capabilities_degrade_with_exact_single_markers(
     reset_engine_globals()
 
     known = sorted(availability)
-    declared: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...]]] = {}
+    declared: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
     for engine_id, _stage, _priority in registrations:
         if known:
             required = tuple(
-                data.draw(st.lists(st.sampled_from(known), max_size=3),
-                          label=f"required:{engine_id}")
+                data.draw(
+                    st.lists(st.sampled_from(known), max_size=3), label=f"required:{engine_id}"
+                )
             )
             optional = tuple(
-                data.draw(st.lists(st.sampled_from(known), max_size=2),
-                          label=f"optional:{engine_id}")
+                data.draw(
+                    st.lists(st.sampled_from(known), max_size=2), label=f"optional:{engine_id}"
+                )
             )
         else:
             required, optional = (), ()
@@ -480,40 +481,31 @@ def test_p12_missing_capabilities_degrade_with_exact_single_markers(
 
     for engine_id, (required, optional) in declared.items():
         result = result_for(stage_outcomes, engine_id)
-        first_missing = next(
-            (cap for cap in required if not availability.get(cap, False)), None
-        )
+        first_missing = next((cap for cap in required if not availability.get(cap, False)), None)
         degradation = [
-            entry for entry in result.markers
-            if entry.startswith(f"engine:{engine_id}:degraded:")
+            entry for entry in result.markers if entry.startswith(f"engine:{engine_id}:degraded:")
         ]
 
         if first_missing is not None:
-            assert result.status is Engine_Status.DEGRADED                       # 7.1
-            assert result.markers == (
-                f"engine:{engine_id}:unavailable:{first_missing}",
-            )
-            assert engines[engine_id].run_count == 0        # body never entered (7.1)
+            assert result.status is Engine_Status.DEGRADED  # 7.1
+            assert result.markers == (f"engine:{engine_id}:unavailable:{first_missing}",)
+            assert engines[engine_id].run_count == 0  # body never entered (7.1)
             assert degradation == []
         else:
             assert engines[engine_id].run_count == 1
-            missing_optional = [
-                cap for cap in optional if not availability.get(cap, False)
-            ]
+            missing_optional = [cap for cap in optional if not availability.get(cap, False)]
             if missing_optional:
-                assert degradation == [
-                    f"engine:{engine_id}:degraded:{missing_optional[0]}"
-                ]                                                               # 7.2
+                assert degradation == [f"engine:{engine_id}:degraded:{missing_optional[0]}"]  # 7.2
             else:
                 assert degradation == []
-            assert len(degradation) <= 1               # one per engine per clip (7.4)
+            assert len(degradation) <= 1  # one per engine per clip (7.4)
 
 
 # --------------------------------------------------------------------------- #
 # Task 9.10 — Property 14                                                      #
 # --------------------------------------------------------------------------- #
 #: Exception types an engine realistically raises, including the ffmpeg wrapper's own.
-_ENGINE_EXCEPTION_TYPES: Tuple[type, ...] = (
+_ENGINE_EXCEPTION_TYPES: tuple[type, ...] = (
     RuntimeError,
     ValueError,
     TypeError,
@@ -535,8 +527,8 @@ def test_p14_one_engine_failure_is_isolated(registrations, data):
     """Validates: Requirements 8.1, 8.2, 8.4"""
     reset_engine_globals()
 
-    raising: Dict[str, BaseException] = {}
-    engines: Dict[str, Any] = {}
+    raising: dict[str, BaseException] = {}
+    engines: dict[str, Any] = {}
     for engine_id, stage, priority in registrations:
         if data.draw(st.booleans(), label=f"raises:{engine_id}"):
             exc_type = data.draw(
@@ -563,15 +555,13 @@ def test_p14_one_engine_failure_is_isolated(registrations, data):
             assert engines[engine_id].run_count == 1
             result = outcome.result_for(engine_id)
             if engine_id in raising:
-                assert result.status is Engine_Status.FAILED                     # 8.1
-                assert result.markers == (f"engine:{engine_id}:failed",)         # 8.4
+                assert result.status is Engine_Status.FAILED  # 8.1
+                assert result.markers == (f"engine:{engine_id}:failed",)  # 8.4
                 assert result.contribution is None and result.artifacts == ()
             else:
                 assert result.status is Engine_Status.APPLIED
         # The failed engines contribute exactly one marker each, no more.
-        failed_markers = [
-            entry for entry in outcome.markers if entry.endswith(":failed")
-        ]
+        failed_markers = [entry for entry in outcome.markers if entry.endswith(":failed")]
         assert sorted(failed_markers) == sorted(
             f"engine:{engine_id}:failed" for engine_id in order if engine_id in raising
         )
@@ -644,8 +634,8 @@ def test_p15_time_budgets_are_enforced_and_abandoned_cleanly(budget, overrun):
 
         timed_out = outcome.result_for("slow_engine")
         assert timed_out is not None
-        assert timed_out.status is Engine_Status.FAILED                          # 8.6
-        assert timed_out.markers == ("engine:slow_engine:timeout",)              # 8.6
+        assert timed_out.status is Engine_Status.FAILED  # 8.6
+        assert timed_out.markers == ("engine:slow_engine:timeout",)  # 8.6
         # Contribution, artifacts and media are all abandoned (8.6, 19.1).
         assert timed_out.contribution is None
         assert timed_out.artifacts == ()
@@ -657,9 +647,7 @@ def test_p15_time_budgets_are_enforced_and_abandoned_cleanly(budget, overrun):
         assert fast.run_count == 1
         assert [item.engine_id for item in outcome.contributions] == ["fast_engine"]
         assert extra == []
-        assert storage.saved_keys == [
-            artifact_key(JOB_ID, "clip_a", "fast_engine", "survivor.bin")
-        ]
+        assert storage.saved_keys == [artifact_key(JOB_ID, "clip_a", "fast_engine", "survivor.bin")]
         assert not any("slow_engine" in key for key in storage.saved_keys)
 
 
@@ -675,13 +663,11 @@ def test_p15_time_budgets_are_enforced_and_abandoned_cleanly(budget, overrun):
     clip_count=st.integers(min_value=1, max_value=4),
     base=st_time_base(),
 )
-def test_p23_every_engine_shares_one_time_base_and_adds_no_probe(
-    registrations, clip_count, base
-):
+def test_p23_every_engine_shares_one_time_base_and_adds_no_probe(registrations, clip_count, base):
     """Validates: Requirements 13.7, 19.4"""
     reset_engine_globals()
 
-    probes: List[Any] = []
+    probes: list[Any] = []
 
     def refuse_probe(path, *args, **kwargs):
         probes.append(path)
@@ -692,9 +678,10 @@ def test_p23_every_engine_shares_one_time_base_and_adds_no_probe(
         for engine_id, stage, priority in registrations
     }
 
-    with mock.patch.object(fu, "probe", refuse_probe), tempfile.TemporaryDirectory(
-        prefix="engine-host-"
-    ) as raw_temp:
+    with (
+        mock.patch.object(fu, "probe", refuse_probe),
+        tempfile.TemporaryDirectory(prefix="engine-host-") as raw_temp,
+    ):
         temp_dir = Path(raw_temp)
         host = build_host(temp_dir, registry_of(engines.values()), all_enabled(engines))
 
@@ -710,9 +697,9 @@ def test_p23_every_engine_shares_one_time_base_and_adds_no_probe(
 
     recorded = [ctx.time_base for engine in engines.values() for ctx in engine.contexts]
     assert recorded, "at least one enabled engine must have been invoked"
-    assert all(item is shared for item in recorded)                  # 13.7 — one object
+    assert all(item is shared for item in recorded)  # 13.7 — one object
     assert all(item == shared for item in recorded)
-    assert probes == []                                              # 19.4 — no probe
+    assert probes == []  # 19.4 — no probe
     assert shared.fps == pytest.approx(base.fps)
     assert shared.fps_substituted is False
 
@@ -736,8 +723,7 @@ def test_p27_rebased_word_timeline_reaches_every_engine(timeline, data):
     cuts = sorted(
         data.draw(
             st.lists(
-                st.floats(min_value=0.0, max_value=duration,
-                          allow_nan=False, allow_infinity=False),
+                st.floats(min_value=0.0, max_value=duration, allow_nan=False, allow_infinity=False),
                 min_size=2,
                 max_size=2,
             ),
@@ -776,7 +762,7 @@ def test_p27_rebased_word_timeline_reaches_every_engine(timeline, data):
         ctx = engine.last_context
         # The very objects the Pipeline rebased reach every engine (15.2).
         assert len(ctx.words) == len(rebased)
-        assert all(seen is expected for seen, expected in zip(ctx.words, rebased))
+        assert all(seen is expected for seen, expected in zip(ctx.words, rebased, strict=False))
         # Bounds are clip-relative, inside [0, ctx.duration] (15.1). ``rebase_words``
         # rounds to milliseconds, so the upper bound carries that tolerance.
         for word in ctx.words:
@@ -805,7 +791,7 @@ def test_p28_independent_engines_are_confluent(bounds):
     """Validates: Requirements 15.6"""
     first_start, first_end, second_start, second_end = sorted(bounds)
 
-    def drive(priority_one: int, priority_two: int) -> Tuple[set, set]:
+    def drive(priority_one: int, priority_two: int) -> tuple[set, set]:
         """Run both engines at the given relative priorities; return markers and keys."""
         reset_engine_globals()
         with tempfile.TemporaryDirectory(prefix="engine-host-") as raw_temp:
@@ -860,8 +846,8 @@ def test_p28_independent_engines_are_confluent(bounds):
     forward_markers, forward_keys = drive(1, 2)
     reversed_markers, reversed_keys = drive(2, 1)
 
-    assert forward_markers == reversed_markers                       # 15.6
-    assert forward_keys == reversed_keys                             # 15.6
+    assert forward_markers == reversed_markers  # 15.6
+    assert forward_keys == reversed_keys  # 15.6
     assert forward_keys == {
         artifact_key(JOB_ID, "clip_a", "engine_one", "engine_one.bin"),
         artifact_key(JOB_ID, "clip_a", "engine_two", "engine_two.bin"),
@@ -879,9 +865,7 @@ def test_p28_independent_engines_are_confluent(bounds):
 # raise.
 @FS_SETTINGS
 @given(registrations=st_registrations(min_size=1, max_size=4), data=st.data())
-def test_p33_permissibility_blocks_network_engines_and_keeps_runs_offline(
-    registrations, data
-):
+def test_p33_permissibility_blocks_network_engines_and_keeps_runs_offline(registrations, data):
     """Validates: Requirements 9.5, 21.2, 21.3, 21.4"""
     reset_engine_globals()
 
@@ -901,9 +885,10 @@ def test_p33_permissibility_blocks_network_engines_and_keeps_runs_offline(
 
     options = all_enabled(engines, permissibility=True)
 
-    with mock.patch.object(socket, "socket", refuse_socket), tempfile.TemporaryDirectory(
-        prefix="engine-host-"
-    ) as raw_temp:
+    with (
+        mock.patch.object(socket, "socket", refuse_socket),
+        tempfile.TemporaryDirectory(prefix="engine-host-") as raw_temp,
+    ):
         temp_dir = Path(raw_temp)
         host = build_host(temp_dir, registry_of(engines.values()), options)
         stage_outcomes = run_every_stage(host, clip_path=temp_dir / "clip_a.mp4")
@@ -913,11 +898,9 @@ def test_p33_permissibility_blocks_network_engines_and_keeps_runs_offline(
         engine = engines[engine_id]
         result = result_for(stage_outcomes, engine_id)
         if needs_network:
-            assert engine.run_count == 0                     # body never entered (21.3)
-            assert result.status is Engine_Status.DEGRADED               # 21.2
-            assert result.markers == (
-                f"engine:{engine_id}:permissibility_blocked",
-            )
+            assert engine.run_count == 0  # body never entered (21.3)
+            assert result.status is Engine_Status.DEGRADED  # 21.2
+            assert result.markers == (f"engine:{engine_id}:permissibility_blocked",)
             # Blocked before any workspace or capability probe exists (21.3).
             assert not any(name.startswith(f"{engine_id}__") for name in leaves)
         else:
@@ -962,8 +945,8 @@ def test_failed_engine_logs_exception_class_and_message(tmp_path, caplog):
 
     assert outcome.result_for("boom_engine").status is Engine_Status.FAILED
     assert "boom_engine" in caplog.text
-    assert "ValueError" in caplog.text                                   # 8.5 — class
-    assert "kaboom detail" in caplog.text                                # 8.5 — message
+    assert "ValueError" in caplog.text  # 8.5 — class
+    assert "kaboom detail" in caplog.text  # 8.5 — message
 
 
 @pytest.mark.parametrize(
@@ -971,10 +954,10 @@ def test_failed_engine_logs_exception_class_and_message(tmp_path, caplog):
     [
         # Media-bearing statuses: the file is adopted.
         (Engine_Status.APPLIED, True, True),
-        (Engine_Status.DEGRADED, True, True),      # Degraded_With_Media
+        (Engine_Status.DEGRADED, True, True),  # Degraded_With_Media
         # No file to adopt, whatever the status.
         (Engine_Status.APPLIED, False, False),
-        (Engine_Status.DEGRADED, False, False),    # Degraded_Without_Media
+        (Engine_Status.DEGRADED, False, False),  # Degraded_Without_Media
         # Not media-bearing: the file is discarded even though it exists.
         (Engine_Status.FAILED, True, False),
         (Engine_Status.SKIPPED, True, False),
@@ -1050,7 +1033,7 @@ def test_caller_notes_are_appended_after_the_hosts_own(tmp_path):
     )
 
     seen = engine.contexts[-1].notes
-    assert seen[-2:] == ("diarization:model", "17")     # coerced to str
+    assert seen[-2:] == ("diarization:model", "17")  # coerced to str
     assert all(isinstance(note, str) for note in seen)
 
 
@@ -1063,15 +1046,25 @@ def test_omitting_caller_notes_changes_no_context(tmp_path):
     without = FakeEngine("a", Engine_Stage.AUDIO)
     host_a = build_host(tmp_path, registry_of([without]), all_enabled(["a"]))
     host_a.run_stage(
-        Engine_Stage.AUDIO, clip_id="c", source="/s.mp4",
-        clip_path=tmp_path / "c.mp4", clip_start=0.0, clip_end=1.0, duration=1.0,
+        Engine_Stage.AUDIO,
+        clip_id="c",
+        source="/s.mp4",
+        clip_path=tmp_path / "c.mp4",
+        clip_start=0.0,
+        clip_end=1.0,
+        duration=1.0,
     )
 
     explicit = FakeEngine("a", Engine_Stage.AUDIO)
     host_b = build_host(tmp_path, registry_of([explicit]), all_enabled(["a"]))
     host_b.run_stage(
-        Engine_Stage.AUDIO, clip_id="c", source="/s.mp4",
-        clip_path=tmp_path / "c.mp4", clip_start=0.0, clip_end=1.0, duration=1.0,
+        Engine_Stage.AUDIO,
+        clip_id="c",
+        source="/s.mp4",
+        clip_path=tmp_path / "c.mp4",
+        clip_start=0.0,
+        clip_end=1.0,
+        duration=1.0,
         notes=(),
     )
 
@@ -1101,8 +1094,13 @@ def test_a_degraded_engines_artifacts_and_media_are_both_kept(tmp_path):
 
     host = build_host(tmp_path, registry_of([engine]), all_enabled(["partial"]))
     outcome = host.run_stage(
-        Engine_Stage.AUDIO, clip_id="clip_a", source="/media/source.mp4",
-        clip_path=tmp_path / "clip_a.mp4", clip_start=0.0, clip_end=3.0, duration=3.0,
+        Engine_Stage.AUDIO,
+        clip_id="clip_a",
+        source="/media/source.mp4",
+        clip_path=tmp_path / "clip_a.mp4",
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
     )
 
     assert outcome.media == replacement
@@ -1117,9 +1115,7 @@ def test_finish_job_persists_source_stage_durable_artifacts(tmp_path, monkeypatc
     only place their durable artifacts can be persisted before the job scratch space
     goes away.
     """
-    monkeypatch.setattr(
-        "runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False)
-    )
+    monkeypatch.setattr("runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False))
     artifact_path = tmp_path / "source_analysis.json"
     artifact_path.write_bytes(b"{}")
     engine = FakeEngine(
@@ -1156,18 +1152,14 @@ def test_finish_job_persists_source_stage_durable_artifacts(tmp_path, monkeypatc
     assert workspace_leaf_names(tmp_path) == []
 
 
-def test_finish_clip_deletes_workspaces_regardless_of_auto_delete_temp(
-    tmp_path, monkeypatch
-):
+def test_finish_clip_deletes_workspaces_regardless_of_auto_delete_temp(tmp_path, monkeypatch):
     """Validates: Requirements 17.1, 17.5 — per-clip deletion carries no condition.
 
     ``auto_delete_temp`` governs the *job-level* scratch space (Reqs 17.2, 17.3, 17.6),
     which is why ``artifacts.cleanup_workspace`` is unconditional and
     ``artifacts.cleanup_job_artifacts`` is gated; ``finish_clip`` must follow the former.
     """
-    monkeypatch.setattr(
-        "runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False)
-    )
+    monkeypatch.setattr("runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False))
     engines = [
         FakeEngine("applied_engine", Engine_Stage.POST, status=Engine_Status.APPLIED),
         FakeEngine("degraded_engine", Engine_Stage.POST, status=Engine_Status.DEGRADED),
@@ -1194,7 +1186,6 @@ def test_finish_clip_deletes_workspaces_regardless_of_auto_delete_temp(
     assert workspace_leaf_names(tmp_path) == []
 
 
-
 def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
     """Validates: Requirements 1.5, 10.3 — ``first_input_index`` reservation rules.
 
@@ -1205,28 +1196,37 @@ def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
     engine declaring ``max_inputs == 0`` consumes no index space and is given the
     documented meaningless ``0``, and no other stage reserves anything.
     """
-    contributing = FakeEngine("b_two_inputs", Engine_Stage.COMPOSE, priority=10,
-                              max_inputs=2)
+    contributing = FakeEngine("b_two_inputs", Engine_Stage.COMPOSE, priority=10, max_inputs=2)
     quiet = FakeEngine("c_no_inputs", Engine_Stage.COMPOSE, priority=20)
-    trailing = FakeEngine("d_one_input", Engine_Stage.COMPOSE, priority=30,
-                          max_inputs=1)
-    disabled = FakeEngine("a_disabled", Engine_Stage.COMPOSE, priority=5,
-                          max_inputs=5)
+    trailing = FakeEngine("d_one_input", Engine_Stage.COMPOSE, priority=30, max_inputs=1)
+    disabled = FakeEngine("a_disabled", Engine_Stage.COMPOSE, priority=5, max_inputs=5)
     post = FakeEngine("e_post", Engine_Stage.POST, max_inputs=3)
     engines = [contributing, quiet, trailing, disabled, post]
 
-    options = options_for({
-        "b_two_inputs": True, "c_no_inputs": True, "d_one_input": True,
-        "e_post": True, "a_disabled": False,
-    })
+    options = options_for(
+        {
+            "b_two_inputs": True,
+            "c_no_inputs": True,
+            "d_one_input": True,
+            "e_post": True,
+            "a_disabled": False,
+        }
+    )
     host = build_host(
-        tmp_path, registry_of(engines), options,
-        capabilities=Capability_Report(StaticProber({})), clock=FakeClock(),
+        tmp_path,
+        registry_of(engines),
+        options,
+        capabilities=Capability_Report(StaticProber({})),
+        clock=FakeClock(),
     )
     for stage in (Engine_Stage.COMPOSE, Engine_Stage.POST):
         host.run_stage(
-            stage, clip_id="clip_a", source="/media/source.mp4",
-            clip_path=tmp_path / "clip_a.mp4", clip_start=0.0, clip_end=6.0,
+            stage,
+            clip_id="clip_a",
+            source="/media/source.mp4",
+            clip_path=tmp_path / "clip_a.mp4",
+            clip_start=0.0,
+            clip_end=6.0,
             duration=6.0,
         )
 
@@ -1251,7 +1251,7 @@ def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
 #: values a filtering/coercing implementation would visibly damage (a tuple that
 #: must not become a list, a numeric *string* that must not become an int, ``None``
 #: that must not be defaulted away, and a nested structure).
-CLIP_METADATA_PAYLOAD: Dict[str, Any] = {
+CLIP_METADATA_PAYLOAD: dict[str, Any] = {
     "hook_text": "Wait for it...",
     "clip_size": (1080, 1920),
     "unknown_key": {"nested": [1, None, "2"]},
@@ -1286,7 +1286,7 @@ def run_compose_stage(
     )
 
 
-def compose_host(tmp_path: Path, engines: List[Any]) -> Engine_Host:
+def compose_host(tmp_path: Path, engines: list[Any]) -> Engine_Host:
     """A host over ``engines`` with every collaborator injected and a frozen clock.
 
     The clock never advances on its own, so two stage runs of the same host build
@@ -1342,13 +1342,13 @@ def test_omitted_clip_metadata_is_empty_and_leaves_the_context_otherwise_unchang
     engine = FakeEngine("metadata_probe", Engine_Stage.COMPOSE)
     host = compose_host(tmp_path, [engine])
 
-    run_compose_stage(host, tmp_path)                                    # omitted
+    run_compose_stage(host, tmp_path)  # omitted
     run_compose_stage(host, tmp_path, clip_metadata=CLIP_METADATA_PAYLOAD)
-    run_compose_stage(host, tmp_path, clip_metadata=None)                # explicit None
+    run_compose_stage(host, tmp_path, clip_metadata=None)  # explicit None
 
     omitted, supplied, explicit_none = engine.contexts
     assert omitted.clip_metadata == {}
-    assert explicit_none.clip_metadata == {}                             # None == empty
+    assert explicit_none.clip_metadata == {}  # None == empty
     assert dict(supplied.clip_metadata) == CLIP_METADATA_PAYLOAD
 
     # Every OTHER field is untouched by the presence or absence of Clip_Metadata.
@@ -1356,9 +1356,7 @@ def test_omitted_clip_metadata_is_empty_and_leaves_the_context_otherwise_unchang
         if field_.name == "clip_metadata":
             continue
         assert getattr(omitted, field_.name) == getattr(supplied, field_.name), field_.name
-        assert getattr(omitted, field_.name) == getattr(explicit_none, field_.name), (
-            field_.name
-        )
+        assert getattr(omitted, field_.name) == getattr(explicit_none, field_.name), field_.name
 
     host.finish_clip("clip_a")
 
@@ -1376,9 +1374,9 @@ def test_clip_metadata_unknown_keys_pass_through_untouched(tmp_path):
     run_compose_stage(host, tmp_path, clip_metadata=CLIP_METADATA_PAYLOAD)
 
     seen = engine.last_context.clip_metadata
-    assert set(seen) == set(CLIP_METADATA_PAYLOAD)                       # no key dropped
+    assert set(seen) == set(CLIP_METADATA_PAYLOAD)  # no key dropped
     for key, value in CLIP_METADATA_PAYLOAD.items():
-        assert seen[key] is value, key                                   # no coercion
+        assert seen[key] is value, key  # no coercion
     assert isinstance(seen["clip_size"], tuple)
     assert seen["numeric_string"] == "12" and isinstance(seen["numeric_string"], str)
     assert seen["empty"] is None

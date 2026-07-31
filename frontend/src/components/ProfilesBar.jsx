@@ -19,22 +19,22 @@ export default function ProfilesBar({
 
   const active = profiles.find((p) => p.id === activeId);
 
-  const run = (fn) => async (...args) => {
-    setBusy(true);
-    try {
-      await fn(...args);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const run =
+    (fn) =>
+    async (...args) => {
+      setBusy(true);
+      try {
+        await fn(...args);
+      } finally {
+        setBusy(false);
+      }
+    };
 
   const handleSave = run(async () => {
     const targetName = name.trim() || active?.name;
     if (!targetName) return;
     // If the typed name matches the active profile, update it; else create new.
-    const existing = profiles.find(
-      (p) => p.name.toLowerCase() === targetName.toLowerCase()
-    );
+    const existing = profiles.find((p) => p.name.toLowerCase() === targetName.toLowerCase());
     await onSave(targetName, existing?.id || "");
     setName("");
   });
@@ -105,9 +105,8 @@ export default function ProfilesBar({
         </div>
       </div>
       <p className="mt-2 text-xs text-slate-500">
-        Save the full current configuration (clip length, aspect, captions,
-        effects, publishing) as a named profile. Selecting one pre-fills every
-        setting for the next run.
+        Save the full current configuration (clip length, aspect, captions, effects, publishing) as
+        a named profile. Selecting one pre-fills every setting for the next run.
       </p>
     </div>
   );

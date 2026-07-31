@@ -76,19 +76,37 @@ def _synthetic_source(dest: Path, ffmpeg: str, seconds: float = 7.0) -> Path:
     loudness normalisation have something with gaps in it to work on — a solid tone would make
     the sidechain compressor look permanently engaged.
     """
-    gate = "+".join(
-        f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS
-    )
+    gate = "+".join(f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS)
     subprocess.run(
         [
-            ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"testsrc=s=1080x1920:d={seconds}:r=30",
-            "-f", "lavfi", "-i", f"sine=f=220:d={seconds}:sample_rate=48000",
-            "-af", f"volume='0.35*({gate})':eval=frame",
-            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-y", str(dest),
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=s=1080x1920:d={seconds}:r=30",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=220:d={seconds}:sample_rate=48000",
+            "-af",
+            f"volume='0.35*({gate})':eval=frame",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(dest),
         ],
-        check=True, capture_output=True, timeout=300,
+        check=True,
+        capture_output=True,
+        timeout=300,
     )
     return dest
 
@@ -134,12 +152,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, help="real footage to use instead of a pattern")
     parser.add_argument(
-        "--out", type=Path,
+        "--out",
+        type=Path,
         default=Path(settings.temp_dir) / "smoke_reel.mp4",
         help="where to write the reel",
     )
     parser.add_argument(
-        "--profile", choices=sorted(BUILTIN_PROFILES),
+        "--profile",
+        choices=sorted(BUILTIN_PROFILES),
         help="render with a built-in profile instead of everything-on",
     )
     args = parser.parse_args()
@@ -167,12 +187,18 @@ def main() -> int:
 
     before = audio.measure_loudness(source)
     result = compositor.render_clip(
-        source, args.out, options, words, work,
+        source,
+        args.out,
+        options,
+        words,
+        work,
         hook_text="watch what happened next",
     )
     if result is None:
-        print("the compositor reported nothing to do, which should be impossible here",
-              file=sys.stderr)
+        print(
+            "the compositor reported nothing to do, which should be impossible here",
+            file=sys.stderr,
+        )
         return 1
 
     after = audio.measure_loudness(args.out)
@@ -185,8 +211,10 @@ def main() -> int:
         flag = "  <-- degraded" if "degraded" in marker else ""
         print(f"    - {marker}{flag}")
     if before and after:
-        print(f"  loudness    : {before.input_i:.2f} -> {after.input_i:.2f} LUFS "
-              f"(target {audio.platform_loudness_target(options.platform):g})")
+        print(
+            f"  loudness    : {before.input_i:.2f} -> {after.input_i:.2f} LUFS "
+            f"(target {audio.platform_loudness_target(options.platform):g})"
+        )
         print(f"  true peak   : {after.input_tp:.2f} dBTP")
 
     print("\nWhat to look at, in the order these have actually broken before:")

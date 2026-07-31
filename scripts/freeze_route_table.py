@@ -25,8 +25,11 @@ from tests.test_api_route_table import GOLDEN, capture  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true",
-                        help="exit 1 if the frozen file would change, without writing it")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 if the frozen file would change, without writing it",
+    )
     args = parser.parse_args(argv)
 
     table = capture()
@@ -42,8 +45,10 @@ def main(argv: list[str] | None = None) -> int:
 
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
     GOLDEN.write_text(serialised, encoding="utf-8")
-    print(f"wrote {GOLDEN.relative_to(REPO)}: {len(table['routes'])} endpoints, "
-          f"{len(table['mounts'])} mounts, {len(table['builtin'])} built-in routes")
+    print(
+        f"wrote {GOLDEN.relative_to(REPO)}: {len(table['routes'])} endpoints, "
+        f"{len(table['mounts'])} mounts, {len(table['builtin'])} built-in routes"
+    )
     return 0
 
 

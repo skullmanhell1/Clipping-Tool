@@ -18,6 +18,7 @@ face sits at a CONSTANT position for the whole turn — the smoothed, converged,
 clamped centre then equals that constant — and use tolerance-based (``approx``)
 assertions to accommodate the EMA/clamp/interpolation arithmetic.
 """
+
 from __future__ import annotations
 
 from unittest import mock
@@ -86,8 +87,9 @@ def _geometry_case(draw):
         end = start + dur
         if end > duration:
             break
-        turns.append(Speaker_Turn(draw(st.sampled_from(["S1", "S2", "S3"])),
-                                  round(start, 3), round(end, 3)))
+        turns.append(
+            Speaker_Turn(draw(st.sampled_from(["S1", "S2", "S3"])), round(start, 3), round(end, 3))
+        )
         cursor = end
 
     # Tracks with boxes anywhere in a padded frame range (stresses clamping).
@@ -149,7 +151,7 @@ def test_p12_follow_active_tracks_speaker_and_holds_on_gap(fx_frac, t0, t1, inte
     track = Face_Track("F1", boxes)
 
     turn0 = Speaker_Turn("S1", 0.0, round(t0, 3))
-    turn1_start = round(t0 + 1.0, 3)          # >=1s gap -> zero F1 presence
+    turn1_start = round(t0 + 1.0, 3)  # >=1s gap -> zero F1 presence
     turn1 = Speaker_Turn("S2", turn1_start, round(turn1_start + t1, 3))
     turns = [turn0, turn1]
     duration = turn1.end
@@ -160,9 +162,15 @@ def test_p12_follow_active_tracks_speaker_and_holds_on_gap(fx_frac, t0, t1, inte
     assert assoc.by_turn[1] is None
 
     path = build_follow_active_path(
-        turns, assoc, [track],
-        src_w=src_w, src_h=src_h, crop_w=crop_w, crop_h=crop_h,
-        intensity=intensity, duration=duration,
+        turns,
+        assoc,
+        [track],
+        src_w=src_w,
+        src_h=src_h,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        intensity=intensity,
+        duration=duration,
     )
 
     saw_associated = False
@@ -205,9 +213,15 @@ def test_p13_crop_windows_within_bounds_and_times_within_clip(case):
 
     for intensity in _INTENSITIES:
         path = build_follow_active_path(
-            turns, assoc, tracks,
-            src_w=src_w, src_h=src_h, crop_w=crop_w, crop_h=crop_h,
-            intensity=intensity, duration=duration,
+            turns,
+            assoc,
+            tracks,
+            src_w=src_w,
+            src_h=src_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            intensity=intensity,
+            duration=duration,
         )
         for c in path:
             assert -eps_t <= c.t <= duration + eps_t
@@ -271,8 +285,8 @@ def test_p15_speaker_change_transitions_smoothly(t0, tail, intensity):
     crop_w, crop_h = compute_crop_size(src_w, src_h, 9, 16)  # (404, 720)
     lo_x, hi_x = crop_w / 2.0, src_w - crop_w / 2.0
     cy = src_h / 2.0
-    x1 = lo_x + 6                 # near the left bound
-    x2 = hi_x - 6                 # near the right bound (well separated)
+    x1 = lo_x + 6  # near the left bound
+    x2 = hi_x - 6  # near the right bound (well separated)
 
     _alpha, transition = intensity_params(intensity)
 
@@ -296,14 +310,20 @@ def test_p15_speaker_change_transitions_smoothly(t0, tail, intensity):
     assert assoc.by_turn[1] == "F2"
 
     path = build_follow_active_path(
-        turns, assoc, [f1, f2],
-        src_w=src_w, src_h=src_h, crop_w=crop_w, crop_h=crop_h,
-        intensity=intensity, duration=duration,
+        turns,
+        assoc,
+        [f1, f2],
+        src_w=src_w,
+        src_h=src_h,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        intensity=intensity,
+        duration=duration,
     )
 
     xs = [c.cx for c in path]
     # Monotone non-decreasing progression (x1 < x2).
-    for a, b in zip(xs, xs[1:]):
+    for a, b in zip(xs, xs[1:], strict=False):
         assert b >= a - 1e-6
 
     # Not an instantaneous jump: at least one strictly-in-between centre exists.
@@ -338,11 +358,11 @@ def _tracks_with_shown_order(draw, min_n, max_n):
         x = draw(st.integers(min_value=50, max_value=1800))
         y = draw(st.integers(min_value=50, max_value=1000))
         tid = f"F{k + 1}"
-        tracks.append(Face_Track(tid, [FaceBox(0.0, x, y, 80, 80),
-                                        FaceBox(0.2, x, y, 80, 80)]))
+        tracks.append(Face_Track(tid, [FaceBox(0.0, x, y, 80, 80), FaceBox(0.2, x, y, 80, 80)]))
         shown.append(tid)
-    assoc = Association(by_turn={i: shown[i] for i in range(n)},
-                        unassociated=[], shown_order=list(shown))
+    assoc = Association(
+        by_turn={i: shown[i] for i in range(n)}, unassociated=[], shown_order=list(shown)
+    )
     return tracks, assoc
 
 
@@ -373,8 +393,13 @@ def test_p16_split_screen_tiles_target_exactly(data, portrait, src):
 
     n = len(assoc.shown_order)
     regions = build_split_screen_layout(
-        [], assoc, tracks,
-        target_w=target_w, target_h=target_h, src_w=src_w, src_h=src_h,
+        [],
+        assoc,
+        tracks,
+        target_w=target_w,
+        target_h=target_h,
+        src_w=src_w,
+        src_h=src_h,
         max_regions=n,
     )
     assert len(regions) == n
@@ -436,7 +461,7 @@ def test_p17_split_screen_shows_most_talkative_within_capacity(d1, d2, d3):
     durs = [d1, d2, d3]
     turns = []
     tracks = []
-    for k, (s, d) in enumerate(zip(starts, durs)):
+    for k, (s, d) in enumerate(zip(starts, durs, strict=False)):
         turns.append(Speaker_Turn(f"S{k + 1}", round(s, 3), round(s + d, 3)))
         boxes = []
         t = s
@@ -450,8 +475,13 @@ def test_p17_split_screen_shows_most_talkative_within_capacity(d1, d2, d3):
     assert assoc.shown_order[:2]  # at least the two longest are ranked
 
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080,
+        turns,
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
         max_regions=2,
     )
     shown_ids = [r.track_id for r in regions]
@@ -475,8 +505,13 @@ def test_p18_too_few_tracks_fall_back(data):
     tracks, assoc = data
     assert len(assoc.shown_order) < 2
     regions = build_split_screen_layout(
-        [], assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080,
+        [],
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
         max_regions=2,
     )
     assert regions == []
@@ -500,8 +535,12 @@ def test_p19_unknown_layout_applies_follow_active_default(layout):
     _ia, vf, notes = build_reframe_filter(
         layout,
         centers=centers,
-        crop_w=404, crop_h=720, src_w=1280, src_h=720,
-        target_w=1080, target_h=1920,
+        crop_w=404,
+        crop_h=720,
+        src_w=1280,
+        src_h=720,
+        target_w=1080,
+        target_h=1920,
         sendcmd_path=None,
     )
     assert "sendcmd" in vf
@@ -532,15 +571,17 @@ def test_p20_no_geometry_action_when_aspect_not_narrower(mult):
     crop_w, crop_h = compute_crop_size(src_w, src_h, 9, 16)
     assume(crop_w >= src_w and crop_h >= src_h)
 
-    fake_info = MediaInfo(duration=5.0, width=src_w, height=src_h,
-                          fps=30.0, has_audio=False)
+    fake_info = MediaInfo(duration=5.0, width=src_w, height=src_h, fps=30.0, has_audio=False)
     turns = [Speaker_Turn("S1", 0.0, 5.0)]
 
     with mock.patch("worker.effects.reframe.probe", return_value=fake_info):
         with pytest.raises(ReframeUnavailable):
             apply_speaker_reframe(
-                "unused.mp4", "out.mp4",
-                turns=turns, aspect="9:16", layout="follow_active",
+                "unused.mp4",
+                "out.mp4",
+                turns=turns,
+                aspect="9:16",
+                layout="follow_active",
                 sampler=lambda v: [],  # never reached
             )
 

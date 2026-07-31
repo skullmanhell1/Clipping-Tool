@@ -319,25 +319,25 @@ class Kinetic_Options:
     """
 
     # --- motion vocabulary (Req 10.2) ---
-    style: str = DEFAULT_STYLE            # one of KINETIC_STYLES
-    reveal: str = DEFAULT_REVEAL          # one of REVEAL_MODES
+    style: str = DEFAULT_STYLE  # one of KINETIC_STYLES
+    reveal: str = DEFAULT_REVEAL  # one of REVEAL_MODES
     # --- look, inherited from the Base_Preset (Reqs 10.2, 10.4) ---
     preset_name: str = caption_presets.FALLBACK_PRESET_NAME
-    font_override: str = ""               # "" => use preset_font
-    preset_font: str = FALLBACK_FONT      # resolved from the Base_Preset
+    font_override: str = ""  # "" => use preset_font
+    preset_font: str = FALLBACK_FONT  # resolved from the Base_Preset
     font_size: int = 84
-    position: str = ""                    # "" => Base_Preset.position (Req 7.4)
+    position: str = ""  # "" => Base_Preset.position (Req 7.4)
     # --- layout (Reqs 7.2, 7.5, 7.6) ---
-    max_lines: int = 2                    # 1..4
-    max_line_width: int = 22              # Display_Width units, 6..80
-    safe_area_x_pct: float = 6.0          # 0..25
-    safe_area_y_pct: float = 10.0         # 0..40
+    max_lines: int = 2  # 1..4
+    max_line_width: int = 22  # Display_Width units, 6..80
+    safe_area_x_pct: float = 6.0  # 0..25
+    safe_area_y_pct: float = 10.0  # 0..40
     # --- motion + emphasis (Reqs 5.9, 6.5, 8.6, 10.2) ---
-    motion_duration_ms: int = 120         # 20..1000
+    motion_duration_ms: int = 120  # 20..1000
     highlight_keywords: bool = False
     keyword_ai: bool = False
     emoji_inline: bool = False
-    confidence_floor: float = 0.0         # 0.0..1.0
+    confidence_floor: float = 0.0  # 0.0..1.0
     # --- carried context (Reqs 3.3, 3.4, 12.2) ---
     captions_enabled: bool = True
     hook_enabled: bool = False
@@ -346,7 +346,7 @@ class Kinetic_Options:
     durable_subtitle: bool = False
     permissibility: bool = False
     # --- resolution provenance (Req 4.8) ---
-    notes: tuple[str, ...] = ()           # e.g. "style_substituted"
+    notes: tuple[str, ...] = ()  # e.g. "style_substituted"
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -430,7 +430,7 @@ class Kinetic_Options:
         return {key: record[key] for key in sorted(record)}
 
     @classmethod
-    def parse(cls, data: Mapping[str, Any] | None) -> "Kinetic_Options":
+    def parse(cls, data: Mapping[str, Any] | None) -> Kinetic_Options:
         """Total parser: never raises, ignores unknown keys (Reqs 10.5, 10.6).
 
         Named keys only — a mapping carrying keys that are not fields simply has
@@ -455,7 +455,7 @@ class Kinetic_Options:
     # -- projection from ProcessingOptions ---------------------------------
 
     @classmethod
-    def from_processing_options(cls, options: Any) -> "Kinetic_Options":
+    def from_processing_options(cls, options: Any) -> Kinetic_Options:
         """Project Processing_Options onto Kinetic_Options (Reqs 10.3, 10.4, 10.8-10.10).
 
         Reads attributes only (never writes), inherits the Base_Preset look
@@ -509,9 +509,7 @@ class Kinetic_Options:
             preset_font=coerce_str(preset.font, FALLBACK_FONT, 128),
             font_size=coerce_int(preset.font_size, 84, lo=8, hi=400),
             position=coerce_choice(raw_position, _POSITION_CHOICES, ""),
-            max_lines=coerce_int(
-                _read(options, "kinetic_max_lines", "max_lines"), 2, lo=1, hi=4
-            ),
+            max_lines=coerce_int(_read(options, "kinetic_max_lines", "max_lines"), 2, lo=1, hi=4),
             max_line_width=coerce_int(
                 _read(options, "kinetic_max_line_width", "max_line_width"),
                 22,
@@ -537,9 +535,7 @@ class Kinetic_Options:
                 hi=1000,
             ),
             highlight_keywords=highlight,
-            keyword_ai=coerce_bool(
-                _read(options, "caption_keyword_ai", "keyword_ai"), False
-            ),
+            keyword_ai=coerce_bool(_read(options, "caption_keyword_ai", "keyword_ai"), False),
             emoji_inline=emoji,
             confidence_floor=coerce_float(
                 _read(options, "kinetic_confidence_floor", "confidence_floor"),
@@ -550,18 +546,14 @@ class Kinetic_Options:
             captions_enabled=coerce_bool(
                 _read(options, "captions", "captions_enabled", default=True), True
             ),
-            hook_enabled=coerce_bool(
-                _read(options, "hook_title", "hook_enabled"), False
-            ),
+            hook_enabled=coerce_bool(_read(options, "hook_title", "hook_enabled"), False),
             hook_duration_s=coerce_float(
                 _read(options, "hook_duration", "hook_duration_s"),
                 2.5,
                 lo=0.0,
                 hi=30.0,
             ),
-            hook_font_size=coerce_int(
-                _read(options, "hook_font_size"), 110, lo=8, hi=400
-            ),
+            hook_font_size=coerce_int(_read(options, "hook_font_size"), 110, lo=8, hi=400),
             durable_subtitle=coerce_bool(_read(options, "durable_subtitle"), False),
             permissibility=coerce_bool(
                 _read(options, "permissibility_mode", "permissibility"), False
@@ -579,14 +571,14 @@ class Kinetic_Options:
 class Kinetic_Word:
     """One planned word: escaped text, snapped bounds, and motion metadata."""
 
-    text: str = ""                      # already ``captions._escape``-d (Req 4.7)
-    start: float = 0.0                  # clip-relative seconds, snapped
-    end: float = 0.0                    # >= start
-    rel_ms: int = 0                     # motion offset from its cue start (Req 5.3)
-    emphasis: bool = False              # Reqs 5.9, 6.5
-    timing_synthesised: bool = False    # Req 6.1
-    emoji: str = ""                     # inline glyph or "" (Reqs 8.6, 8.7)
-    line: int = 0                       # Text_Line index within the cue (Req 7.5)
+    text: str = ""  # already ``captions._escape``-d (Req 4.7)
+    start: float = 0.0  # clip-relative seconds, snapped
+    end: float = 0.0  # >= start
+    rel_ms: int = 0  # motion offset from its cue start (Req 5.3)
+    emphasis: bool = False  # Reqs 5.9, 6.5
+    timing_synthesised: bool = False  # Req 6.1
+    emoji: str = ""  # inline glyph or "" (Reqs 8.6, 8.7)
+    line: int = 0  # Text_Line index within the cue (Req 7.5)
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -615,7 +607,7 @@ class Kinetic_Word:
         return {key: record[key] for key in sorted(record)}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Kinetic_Word":
+    def from_dict(cls, data: Mapping[str, Any]) -> Kinetic_Word:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls()
@@ -635,20 +627,16 @@ class Kinetic_Word:
 class Kinetic_Cue:
     """One on-screen cue: a snapped Timeline_Segment plus its packed Text_Lines."""
 
-    segment: Timeline_Segment = field(
-        default_factory=lambda: Timeline_Segment(0.0, 0.0)
-    )
+    segment: Timeline_Segment = field(default_factory=lambda: Timeline_Segment(0.0, 0.0))
     words: tuple[Kinetic_Word, ...] = ()
-    lines: tuple[tuple[int, ...], ...] = ()   # word indices per Text_Line (Req 7.5)
+    lines: tuple[tuple[int, ...], ...] = ()  # word indices per Text_Line (Req 7.5)
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
         segment = self.segment
         if not isinstance(segment, Timeline_Segment):
             segment = (
-                Timeline_Segment.from_dict(segment)
-                if isinstance(segment, Mapping)
-                else None
+                Timeline_Segment.from_dict(segment) if isinstance(segment, Mapping) else None
             ) or Timeline_Segment(0.0, 0.0)
         set_(self, "segment", segment)
 
@@ -699,7 +687,7 @@ class Kinetic_Cue:
         return {key: record[key] for key in sorted(record)}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Kinetic_Cue":
+    def from_dict(cls, data: Mapping[str, Any]) -> Kinetic_Cue:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls()
@@ -729,18 +717,18 @@ class Kinetic_Plan:
 
     style: str
     reveal: str
-    font: str                    # the resolved ladder rung (Req 9.7)
+    font: str  # the resolved ladder rung (Req 9.7)
     font_size: int
-    position: str                # bottom | center | top
-    align: int                   # 2 | 5 | 8 (Req 7.3)
-    play_res_x: int              # Req 7.1
-    play_res_y: int              # Req 7.1
+    position: str  # bottom | center | top
+    align: int  # 2 | 5 | 8 (Req 7.3)
+    play_res_x: int  # Req 7.1
+    play_res_y: int  # Req 7.1
     margin_l: int
     margin_r: int
-    margin_v: int                # Safe_Area (Reqs 7.2, 7.10)
+    margin_v: int  # Safe_Area (Reqs 7.2, 7.10)
     duration: float
-    style_line: str              # Style: Default, from the Base_Preset (Req 10.4)
-    hook_style: str              # Style: Hook, verbatim shape (Req 3.3)
+    style_line: str  # Style: Default, from the Base_Preset (Req 10.4)
+    hook_style: str  # Style: Hook, verbatim shape (Req 3.3)
     hook_text: str = ""
     hook_duration_s: float = 2.5
     # ``d`` in the design's span table (Reqs 4.4-4.6). Carried on the plan — not
@@ -748,12 +736,12 @@ class Kinetic_Plan:
     # depends on nothing but ``plan`` (design determinism rule 4, Req 11.5).
     motion_duration_ms: int = 120
     cues: tuple[Kinetic_Cue, ...] = ()
-    cue_level: bool = False      # Req 6.4
+    cue_level: bool = False  # Req 6.4
     degraded: bool = False
     markers: tuple[str, ...] = ()
     detail: str = ""
-    colors: Mapping[str, str] = field(default_factory=dict)   # primary/highlight
-    highlight_scale: int = 118                                # percent, Req 5.9
+    colors: Mapping[str, str] = field(default_factory=dict)  # primary/highlight
+    highlight_scale: int = 118  # percent, Req 5.9
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -832,7 +820,7 @@ class Kinetic_Plan:
         return {key: record[key] for key in sorted(record)}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Kinetic_Plan":
+    def from_dict(cls, data: Mapping[str, Any]) -> Kinetic_Plan:
         """Rebuild an equivalent plan from :meth:`to_dict` output (Req 11.10)."""
         if not isinstance(data, Mapping):
             data = {}
@@ -896,20 +884,20 @@ def _captions() -> Any:
 #: Han (incl. CJK radicals, compatibility and extension B+), Hiragana, Katakana
 #: (incl. halfwidth), and Hangul (Jamo, compatibility Jamo, extended, syllables).
 _SPACE_FREE_RANGES: tuple[tuple[int, int], ...] = (
-    (0x2E80, 0x2EFF),    # CJK radicals supplement
-    (0x3005, 0x3007),    # ideographic iteration mark, ditto, ideographic zero
-    (0x3040, 0x30FF),    # Hiragana + Katakana
-    (0x3100, 0x312F),    # Bopomofo
-    (0x3130, 0x318F),    # Hangul compatibility Jamo
-    (0x31A0, 0x31BF),    # Bopomofo extended
-    (0x31F0, 0x31FF),    # Katakana phonetic extensions
-    (0x3400, 0x4DBF),    # CJK unified ideographs extension A
-    (0x4E00, 0x9FFF),    # CJK unified ideographs
-    (0xA960, 0xA97F),    # Hangul Jamo extended-A
-    (0xAC00, 0xD7FF),    # Hangul syllables + Jamo extended-B
-    (0xF900, 0xFAFF),    # CJK compatibility ideographs
-    (0xFF66, 0xFF9D),    # halfwidth Katakana
-    (0x1100, 0x11FF),    # Hangul Jamo
+    (0x2E80, 0x2EFF),  # CJK radicals supplement
+    (0x3005, 0x3007),  # ideographic iteration mark, ditto, ideographic zero
+    (0x3040, 0x30FF),  # Hiragana + Katakana
+    (0x3100, 0x312F),  # Bopomofo
+    (0x3130, 0x318F),  # Hangul compatibility Jamo
+    (0x31A0, 0x31BF),  # Bopomofo extended
+    (0x31F0, 0x31FF),  # Katakana phonetic extensions
+    (0x3400, 0x4DBF),  # CJK unified ideographs extension A
+    (0x4E00, 0x9FFF),  # CJK unified ideographs
+    (0xA960, 0xA97F),  # Hangul Jamo extended-A
+    (0xAC00, 0xD7FF),  # Hangul syllables + Jamo extended-B
+    (0xF900, 0xFAFF),  # CJK compatibility ideographs
+    (0xFF66, 0xFF9D),  # halfwidth Katakana
+    (0x1100, 0x11FF),  # Hangul Jamo
     (0x20000, 0x3FFFF),  # CJK unified ideographs extensions B..
 )
 
@@ -1134,7 +1122,7 @@ class _Source_Word:
     start: float = 0.0
     end: float = 0.0
     probability: float = 1.0
-    synthesised: bool = False   # Req 6.1 — this word's interval was invented
+    synthesised: bool = False  # Req 6.1 — this word's interval was invented
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -1180,18 +1168,16 @@ def _sanitise_words(words: Any) -> list[_Source_Word]:
     for item in items:
         text = _word_text(item).strip()
         if not text:
-            continue                                   # Req 6.6
+            continue  # Req 6.6
         raw_start, raw_end = captions._word_bounds(item)
-        start = coerce_float(raw_start, 0.0, lo=0.0)   # rejects NaN/inf too
+        start = coerce_float(raw_start, 0.0, lo=0.0)  # rejects NaN/inf too
         end = coerce_float(raw_end, start, lo=0.0)
         if end < start:
             end = start
         attr_start = None if isinstance(item, str) else getattr(item, "start", None)
         attr_end = None if isinstance(item, str) else getattr(item, "end", None)
         synthesised = (
-            not _is_finite_number(attr_start)
-            or not _is_finite_number(attr_end)
-            or end <= start
+            not _is_finite_number(attr_start) or not _is_finite_number(attr_end) or end <= start
         )
         out.append(
             _Source_Word(
@@ -1253,9 +1239,7 @@ def _split_drafts(
     produces three contiguous parts in Word_Timeline order.
     """
     drafts: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
-    pending: list[tuple[float, float, list[_Source_Word]]] = [
-        (cue_start, cue_end, items)
-    ]
+    pending: list[tuple[float, float, list[_Source_Word]]] = [(cue_start, cue_end, items)]
     # Every split consumes at least one word, so the queue is bounded by the word
     # count; the cap is pure paranoia against a pathological packing.
     budget = 4 * len(items) + 16
@@ -1282,9 +1266,7 @@ def _split_drafts(
         boundary = _snap(time_base, start + (end - start) * ratio)
         boundary = min(max(boundary, start), end)
 
-        drafts.append(
-            (start, boundary, head, _finalise_lines(lines, len(head), max_lines))
-        )
+        drafts.append((start, boundary, head, _finalise_lines(lines, len(head), max_lines)))
         pending.insert(0, (boundary, end, tail))
 
     for start, end, words in pending:  # pragma: no cover - cap never reached
@@ -1293,9 +1275,7 @@ def _split_drafts(
     return drafts
 
 
-def _fill_timings(
-    start: float, end: float, items: list[_Source_Word]
-) -> list[_Source_Word]:
+def _fill_timings(start: float, end: float, items: list[_Source_Word]) -> list[_Source_Word]:
     """Planner step 4 — invent the flagged words' intervals (Reqs 6.1, 6.2).
 
     A word flagged in step 1 takes its share of the **cue span**, distributed
@@ -1316,7 +1296,7 @@ def _fill_timings(
             word_start = start + step * index
             word_end = word_start + step
         if word_end - word_start <= 0.0:
-            word_end = word_start + MIN_WORD_S       # Req 6.2
+            word_end = word_start + MIN_WORD_S  # Req 6.2
         filled.append(dataclasses.replace(word, start=word_start, end=word_end))
     return filled
 
@@ -1664,14 +1644,12 @@ def plan_kinetic(
 
     snapped: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
     segments: list[Timeline_Segment] = []
-    for (cue_start, cue_end), (_s, _e, cue_words, lines) in zip(filled_bounds, drafts):
+    for (cue_start, cue_end), (_s, _e, cue_words, lines) in zip(filled_bounds, drafts, strict=True):
         filled = _fill_timings(cue_start, cue_end, cue_words)
         snapped.append((cue_start, cue_end, filled, lines))
         segments.append(Timeline_Segment(start=cue_start, end=cue_end))
 
-    normalised = normalize_segments(
-        segments, limit, time_base=base, min_duration=MIN_WORD_S
-    )
+    normalised = normalize_segments(segments, limit, time_base=base, min_duration=MIN_WORD_S)
 
     kept: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
     cursor = 0.0
@@ -1680,7 +1658,7 @@ def plan_kinetic(
     ):
         segment = _covering_segment(normalised, cue_start, cue_end)
         if segment is None:
-            continue                        # dropped by normalisation: words go too
+            continue  # dropped by normalisation: words go too
         start = max(cue_start, float(segment.start), cursor)
         end = min(cue_end, float(segment.end))
         # A cue shaved below MIN_WORD_S is dropped, exactly as normalize_segments already drops
@@ -1724,7 +1702,7 @@ def plan_kinetic(
             except Exception:  # pragma: no cover - hostile container
                 hit = False
         if hit and word.probability < options.confidence_floor:
-            hit = False                     # Reqs 5.9, 6.5 — text/timing untouched
+            hit = False  # Reqs 5.9, 6.5 — text/timing untouched
         emphasis.append(hit)
 
     # -- build the cue records ---------------------------------------------
@@ -1759,15 +1737,13 @@ def plan_kinetic(
             # offset that is mathematically a whole millisecond (e.g. 32/30 s -
             # 26/30 s, which evaluates to 0.19999999999999996) floors onto that
             # millisecond instead of the one below it.
-            rel_ms = max(
-                0, int(math.floor((word_start - start) * 1000.0 + _MS_EPSILON))
-            )
+            rel_ms = max(0, int(math.floor((word_start - start) * 1000.0 + _MS_EPSILON)))
             word_start = start + rel_ms / 1000.0
             if word.synthesised:
                 synthesised_count += 1
             planned.append(
                 Kinetic_Word(
-                    text=captions._escape(word.text),      # Req 4.7
+                    text=captions._escape(word.text),  # Req 4.7
                     start=word_start,
                     end=word_end,
                     rel_ms=rel_ms,
@@ -1794,8 +1770,7 @@ def plan_kinetic(
     cue_level = False
     degraded = False
     detail = (
-        f"{len(cues)} cues, {word_count} words, "
-        f"style={options.style}, reveal={options.reveal}"
+        f"{len(cues)} cues, {word_count} words, " f"style={options.style}, reveal={options.reveal}"
     )
     if ratio > SYNTHESISED_RATIO_LIMIT:
         cue_level = True
@@ -1828,13 +1803,10 @@ def _inline_emoji(word: Any, preset: Any, options: Kinetic_Options) -> str:
         return ""
     try:
         return _text(
-            _captions().caption_emoji_glyph(
-                word, preset, permissible=options.permissibility
-            )
+            _captions().caption_emoji_glyph(word, preset, permissible=options.permissibility)
         )
     except Exception:  # pragma: no cover - the helper never raises
         return ""
-
 
 
 # ---------------------------------------------------------------------------
@@ -1945,10 +1917,7 @@ def _style_span(
             f"\\t({rel + half},{rel + duration_ms},\\fscx100\\fscy100)}}{escaped}"
         )
     if style == "highlight_sweep":
-        return (
-            f"{{\\c{highlight}&\\t({rel},{rel + duration_ms},"
-            f"\\c{primary}&)}}{escaped}"
-        )
+        return f"{{\\c{highlight}&\\t({rel},{rel + duration_ms}," f"\\c{primary}&)}}{escaped}"
     # ``slide_up``'s per-word span *is* ``typewriter``'s alpha gate: it carries the event-level
     # ``\move`` (added in :func:`_cue_event`) plus this gate, so its words still appear on beat
     # rather than all at once (Req 4.5). Mapped rather than special-cased in the shared table,
@@ -1956,15 +1925,14 @@ def _style_span(
     shared = "typewriter" if style == "slide_up" else style
     # "none", and any unrecognised style, fall through to the plain escaped word (Reqs 4.3, 4.8).
     return ass_style.animation_span(
-        shared, escaped,
+        shared,
+        escaped,
         rel_ms=rel,
         duration_cs=ass_style.centiseconds(word.end - word.start),
     )
 
 
-def _word_span(
-    plan: Kinetic_Plan, word: Kinetic_Word, primary: str, highlight: str
-) -> str:
+def _word_span(plan: Kinetic_Plan, word: Kinetic_Word, primary: str, highlight: str) -> str:
     """Compose one word's span: style, inline emoji, Reveal_Mode gate, emphasis.
 
     The composition is a **product**, so the 7 x 2 style/Reveal_Mode matrix needs
@@ -1994,7 +1962,9 @@ def _word_span(
         # ``plan.highlight_scale`` is already a percentage — the planner multiplied the preset's
         # fraction by 100 when it built the plan.
         span = ass_style.emphasis_span(
-            span, primary=primary, highlight=highlight,
+            span,
+            primary=primary,
+            highlight=highlight,
             scale_pct=int(plan.highlight_scale),
         )
     return span
@@ -2014,9 +1984,7 @@ def _text_lines(cue: Kinetic_Cue) -> list[list[int]]:
     groups: list[list[int]] = []
     used: set[int] = set()
     for line in cue.lines:
-        indices = [
-            index for index in line if 0 <= index < count and index not in used
-        ]
+        indices = [index for index in line if 0 <= index < count and index not in used]
         used.update(indices)
         if indices:
             groups.append(indices)
@@ -2029,9 +1997,7 @@ def _text_lines(cue: Kinetic_Cue) -> list[list[int]]:
     return groups
 
 
-def _cue_text(
-    plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str
-) -> str:
+def _cue_text(plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str) -> str:
     """The ASS text field for one cue: joined spans, ``\\N`` between Text_Lines.
 
     Within a Text_Line neighbours are joined by :func:`join_separator` — the very
@@ -2054,18 +2020,14 @@ def _cue_text(
             if position:
                 parts.append(join_separator(previous, word.text))
             parts.append(
-                word.text
-                if plan.cue_level
-                else _word_span(plan, word, primary, highlight)
+                word.text if plan.cue_level else _word_span(plan, word, primary, highlight)
             )
             previous = word.text
         rendered.append("".join(parts))
     return _LINE_BREAK.join(rendered)
 
 
-def _cue_event(
-    plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str
-) -> str | None:
+def _cue_event(plan: Kinetic_Plan, cue: Kinetic_Cue, primary: str, highlight: str) -> str | None:
     """One ``Dialogue:`` line for a cue, or ``None`` when it has nothing to say.
 
     Both timestamps are clamped to ``[0, plan.duration]`` and formatted **only**
@@ -2098,7 +2060,10 @@ def _cue_event(
         prefix = ""
 
     return ass_style.dialogue(
-        f"{prefix}{text}", style="Default", start=stamp(start), end=stamp(end),
+        f"{prefix}{text}",
+        style="Default",
+        start=stamp(start),
+        end=stamp(end),
     )
 
 
@@ -2120,7 +2085,10 @@ def _hook_event(plan: Kinetic_Plan) -> str | None:
     fade_in, fade_out = captions.HOOK_FADE_MS
     return ass_style.dialogue(
         f"{{\\fad({fade_in},{fade_out})}}{escaped}",
-        style="Hook", start=start, end=end, layer=1,
+        style="Hook",
+        start=start,
+        end=end,
+        layer=1,
     )
 
 
@@ -2214,7 +2182,6 @@ def emit_ass(plan: Any) -> str:
     return "\n".join(lines) + "\n"
 
 
-
 # ---------------------------------------------------------------------------
 # The engine class (tasks 9.1-9.3) — Reqs 1, 2, 3, 9, 12, 13.1, 14.4, 16
 # ---------------------------------------------------------------------------
@@ -2257,20 +2224,20 @@ class Kinetic_Typography_Engine(AV_Engine):
     ``import worker.engines.kinetic`` free of every heavy dependency.
     """
 
-    engine_id: ClassVar[str] = ENGINE_ID                    # Req 1.1
-    stage: ClassVar[Engine_Stage] = Engine_Stage.COMPOSE    # Req 1.1
-    priority: ClassVar[int] = 50                            # Req 1.1
+    engine_id: ClassVar[str] = ENGINE_ID  # Req 1.1
+    stage: ClassVar[Engine_Stage] = Engine_Stage.COMPOSE  # Req 1.1
+    priority: ClassVar[int] = 50  # Req 1.1
     required_capabilities: ClassVar[tuple[str, ...]] = (SUBTITLES_CAPABILITY,)  # 1.5
     #: ``font:<family>`` is *not* declared here: the family is only known after
     #: options resolution, so it is probed per clip by :meth:`_resolve_font` and a
     #: missing font degrades rather than gating the engine (Reqs 1.5, 9.4).
     optional_capabilities: ClassVar[tuple[str, ...]] = ()
-    requires_network: ClassVar[bool] = False                # Reqs 1.5, 15.1
-    requires_model_download: ClassVar[bool] = False         # Reqs 1.5, 15.2
-    time_budget_s: ClassVar[float] = 5.0                    # Reqs 1.6, 16.1
-    max_media_passes: ClassVar[int] = 0                     # Reqs 1.6, 2.2
-    max_inputs: ClassVar[int] = 0                           # Req 2.4 — subtitle only
-    produces_media: ClassVar[bool] = False                  # Req 1.6
+    requires_network: ClassVar[bool] = False  # Reqs 1.5, 15.1
+    requires_model_download: ClassVar[bool] = False  # Reqs 1.5, 15.2
+    time_budget_s: ClassVar[float] = 5.0  # Reqs 1.6, 16.1
+    max_media_passes: ClassVar[int] = 0  # Reqs 1.6, 2.2
+    max_inputs: ClassVar[int] = 0  # Req 2.4 — subtitle only
+    produces_media: ClassVar[bool] = False  # Req 1.6
 
     def __init__(
         self,
@@ -2378,16 +2345,16 @@ class Kinetic_Typography_Engine(AV_Engine):
         except OSError as exc:
             return Engine_Result.failed(ENGINE_ID, f"{type(exc).__name__}: {exc}")
 
-        artifact = workspace.artifact(                      # Reqs 12.2, 12.4, 12.7
+        artifact = workspace.artifact(  # Reqs 12.2, 12.4, 12.7
             ASS_NAME, media_type="subtitle", durable=opts.durable_subtitle
         )
 
         markers = _str_tuple(
             (
-                *font_markers,                              # <=1 degraded:font: (Req 9.8)
-                *kplan.markers,                             # style_substituted / degraded:*
+                *font_markers,  # <=1 degraded:font: (Req 9.8)
+                *kplan.markers,  # style_substituted / degraded:*
                 marker(ENGINE_ID, f"style:{kplan.style}"),  # Req 3.7
-                marker(ENGINE_ID, "supersedes_captions"),   # Reqs 3.7, 3.9
+                marker(ENGINE_ID, "supersedes_captions"),  # Reqs 3.7, 3.9
             )
         )
 
@@ -2404,7 +2371,7 @@ class Kinetic_Typography_Engine(AV_Engine):
             markers=markers,
             artifacts=(artifact,),
             plan=kplan.to_dict(),
-            contribution=Compose_Contribution(              # Reqs 2.1, 2.3, 2.4
+            contribution=Compose_Contribution(  # Reqs 2.1, 2.3, 2.4
                 engine_id=ENGINE_ID,
                 inputs=(),
                 video_filters=(),
@@ -2414,7 +2381,7 @@ class Kinetic_Typography_Engine(AV_Engine):
             ),
             detail=kplan.detail,
         )
-        if status is Engine_Status.DEGRADED:                # Reqs 3.6, 3.9
+        if status is Engine_Status.DEGRADED:  # Reqs 3.6, 3.9
             return dataclasses.replace(result, contribution=None)
         return result
 
@@ -2437,9 +2404,7 @@ class Kinetic_Typography_Engine(AV_Engine):
         """
         opts = self._resolved_options(ctx)
         ladder = tuple(
-            family
-            for family in (opts.font_override, opts.preset_font, FALLBACK_FONT)
-            if family
+            family for family in (opts.font_override, opts.preset_font, FALLBACK_FONT) if family
         ) or (FALLBACK_FONT,)
         requested = ladder[0]
 
@@ -2475,13 +2440,13 @@ class Kinetic_Typography_Engine(AV_Engine):
         opts = self._resolved_options(ctx)
         play_res_x, play_res_y = self._play_res(ctx)
         return plan_kinetic(
-            words=getattr(ctx, "words", ()),          # rebased, clip-relative (Req 5.1)
-            duration=getattr(ctx, "duration", 0.0),   # Reqs 5.6, 5.7
+            words=getattr(ctx, "words", ()),  # rebased, clip-relative (Req 5.1)
+            duration=getattr(ctx, "duration", 0.0),  # Reqs 5.6, 5.7
             time_base=getattr(ctx, "time_base", None),  # Reqs 5.4, 16.2
             opts=opts,
             font=font,
-            hook_text=self._hook_text(ctx, opts),     # Req 3.3
-            keyword_planner=self._keyword_planner,    # Req 18.1
+            hook_text=self._hook_text(ctx, opts),  # Req 3.3
+            keyword_planner=self._keyword_planner,  # Req 18.1
             remaining=getattr(ctx, "remaining", None),  # Req 14.4
             play_res_x=play_res_x,
             play_res_y=play_res_y,

@@ -16,6 +16,7 @@ from worker.download import DownloadError, UnsafeURLError, fetch_metadata, is_ur
 #: than repeated on each decorator.
 router = APIRouter(tags=["input"])
 
+
 # ---------------------------------------------------------------------------
 # Preview
 # ---------------------------------------------------------------------------

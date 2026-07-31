@@ -19,7 +19,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 
@@ -79,16 +79,22 @@ class ProfileStore:
         with self._lock:
             return sorted(self._profiles.values(), key=lambda p: p.created_at)
 
-    def get(self, profile_id: str) -> Optional[Profile]:
+    def get(self, profile_id: str) -> Profile | None:
         with self._lock:
             return self._profiles.get(profile_id)
 
-    def get_default(self) -> Optional[Profile]:
+    def get_default(self) -> Profile | None:
         with self._lock:
             return next((p for p in self._profiles.values() if p.is_default), None)
 
-    def save(self, name: str, settings_blob: dict, publishing_blob: dict,
-             profile_id: str = "", make_default: bool = False) -> Profile:
+    def save(
+        self,
+        name: str,
+        settings_blob: dict,
+        publishing_blob: dict,
+        profile_id: str = "",
+        make_default: bool = False,
+    ) -> Profile:
         """Create or update a profile. Returns the saved profile."""
         with self._lock:
             now = time.time()
@@ -113,7 +119,7 @@ class ProfileStore:
             self._save()
             return prof
 
-    def set_default(self, profile_id: str) -> Optional[Profile]:
+    def set_default(self, profile_id: str) -> Profile | None:
         with self._lock:
             if profile_id not in self._profiles:
                 return None
@@ -134,7 +140,7 @@ class ProfileStore:
             return False
 
 
-_store: Optional[ProfileStore] = None
+_store: ProfileStore | None = None
 _lock = threading.Lock()
 
 

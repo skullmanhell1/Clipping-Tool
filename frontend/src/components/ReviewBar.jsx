@@ -10,7 +10,8 @@
  * hand is the work the batch action was supposed to remove.
  */
 
-const chip = "rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300 hover:border-brand-accent disabled:opacity-40";
+const chip =
+  "rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300 hover:border-brand-accent disabled:opacity-40";
 
 export default function ReviewBar({
   counts = { approved: 0, rejected: 0, pending: 0 },
@@ -96,8 +97,8 @@ export default function ReviewBar({
 
       <p className="mt-1 text-[10px] text-slate-600">
         Keys: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> approve · <kbd>x</kbd> reject ·{" "}
-        <kbd>s</kbd> select · <kbd>space</kbd> play · <kbd>,</kbd>/<kbd>.</kbd> frame ·{" "}
-        <kbd>←</kbd>/<kbd>→</kbd> second
+        <kbd>s</kbd> select · <kbd>space</kbd> play · <kbd>,</kbd>/<kbd>.</kbd> frame · <kbd>←</kbd>
+        /<kbd>→</kbd> second
       </p>
       {error ? <p className="mt-1 text-[10px] text-rose-400">{error}</p> : null}
     </div>

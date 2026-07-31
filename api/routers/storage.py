@@ -16,6 +16,7 @@ from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 #: than repeated on each decorator.
 router = APIRouter(tags=["storage"])
 
+
 # ---------------------------------------------------------------------------
 # Storage: disk usage, runtime settings, cleanup, and protected source deletion
 # ---------------------------------------------------------------------------
@@ -63,14 +64,16 @@ def delete_source(job_id: str, confirm: bool = False) -> dict:
     it, and it refuses to act without explicit confirmation.
     """
     if not confirm:
-        raise HTTPException(status_code=400,
-                            detail="Deleting the original source requires confirm=true")
+        raise HTTPException(
+            status_code=400, detail="Deleting the original source requires confirm=true"
+        )
     job = deps.get_manager().store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.input_type != "file":
-        raise HTTPException(status_code=400,
-                            detail="Only uploaded/downloaded source files can be deleted here")
+        raise HTTPException(
+            status_code=400, detail="Only uploaded/downloaded source files can be deleted here"
+        )
     src = Path(job.source).resolve()
     uploads_root = Path(settings.uploads_dir).resolve()
     if uploads_root not in src.parents:

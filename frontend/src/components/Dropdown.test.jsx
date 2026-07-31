@@ -26,7 +26,7 @@ function renderDropdown(props = {}) {
       onChange={onChange}
       options={OPTIONS}
       {...props}
-    />
+    />,
   );
   return { onChange };
 }
@@ -44,15 +44,13 @@ describe("Dropdown", () => {
     // The unavailable option must still be *visible*, carrying its explanation.
     expect(screen.getAllByRole("option")).toHaveLength(3);
     expect(
-      screen.getByRole("option", { name: "Spectral (needs local model)" })
+      screen.getByRole("option", { name: "Spectral (needs local model)" }),
     ).toBeInTheDocument();
   });
 
   it("marks an unavailable option as disabled rather than hiding it", () => {
     renderDropdown();
-    expect(
-      screen.getByRole("option", { name: "Spectral (needs local model)" })
-    ).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Spectral (needs local model)" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Crossfade" })).not.toBeDisabled();
   });
 

@@ -74,9 +74,7 @@ def _engines_info() -> tuple[list[dict[str, object]], dict[str, Any]]:
     return rows, capabilities
 
 
-def _add_engine_option_domains(
-    rows: list[dict[str, object]], capabilities: dict[str, Any]
-) -> None:
+def _add_engine_option_domains(rows: list[dict[str, object]], capabilities: dict[str, Any]) -> None:
     """Advertise engine-specific option domains inside the ``capabilities`` block.
 
     The per-engine row stays generic (`id`/`stage`/`priority`/`flag`/

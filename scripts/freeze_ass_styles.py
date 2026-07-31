@@ -49,8 +49,11 @@ def capture_all() -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true",
-                        help="exit 1 if the frozen file would change, without writing it")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 if the frozen file would change, without writing it",
+    )
     args = parser.parse_args(argv)
 
     frozen = capture_all()
@@ -66,10 +69,10 @@ def main(argv: list[str] | None = None) -> int:
 
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
     GOLDEN.write_text(serialised, encoding="utf-8")
-    styles = sum(line.startswith("Style: ")
-                 for doc in frozen.values() for line in doc.splitlines())
-    print(f"wrote {GOLDEN.relative_to(REPO)}: {len(frozen)} configurations, "
-          f"{styles} Style: lines")
+    styles = sum(line.startswith("Style: ") for doc in frozen.values() for line in doc.splitlines())
+    print(
+        f"wrote {GOLDEN.relative_to(REPO)}: {len(frozen)} configurations, " f"{styles} Style: lines"
+    )
     return 0
 
 

@@ -45,19 +45,56 @@ from worker.effects import compositor  # noqa: E402
 def _make_video(dest: Path, ffmpeg: str) -> Path:
     """The same synthetic clip the tests use, so the frozen numbers match theirs."""
     subprocess.run(
-        [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30:duration=3.0",
-         "-f", "lavfi", "-i", "sine=frequency=330:duration=3.0", "-shortest",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", "-c:a", "aac", str(dest)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=1080x1920:rate=30:duration=3.0",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=3.0",
+            "-shortest",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
     )
     return dest
 
 
+def _make_recorder(recorded: list[list[str]]):
+    """A stand-in for `compositor._run` that records the command instead of running ffmpeg.
+
+    It still creates the destination file, because `render_clip` stats its own output.
+    """
+
+    def _fake_run(cmd, *a, **kw):
+        recorded.append([str(part) for part in cmd])
+        dest = Path(cmd[-1])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"\0" * 64)
+
+    return _fake_run
+
+
 def _words():
     return [
-        FakeWord(0.2, 0.6, "This"), FakeWord(0.7, 1.1, "is"),
-        FakeWord(1.2, 1.6, "fire"), FakeWord(1.7, 2.2, "money"),
+        FakeWord(0.2, 0.6, "This"),
+        FakeWord(0.7, 1.1, "is"),
+        FakeWord(1.2, 1.6, "fire"),
+        FakeWord(1.7, 2.2, "money"),
     ]
 
 
@@ -78,17 +115,19 @@ def capture_all() -> dict:
                 spec.update(resolvers(needs, tmp))
                 base = _make_video(tmp / "base.mp4", ffmpeg)
                 recorded: list[list[str]] = []
-
-                def _fake_run(cmd, *a, **kw):
-                    recorded.append([str(part) for part in cmd])
-                    dest = Path(cmd[-1])
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(b"\0" * 64)
-
-                compositor._run = _fake_run
+                # Bound as a default rather than closed over: `recorded` is rebound every
+                # iteration, and a closure that reads it from the enclosing scope would record
+                # into whichever list happened to be current when it ran. It is only ever called
+                # within this iteration, so the behaviour is the same -- but that was an
+                # invariant of the call site, not of this function.
+                compositor._run = _make_recorder(recorded)
                 result = compositor.render_clip(
-                    base, tmp / "out.mp4", options_all_off(**option_kwargs),
-                    _words(), tmp, **spec,
+                    base,
+                    tmp / "out.mp4",
+                    options_all_off(**option_kwargs),
+                    _words(),
+                    tmp,
+                    **spec,
                 )
 
                 if result is None:
@@ -103,8 +142,7 @@ def capture_all() -> dict:
                     "inputs": [cmd[i + 1] for i, p in enumerate(cmd) if p == "-i"],
                     "graph": graph,
                     "flags": [
-                        p for p in cmd
-                        if p.startswith("-") and p not in ("-i", "-filter_complex")
+                        p for p in cmd if p.startswith("-") and p not in ("-i", "-filter_complex")
                     ],
                     "maps": [cmd[i + 1] for i, p in enumerate(cmd) if p == "-map"],
                     "effects": sorted(result.effects_applied),
@@ -116,8 +154,11 @@ def capture_all() -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true",
-                        help="exit 1 if the frozen file would change, without writing it")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 if the frozen file would change, without writing it",
+    )
     args = parser.parse_args(argv)
 
     frozen = capture_all()
@@ -134,8 +175,10 @@ def main(argv: list[str] | None = None) -> int:
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
     GOLDEN.write_text(serialised, encoding="utf-8")
     rendered = sum(1 for entry in frozen.values() if entry["rendered"])
-    print(f"wrote {GOLDEN.relative_to(REPO)}: {len(frozen)} configurations "
-          f"({rendered} render, {len(frozen) - rendered} return None)")
+    print(
+        f"wrote {GOLDEN.relative_to(REPO)}: {len(frozen)} configurations "
+        f"({rendered} render, {len(frozen) - rendered} return None)"
+    )
     return 0
 
 

@@ -7,8 +7,6 @@ API's contract rather than part of any one endpoint's implementation.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel
 
 from worker.models import ProcessingOptions
@@ -20,7 +18,7 @@ from worker.models import ProcessingOptions
 class OptionsModel(BaseModel):
     """Processing options accepted from the UI (all optional, sane defaults)."""
 
-    language: Optional[str] = None
+    language: str | None = None
     translate: bool = False
     clip_length: str = "auto"
     aspect: str = "9:16"
@@ -34,14 +32,14 @@ class OptionsModel(BaseModel):
     vibe: str = ""
     platform: str = "generic"
     hashtag_count: int = 5
-    range_start: Optional[float] = None
-    range_end: Optional[float] = None
+    range_start: float | None = None
+    range_end: float | None = None
     metadata: bool = True
     # Phase 3 — publishing
     publish_to: list[str] = []
     campaign_id: str = ""
     publish_mode: str = "review"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     # Phase 4 — visual effects (all individually toggleable)
     reframe: bool = False
     zoom: bool = False
@@ -114,21 +112,21 @@ class OptionsModel(BaseModel):
 class ClipEditModel(BaseModel):
     """Editable clip metadata fields (all optional; only provided ones apply)."""
 
-    title: Optional[str] = None
-    title_alternatives: Optional[list[str]] = None
-    description: Optional[str] = None
-    hashtags: Optional[list[str]] = None
-    hook_text: Optional[str] = None
-    cta: Optional[str] = None
-    mentions: Optional[list[str]] = None
-    thumbnail_text: Optional[str] = None
+    title: str | None = None
+    title_alternatives: list[str] | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    hook_text: str | None = None
+    cta: str | None = None
+    mentions: list[str] | None = None
+    thumbnail_text: str | None = None
 
 
 class RegenerateRequest(BaseModel):
     """Request to regenerate a single metadata field for a clip."""
 
     field: str
-    platform: Optional[str] = None
+    platform: str | None = None
 
 
 class CaptionPreviewModel(BaseModel):
@@ -176,7 +174,7 @@ class PublishClipRequest(BaseModel):
     platforms: list[str] = []
     campaign_id: str = ""
     mode: str = "auto"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     routes: dict[str, dict[str, str]] = {}
 
 
@@ -195,9 +193,9 @@ class CampaignModel(BaseModel):
 class StorageSettingsModel(BaseModel):
     """User-tunable storage settings (runtime-persisted)."""
 
-    retention_days: Optional[int] = None
-    auto_delete_temp: Optional[bool] = None
-    delete_local_after_publish: Optional[bool] = None
+    retention_days: int | None = None
+    auto_delete_temp: bool | None = None
+    delete_local_after_publish: bool | None = None
 
 
 class ProfileModel(BaseModel):

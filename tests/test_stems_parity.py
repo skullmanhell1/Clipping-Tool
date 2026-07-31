@@ -46,9 +46,7 @@ def _stub_transcribe(monkeypatch, text="hello there my friend today"):
             Word(1.7, 2.3, "friend"),
             Word(2.4, 3.0, "today"),
         ]
-        return Transcript(
-            language="en", segments=[TranscriptSegment(0.0, 4.0, text, words)]
-        )
+        return Transcript(language="en", segments=[TranscriptSegment(0.0, 4.0, text, words)])
 
     monkeypatch.setattr(pl, "transcribe", fake_transcribe)
 
@@ -119,9 +117,7 @@ def _run(source, work: Path, monkeypatch, options, *, registered: bool, tag: str
     _stub_selection(monkeypatch)
 
     clips_dir = work / f"clips_{tag}"
-    clips = pl.run_pipeline(
-        source, options, clips_dir=clips_dir, temp_dir=work / f"tmp_{tag}"
-    )
+    clips = pl.run_pipeline(source, options, clips_dir=clips_dir, temp_dir=work / f"tmp_{tag}")
     return _snapshot(clips, clips_dir), clips
 
 
@@ -132,7 +128,8 @@ def _run(source, work: Path, monkeypatch, options, *, registered: bool, tag: str
 # engine applies
 @requires_ffmpeg
 @settings(
-    max_examples=8, deadline=None,
+    max_examples=8,
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 @given(
@@ -158,7 +155,9 @@ def test_p17_a_registered_but_disabled_engine_changes_nothing(
     """
     src = make_video("src.mp4", duration=4.0, w=640, h=360)
     options = ProcessingOptions(
-        captions=captions, metadata=False, aspect=aspect,
+        captions=captions,
+        metadata=False,
+        aspect=aspect,
         filler_removal=filler_removal,
     )
 
@@ -188,12 +187,14 @@ def test_p17_an_enabled_engine_preserves_clip_count_and_existing_markers(
     original relative order. Only ``engine:stem_inpainting:*`` entries may be added.
     """
     src = make_video("src.mp4", duration=4.0, w=640, h=360)
-    base = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16", filler_removal=True
-    )
+    base = ProcessingOptions(captions=False, metadata=False, aspect="9:16", filler_removal=True)
     enabled = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16", filler_removal=True,
-        stem_inpainting_enabled=True, stem_mix_preset="speech_focus",
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        filler_removal=True,
+        stem_inpainting_enabled=True,
+        stem_mix_preset="speech_focus",
     )
 
     with monkeypatch.context() as m:
@@ -202,7 +203,7 @@ def test_p17_an_enabled_engine_preserves_clip_count_and_existing_markers(
         on, _ = _run(src, tmp_path, m, enabled, registered=True, tag="on")
 
     assert len(on) == len(off)
-    for before, after in zip(off, on):
+    for before, after in zip(off, on, strict=False):
         assert after["duration"] == before["duration"]
         assert (after["start"], after["end"]) == (before["start"], before["end"])
         # Every pre-existing marker survives, in the same relative order.
@@ -223,7 +224,11 @@ def test_the_pipeline_stage_order_is_unchanged() -> None:
     from worker.engines.base import Engine_Stage
 
     assert [stage.value for stage in Engine_Stage] == [
-        "source", "audio", "geometry", "compose", "post"
+        "source",
+        "audio",
+        "geometry",
+        "compose",
+        "post",
     ]
 
     source = (_ROOT / "worker" / "pipeline.py").read_text(encoding="utf-8")
@@ -303,14 +308,18 @@ def test_the_sibling_spec_directories_were_not_modified() -> None:
 
     changed = subprocess.run(
         ["git", "diff", "--name-only", "origin/main...HEAD"],
-        cwd=str(_ROOT), capture_output=True, text=True, timeout=60,
+        cwd=str(_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if changed.returncode != 0:
         pytest.skip("no origin/main to compare against in this checkout")
 
     touched = [line for line in changed.stdout.splitlines() if line.strip()]
     forbidden = [
-        path for path in touched
+        path
+        for path in touched
         if path.startswith(".kiro/specs/av-engines-foundation/")
         or path.startswith(".kiro/specs/kinetic-typography/")
     ]
@@ -337,25 +346,35 @@ def test_the_stem_engine_adds_no_new_production_file() -> None:
 
     added = subprocess.run(
         ["git", "diff", "--name-status", "--diff-filter=A", "origin/main...HEAD"],
-        cwd=str(_ROOT), capture_output=True, text=True, timeout=60,
+        cwd=str(_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if added.returncode != 0:
         pytest.skip("no origin/main to compare against in this checkout")
 
-    new_files = [
-        line.split("\t", 1)[1] for line in added.stdout.splitlines() if "\t" in line
-    ]
+    new_files = [line.split("\t", 1)[1] for line in added.stdout.splitlines() if "\t" in line]
     new_production = [
-        path for path in new_files
+        path
+        for path in new_files
         if not path.startswith("tests/") and not path.startswith(".kiro/")
     ]
 
     # No new engine module, and nothing named for this feature: the engine lives entirely
     # in the pre-existing worker/engines/stems.py.
+    #
+    # Matched on a word boundary rather than as a substring. `"stem" in path.lower()` was the
+    # first spelling, and it fired on `api/routers/system.py` -- **sy-stem** -- the moment the API
+    # was split into routers. A guard that fails for a reason unrelated to what it guards is worse
+    # than no guard: the honest response is to widen the exclusion list, and after two rounds of
+    # that nobody trusts the assertion.
+    stem_pattern = re.compile(r"(?:^|[^a-z])stems?(?:[^a-z]|$)")
     stem_related = [
-        path for path in new_production
-        if "stem" in path.lower() or path.startswith("worker/engines/")
+        path
+        for path in new_production
+        if stem_pattern.search(path.lower()) or path.startswith("worker/engines/")
     ]
-    assert stem_related == [], (
-        f"the stem engine should not add production files, but got: {stem_related}"
-    )
+    assert (
+        stem_related == []
+    ), f"the stem engine should not add production files, but got: {stem_related}"

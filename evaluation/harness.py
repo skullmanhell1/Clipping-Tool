@@ -16,9 +16,10 @@ different function, and comparing two selectors is the same code path as scoring
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Sequence, cast
+from typing import Any, Protocol, cast
 
 from evaluation import baselines
 from evaluation.dataset import Dataset, LabelledSource
@@ -35,10 +36,7 @@ class Selector(Protocol):
     do, so a baseline and the real selector are interchangeable here.
     """
 
-    def __call__(
-        self, source: Path, duration: float, transcript: object, k: int
-    ) -> Sequence:
-        ...
+    def __call__(self, source: Path, duration: float, transcript: object, k: int) -> Sequence: ...
 
 
 @dataclass
@@ -93,7 +91,7 @@ def load_cached_transcript(cache_dir: Path, source: Path):
     return transcript_cache.load(key, cache_dir)
 
 
-def save_cached_transcript(cache_dir: Path, source: Path, transcript) -> Optional[Path]:
+def save_cached_transcript(cache_dir: Path, source: Path, transcript) -> Path | None:
     """Cache ``transcript`` for ``source``. Best-effort; returns the path written."""
     try:
         key = _harness_key(Path(source))
@@ -132,9 +130,7 @@ def run_selector(
         try:
             run.duration = float(duration_of(source.source))
             run.transcript = transcript_of(source.source)
-            run.predictions = list(
-                selector(source.source, run.duration, run.transcript, k)
-            )
+            run.predictions = list(selector(source.source, run.duration, run.transcript, k))
         except Exception as exc:  # noqa: BLE001 - one bad source must not end the run
             run.error = f"{type(exc).__name__}: {exc}"
         run.seconds = time.time() - started
@@ -157,7 +153,7 @@ def run_baselines(
     *,
     k: int,
     duration_of: Callable[[Path], float],
-    segments_of: Optional[Callable[[Path, float], Sequence]] = None,
+    segments_of: Callable[[Path, float], Sequence] | None = None,
 ) -> list[AggregateScore]:
     """Score the naive selectors on the same dataset.
 
@@ -168,23 +164,33 @@ def run_baselines(
     results: list[AggregateScore] = []
 
     for name, function in baselines.CHEAP_BASELINES.items():
+
         def _selector(source, duration, transcript, k_, _fn=function, _src=None):
             labels = _labels_for(dataset, source)
             return _fn(duration, labels, k_)
 
         score, _runs = run_selector(
-            dataset, _selector, k=k, label=f"baseline:{name}",
-            duration_of=duration_of, transcript_of=lambda _path: None,
+            dataset,
+            _selector,
+            k=k,
+            label=f"baseline:{name}",
+            duration_of=duration_of,
+            transcript_of=lambda _path: None,
         )
         results.append(score)
 
     if segments_of is not None:
+
         def _longest(source, duration, transcript, k_):
             return baselines.longest_segment_baseline(segments_of(source, duration), k_)
 
         score, _runs = run_selector(
-            dataset, _longest, k=k, label="baseline:longest",
-            duration_of=duration_of, transcript_of=lambda _path: None,
+            dataset,
+            _longest,
+            k=k,
+            label="baseline:longest",
+            duration_of=duration_of,
+            transcript_of=lambda _path: None,
         )
         results.append(score)
 

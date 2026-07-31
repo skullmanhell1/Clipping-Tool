@@ -49,8 +49,10 @@ GOLDEN = Path(__file__).parent / "golden" / "compositor_commands.json"
 
 def _words():
     return [
-        FakeWord(0.2, 0.6, "This"), FakeWord(0.7, 1.1, "is"),
-        FakeWord(1.2, 1.6, "fire"), FakeWord(1.7, 2.2, "money"),
+        FakeWord(0.2, 0.6, "This"),
+        FakeWord(0.7, 1.1, "is"),
+        FakeWord(1.2, 1.6, "fire"),
+        FakeWord(1.7, 2.2, "money"),
     ]
 
 
@@ -97,8 +99,7 @@ def _capture(monkeypatch, tmp_path, base, options, **kwargs) -> dict:
         "graph": graph,
         # Mapping and codec choices: which streams were re-encoded versus copied.
         "flags": [
-            part for part in cmd
-            if part.startswith("-") and part not in ("-i", "-filter_complex")
+            part for part in cmd if part.startswith("-") and part not in ("-i", "-filter_complex")
         ],
         "maps": [cmd[i + 1] for i, part in enumerate(cmd) if part == "-map"],
         "effects": sorted(result.effects_applied),
@@ -125,13 +126,25 @@ CONFIGURATIONS: dict[str, dict] = {
     "music_only": dict(options=dict(captions=False, music="chill")),
     "music_and_fades": dict(options=dict(captions=False, music="chill", fades=True)),
     "fades_audio_only": dict(options=dict(captions=False, fades=True)),
-    "everything_visual": dict(options=dict(
-        captions=True, hook_title=True, color="vivid", zoom=True, transitions=True,
-        fades=True, progress_bar=True,
-    ), hook_text="WAIT FOR IT"),
-    "loudness_with_music": dict(options=dict(
-        captions=False, music="upbeat", loudness_normalise=True,
-    )),
+    "everything_visual": dict(
+        options=dict(
+            captions=True,
+            hook_title=True,
+            color="vivid",
+            zoom=True,
+            transitions=True,
+            fades=True,
+            progress_bar=True,
+        ),
+        hook_text="WAIT FOR IT",
+    ),
+    "loudness_with_music": dict(
+        options=dict(
+            captions=False,
+            music="upbeat",
+            loudness_normalise=True,
+        )
+    ),
     "caption_preset_pop": dict(options=dict(captions=True, caption_preset="pop")),
     # --- the input-index accounting ----------------------------------------------
     # These four exist because the first version of this matrix had none of them, and an
@@ -140,10 +153,12 @@ CONFIGURATIONS: dict[str, dict] = {
     # unchecked.
     "emoji_only": dict(options=dict(captions=False, emoji="standard"), needs="emoji"),
     "emoji_with_music": dict(
-        options=dict(captions=False, emoji="standard", music="chill"), needs="emoji",
+        options=dict(captions=False, emoji="standard", music="chill"),
+        needs="emoji",
     ),
     "broll_with_captions_and_emoji": dict(
-        options=dict(captions=True, emoji="standard"), needs="both",
+        options=dict(captions=True, emoji="standard"),
+        needs="both",
     ),
     "broll_music_captions_emoji": dict(
         options=dict(captions=True, emoji="standard", music="chill", color="vivid", zoom=True),
@@ -164,11 +179,13 @@ def resolvers(needs: str | None, tmp_path: Path) -> dict:
     if not png.exists():
         # A minimal valid PNG. ffmpeg never runs here (`_run` is stubbed), so it only has to
         # exist for the path checks inside the overlay builders.
-        png.write_bytes(bytes.fromhex(
-            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-            "0000000a49444154789c6300010000050001"
-            "0d0a2db40000000049454e44ae426082"
-        ))
+        png.write_bytes(
+            bytes.fromhex(
+                "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                "0000000a49444154789c6300010000050001"
+                "0d0a2db40000000049454e44ae426082"
+            )
+        )
     out: dict = {"emoji_resolver": lambda cue: png}
     if needs == "both":
         asset = AssetRef(path=str(png), kind="image", provider="local", license="local")
@@ -245,7 +262,11 @@ def test_a_rendered_configuration_produces_exactly_one_pass(make_video, tmp_path
     """
     base = make_video("base.mp4", duration=2.0, w=720, h=1280)
     options = options_all_off(
-        captions=True, color="vivid", zoom=True, progress_bar=True, music="chill",
+        captions=True,
+        color="vivid",
+        zoom=True,
+        progress_bar=True,
+        music="chill",
     )
     captured = _capture(monkeypatch, tmp_path, base, options)
     assert captured["rendered"] is True

@@ -69,6 +69,7 @@ under ``word_by_word``. If the spec decides ``slide_up`` should also be excluded
 from the gate — making *its* two Reveal_Modes byte-identical too — that pin is
 the one line that fails, which is the point.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -142,17 +143,23 @@ _TAG_BLOCK = re.compile(r"\{[^{}]*\}")
 _ALPHA_BLOCK = re.compile(r"\{\\alpha&HFF&\\t\((\d+),(\d+),\\alpha&H00&\)\}")
 
 #: Unicode directional controls the emitter must never insert (Req 4.11).
-_BIDI_CONTROLS = (
-    "\u200e\u200f\u061c\u202a\u202b\u202c\u202d\u202e"
-    "\u2066\u2067\u2068\u2069"
-)
+_BIDI_CONTROLS = "\u200e\u200f\u061c\u202a\u202b\u202c\u202d\u202e" "\u2066\u2067\u2068\u2069"
 
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                       #
 # --------------------------------------------------------------------------- #
-def _plan(words, duration, *, style, reveal, option_data=None, hook_text="",
-          keyword_planner=None, **overrides):
+def _plan(
+    words,
+    duration,
+    *,
+    style,
+    reveal,
+    option_data=None,
+    hook_text="",
+    keyword_planner=None,
+    **overrides,
+):
     """Plan ``words`` with the drawn options, forcing ``style`` / ``reveal``."""
     data = dict(option_data or {})
     data.update(overrides)
@@ -174,7 +181,7 @@ def _plan(words, duration, *, style, reveal, option_data=None, hook_text="",
 def _declared_styles(document):
     """The style names the ``[V4+ Styles]`` section declares."""
     return [
-        line[len("Style: "):].split(",")[0]
+        line[len("Style: ") :].split(",")[0]
         for line in document.splitlines()
         if line.startswith("Style: ")
     ]
@@ -190,7 +197,7 @@ def _events(document):
     for line in document.splitlines():
         if not line.startswith("Dialogue: "):
             continue
-        parts = line[len("Dialogue: "):].split(",", 9)
+        parts = line[len("Dialogue: ") :].split(",", 9)
         out.append((parts[:9], parts[9] if len(parts) > 9 else None))
     return out
 
@@ -247,10 +254,8 @@ def _line_width(words):
     if not words:
         return 0
     total = display_width(words[0].text)
-    for previous, following in zip(words, words[1:]):
-        total += join_width(previous.text, following.text) + display_width(
-            following.text
-        )
+    for previous, following in zip(words, words[1:], strict=False):
+        total += join_width(previous.text, following.text) + display_width(following.text)
     return total
 
 
@@ -281,15 +286,13 @@ def _is_ordered_containment(needles, haystack):
     reveal=st_reveal_mode(),
     option_data=st_kinetic_options(),
 )
-def test_p6_every_emitted_ass_document_is_well_formed(
-    timeline, style, reveal, option_data
-):
+def test_p6_every_emitted_ass_document_is_well_formed(timeline, style, reveal, option_data):
     """Validates: Requirements 4.10, 7.1, 7.5, 8.8"""
     words, duration = timeline
 
     for source_words, source_duration in (
         (words, duration),
-        (REFERENCE_WORDS, REFERENCE_DURATION),   # guarantees events exist
+        (REFERENCE_WORDS, REFERENCE_DURATION),  # guarantees events exist
     ):
         _opts, plan = _plan(
             source_words,
@@ -297,7 +300,7 @@ def test_p6_every_emitted_ass_document_is_well_formed(
             style=style,
             reveal=reveal,
             option_data=option_data,
-            hook_text="watch this",             # exercises the Hook style too
+            hook_text="watch this",  # exercises the Hook style too
         )
         document = emit_ass(plan)
 
@@ -322,13 +325,13 @@ def test_p6_every_emitted_ass_document_is_well_formed(
         declared = _declared_styles(document)
         assert "Default" in declared and "Hook" in declared
         events = _events(document)
-        assert events                                  # non-vacuous
+        assert events  # non-vacuous
         for fields, text in events:
-            assert len(fields) == 9                    # Layer..Effect (Req 4.10)
+            assert len(fields) == 9  # Layer..Effect (Req 4.10)
             assert text is not None
-            assert fields[0] in ("0", "1")             # Layer
-            assert fields[3] in declared               # Style (Req 4.10)
-            assert fields[4] == ""                     # Name
+            assert fields[0] in ("0", "1")  # Layer
+            assert fields[3] in declared  # Style (Req 4.10)
+            assert fields[4] == ""  # Name
             assert fields[5:9] == ["0", "0", "0", ""]  # margins + Effect
 
             depth = 0
@@ -359,9 +362,7 @@ def test_p6_every_emitted_ass_document_is_well_formed(
     reveal=st_reveal_mode(),
     option_data=st_kinetic_options(),
 )
-def test_p7_visible_text_preserves_every_word_in_order(
-    timeline, style, reveal, option_data
-):
+def test_p7_visible_text_preserves_every_word_in_order(timeline, style, reveal, option_data):
     """Validates: Requirements 4.7, 4.11, 6.6, 8.3, 8.9
 
     Also re-asserts Property 14's layout clauses on real ``Default`` events, as
@@ -388,7 +389,7 @@ def test_p7_visible_text_preserves_every_word_in_order(
         assert len(texts) == len(plan.cues)
 
         emitted_words = []
-        for cue, text in zip(plan.cues, texts):
+        for cue, text in zip(plan.cues, texts, strict=False):
             visible = _strip_tags(text)
             groups = _plan_lines(cue)
 
@@ -396,9 +397,7 @@ def test_p7_visible_text_preserves_every_word_in_order(
             # Byte equality against the reconstruction from the plan's own words
             # proves the order, the joins, the `\N` placement and the inline
             # glyph placement, and rules out any inserted directional override.
-            assert visible == "\\N".join(
-                _visible_line(group) for group in groups
-            )
+            assert visible == "\\N".join(_visible_line(group) for group in groups)
 
             rendered_lines = visible.split("\\N")
             assert len(rendered_lines) == len(groups)
@@ -406,10 +405,10 @@ def test_p7_visible_text_preserves_every_word_in_order(
             # --- Property 14, now on a real Default event --------------------
             assert visible.count("\\N") <= max(opts.max_lines - 1, 0)
             assert len(groups) <= opts.max_lines
-            for group, rendered in zip(groups, rendered_lines):
+            for group, rendered in zip(groups, rendered_lines, strict=False):
                 width = _line_width(group)
                 if width > opts.max_line_width:
-                    assert len(group) == 1        # over-long token, never split
+                    assert len(group) == 1  # over-long token, never split
                 assert "\\N" not in rendered
 
                 # every word intact, in order, inside this single Text_Line
@@ -420,7 +419,7 @@ def test_p7_visible_text_preserves_every_word_in_order(
                     cursor = found + len(word.text)
 
                 # the join rule (Reqs 8.2, 8.4)
-                for previous, following in zip(group, group[1:]):
+                for previous, following in zip(group, group[1:], strict=False):
                     separator = join_separator(previous.text, following.text)
                     if is_space_free(previous.text) and is_space_free(following.text):
                         assert separator == ""
@@ -429,9 +428,7 @@ def test_p7_visible_text_preserves_every_word_in_order(
 
                 # stripping the inline glyphs leaves exactly the joined words
                 assert _visible_line(group, with_emoji=False) == "".join(
-                    (
-                        join_separator(group[i - 1].text, word.text) if i else ""
-                    ) + word.text
+                    (join_separator(group[i - 1].text, word.text) if i else "") + word.text
                     for i, word in enumerate(group)
                 )
 
@@ -440,19 +437,16 @@ def test_p7_visible_text_preserves_every_word_in_order(
             # --- no directional override characters inserted (Req 4.11) ------
             for control in _BIDI_CONTROLS:
                 assert visible.count(control) == sum(
-                    word.text.count(control) + word.emoji.count(control)
-                    for word in cue.words
+                    word.text.count(control) + word.emoji.count(control) for word in cue.words
                 )
 
         # --- every non-whitespace word, escaped, in Word_Timeline order -------
         expected = [
-            captions._escape(word.text.strip())
-            for word in source_words
-            if word.text.strip()
+            captions._escape(word.text.strip()) for word in source_words if word.text.strip()
         ]
         assert emitted_words == [word.text for cue in plan.cues for word in cue.words]
         for emitted in emitted_words:
-            assert emitted.strip() == emitted != ""     # Req 6.6 — no blank word
+            assert emitted.strip() == emitted != ""  # Req 6.6 — no blank word
             assert captions._escape(emitted) == emitted  # Req 4.7 — already escaped
         if exact:
             assert emitted_words == expected
@@ -494,9 +488,7 @@ def test_p7_visible_text_preserves_every_word_in_order(
     style=st_kinetic_style(),
     option_data=st_kinetic_options(),
 )
-def test_p8_shared_styles_reproduce_build_word_span_semantics(
-    timeline, style, option_data
-):
+def test_p8_shared_styles_reproduce_build_word_span_semantics(timeline, style, option_data):
     """Validates: Requirements 4.2, 4.3, 4.4, 4.5, 4.6"""
     words, duration = timeline
 
@@ -521,7 +513,7 @@ def test_p8_shared_styles_reproduce_build_word_span_semantics(
         primary = plan.colors["primary"]
         highlight = plan.colors["highlight"]
 
-        for cue, text in zip(plan.cues, _default_texts(emit_ass(plan))):
+        for cue, text in zip(plan.cues, _default_texts(emit_ass(plan)), strict=False):
             assert all(not word.emphasis for word in cue.words)
 
             if style in ("none", "pop", "typewriter", "karaoke_fill"):
@@ -529,12 +521,8 @@ def test_p8_shared_styles_reproduce_build_word_span_semantics(
                 # event is exactly those spans, joined per Req 8.4 (Req 4.3).
                 assert text == "\\N".join(
                     "".join(
-                        (
-                            join_separator(group[i - 1].text, word.text) if i else ""
-                        )
-                        + captions.build_word_span(
-                            word, shared, False, cue_start=cue.start
-                        )
+                        (join_separator(group[i - 1].text, word.text) if i else "")
+                        + captions.build_word_span(word, shared, False, cue_start=cue.start)
                         for i, word in enumerate(group)
                     )
                     for group in _plan_lines(cue)
@@ -553,14 +541,12 @@ def test_p8_shared_styles_reproduce_build_word_span_semantics(
                 elif style == "highlight_sweep":
                     # colors.highlight -> colors.primary over d ms (Req 4.6)
                     assert (
-                        f"{{\\c{highlight}&\\t({rel},{rel + motion},"
-                        f"\\c{primary}&)}}{word.text}"
+                        f"{{\\c{highlight}&\\t({rel},{rel + motion}," f"\\c{primary}&)}}{word.text}"
                     ) in text
-                else:                                      # slide_up (Req 4.5)
+                else:  # slide_up (Req 4.5)
                     # the per-word alpha gate keeps words appearing on beat
                     assert (
-                        f"{{\\alpha&HFF&\\t({rel},{rel + 30},\\alpha&H00&)}}"
-                        f"{word.text}"
+                        f"{{\\alpha&HFF&\\t({rel},{rel + 30},\\alpha&H00&)}}" f"{word.text}"
                     ) in text
 
             if style == "slide_up":
@@ -638,7 +624,7 @@ def test_p9_reveal_mode_is_orthogonal_to_kinetic_style(timeline, style, option_d
 
         # --- the gate is the *only* difference -------------------------------
         assert _strip_gates(word_by_word) == cumulative
-        assert _strip_gates(cumulative) == cumulative        # never gated
+        assert _strip_gates(cumulative) == cumulative  # never gated
 
         # --- the gate is present exactly once per word, except typewriter ----
         word_count = sum(len(cue.words) for cue in plans["cumulative"].cues)
@@ -695,9 +681,7 @@ _ST_HOOK_TEXT = st.text(max_size=40).filter(
     style=st_kinetic_style(),
     hook_text=_ST_HOOK_TEXT,
 )
-def test_p5_the_hook_title_survives_engine_ownership(
-    timeline, option_data, style, hook_text
-):
+def test_p5_the_hook_title_survives_engine_ownership(timeline, option_data, style, hook_text):
     """Validates: Requirements 3.3, 3.7
 
     Deliberately **planner-level**: the hook text is driven straight into
@@ -719,9 +703,7 @@ def test_p5_the_hook_title_survives_engine_ownership(
         hook_text=hook_text,
     )
     document = emit_ass(plan)
-    hook_events = [
-        (fields, text) for fields, text in _events(document) if fields[3] == "Hook"
-    ]
+    hook_events = [(fields, text) for fields, text in _events(document) if fields[3] == "Hook"]
 
     # --- the Style: Hook line is byte-identical to build_ass's (Req 3.3) -----
     # ``_preset_header_styles`` owns that literal inside the v0.8.0 caption path; the
@@ -742,7 +724,7 @@ def test_p5_the_hook_title_survives_engine_ownership(
     # --- exactly one Hook event, carrying the escaped upper-cased hook -------
     assert len(hook_events) == 1
     fields, text = hook_events[0]
-    assert fields[0] == "1"                              # layer above the cues
+    assert fields[0] == "1"  # layer above the cues
     assert fields[1] == captions._ass_timestamp(0.0)
     assert fields[2] == captions._ass_timestamp(max(0.5, opts.hook_duration_s))
     assert text.startswith("{\\fad(250,350)}")
@@ -798,7 +780,7 @@ def _worked_plan(style, reveal):
     opts = Kinetic_Options(
         style=style,
         reveal=reveal,
-        preset_name="pop",              # default colours + highlight_scale 1.18
+        preset_name="pop",  # default colours + highlight_scale 1.18
         position="bottom",
         max_lines=2,
         max_line_width=22,
@@ -861,7 +843,6 @@ def test_cue_level_degradation_collapses_the_worked_cue():
             assert "\\t(" not in events[0]
             assert "\\move(" not in events[0]
             assert "\\fscx" not in events[0]
-
 
 
 # --------------------------------------------------------------------------- #
@@ -945,8 +926,8 @@ def test_every_kinetic_style_and_position_parses_under_libass(
         style=style,
         reveal=reveal,
         position=position,
-        preset_name="hormozi",        # box border style + a real highlight colour
-        highlight_keywords=True,      # exercises the emphasis wrap
+        preset_name="hormozi",  # box border style + a real highlight colour
+        highlight_keywords=True,  # exercises the emphasis wrap
         emoji_inline=True,
         hook_enabled=True,
         max_lines=2,
@@ -959,7 +940,7 @@ def test_every_kinetic_style_and_position_parses_under_libass(
         TIME_BASE,
         opts,
         RESOLVED_FONT,
-        "watch this",                 # exercises the Hook style + event too
+        "watch this",  # exercises the Hook style + event too
         keyword_planner=lambda flat, use_ai=False, client=None: {1},
         play_res_x=play_res_x,
         play_res_y=play_res_y,
@@ -988,10 +969,18 @@ def test_every_kinetic_style_and_position_parses_under_libass(
     out = tmp_path / f"{style}_{position}.mp4"
     proc = subprocess.run(
         [
-            FFMPEG, "-y", "-i", str(src),
-            "-vf", captions.subtitles_filter(ass),
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "copy",
+            FFMPEG,
+            "-y",
+            "-i",
+            str(src),
+            "-vf",
+            captions.subtitles_filter(ass),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "copy",
             str(out),
         ],
         capture_output=True,
@@ -1000,8 +989,7 @@ def test_every_kinetic_style_and_position_parses_under_libass(
 
     # --- the process exited 0 -------------------------------------------------
     assert proc.returncode == 0, (
-        f"{style}/{position}/{reveal}: ffmpeg exited {proc.returncode}\n"
-        f"{proc.stderr[-2000:]}"
+        f"{style}/{position}/{reveal}: ffmpeg exited {proc.returncode}\n" f"{proc.stderr[-2000:]}"
     )
 
     # --- libass actually opened and parsed the document (non-vacuity) ---------
@@ -1014,9 +1002,9 @@ def test_every_kinetic_style_and_position_parses_under_libass(
     for line in libass_lines:
         lowered = line.lower()
         for problem in _LIBASS_PROBLEM_MARKERS:
-            assert problem not in lowered, (
-                f"{style}/{position}/{reveal}: libass reported a problem: {line}"
-            )
+            assert (
+                problem not in lowered
+            ), f"{style}/{position}/{reveal}: libass reported a problem: {line}"
 
     # --- the burn produced a real, correctly-sized clip ------------------------
     assert out.exists() and out.stat().st_size > 0

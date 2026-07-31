@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 
@@ -67,7 +67,7 @@ def _dir_size(path: Path) -> int:
 
 
 #: Cached per-area sizes: ``(computed_at, {area: bytes})``. Guarded by :data:`_AREA_LOCK`.
-_AREA_CACHE: Optional[tuple[float, dict[str, int]]] = None
+_AREA_CACHE: tuple[float, dict[str, int]] | None = None
 _AREA_LOCK = threading.Lock()
 
 
@@ -114,10 +114,12 @@ def invalidate_disk_usage_cache() -> None:
         _AREA_CACHE = None
 
 
-def disk_usage(warn_free_gb: Optional[float] = None,
-               warn_percent: Optional[float] = None,
-               *,
-               refresh: bool = False) -> dict[str, Any]:
+def disk_usage(
+    warn_free_gb: float | None = None,
+    warn_percent: float | None = None,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
     """Return disk usage for the storage volume plus per-area sizes.
 
     ``low_space`` is ``True`` when free space drops below ``warn_free_gb`` **or**
@@ -134,7 +136,7 @@ def disk_usage(warn_free_gb: Optional[float] = None,
     root.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(root)
     used_percent = (usage.used / usage.total * 100) if usage.total else 0.0
-    free_gb = usage.free / (1024 ** 3)
+    free_gb = usage.free / (1024**3)
 
     areas = _area_sizes(refresh=refresh)
     low_space = free_gb < warn_free_gb or used_percent >= warn_percent
@@ -161,7 +163,7 @@ def sidecar_path(clip_path: str | Path) -> Path:
     return p.with_suffix(".json")
 
 
-def write_sidecar(clip_path: str | Path, clip: Any, extra: Optional[dict] = None) -> Path:
+def write_sidecar(clip_path: str | Path, clip: Any, extra: dict | None = None) -> Path:
     """Write a ``<clip>.json`` sidecar describing ``clip`` next to the media.
 
     ``clip`` may be a dataclass (``ClipResult``), an object with ``to_dict``, or
@@ -188,8 +190,7 @@ def write_sidecar(clip_path: str | Path, clip: Any, extra: Optional[dict] = None
 # --------------------------------------------------------------------------- #
 # Retention sweep
 # --------------------------------------------------------------------------- #
-def cleanup_expired(retention_days: Optional[int] = None,
-                    now: Optional[float] = None) -> dict[str, Any]:
+def cleanup_expired(retention_days: int | None = None, now: float | None = None) -> dict[str, Any]:
     """Delete clip artefacts older than the retention window.
 
     Args:
@@ -207,8 +208,7 @@ def cleanup_expired(retention_days: Optional[int] = None,
     now = now if now is not None else time.time()
 
     if not retention_days or retention_days <= 0:
-        return {"removed": 0, "freed_bytes": 0, "retention_days": 0,
-                "kept_forever": True}
+        return {"removed": 0, "freed_bytes": 0, "retention_days": 0, "kept_forever": True}
 
     cutoff = now - retention_days * 86400
     removed = 0
@@ -231,11 +231,15 @@ def cleanup_expired(retention_days: Optional[int] = None,
             except OSError:
                 continue
 
-    return {"removed": removed, "freed_bytes": freed,
-            "retention_days": retention_days, "kept_forever": False}
+    return {
+        "removed": removed,
+        "freed_bytes": freed,
+        "retention_days": retention_days,
+        "kept_forever": False,
+    }
 
 
-def cleanup_temp(job_id: Optional[str] = None) -> int:
+def cleanup_temp(job_id: str | None = None) -> int:
     """Remove scratch files. With ``job_id`` remove only that job's temp dir.
 
     Returns the number of top-level entries removed. Honours the
@@ -265,19 +269,19 @@ def cleanup_temp(job_id: Optional[str] = None) -> int:
 class RetentionSweeper:
     """Background thread that periodically runs :func:`cleanup_expired`."""
 
-    def __init__(self, interval_hours: Optional[float] = None) -> None:
-        self.interval = (interval_hours if interval_hours is not None
-                         else settings.retention_sweep_hours) * 3600
+    def __init__(self, interval_hours: float | None = None) -> None:
+        self.interval = (
+            interval_hours if interval_hours is not None else settings.retention_sweep_hours
+        ) * 3600
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self.last_result: dict[str, Any] = {}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True,
-                                        name="retention-sweeper")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="retention-sweeper")
         self._thread.start()
 
     def stop(self) -> None:
@@ -296,7 +300,7 @@ class RetentionSweeper:
                 break
 
 
-_sweeper: Optional[RetentionSweeper] = None
+_sweeper: RetentionSweeper | None = None
 _sweeper_lock = threading.Lock()
 
 

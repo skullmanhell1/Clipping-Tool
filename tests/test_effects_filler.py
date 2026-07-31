@@ -1,4 +1,5 @@
 """Tests for filler-word/pause removal planning, rebasing, and cutting."""
+
 from __future__ import annotations
 
 from tests.conftest import FakeWord, probe_duration, requires_ffmpeg
@@ -8,10 +9,10 @@ from worker.effects import filler as fl
 def test_plan_removes_filler_and_long_pause():
     words = [
         FakeWord(0.2, 0.6, "Hello"),
-        FakeWord(1.0, 1.3, "um"),       # filler
+        FakeWord(1.0, 1.3, "um"),  # filler
         FakeWord(1.4, 1.8, "world"),
         FakeWord(2.0, 2.4, "today"),
-        FakeWord(6.0, 6.5, "again"),    # preceded by a long (3.6s) pause
+        FakeWord(6.0, 6.5, "again"),  # preceded by a long (3.6s) pause
     ]
     plan = fl.plan_keep_intervals(words, duration=7.0)
     assert plan.changed

@@ -81,9 +81,9 @@ import json
 import signal
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -167,9 +167,7 @@ def _apply(mutation: Mutation, backups: _Backups) -> bool:
 
 def _run_tests(command: Sequence[str]) -> tuple[bool, str]:
     """Run ``command``; return ``(something_failed, tail_of_output)``."""
-    proc = subprocess.run(
-        list(command), cwd=REPO_ROOT, capture_output=True, text=True, check=False
-    )
+    proc = subprocess.run(list(command), cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
     # The exit status is the signal, not a grep of the summary line: a collection error, an internal
     # error or a non-zero exit for any other reason all mean the tests noticed something, and a
@@ -191,13 +189,10 @@ def run(
         print("\ninterrupted - working tree restored", file=sys.stderr)
         raise SystemExit(130)
 
-    previous = {
-        sig: signal.signal(sig, _on_signal)
-        for sig in (signal.SIGINT, signal.SIGTERM)
-    }
+    previous = {sig: signal.signal(sig, _on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         for mutation in mutations:
-            backups.restore()          # start each mutation from clean source
+            backups.restore()  # start each mutation from clean source
             if not _apply(mutation, backups):
                 results.append(Result(mutation, STALE))
                 continue
@@ -261,22 +256,29 @@ def _report(results: Sequence[Result]) -> int:
     return 0 if not escaped and not stale else 1
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--spec", type=Path, help="JSON file of mutations to run as a batch")
-    parser.add_argument("--only", action="append", default=[], metavar="NAME",
-                        help="run only these mutations from the spec (repeatable)")
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="run only these mutations from the spec (repeatable)",
+    )
     parser.add_argument("--list", action="store_true", help="list the spec's mutations and exit")
     parser.add_argument("--file", help="file to mutate (inline mode)")
     parser.add_argument("--old", help="exact text to replace; must occur exactly once")
     parser.add_argument("--new", help="replacement text")
     parser.add_argument("--why", default="", help="what should notice this")
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="show test output for an escape")
-    parser.add_argument("command", nargs="*",
-                        help="test command, after `--` (default: pytest -q -x)")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="show test output for an escape"
+    )
+    parser.add_argument(
+        "command", nargs="*", help="test command, after `--` (default: pytest -q -x)"
+    )
     args = parser.parse_args(argv)
 
     if args.spec:
