@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — what the words say, and who they say it to (C19, S7, S8, S12, T9, T10)
+
+- **`S7` — question/answer and list structure.** Selection measured how a moment was *delivered* —
+  pace, energy, how promptly it opens — and nothing about what it says. A question with its answer,
+  or an enumeration ("three things you need to know", "here's why"), is a self-contained unit by
+  construction: it opens with an implicit promise and closes by keeping it.
+
+  The ordering is the substance. An **unanswered** question scores *below* a passage with no
+  structure at all (0.25 against 0.5), because it opens a loop the clip never closes — the single
+  most common way an auto-cut moment feels unfinished. Any implementation that treats structure as
+  a bonus to be added would score it neutrally and still look like it worked.
+
+  Questions are detected from opener words as well as `?`, because Whisper omits question marks on
+  rising-intonation questions routinely, and relying on punctuation makes the signal a property of
+  Whisper's formatting rather than of the speech. Trailing conversational tags are stripped first:
+  `"we rebuilt the whole thing over one weekend, you know?"` is a statement, and reading it as an
+  unanswered question would apply the lowest score there is to the way people talk.
+- **`S8` — lexical emotional intensity.** How strongly a passage is *worded*, which is not what
+  energy (S2) measures. A shouted list of ingredients and a quietly devastating sentence sit at
+  opposite corners of the two, so both signals exist.
+
+  A **density**, not a count: a raw count ranks a three-minute passage containing two strong words
+  above a ten-second one containing the same two — higher purely for being longer, the same defect
+  S11 exists to remove. Strong terms are weighted twice the merely-emphatic ones; a grouping that
+  did not affect the score would be two word lists pretending to be one.
+- **`S12` — standalone completeness.** Whether a window makes sense without what came before. A clip
+  opening on "and *that's* why he did it" is a fragment of a conversation, and no amount of pace or
+  energy makes it publishable — this is invisible to every other signal.
+
+  The penalties are deliberately **unequal**: a stated back-reference ("as I said") 0.5, a dangling
+  conjunction 0.4, a demonstrative opener 0.15, an unfinished ending 0.1. A demonstrative is weak
+  because "this is the part where…" is a *good* clip opening — the word is as often forward-looking
+  as back-looking. An unfinished tail is lightest because it is the one failure the boundary logic
+  (S9 snapping, AU7 trimming) can still fix, whereas nothing downstream can supply missing context.
+  A back-reference in the *middle* of a clip is not penalised at all: that is a speaker recapping,
+  which usually helps the clip stand alone.
+
+  All three are **lexical rules, not model calls**, for the reason S4 records: a per-segment request
+  costs money per job, and nothing can yet tell whether a scored signal improves selection because
+  the S1 labelled dataset does not exist. A paid, unvalidated signal makes an improvement and a
+  regression indistinguishable *while charging for it*.
+
+  Weighted **below** the acoustic signals (`SELECTION_WEIGHT_STANDALONE=0.20`, `_STRUCTURE=0.15`,
+  `_INTENSITY=0.10`): these read ASR output, so they are the least certain measurements here — one
+  mis-transcribed opener makes a complete thought look like a fragment. `standalone` leads the three
+  because nothing downstream can supply context; `intensity` trails because it overlaps energy, and
+  double-counting emphasis would let one loud, strongly-worded moment dominate a whole source. They
+  also annotate the S10 prompt in **words, not numbers**, and only where the passage departs from
+  ordinary — annotating everything is the same as annotating nothing.
+- **`T9` — per-segment language detection.** Whisper reports *one* language for a whole file, so on
+  bilingual content that label is wrong for part of every transcript, and wrong **silently**: the
+  text appears, the timings are right, and the only symptom is degraded recognition on the passages
+  in the other language.
+
+  The two halves of this are not equally trustworthy and it says so. **Script switching is a fact** —
+  Devanagari, Cyrillic, Hangul, Arabic, Hebrew, Greek and Thai occupy disjoint Unicode ranges — and
+  is reported with high confidence. **Latin-script languages are only weakly separable**, from
+  function words and diacritics, which works on a sentence and is noise on three words; under six
+  words it declines to answer rather than guessing, and a tie between two languages counts as
+  evidence for neither (Spanish and Portuguese share enough function words that a count-based
+  detector would confidently pick whichever came first in the table).
+
+  **Han script deliberately returns no language.** It is used by Chinese *and* Japanese, and choosing
+  between them from characters alone is exactly the confident-and-wrong answer this exists to avoid.
+  Combining marks are excluded from the script census, or a diacritic-heavy script outweighs a Latin
+  passage of the same length and a mostly-English sentence comes back as Hindi.
+
+  It reports **suspected switches** rather than correcting them, because correcting would mean a
+  Whisper pass per segment. That belongs behind a setting, measured against M3's WER benchmark.
+- **`T10` — a translated subtitle *track*, not a replaced transcript.** `task=translate` rewrites the
+  transcript in English, so asking for a translation cost you the original-language captions
+  entirely: a Spanish creator's clip came back with English burned into the pixels. Now the burned
+  captions stay in the source language and English arrives as a second selectable track plus a
+  `clip_N.en.srt`/`.vtt` sidecar, so one render serves both audiences.
+
+  A **boolean**, not a target language (`SUBTITLE_TRANSLATION=false`): Whisper only ever translates
+  *to* English, so a target-language field would be a control that silently ignores its own value.
+
+  Both tracks are muxed in **one** ffmpeg call. `-metadata:s:s:N` numbers subtitle streams by their
+  position in the *output*, so a follow-up remux of a file that already carries a track would either
+  re-label the first one or need to know how many the input had; supplying every track at once makes
+  the indices a property of the argument list. The original-language track goes first so a player
+  defaults to it, and is now labelled with the language actually spoken rather than the hard-coded
+  `eng` the single-track path used — a menu offering two entries both called English is no menu.
+  Unknown codes become `und` ("undetermined", a real code) rather than an invalid two-letter one.
+
+  Skipped, with a `subtitle_translation:skipped_*` marker on the clip, when the source is already
+  English or `translate` was requested for the main pass — a second ASR pass to turn English into
+  English is minutes spent for nothing, and an absent track with *no explanation* is
+  indistinguishable from a broken one. A failure in the translation pass records
+  `subtitle_translation:failed` and ships the clips: it is an extra track on a job whose expensive
+  work is still ahead of it. The translated words are rebased onto the filler-removal keep plan
+  alongside the originals, or the track drifts by the total removed duration and reads as a sync bug
+  in the player.
+
+  Off by default because it costs a full second ASR pass — cached separately by T8, so re-runs are
+  free, but the first run roughly doubles transcription time.
+- **`C19` — emoji placement, agreeing with the captions.** Two halves. First, the emoji planner now
+  takes the **actual** highlighted word indices from the caption highlighter, and a highlighted word
+  outranks every unhighlighted one regardless of salience. A11 already ranked by the same salience
+  scorer the highlighter uses, which makes them agree *most* of the time — but the highlighter
+  applies a per-cue budget and a floor, so its final selection is not a pure function of salience,
+  and where they disagreed the emoji illustrated one word while the caption emphasised another. To a
+  viewer that is a bug even though both components behaved exactly as written.
+
+  Second, `EMOJI_PLACEMENT=caption` sits the glyph just clear of the caption block instead of in one
+  of three fixed frame slots — above bottom captions, below top ones — so the glyph and the word it
+  illustrates read as one element. That placement is only defensible *because* of the first half: an
+  emoji pinned beside a caption while illustrating a word three seconds earlier looks like a
+  mistake. Default stays `spread`, the shipped behaviour, so an upgrade does not move existing
+  output.
+
 ### Added — caption typography and previewing (C6, C9, C14, C16, C17, C18, C20)
 
 - **`C6` — real line wrapping, from measured text.** Captions relied on ASS `WrapStyle: 2`, which

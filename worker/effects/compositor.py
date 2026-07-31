@@ -221,6 +221,10 @@ def render_clip(
 
     # --- captions + hook title (single combined ASS) ---------------------
     subtitles_filter: Optional[str] = None
+    # C19: the highlighted word indices, hoisted out of the preset branch below so the emoji
+    # planner can read them. `None` means "no highlighting ran", which is distinct from an empty
+    # set ("highlighting ran and chose nothing") - the planner treats only the latter as a decision.
+    keyword_indices: Optional[set[int]] = None
     # O12: in `soft` mode the captions are delivered as a selectable track by the pipeline
     # instead of being burned in here. The hook title is unaffected - it is a title card, not a
     # caption, and there is no soft equivalent of one.
@@ -320,7 +324,6 @@ def render_clip(
 
             # Keyword highlighting: compute indices only when enabled. When
             # disabled we pass ``None`` and make NO llm call (Req 3.6).
-            keyword_indices = None
             if options.caption_keyword_highlight:
                 flat_words = [w for cue in cues for w in cue.words]
                 keyword_indices = caption_presets.plan_keywords(
@@ -445,6 +448,10 @@ def render_clip(
         emoji_cues = emoji.plan_emoji(
             words, duration, intensity=options.emoji, mode=options.emoji_mode,
             client=llm_client,
+            # C19: the words the captions actually highlight, so the emoji lands on the word the
+            # viewer is already being pointed at. `None` when keyword highlighting is off, which
+            # leaves the A11 salience ranking as the only opinion - the pre-C19 behaviour.
+            keyword_indices=keyword_indices,
         )
 
     # --- music bed --------------------------------------------------------
@@ -550,6 +557,10 @@ def render_clip(
             # sized for a frame the output might not have.
             frame_width=width,
             resolver=emoji_resolver, input_offset=emoji_offset,
+            # C19: `caption` sits the glyph just clear of the caption block, which only makes
+            # sense now that the emoji lands on the word the caption highlights.
+            placement=str(getattr(settings, "emoji_placement", "spread") or "spread"),
+            caption_position=options.caption_position or "bottom",
         )
     if emoji_graph:
         graph_parts.append(emoji_graph)
