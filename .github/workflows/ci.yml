@@ -84,6 +84,14 @@ jobs:
       - name: Emoji assets are vendored
         run: python scripts/fetch_emoji.py --check
 
+      # Same guarantee for the face-detector model, and for the same reason: the `mediapipe`
+      # backend loads a vendored `.tflite` by path, so an absent or truncated file means the
+      # backend silently substitutes Haar on every render. This is a digest check rather than
+      # an existence check because a half-downloaded model is a file that exists, has a
+      # plausible size, and fails deep inside the native graph at the first frame.
+      - name: Detector models are vendored
+        run: python scripts/fetch_models.py --check
+
       # A1/A2: same guarantee for the caption faces. A missing font is why captions
       # rendered in whatever the host substituted.
       - name: Caption fonts are vendored

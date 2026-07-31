@@ -29,66 +29,66 @@ running.
 
 ## Tasks
 
-- [ ] 0. Settle the golden-parity question before writing code
-  - [ ] 0.1 Determine whether the parity/golden fixtures pin `effects_applied` exactly
+- [x] 0. Settle the golden-parity question before writing code
+  - [x] 0.1 Determine whether the parity/golden fixtures pin `effects_applied` exactly
     - Inspect the golden render and parity tests (`tests/test_output_compat.py`, `tests/test_render_output_quality.py`, and any `*_parity*` fixtures) to establish whether adding `face_detector:haar` to a default run breaks a frozen set.
     - Record the finding in the PR description. If they are pinned, choose **deliberately** between updating the goldens (recommended — preserves Requirement 3) and withholding the marker on the default backend (weakens Requirement 3). Do not decide this implicitly by discovering a red test.
     - _Requirements: 3.1, 3.3, 9.2, 9.5_
 
-- [ ] 1. Pure geometry, arithmetic, and selection (no cv2, no mediapipe, no ffmpeg)
-  - [ ] 1.1 Add the `Detection` record and `relative_box_to_pixels` to `worker/effects/reframe.py`
+- [x] 1. Pure geometry, arithmetic, and selection (no cv2, no mediapipe, no ffmpeg)
+  - [x] 1.1 Add the `Detection` record and `relative_box_to_pixels` to `worker/effects/reframe.py`
     - Add a frozen `Detection` dataclass (`x`, `y`, `w`, `h`, `score: Optional[float] = None`) and the pure `relative_box_to_pixels(rel_x, rel_y, rel_w, rel_h, *, width, height)` returning `Optional[tuple[int, int, int, int]]`.
     - Convert, **then** clamp to `[0, width] × [0, height]`, **then** return `None` for a degenerate box. Document why that order is fixed and why the function is not inlined.
     - _Requirements: 2.4, 2.5, 2.6_
 
-  - [ ] 1.2 Add `detection_coverage` and the marker formatters
+  - [x] 1.2 Add `detection_coverage` and the marker formatters
     - Pure `detection_coverage(samples) -> float` returning `0.0` for an empty sample list, otherwise the fraction of samples with at least one detection, constrained to `[0.0, 1.0]`.
     - Pure marker builders producing `face_detector:{label}`, `face_detector_substituted:{requested}:{resolved}`, `reframe_low_confidence:{coverage:.2f}`, `reframe_sample_rate:{fps:.1f}` — fixed-precision formatting, never `str(float)`.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 6.2, 6.6, 8.1_
 
-  - [ ] 1.3 Extend `pick_main_face` for optional Detection_Scores
+  - [x] 1.3 Extend `pick_main_face` for optional Detection_Scores
     - Where any detection carries a score, rank on score and area together; where none do, preserve **exactly** the current largest-area behaviour; a single detection always wins regardless of score; zero detections still return `None`.
     - Keep the existing `list[tuple[int, int, int, int]]` call signature working, so no existing caller or test changes.
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 9.1_
 
-  - [ ] 1.4* Property test: relative→pixel conversion is bounded and non-degenerate → `tests/test_face_detection.py`
+  - [x] 1.4* Property test: relative→pixel conversion is bounded and non-degenerate → `tests/test_face_detection.py`
     - **Property 1** — for any relative box and any positive frame size, the result is `None` or lies within frame bounds with `w > 0 and h > 0`.
     - _Requirements: 2.4, 2.5, 2.6_ · _Properties: P1_
 
-  - [ ] 1.5* Property test: coverage is a bounded fraction → `tests/test_face_detection.py`
+  - [x] 1.5* Property test: coverage is a bounded fraction → `tests/test_face_detection.py`
     - **Property 2** — coverage is in `[0, 1]`; `0.0` for an empty sample list; `1.0` when every sample has ≥ 1 detection.
     - _Requirements: 5.1, 5.2, 5.3, 5.4_ · _Properties: P2_
 
-  - [ ] 1.6* Property tests: main-face selection → `tests/test_face_detection.py`
+  - [x] 1.6* Property tests: main-face selection → `tests/test_face_detection.py`
     - **Property 3** — with no scores present, selection is exactly largest-area.
     - **Property 4** — at most one main face is selected, and a lone detection is always selected.
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 9.1_ · _Properties: P3, P4_
 
-  - [ ] 1.7* Property test: marker strings are deterministic → `tests/test_face_detection.py`
+  - [x] 1.7* Property test: marker strings are deterministic → `tests/test_face_detection.py`
     - **Property 5** — for any coverage value the marker is stable across repeated formatting and carries a two-decimal representation.
     - _Requirements: 6.6_ · _Properties: P5_
 
-- [ ] 1b. Vendor the detector model — this is what unblocks the feature
-  - [ ] 1b.1 Confirm the model choice and licence before committing a binary
+- [x] 1b. Vendor the detector model — this is what unblocks the feature
+  - [x] 1b.1 Confirm the model choice and licence before committing a binary
     - Decide between MediaPipe BlazeFace (`blaze_face_short_range.tflite`, ~230 KB, Apache-2.0) and OpenCV YuNet (`face_detection_yunet_*.onnx`, ~340 KB, MIT). Neither ships in its wheel — verified. Record the decision and the licence in the PR.
     - Prefer BlazeFace only if the licence permits redistribution as clearly as the OFL fonts already vendored do; otherwise prefer YuNet, which also removes the `mediapipe` API-churn risk entirely.
     - _Requirements: 12.1, 12.2_
 
-  - [ ] 1b.2 Commit the model and its licence under `assets/models/`
+  - [x] 1b.2 Commit the model and its licence under `assets/models/`
     - The model file plus `LICENSE-<model>.txt`, following the `assets/font-licenses/` precedent. Note `assets/fonts/` must contain nothing but font files because libass offers every entry to FreeType — `assets/models/` has no equivalent constraint, but keep the licence as a sibling for consistency.
     - Check `.gitignore` and `.dockerignore` do not exclude the path; `assets/emoji-*/` is excluded but `assets/emoji/` is not, and this must follow the latter.
     - _Requirements: 12.1, 12.2, 12.7_
 
-  - [ ] 1b.3 Add `scripts/fetch_models.py` with a `--check` mode
+  - [x] 1b.3 Add `scripts/fetch_models.py` with a `--check` mode
     - Modelled directly on `scripts/fetch_emoji.py`. A Model_Manifest (filename, SHA-256, source URL, licence id, backend served) and a `--check` that verifies the working tree with **no network access**, exiting non-zero and naming the offending file on a missing, truncated, or mismatched model.
     - The fetch path is for maintainers only and is never invoked from the render path.
     - _Requirements: 12.3, 12.4, 12.5, 12.10, 12.11_
 
-  - [ ] 1b.4 Wire verification into CI and the container
+  - [x] 1b.4 Wire verification into CI and the container
     - Add `python scripts/fetch_models.py --check` to the `backend` job in `.github/workflows/ci.yml`, beside the existing emoji check. Ensure the model is copied into the image, and extend `scripts/docker_smoke.sh` to assert it resolves **through the API** rather than by listing the filesystem — the emoji check's `/api/info` assertion is the pattern.
     - _Requirements: 12.6, 12.7, 12.8_
 
-  - [ ] 1b.5 Narrow the `mediapipe` pin and pin the API surface
+  - [x] 1b.5 Narrow the `mediapipe` pin and pin the API surface
     - Change `mediapipe>=0.10,<1.0` to a range whose every member exposes `mediapipe.tasks.python.vision.FaceDetector`, with a comment recording that `mediapipe.solutions` was removed and must not be depended upon.
     - _Requirements: 13.1, 13.2, 13.4_
 
@@ -96,7 +96,7 @@ running.
     - Assert `mediapipe.tasks.python.vision.FaceDetector` (or the YuNet equivalent) is importable and that `mediapipe.solutions` is **not** relied upon. This is a drift pin: it fails loudly when a resolver upgrade moves the API out from under the backend, which is the failure this task exists to prevent.
     - _Requirements: 13.1, 13.3_
 
-  - [ ] 1b.7* Test: `--check` verifies offline and fails on corruption → `tests/test_face_detection.py`
+  - [x] 1b.7* Test: `--check` verifies offline and fails on corruption → `tests/test_face_detection.py`
     - Assert `--check` passes on the working tree with no network; assert a truncated copy in a temp dir fails and names the file. Mirror `scripts/fetch_emoji.py --check`'s existing coverage.
     - _Requirements: 12.4, 12.5_
 
@@ -120,7 +120,7 @@ running.
     - _Requirements: 1.2, 1.4, 1.6, 3.2, 3.3, 3.4, 4.1, 4.2_
 
 - [ ] 3. Real-library verification — do this before pipeline integration
-  - [ ] 3.0 Establish the tasks API's coordinate system empirically
+  - [x] 3.0 Establish the tasks API's coordinate system empirically
     - Load the Vendored_Model, run the real detector on a real image, and print `detections[0].bounding_box`. Determine whether `origin_x`/`origin_y`/`width`/`height` are absolute pixels or normalised. **Write this finding into the design document before implementing the conversion** — the first draft of this spec was wrong about the library's API twice, and both times the correction came from running it.
     - _Requirements: 2.4, 11.1_
 

@@ -83,15 +83,224 @@ def compute_crop_size(
     return max(2, cw), max(2, ch)
 
 
-def pick_main_face(faces: list[tuple[int, int, int, int]]) -> Optional[tuple[float, float]]:
-    """Return the centre ``(cx, cy)`` of the largest face box, or ``None``.
+@dataclass(frozen=True)
+class Detection:
+    """One detected face: an absolute-pixel box with an optional confidence.
 
-    ``faces`` is a list of ``(x, y, w, h)`` rectangles.
+    ``score`` is ``Optional`` rather than defaulted to a number because Haar supplies no
+    confidence at all. ``detectMultiScale`` can be asked for reject levels, but they are not
+    comparable across scales and are not probabilities; synthesising a score from them would
+    be the false precision this codebase declines elsewhere (see :mod:`worker.language`
+    refusing to guess a language from Han script). ``None`` means "this backend does not
+    know", which is a different statement from "confidence zero", and
+    :func:`pick_main_face` branches on the difference.
     """
-    if not faces:
+
+    x: int
+    y: int
+    w: int
+    h: int
+    score: Optional[float] = None
+
+    @property
+    def area(self) -> int:
+        return self.w * self.h
+
+    def as_tuple(self) -> tuple[int, int, int, int]:
+        """The ``(x, y, w, h)`` form every pre-existing caller expects."""
+        return (self.x, self.y, self.w, self.h)
+
+
+def relative_box_to_pixels(
+    rel_x: float,
+    rel_y: float,
+    rel_w: float,
+    rel_h: float,
+    *,
+    width: int,
+    height: int,
+) -> Optional[tuple[int, int, int, int]]:
+    """Convert a detector's bounding box to an absolute-pixel box, or ``None``.
+
+    Pure, and deliberately **not inlined at the call site**. Every other detector in this
+    module reports pixels; MediaPipe's legacy ``solutions`` API reported values normalised to
+    ``[0, 1]``. A box that silently stays normalised becomes a 1-pixel face at the frame
+    origin, and *nothing downstream objects*: ``pick_main_face`` returns a centre,
+    ``FaceBox`` validates, ``build_face_tracks`` builds tracks, ``build_sendcmd`` clamps to a
+    valid window, and ffmpeg encodes successfully. The only symptom is every clip cropped to
+    the frame's left edge, visible solely in the pixels. That is the same shape as the
+    ``font_substituted:Arial`` defect, and it is why this is a named function with its own
+    tests rather than four multiplications at the call site.
+
+    **Accepts either coordinate system, on purpose.** When all four values are ``<= 1.0``
+    they are treated as normalised and scaled by the frame dimensions; otherwise they are
+    treated as already absolute and this becomes a clamp-and-validate step. That makes the
+    function correct whichever form the installed library hands over, rather than correct
+    only against the version it was written for — and the tasks API's actual answer is
+    recorded in the spec's design document (measured: **absolute pixels**, see
+    ``.kiro/specs/face-detection-upgrade/design.md``). The ambiguity is real but bounded: a
+    genuinely absolute box with every value ``<= 1`` is at most one pixel, which the
+    degeneracy check below rejects either way.
+
+    **Order is fixed: convert, then clamp, then test for degeneracy.** Testing degeneracy
+    first would admit a box lying entirely off-frame (it is non-degenerate until it is
+    clipped); clamping before converting is meaningless because the bounds are in pixels.
+    A partially visible face legitimately produces a box extending past the frame edge, so
+    clamping is what can *create* degeneracy, which is why the test has to follow it.
+    """
+    if width <= 0 or height <= 0:
         return None
-    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-    return (x + w / 2.0, y + h / 2.0)
+    try:
+        values = (float(rel_x), float(rel_y), float(rel_w), float(rel_h))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in values):
+        # NaN survives float() and then poisons every comparison and every clamp below,
+        # reaching an ffmpeg crop argument as a literal "nan".
+        return None
+
+    normalised = all(abs(v) <= 1.0 for v in values)
+    if normalised:
+        x0 = values[0] * width
+        y0 = values[1] * height
+        x1 = x0 + values[2] * width
+        y1 = y0 + values[3] * height
+    else:
+        x0, y0 = values[0], values[1]
+        x1, y1 = x0 + values[2], y0 + values[3]
+
+    # Clamp in float space, then measure what survived, then coerce to int. Measuring before
+    # the int coercion is what makes the degeneracy test meaningful: rounding a 0.1-pixel box
+    # outward would manufacture a 1-pixel "detection" out of nothing, and a box narrower than
+    # a single pixel is not a face however it arrived.
+    fx0 = max(0.0, min(float(width), min(x0, x1)))
+    fy0 = max(0.0, min(float(height), min(y0, y1)))
+    fx1 = max(0.0, min(float(width), max(x0, x1)))
+    fy1 = max(0.0, min(float(height), max(y0, y1)))
+    if (fx1 - fx0) < 1.0 or (fy1 - fy0) < 1.0:
+        return None
+
+    px0 = int(math.floor(fx0))
+    py0 = int(math.floor(fy0))
+    px1 = min(width, int(math.ceil(fx1)))
+    py1 = min(height, int(math.ceil(fy1)))
+    box_w = px1 - px0
+    box_h = py1 - py0
+    if box_w <= 0 or box_h <= 0:
+        return None
+    return (px0, py0, box_w, box_h)
+
+
+def detection_coverage(samples: Sequence[tuple[float, Sequence[object]]]) -> float:
+    """The fraction of sampled frames containing at least one detection.
+
+    ``0.0`` for an empty sample list rather than a ``ZeroDivisionError``: zero frames sampled
+    and zero frames with a face are different causes with the same honest answer, and the
+    caller distinguishes them by whether it got any samples at all.
+    """
+    if not samples:
+        return 0.0
+    hit = sum(1 for _t, boxes in samples if boxes)
+    return max(0.0, min(1.0, hit / len(samples)))
+
+
+# Marker builders. Kept as functions rather than f-strings at the call sites so the spelling
+# has exactly one definition -- these strings are the only channel a caller sees, and two
+# call sites formatting "the same" marker slightly differently is the duplicated-fact defect
+# mutation testing has caught twice in this repository.
+def face_detector_marker(resolved: str) -> str:
+    """``face_detector:{resolved}`` -- names the backend that actually ran."""
+    return f"face_detector:{resolved}"
+
+
+def face_detector_substituted_marker(requested: str, resolved: str) -> str:
+    """``face_detector_substituted:{requested}:{resolved}`` -- names **both** sides.
+
+    Following ``caption_font_substituted:{script}:{family}``: a marker naming only the
+    outcome cannot tell you what was lost, which is the whole reason the operator is reading
+    it.
+    """
+    return f"face_detector_substituted:{requested}:{resolved}"
+
+
+def low_confidence_marker(coverage: float) -> str:
+    """``reframe_low_confidence:{coverage:.2f}`` -- fixed precision, never ``str(float)``.
+
+    A marker whose text varied with float repr would make golden comparison
+    platform-dependent, and the golden renders are how the byte-parity requirement is
+    verified.
+    """
+    return f"reframe_low_confidence:{coverage:.2f}"
+
+
+def sample_rate_marker(effective_fps: float) -> str:
+    """``reframe_sample_rate:{fps:.1f}`` -- the rate that actually ran, one decimal."""
+    return f"reframe_sample_rate:{effective_fps:.1f}"
+
+
+def _as_detection(item: object) -> Optional[Detection]:
+    """Coerce a ``Detection`` or a bare ``(x, y, w, h)`` tuple into a ``Detection``.
+
+    Both shapes are live: the Haar path and every existing test pass 4-tuples, the MediaPipe
+    path passes ``Detection``. Returning ``None`` for anything unusable keeps
+    :func:`pick_main_face` non-raising for callers that hand it partial data.
+    """
+    if isinstance(item, Detection):
+        return item
+    try:
+        x, y, w, h = item  # type: ignore[misc]
+    except (TypeError, ValueError):
+        return None
+    try:
+        return Detection(int(x), int(y), int(w), int(h))
+    except (TypeError, ValueError):
+        return None
+
+
+def pick_main_face(faces: Sequence[object]) -> Optional[tuple[float, float]]:
+    """Return the centre ``(cx, cy)`` of the main face box, or ``None``.
+
+    ``faces`` is a list of ``(x, y, w, h)`` rectangles **or** :class:`Detection` records; the
+    tuple form is preserved because 48 existing tests and the Haar path pass it.
+
+    Selection depends on whether confidences are present, and the two branches are kept
+    genuinely separate rather than unified behind a synthesised score:
+
+    * **No scores anywhere** -- largest area, which is the v0.11.0 behaviour *verbatim*,
+      including that ``max`` keeps the first of equal-area boxes. This is what makes the
+      byte-identical-default requirement achievable rather than merely likely.
+    * **Any score present** -- ranked on ``score * sqrt(area)``, so a large low-confidence
+      box loses to a smaller confident face. That is the point of the requirement: the crop
+      should follow a face rather than a bookshelf, and a bookshelf is usually bigger.
+
+      ``sqrt(area)`` -- the box's linear extent -- rather than ``area``, and the difference
+      decides real cases. Weighting by area makes confidence almost irrelevant: a 400x400
+      false positive at 0.10 has 62x the area of an 80x80 face at 0.95 and wins on
+      ``score * area`` by more than two to one, which is exactly the outcome this requirement
+      exists to prevent. Linear extent is also the better measure of what "dominant face"
+      means for framing: a face twice as wide occupies twice the width of the crop, not four
+      times. Since ``sqrt`` is monotonic in area, this changes no ordering when the scores
+      are equal.
+
+    A lone detection always wins regardless of its score -- with nothing to compare against,
+    a confidence is not evidence for rejecting the only thing found, and dropping it would
+    turn a low-confidence frame into a zero-detection frame, which is a different report.
+    """
+    items = [d for d in (_as_detection(f) for f in faces) if d is not None]
+    if not items:
+        return None
+    if len(items) == 1:
+        best = items[0]
+    elif any(d.score is not None for d in items):
+        # A missing score among scored peers ranks on area alone (neutral multiplier) rather
+        # than as zero, which would silently discard it.
+        best = max(
+            items,
+            key=lambda d: (1.0 if d.score is None else max(0.0, d.score)) * math.sqrt(d.area),
+        )
+    else:
+        best = max(items, key=lambda d: d.area)
+    return (best.x + best.w / 2.0, best.y + best.h / 2.0)
 
 
 def ema_smooth(
