@@ -726,6 +726,40 @@ class Settings(BaseSettings):
                     "Without this, reframing already-boxed footage centres the crop on the "
                     "bars and bakes them into the output.",
     )
+    # O7: target one platform's output profile rather than one file for every destination.
+    output_platform: str = Field(
+        default="",
+        description="Target platform output profile: tiktok | instagram | youtube | "
+                    "youtube_shorts | x | whop (O7). Empty means use the explicit output "
+                    "settings. Controls resolution, bitrate ceiling and the clip-length cap; "
+                    "the aspect is advisory so it cannot override a user's choice.",
+    )
+    # O12: burned-in captions, a selectable soft track, or both.
+    caption_mode: str = Field(
+        default="burned",
+        description="How captions are delivered: burned | soft | both (O12). 'soft' adds a "
+                    "selectable mov_text track instead of burning pixels; note mov_text is "
+                    "plain text, so preset animation and highlighting are lost in that track.",
+    )
+    # AU4: speech de-noise.
+    speech_denoise: str = Field(
+        default="off",
+        description="Speech de-noise strength: off | light | standard | strong (AU4). Uses "
+                    "afftdn, or arnndn when SPEECH_DENOISE_MODEL points at a real model file.",
+    )
+    speech_denoise_model: str = Field(
+        default="",
+        description="Path to an arnndn .rnnn model (AU4). ffmpeg ships no models, so this is "
+                    "empty by default and afftdn is used instead. A configured-but-missing "
+                    "file degrades to afftdn rather than failing the render.",
+    )
+    # AU5: sibilance reduction.
+    deesser: str = Field(
+        default="off",
+        description="De-esser strength: off | light | standard | strong (AU5). De-reverb is "
+                    "not included: ffmpeg has no de-reverb filter, and approximating one with "
+                    "a high-pass would be mislabelling it.",
+    )
     # V14: a closing call-to-action over the tail of the clip. Empty disables it.
     end_card_text: str = Field(
         default="",

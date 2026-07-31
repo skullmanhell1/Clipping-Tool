@@ -24,7 +24,7 @@ from typing import Any, Iterable, Optional
 
 from config import settings
 from worker.effects.caption_presets import CaptionPreset
-from worker.ffmpeg_utils import _run, h264_args
+from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
 
 
@@ -1216,10 +1216,8 @@ def _preset_dialogue_lines(
     return lines
 
 
-def _escape_filter_path(path: str | Path) -> str:
-    """Escape an absolute path for ffmpeg's filter-argument syntax."""
-    resolved = str(Path(path).resolve())
-    return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+#: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
+_escape_filter_path = escape_filter_path
 
 
 def subtitles_filter(ass: str | Path) -> str:

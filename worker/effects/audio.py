@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import settings
-from worker.ffmpeg_utils import _run
+from worker.ffmpeg_utils import _run, escape_filter_path
 
 # Per-mood synthesis parameters: two tones (root + interval) and a tremolo rate.
 # Frequencies are chosen to be pleasant and unobtrusive; this is a mood *bed*,
@@ -303,6 +303,105 @@ def music_mix_filter(
 # --------------------------------------------------------------------------- #
 # Loudness normalisation (AU1)
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Speech repair: de-noise (AU4) and de-ess (AU5)
+# --------------------------------------------------------------------------- #
+#
+# Both are OFF by default and both are deliberately conservative when on. Noise reduction and
+# sibilance reduction are the two processes most likely to make a recording *worse* while
+# measurably improving the thing they target: over-reduced noise leaves speech sounding
+# underwater and gated, and an aggressive de-esser turns an "s" into a "th". A clip that is
+# slightly noisy is publishable; one that sounds processed is not.
+
+#: ``afftdn`` settings per strength: ``(noise_reduction_db, noise_floor_db)``.
+#:
+#: ``nr`` is how much to remove, ``nf`` the assumed floor. The floor matters more than the
+#: reduction: set it too high and the filter treats quiet speech as noise and gates it. These
+#: pair a modest reduction with a floor low enough to sit under real room tone.
+DENOISE_LEVELS: dict[str, tuple[float, float]] = {
+    "light":    (6.0, -30.0),
+    "standard": (12.0, -25.0),
+    "strong":   (20.0, -20.0),
+}
+
+#: ``deesser`` intensity per strength (its ``i`` parameter, 0..1).
+#:
+#: Even "strong" is 0.6 rather than 1.0. At full intensity the filter removes so much of the
+#: 4-8 kHz band that consonants lose definition, which is a different defect, not a fix.
+DEESSER_LEVELS: dict[str, float] = {
+    "light":    0.2,
+    "standard": 0.4,
+    "strong":   0.6,
+}
+
+
+def denoise_filter(
+    strength: Optional[str] = None, model_path: Optional[str] = None
+) -> Optional[str]:
+    """Speech de-noise, or ``None`` when disabled (AU4).
+
+    Uses ``afftdn`` (spectral gating) by default. ``arnndn`` is the better filter and *is*
+    compiled into ffmpeg, but it is useless without a trained ``.rnnn`` model, and ffmpeg ships
+    none - the models live in a separate repository. So ``arnndn`` is available here only when
+    the operator supplies a model, and naming that dependency is the difference between a
+    setting that works and one that fails the render on a missing file.
+
+    An ``arnndn`` model that is configured but absent degrades to ``afftdn`` rather than
+    failing: the point of de-noising is a publishable clip, and refusing to render one over a
+    missing optional model would invert that.
+    """
+    if strength is None:
+        strength = str(getattr(settings, "speech_denoise", "off") or "off")
+    strength = strength.strip().lower()
+    if strength in ("", "off", "none"):
+        return None
+
+    if model_path is None:
+        model_path = str(getattr(settings, "speech_denoise_model", "") or "")
+    if model_path:
+        model = Path(model_path).expanduser()
+        if model.is_file():
+            return f"arnndn=m='{escape_filter_path(model)}'"
+
+    nr, nf = DENOISE_LEVELS.get(strength, DENOISE_LEVELS["standard"])
+    return f"afftdn=nr={nr:g}:nf={nf:g}"
+
+
+def deesser_filter(strength: Optional[str] = None) -> Optional[str]:
+    """Sibilance reduction, or ``None`` when disabled (AU5).
+
+    **This is the de-esser half of AU5 only.** AU5 also asks for de-reverb, and ffmpeg has no
+    de-reverb filter - not a filter this build lacks, one that does not exist upstream. Real
+    de-reverberation needs spectral deconvolution or a trained model, i.e. an external tool and
+    a new dependency, so it is out of scope for an ffmpeg-only pipeline rather than quietly
+    approximated. A high-pass and a noise gate are sometimes offered as "de-reverb"; they are
+    not, and shipping them under that name would be worse than not shipping it.
+    """
+    if strength is None:
+        strength = str(getattr(settings, "deesser", "off") or "off")
+    strength = strength.strip().lower()
+    if strength in ("", "off", "none"):
+        return None
+    intensity = DEESSER_LEVELS.get(strength, DEESSER_LEVELS["standard"])
+    return f"deesser=i={intensity:g}"
+
+
+def speech_repair_chain(
+    *, denoise: Optional[str] = None, deess: Optional[str] = None
+) -> list[str]:
+    """The ordered speech-cleanup filters: de-noise then de-ess (AU4, AU5).
+
+    That order is not arbitrary. De-noising changes the spectrum in exactly the band a de-esser
+    keys on, so de-essing first means setting its threshold against a signal that is about to
+    change underneath it. Cleaning first, then correcting sibilance, is how the same chain is
+    built by hand.
+
+    Returns ``[]`` when both are off, which is the default and leaves the audio graph exactly as
+    it was before AU4/AU5.
+    """
+    return [f for f in (denoise_filter(denoise), deesser_filter(deess)) if f]
+
+
 #: Integrated-loudness targets per publish platform, in LUFS.
 #:
 #: A clip quieter than the platform's target is turned *up* on playback, which lifts its

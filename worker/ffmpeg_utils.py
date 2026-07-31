@@ -69,6 +69,26 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
 )
 
 
+def escape_filter_path(path: str | Path) -> str:
+    """Escape a filesystem path for use inside an ffmpeg filter argument.
+
+    ``:`` separates filter options and ``\\``/``'`` are the escape characters, so an unescaped
+    path in a directory containing a colon produces a filtergraph parse error rather than a
+    wrong-looking result - and the error names the whole graph, not the path.
+
+    Lives here because four modules had grown their own copy (captions, overlays, reframe and
+    now audio) and they had *diverged*: one resolved the path and escaped backslashes, another
+    did neither and rewrote backslashes as forward slashes. Two of those are defensible and the
+    combination is not, since which one you got depended on which effect you enabled.
+
+    Note for Windows hosts: ffmpeg also accepts ``C\\:/dir/file`` there. This project's
+    deployment targets are Linux (Dockerfile, render.yaml), so the escaped form is used
+    uniformly rather than branching on platform.
+    """
+    resolved = str(Path(path).resolve())
+    return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
 def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str]:
     """The standard libx264 arguments for an encode.
 
@@ -100,11 +120,53 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     if normalise_fps:
         args += ["-r", str(int(settings.output_fps))]
     if vbv_cap:
-        maxrate = int(settings.output_max_bitrate_kbps)
+        # O7: the platform profile's ceiling when one is active, else the configured value.
+        from worker import output_profiles
+
+        maxrate = output_profiles.resolve_max_bitrate_kbps()
         # A two-second buffer, the usual pairing: large enough that a brief complex passage
         # is not visibly starved, small enough that the cap still means something.
         args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
     return args
+
+
+def mux_soft_subtitles(
+    video: str | Path,
+    subtitles: str | Path,
+    dest: str | Path,
+    *,
+    language: str = "eng",
+) -> Path:
+    """Copy ``video`` to ``dest`` with ``subtitles`` added as a selectable track (O12).
+
+    Burned-in captions are the right default for short-form - the platforms autoplay muted and
+    a viewer never enables a subtitle track - but they are a permanent, untranslatable,
+    un-hideable decision baked into the pixels. A soft track lets the same file serve an
+    audience that wants captions off, or wants them in another language, or is on a platform
+    that renders its own.
+
+    ``mov_text`` is the only subtitle codec MP4 carries, and it is *text only*: the karaoke
+    fills, per-word highlights, glyphs and positioning of the ASS captions cannot survive in
+    it. That is not a limitation of this function but of the container, and it is exactly why
+    soft captions are an alternative to the burned ones rather than a replacement - which is
+    also why ``both`` exists as a mode.
+
+    Streams are copied, so this costs a remux rather than a re-encode: no generation loss, and
+    a second or two on a clip-length file.
+    """
+    video, subtitles, dest = Path(video), Path(subtitles), Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run([
+        settings.ffmpeg_binary, "-y",
+        "-i", str(video),
+        "-i", str(subtitles),
+        "-map", "0", "-map", "1",
+        "-c", "copy", "-c:s", "mov_text",
+        "-metadata:s:s:0", f"language={language}",
+        "-movflags", "+faststart",
+        str(dest),
+    ])
+    return dest
 
 
 def aac_args() -> list[str]:
@@ -162,7 +224,13 @@ def aspect_size(aspect: str, short_side: int | None = None) -> tuple[int, int]:
         raise ValueError(f"Unknown aspect '{aspect}'. Valid: {sorted(ASPECT_PRESETS)}")
     base_w, base_h = ASPECT_PRESETS[aspect]
     if short_side is None:
-        short_side = int(getattr(settings, "output_short_side", BASE_SHORT_SIDE))
+        # O7: an active platform profile supplies the resolution unless the operator has set
+        # one explicitly. Imported here rather than at module scope because the profile table
+        # reads this module's constants - and because ffmpeg_utils is imported by everything,
+        # so keeping its import surface small is worth a local import.
+        from worker import output_profiles
+
+        short_side = output_profiles.resolve_short_side()
     if short_side not in OUTPUT_SHORT_SIDES:
         short_side = BASE_SHORT_SIDE
     if short_side == BASE_SHORT_SIDE:
