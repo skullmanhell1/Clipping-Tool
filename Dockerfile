@@ -104,6 +104,40 @@ COPY . .
 # Bring in the built SPA from the frontend stage so FastAPI serves it at "/".
 COPY --from=frontend /ui/dist ./frontend/dist
 
+# Run as an unprivileged user. The container downloads arbitrary URLs with yt-dlp, shells out to
+# ffmpeg with caller-influenced filter arguments, and writes files under /app/storage — so a
+# defect in any of those three reached root, and root in a container is one namespace escape away
+# from root on the host.
+#
+# A fixed UID/GID rather than whatever the base image allocates next: a bind-mounted host
+# directory carries the host's ownership, so the number has to be knowable to be granted access.
+# `docker-compose.yml` documents the one command that grants it.
+#
+# `/app/storage` is created and chowned here so the default (unmounted) case works out of the box:
+# `settings.ensure_local_dirs()` runs at startup and would otherwise be creating directories under
+# a root-owned /app. Only that subtree is chowned — the source stays root-owned and world-readable,
+# so the running process cannot rewrite its own code.
+# Not `--system`: that flag allocates from the low reserved range and warns when given an explicit
+# UID above SYS_UID_MAX (999). The UID has to be an explicit high number so a bind-mounted host
+# directory can be chowned to it, so the flag and the requirement are incompatible.
+RUN groupadd --gid 10001 clipper \
+    && useradd --uid 10001 --gid clipper --no-create-home --shell /usr/sbin/nologin clipper \
+    && mkdir -p /app/storage \
+    && chown -R clipper:clipper /app/storage
+
+USER clipper
+
 EXPOSE 8000
+
+# Hits /healthz, which api.security exempts from the shared secret for exactly this reason — a
+# health check has nowhere to hold a credential, and a probe that 401s reports the container as
+# unhealthy forever.
+#
+# Uses python rather than curl because curl is not installed and adding it for one probe is 5 MB
+# for something the interpreter already does. `--start-period` is generous because importing
+# mediapipe, opencv and faster-whisper takes real time on a cold start, and a health check that
+# fails during a normal boot causes a restart loop that looks like a crash.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"]
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

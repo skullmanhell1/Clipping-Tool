@@ -23,7 +23,7 @@ class InstagramPublisher(BasePublisher):
         return PublisherStatus(self.name,ok,ok,approved,"ready" if ok else "not_configured",msg,
           account_id or (settings.instagram_account_id or ""),not approved,
           # PB4: static long-lived token; renewal is a manual step outside this tool.
-          token_kind="static")
+          token_kind="static")  # noqa: S106 - a credential *kind*, not a credential
     def publish(self,request):
         st=self.status(request.account_id)
         if not st.configured:return PublishResult(False,PublishState.FAILED,self.name,error=st.message)

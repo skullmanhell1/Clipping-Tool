@@ -71,8 +71,8 @@ because it looks like success.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **1932 passed, 0 skipped, 0 warnings** |
-| `npm run test:run` | **132 passed** |
+| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
+| `npm run test:run` | **141 passed** |
 | `ruff check .` | clean |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
@@ -201,6 +201,17 @@ and each refusal is load-bearing:
 **Ask the font, not fontconfig.** `fc-match` is a *best match* and always answers —
 `fc-match ':lang=ar'` returns a font containing no Arabic. Use `fc-list :lang=xx` (which returns
 nothing when there is nothing) and verify against the file's `cmap`.
+
+**And do not ask fontconfig whether a *vendored* face exists.** `font_available` consults
+`assets/fonts.json` before `fc-list`, because the renderer passes `font_assets_dir` to libass as
+`fontsdir` and a face we ship renders whether or not the host installed it. Probing only
+fontconfig made all fourteen presets substitute to Noto Sans anywhere `fc-cache` had not been run
+over `assets/fonts` — which `setup_dev_env.sh` and the Dockerfile both do and
+`.github/workflows/ci.yml` does not, so CI was failing six assertions while every local run was
+green. The system-wide install is still wanted (fontconfig can select named instances of a
+*variable* font, which `fontsdir` cannot, and `drawtext` goes through fontconfig), but it is no
+longer load-bearing for the vendored faces. If you add a probe for a resource this repository
+ships, check the shipped copy first.
 
 **A listed encoder is not a usable one.** `ffmpeg -encoders` reports what was compiled in. This
 ffmpeg lists `h264_v4l2m2m` and fails on the first frame. Availability is a real one-frame encode.
