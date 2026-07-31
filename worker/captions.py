@@ -20,11 +20,12 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config import settings
-from worker import text_metrics
+from worker import script_support, text_metrics
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -1233,6 +1234,29 @@ def build_ass(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    # C21: pick a font that can actually render what was said, and note it when nothing can.
+    #
+    # Done here rather than in the caller because this is the only place that has both the text and
+    # the font in one scope. The default path is untouched: Latin text returns the requested font
+    # with no marker and `WrapStyle: 2`, so an English render is byte-identical.
+    # The hook title is included, not just the cues: a clip captioned in one script with a hook in
+    # another is unusual, but a hook-only render (cues empty) is not, and it would otherwise be
+    # planned from an empty string.
+    script_plan = script_support.plan_for_text(
+        " ".join(
+            [word.text for cue in cues for word in cue.words] + ([hook_text] if hook_text else [])
+        ),
+        (preset.font if preset is not None else font),
+    )
+    if script_plan.marker and notes is not None and script_plan.marker not in notes:
+        notes.append(script_plan.marker)
+    if preset is not None and script_plan.font and script_plan.font != preset.font:
+        # `replace` rather than mutation: presets are frozen and shared, so writing to one would
+        # change the font for every later clip in the job.
+        preset = dataclass_replace(preset, font=script_plan.font)
+    elif preset is None and script_plan.font:
+        font = script_plan.font
+
     if preset is not None:
         style_line, hook_style = _preset_header_styles(
             preset, position, hook_font_size, notes,
@@ -1265,11 +1289,15 @@ def build_ass(
         )
         body = _legacy_dialogue_lines(cues, use_karaoke)
 
+    # C21: 2 means "no automatic wrapping", which C6's measured `\N` breaks depend on. A shaping
+    # script gets 0 instead, so libass wraps it - an Arabic word's rendered width is not the sum of
+    # its letters' isolated advances, so the number C6 would break on is simply wrong there.
+    wrap_style = script_support.wrap_style(script_plan)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
-WrapStyle: 2
+WrapStyle: {wrap_style}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]

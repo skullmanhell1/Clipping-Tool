@@ -33,6 +33,7 @@ from worker import (
     segmentation,
     subtitle_export,
     thumbnail,
+    video_encoders,
     visual_selection,
 )
 from worker import ffmpeg_utils as fu
@@ -230,6 +231,13 @@ def run_pipeline(
                     translated = None
                     translation_marker = "subtitle_translation:empty"
 
+    # O8: resolved once per job, not per clip - the probe runs a real one-frame encode, and the
+    # answer cannot change between two clips of the same source.
+    encoder_choice = video_encoders.resolve_encoder()
+    encoder_marker = encoder_choice.marker
+    if encoder_choice.encoder.hardware:
+        encoder_marker = encoder_marker or f"encoder:{encoder_choice.encoder.name}"
+
     report(_P_TRANSCRIBE_END, "Finding the best moments")
 
     # --- AI highlight selection (with process-range + fallback) -----------
@@ -356,6 +364,11 @@ def run_pipeline(
         # a broken one.
         if translation_marker:
             applied.append(translation_marker)
+        # O8: which encoder actually ran, when it is not the one configured. A property of the
+        # machine rather than of this clip, but the clip record is the only thing a caller sees,
+        # and "my GPU is not being used" is exactly the question this answers.
+        if encoder_marker:
+            applied.append(encoder_marker)
         broll_assets: list[dict] = []
         # Filler keep-plan for this clip (None unless filler removal tightened
         # the timeline). Used to rebase speaker turns onto the same tightened
