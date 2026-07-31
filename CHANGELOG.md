@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — review workflow and brand kit (U3, U5, U6, U7, U9, U11)
+
+- **`U3` — a review player instead of a playback one.** The clip surface was a bare
+  `<video controls>`, which cannot step a frame or seek to a time you can name. Judging a clip
+  means checking the specific things that go wrong in this pipeline — does it open mid-word, is the
+  caption in sync, does the reframe lose the speaker, is the last frame a blink — and every one of
+  those needs a frame you can land on and hold. Adds scrubbing, ±1 frame, ±1 second and a time
+  readout. Frame stepping assumes 30 fps, which is what output is normalised to (`O3`).
+- **`U5` — a caption style picker with a live preview.** The presets were a dropdown of six names,
+  so choosing between "pop", "typewriter" and "hormozi" meant rendering a clip to find out what you
+  had picked. `/api/info` now reports `caption_preset_details` — the presets' real values, with
+  `#RRGGBB` equivalents added alongside the ASS originals, because no colour input accepts
+  `&H00FFFFFF`.
+
+  **The preview is labelled as an approximation.** libass does the word-by-word fill, the per-word
+  punch, the outline geometry and the exact metrics; CSS reproduces none of them faithfully. What it
+  shows honestly is what decides the choice: typeface, weight, colour pair, case, box and rough
+  placement. A preview that overstates itself is trusted once and disbelieved thereafter.
+- **`U6` — a brand kit: font, colour pair, logo and standing CTA.** These lived in places that could
+  not be saved together — the caption font and colours inside a preset editable only in source, the
+  CTA regenerated per clip by the LLM (so a creator with one standing ask got different wording on
+  every clip), and no way to put a logo on a clip at all.
+
+  The kit **overrides the preset** rather than the reverse: a preset is a *look* (how captions
+  animate, where they sit), the kit is an *identity*, so `hormozi` plus a brand font should give
+  hormozi's animation in the brand's typeface. It lives inside `settings`, so saved profiles
+  persist it with machinery that already exists. Colour conversion is one named function with tests
+  because ASS stores colours **byte-reversed** (blue-green-red) and getting that wrong does not
+  fail — it renders a brand's red as its blue and reports nothing.
+
+  The logo is drawn with the `movie` source filter, **not** a second ffmpeg input: the compositor's
+  input indices are load-bearing (engine contributions, music, b-roll and emoji all compute offsets
+  from them, which is what keeps the v0.8.0 parity guarantee), so an extra input would risk all of
+  those to save nothing. It is composited above the captions and emoji — a watermark an overlay
+  could cover is not a watermark — and the logo width is forced even, since an odd width in a 4:2:0
+  frame makes ffmpeg pick a chroma alignment rather than fail.
+- **`U7` — re-render one clip instead of the whole job.** Changing a caption preset or a colour
+  grade meant resubmitting the source and paying for everything again: the download, the
+  transcription, the selection call, the metadata generation and every *other* clip. Worse, it
+  produced a **different set of clips**, because selection is not deterministic with an LLM in it.
+
+  `run_pipeline` now accepts explicit candidates, which skips selection entirely. That is a
+  parameter rather than a separate clip-render function on purpose: the per-clip path is two hundred
+  lines of filler removal, diarisation rebasing, b-roll, engine stages, captions and thumbnailing,
+  and a second copy would drift from it within a release. `Job.source_path` records the resolved
+  local file, without which a URL job's source is only a URL. Edited metadata, the review verdict
+  and the filename are all carried across — the filename because every clip URL, publish record and
+  history row already points at it. The new media replaces the old only after the render succeeds.
+- **`U9` — batch review.** A job produces up to ten clips, each had to be judged individually, and
+  there was nowhere to record "I have looked at this". A review pass over twenty clips left no trace
+  and had to be redone from the top after any interruption. Clips gain `review_state`
+  (`pending`/`approved`/`rejected`) — defaulting to `pending`, so nothing is silently approved — with
+  per-clip and batch endpoints and a tally bar. A batch with one stale id applies to the rest rather
+  than failing wholesale, because discarding the other nineteen decisions to report one missing clip
+  is the wrong trade.
+- **`U11` — keyboard shortcuts for review.** `j`/`k` move, `a`/`x` judge, `s` selects, space plays,
+  `,`/`.` step a frame, arrows skip a second. Bound on the window rather than per card, because the
+  target is "the clip I am looking at" — and deliberately inert while a text field has focus, since
+  `a` must type an `a` when someone is editing a caption. Getting that wrong would approve clips
+  while a user wrote metadata.
+
 ### Added — publishing reliability and scheduling (PB4, PB5, PB6, PB7)
 
 - **`PB5` — automatic retry of transient publish failures.** A publish attempt had exactly one
