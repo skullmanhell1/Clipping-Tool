@@ -28,8 +28,11 @@ Run: ``uvicorn api.main:app --reload``
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import logging
+import secrets
 import time
 import uuid
 import zipfile
@@ -37,9 +40,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -93,9 +101,10 @@ def _run_startup() -> None:
         logger.exception("could not install job-scoped log context")
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
-    if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
+    _non_public_env = settings.environment.strip().lower() in (
         "development", "dev", "local", "test",
-    ):
+    )
+    if settings.cors_allow_wildcard and not _non_public_env:
         # A wildcard is a sensible default for local work and a poor one on a public
         # host, where it lets any site call this API. Warning rather than refusing to
         # boot: an operator may be fronting the app with a proxy that handles CORS.
@@ -105,6 +114,39 @@ def _run_startup() -> None:
             "while the wildcard is in use.",
             settings.environment,
         )
+    if not settings.api_auth_token:
+        if _non_public_env:
+            logger.info("API_AUTH_TOKEN is unset - all routes are open (environment=%r).",
+                        settings.environment)
+        elif settings.allow_insecure_public:
+            # Explicitly accepted. Still said out loud on every boot, because "I accepted
+            # this once" and "I remember accepting this" are different things.
+            logger.warning(
+                "API_AUTH_TOKEN is unset with environment=%r and ALLOW_INSECURE_PUBLIC=true. "
+                "Every route is reachable without credentials, including clip downloads and "
+                "publishing with stored platform tokens.",
+                settings.environment,
+            )
+        elif settings.cors_allow_wildcard:
+            # Refused, not warned. A public instance with no credentials and no origin
+            # restriction cannot be made safe by anything further down the stack, and a
+            # warning in a log nobody reads is indistinguishable from silence.
+            raise RuntimeError(
+                "Refusing to start: environment=%r with wildcard CORS_ORIGINS and no "
+                "API_AUTH_TOKEN. Anyone who can reach this port could queue renders, "
+                "download every clip, and publish to your connected accounts.\n"
+                "Fix any one of:\n"
+                "  * set API_AUTH_TOKEN=<secret>            (recommended)\n"
+                "  * set CORS_ORIGINS=https://your.host\n"
+                "  * set ENVIRONMENT=development            (localhost only)\n"
+                "  * set ALLOW_INSECURE_PUBLIC=true         (accept the risk)"
+                % settings.environment
+            )
+        else:
+            logger.warning(
+                "API_AUTH_TOKEN is unset with environment=%r. Routes are open to anything "
+                "that can reach this port.", settings.environment,
+            )
     try:
         from storage_backends.retention import get_sweeper
 
@@ -144,6 +186,82 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _auth_exempt_prefixes() -> tuple[str, ...]:
+    return tuple(
+        p.strip() for p in settings.api_auth_exempt_paths.split(",") if p.strip()
+    )
+
+
+def _presented_secret(request: Request) -> Optional[str]:
+    """Extract a caller-supplied secret from the three accepted forms.
+
+    Three rather than one because the callers are genuinely different. A script or an n8n
+    node sends a header; a browser cannot hold a secret in a same-origin ``fetch`` without
+    the SPA shipping it, so Basic auth is what lets the *browser* prompt and remember
+    instead — which is why this needs no frontend change at all. The Basic username is
+    ignored: there is one operator and one secret, and inventing a username would imply a
+    user model that does not exist.
+    """
+    header = request.headers.get("x-api-key")
+    if header:
+        return header
+    authorization = request.headers.get("authorization", "")
+    scheme, _, value = authorization.partition(" ")
+    scheme = scheme.strip().lower()
+    value = value.strip()
+    if scheme == "bearer" and value:
+        return value
+    if scheme == "basic" and value:
+        try:
+            decoded = base64.b64decode(value, validate=True).decode("utf-8", "replace")
+        except (binascii.Error, ValueError):
+            return None
+        _, sep, password = decoded.partition(":")
+        return password if sep else None
+    return None
+
+
+@app.middleware("http")
+async def _require_api_token(request: Request, call_next):
+    """Gate ``/api`` and ``/clips`` behind ``settings.api_auth_token``.
+
+    Middleware rather than a ``Depends`` on each route, for two reasons. There are 47
+    routes and a per-route dependency is one ``forgot to add it`` away from a hole -
+    including on routes added later, which is exactly when nobody is looking. And the
+    ``/clips`` mount is a ``StaticFiles`` app, not a route, so it cannot take a dependency
+    at all; it was previously serving every rendered clip unauthenticated while the
+    per-clip download endpoints beside it checked ownership.
+
+    Unset token means allow everything, so this is inert by default: local installs and
+    the existing test suite behave exactly as before.
+
+    ``OPTIONS`` is exempt because a CORS preflight carries no credentials by definition,
+    and rejecting it would surface as an unexplained browser CORS error rather than a 401.
+    """
+    token = settings.api_auth_token
+    if not token or request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    if not (path.startswith("/api") or path.startswith("/clips")):
+        return await call_next(request)
+    if any(path.startswith(prefix) for prefix in _auth_exempt_prefixes()):
+        return await call_next(request)
+
+    presented = _presented_secret(request)
+    # compare_digest, not ==: string equality short-circuits on the first differing byte,
+    # which leaks the length of the matching prefix to anyone able to time the response.
+    if presented is None or not secrets.compare_digest(presented, token):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Missing or invalid credentials."},
+            # Prompts the browser for Basic credentials, which is what makes the SPA work
+            # against a protected instance without shipping the secret in JavaScript.
+            headers={"WWW-Authenticate": 'Basic realm="Clipping Tool"'},
+        )
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
