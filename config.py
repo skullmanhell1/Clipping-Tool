@@ -699,6 +699,37 @@ class Settings(BaseSettings):
                     "per reframed clip; off restores smoothing straight through cuts.",
     )
 
+    # ------------------------------------------- face detection (V-faces) --
+    # Which face detector runs. `haar` is the shipped v0.11.0 cascade and stays the default:
+    # switching it would change the crop path, and therefore the pixels, for every clip in
+    # every golden and parity render - which is exactly the accidental change those renders
+    # exist to detect.
+    face_detector_backend: str = Field(
+        default="haar",
+        description="Face detector backend when a job does not specify one: haar | mediapipe. "
+                    "haar is the shipped cascade; mediapipe uses the vendored BlazeFace model "
+                    "and finds faces in profile and at a distance that Haar misses.",
+    )
+    face_detector_min_score: float = Field(
+        default=0.5,
+        description="Minimum MediaPipe detection confidence (0..1); below this a detection is "
+                    "discarded. Haar supplies no confidence, so this affects mediapipe only.",
+    )
+    # A *starting* value, not a measured one, and worth being explicit about: 0.35 is the point
+    # at which the crop path is interpolated across more frames than it is anchored by. Choosing
+    # it properly needs the labelled selection benchmark (M4/S1); until that exists it is a
+    # setting so it can be moved without a code change.
+    reframe_coverage_floor: float = Field(
+        default=0.35,
+        description="Detection coverage below which framing is reported low-confidence "
+                    "(reframe_low_confidence). A starting value, not a measured one.",
+    )
+    face_model_dir: Path = Field(
+        default=BASE_DIR / "assets" / "models",
+        description="Directory holding the vendored detector models. A setting because the "
+                    "container and the working tree put them in different places.",
+    )
+
     # ------------------------------------------- output geometry (O5, O9) --
     # Resolution was fixed at the 1080-class values in ffmpeg_utils.ASPECT_PRESETS with no way
     # to ask for anything else, so a 4K source was always downscaled and a low-powered host had

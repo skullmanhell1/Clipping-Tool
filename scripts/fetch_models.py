@@ -25,58 +25,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import sys
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-#: Where the models live in the working tree. The runtime reads this location from
-#: ``settings.face_model_dir`` instead, because the container puts it elsewhere; this
-#: constant is only the default for the script.
+# The manifest and the verification live in `worker/face_models.py`, not here. The render path
+# needs both in order to decide whether a model on disk is usable before constructing a backend
+# against it, so a copy in this script would be a second definition of the digests -- and the
+# copy the renderer reads would be the one free to go stale.
+from worker.face_models import MODEL_MANIFEST, verify  # noqa: E402
+
+#: Where the models live in the working tree. The runtime reads this from
+#: ``settings.face_model_dir`` instead, because the container puts it elsewhere.
 DEFAULT_MODELS_DIR = REPO_ROOT / "assets" / "models"
-
-_CHUNK = 1024 * 1024
-
-
-@dataclass(frozen=True)
-class Model_Entry:
-    """One vendored model: what it is, where it came from, and how to prove it is intact."""
-
-    filename: str
-    sha256: str
-    size_bytes: int
-    source_url: str
-    licence: str
-    licence_file: str
-    backend: str
-
-
-#: The Model_Manifest. Every field is here so that "is this the right file?" is answerable
-#: offline and without trusting the filename.
-MODEL_MANIFEST: tuple[Model_Entry, ...] = (
-    Model_Entry(
-        filename="blaze_face_short_range.tflite",
-        sha256="b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f",
-        size_bytes=229746,
-        source_url=(
-            "https://storage.googleapis.com/mediapipe-models/face_detector/"
-            "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
-        ),
-        licence="Apache-2.0",
-        licence_file="LICENSE-blazeface.txt",
-        backend="mediapipe",
-    ),
-)
-
-
-def _digest(path: Path) -> str:
-    """Streamed SHA-256, so a large model is not read into memory whole."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(_CHUNK), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _get(url: str) -> bytes:
@@ -85,40 +50,6 @@ def _get(url: str) -> bytes:
         if response.status != 200:
             raise RuntimeError(f"{url} -> HTTP {response.status}")
         return response.read()
-
-
-def verify(models_dir: Path) -> list[str]:
-    """Return a list of human-readable problems; empty means every model verified.
-
-    Performs no network access. Each problem names the file, because "a model is wrong" is
-    not actionable and "blaze_face_short_range.tflite is 1024 bytes, expected 229746" is.
-    """
-    problems: list[str] = []
-    for entry in MODEL_MANIFEST:
-        path = models_dir / entry.filename
-        if not path.is_file():
-            problems.append(f"{entry.filename}: missing from {models_dir}")
-            continue
-        actual_size = path.stat().st_size
-        if actual_size != entry.size_bytes:
-            problems.append(
-                f"{entry.filename}: {actual_size} bytes, expected {entry.size_bytes} "
-                "(truncated or replaced)"
-            )
-            continue
-        actual = _digest(path)
-        if actual != entry.sha256:
-            problems.append(
-                f"{entry.filename}: sha256 {actual[:16]}..., expected {entry.sha256[:16]}..."
-            )
-            continue
-        licence = models_dir / entry.licence_file
-        if not licence.is_file():
-            problems.append(
-                f"{entry.licence_file}: licence text missing for {entry.filename} "
-                f"({entry.licence})"
-            )
-    return problems
 
 
 def main(argv: list[str] | None = None) -> int:

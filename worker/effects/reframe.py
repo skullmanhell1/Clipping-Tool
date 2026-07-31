@@ -19,6 +19,7 @@ fall back to the static reformat.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -41,6 +42,8 @@ from worker.ffmpeg_utils import (
     h264_args,
     probe,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReframeUnavailable(RuntimeError):
@@ -236,6 +239,26 @@ def low_confidence_marker(coverage: float) -> str:
 def sample_rate_marker(effective_fps: float) -> str:
     """``reframe_sample_rate:{fps:.1f}`` -- the rate that actually ran, one decimal."""
     return f"reframe_sample_rate:{effective_fps:.1f}"
+
+
+#: Prefix :func:`resolve_detector` uses internally to encode "a substitution happened", carrying
+#: both sides so the marker can name them. Internal because the wire format callers see is the
+#: marker, and that translation happens in exactly one place -- :func:`detector_marker_for`.
+_SUBSTITUTED_PREFIX = "substituted:"
+
+
+def detector_marker_for(resolved_label: str) -> str:
+    """Turn a :func:`resolve_detector` label into the marker recorded on the clip.
+
+    One function so the two marker spellings have one decision point between them. A caller
+    doing this inline would have to remember that a substitution is spelled differently from a
+    plain resolution, and the failure mode of forgetting is a marker that says Haar ran and
+    nothing that says MediaPipe was asked for.
+    """
+    if resolved_label.startswith(_SUBSTITUTED_PREFIX):
+        requested, _, resolved = resolved_label[len(_SUBSTITUTED_PREFIX):].partition(":")
+        return face_detector_substituted_marker(requested, resolved)
+    return face_detector_marker(resolved_label)
 
 
 def _as_detection(item: object) -> Optional[Detection]:
@@ -750,6 +773,197 @@ def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, i
         return [tuple(int(v) for v in f) for f in faces]
 
     return _detect
+
+
+#: The Face_Detector_Backend values this build understands.
+FACE_DETECTOR_BACKENDS: tuple[str, ...] = ("haar", "mediapipe")
+
+#: ``haar`` is the default because every new setting must default to previously shipped
+#: behaviour. That is not caution for its own sake: the golden and parity renders only detect
+#: an *accidental* change while they are not re-frozen each release, and switching the default
+#: detector would change the crop path -- and therefore the pixels -- in every one of them.
+DEFAULT_FACE_DETECTOR_BACKEND = "haar"
+
+
+def _mediapipe_detector(
+    min_score: float, model_path: Path
+) -> Optional[tuple[Callable[[object], list[Detection]], Callable[[], None]]]:
+    """Build the BlazeFace detector, returning ``(detect, close)`` or ``None``.
+
+    ``mediapipe`` is imported **here** rather than at module scope, matching every other heavy
+    dependency in this package: this module must stay importable on a host with no vision
+    stack, because the capability probe and the options round-trip tests import it.
+
+    Uses ``mediapipe.tasks.python.vision.FaceDetector``. The legacy
+    ``mediapipe.solutions.face_detection`` namespace was **removed** in 0.10.x and must not be
+    reintroduced -- on the installed 0.10.35, ``dir(mediapipe)`` is exactly
+    ``['Image', 'ImageFormat', 'tasks']``. There is consequently no ``model_selection``
+    argument: near versus far range is decided by *which vendored model file is loaded*, not by
+    a constructor flag. ``tests/test_face_detection_real_binary.py`` pins the API surface so a
+    resolver upgrade that moves it fails loudly here rather than silently at render time.
+
+    Returns a ``close`` alongside the detector because MediaPipe holds a native graph that must
+    be released; the sampler calls it in a ``finally``.
+
+    Never raises and never fetches: a missing model or a construction failure returns ``None``
+    and the caller degrades to Haar with a substitution marker.
+    """
+    try:
+        # Lazy on purpose, see the docstring: this module must import on a host with no
+        # vision stack.
+        import mediapipe as mp
+        import numpy as np
+        from mediapipe.tasks.python import BaseOptions, vision
+    except Exception:
+        return None
+
+    if not model_path or not Path(model_path).is_file():
+        return None
+
+    try:
+        options = vision.FaceDetectorOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=float(min_score),
+        )
+        detector = vision.FaceDetector.create_from_options(options)
+    except Exception:
+        return None
+
+    def _detect(frame) -> list[Detection]:
+        """Detect faces in one BGR frame, returning absolute-pixel boxes.
+
+        The frame arrives from OpenCV as **BGR**; MediaPipe is told the buffer is ``SRGB``, so
+        the channels are reversed first. Passing BGR through unswapped is not a crash: the
+        model sees a blue-skinned face, detects fewer of them, and the only symptom is a
+        coverage figure lower than it should be -- which would then read as "this footage is
+        hard" rather than "the channels are backwards". ``ascontiguousarray`` because the
+        reversed view is a stride trick and MediaPipe needs a real contiguous buffer.
+        """
+        rgb = np.ascontiguousarray(frame[:, :, ::-1])
+        height, width = rgb.shape[0], rgb.shape[1]
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = detector.detect(image)
+
+        out: list[Detection] = []
+        for detection in getattr(result, "detections", None) or []:
+            box = getattr(detection, "bounding_box", None)
+            if box is None:
+                continue
+            # Measured on 0.10.35: these are ABSOLUTE PIXELS as int (see the spec's design
+            # doc). Routed through the conversion anyway, which then clamps and validates
+            # rather than scaling -- and would still be correct if the library moved back to a
+            # normalised box, which it has already changed once.
+            converted = relative_box_to_pixels(
+                box.origin_x, box.origin_y, box.width, box.height,
+                width=width, height=height,
+            )
+            if converted is None:
+                continue
+            categories = getattr(detection, "categories", None) or []
+            score = None
+            if categories:
+                raw_score = getattr(categories[0], "score", None)
+                if raw_score is not None:
+                    score = float(raw_score)
+            # No absolute minimum-size floor (Requirement 2.7): a distant face is small and is
+            # exactly what this backend was adopted to find.
+            if score is not None and score < float(min_score):
+                continue
+            out.append(Detection(*converted, score=score))
+        return out
+
+    def _close() -> None:
+        try:
+            detector.close()
+        except Exception:
+            # Releasing a native graph must not be able to fail a render that already
+            # succeeded; the process exiting reclaims it regardless.
+            pass
+
+    return _detect, _close
+
+
+def resolve_detector(
+    backend: str,
+    *,
+    injected: Optional[Callable] = None,
+    cv2_module=None,
+    min_score: Optional[float] = None,
+    model_dir: Optional[Path] = None,
+) -> tuple[Optional[Callable], str]:
+    """Return ``(detector, resolved_label)`` -- the label names what **ran**.
+
+    The return type is the design decision worth defending: handing back a bare callable would
+    force the caller to infer which backend produced the detections, and inference is how
+    ``font_substituted:Arial`` got frozen into a golden file as correct. The label is returned
+    *by the branch that actually succeeded*.
+
+    Never raises. A detector that cannot be built returns ``(None, label)`` and the caller
+    degrades along the existing geometry ladder to a static reformat.
+
+    The ladder, in order:
+
+    1. an injected detector resolves to ``"injected"`` -- not to a backend name, because a test
+       double is not evidence that a backend works;
+    2. ``mediapipe`` requested and constructible resolves to ``"mediapipe"``;
+    3. ``mediapipe`` requested but unimportable, unconstructible, or with its vendored model
+       absent or the wrong size resolves to ``"substituted:mediapipe:haar"`` -- all four causes
+       share one label because the operator's remedy is identical in every case, while the log
+       line names the specific cause;
+    4. anything else, including an unrecognised value, resolves to ``"haar"``.
+    """
+    if injected is not None:
+        return injected, "injected"
+
+    requested = (backend or "").strip().lower()
+    if requested not in FACE_DETECTOR_BACKENDS:
+        requested = DEFAULT_FACE_DETECTOR_BACKEND
+
+    if cv2_module is None:
+        try:
+            import cv2 as cv2_module  # type: ignore  # noqa: PLC0415
+        except Exception:
+            cv2_module = None
+
+    def _haar() -> Optional[Callable]:
+        if cv2_module is None:
+            return None
+        try:
+            return _default_haar_detector(cv2_module)
+        except Exception:
+            return None
+
+    if requested == "mediapipe":
+        from worker import face_models  # noqa: PLC0415 - avoids a config import at module scope
+
+        model_path = face_models.resolve_model("mediapipe", model_dir)
+        built = None
+        if model_path is None:
+            logger.warning(
+                "face detector: mediapipe requested but its vendored model is absent or the "
+                "wrong size under %s; falling back to haar. Run "
+                "`python scripts/fetch_models.py --check`.",
+                model_dir if model_dir is not None else face_models.models_dir(),
+            )
+        else:
+            score = settings.face_detector_min_score if min_score is None else min_score
+            built = _mediapipe_detector(float(score), model_path)
+            if built is None:
+                logger.warning(
+                    "face detector: mediapipe requested but could not be imported or "
+                    "constructed; falling back to haar",
+                )
+        if built is not None:
+            detect, close = built
+            # Carried as an attribute rather than a third return value so the documented
+            # two-tuple signature holds for every backend; the sampler releases it in a
+            # `finally`. Haar has nothing to release, so the attribute is simply absent.
+            detect.close = close  # type: ignore[attr-defined]
+            return detect, "mediapipe"
+        haar = _haar()
+        return haar, "substituted:mediapipe:haar"
+
+    return _haar(), "haar"
 
 
 def _sample_face_boxes(

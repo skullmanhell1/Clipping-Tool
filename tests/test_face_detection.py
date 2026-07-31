@@ -298,7 +298,7 @@ def test_the_model_check_fails_and_names_a_truncated_file(tmp_path):
     A digest check that passes on a half-downloaded file is worse than none: the backend would
     construct against a corrupt graph and fail at detection time instead of degrading.
     """
-    from scripts.fetch_models import MODEL_MANIFEST
+    from worker.face_models import MODEL_MANIFEST
 
     entry = MODEL_MANIFEST[0]
     models = tmp_path / "models"
@@ -312,10 +312,144 @@ def test_the_model_check_fails_and_names_a_truncated_file(tmp_path):
 
 
 def test_the_model_check_fails_and_names_a_missing_file(tmp_path):
-    from scripts.fetch_models import MODEL_MANIFEST
+    from worker.face_models import MODEL_MANIFEST
 
     empty = tmp_path / "empty"
     empty.mkdir()
     result = _run_check("--models-dir", str(empty))
     assert result.returncode != 0
     assert MODEL_MANIFEST[0].filename in (result.stdout + result.stderr)
+
+
+
+# --------------------------------------------------------------------------- #
+# 2.4 — backend resolution and substitution                                    #
+# --------------------------------------------------------------------------- #
+from worker.effects.reframe import (  # noqa: E402 - grouped with its own section
+    DEFAULT_FACE_DETECTOR_BACKEND,
+    FACE_DETECTOR_BACKENDS,
+    detector_marker_for,
+    resolve_detector,
+)
+
+
+def test_the_default_backend_is_haar():
+    """The whole byte-parity argument rests on this one line."""
+    assert DEFAULT_FACE_DETECTOR_BACKEND == "haar"
+    assert "haar" in FACE_DETECTOR_BACKENDS and "mediapipe" in FACE_DETECTOR_BACKENDS
+
+
+def test_the_default_resolves_to_haar():
+    detector, label = resolve_detector("haar")
+    assert label == "haar"
+    assert detector is not None
+
+
+@pytest.mark.parametrize("value", ["", "  ", "nonsense", "MEDIAPIPE-ish", "yunet", None])
+def test_an_unrecognised_backend_resolves_to_haar_without_raising(value):
+    """Requirement 1.4 — an unknown value must not fail a render."""
+    detector, label = resolve_detector(value)
+    assert label == "haar"
+    assert detector is not None
+
+
+def test_backend_names_are_case_and_space_insensitive():
+    _detector, label = resolve_detector("  MediaPipe  ")
+    assert label in {"mediapipe", "substituted:mediapipe:haar"}
+
+
+def test_an_injected_detector_resolves_to_injected_and_is_used():
+    """Requirement 3.4 — a test double is not evidence that a backend works.
+
+    The label must not borrow a backend name, or a suite of fakes would produce clip records
+    claiming MediaPipe ran on machines where it is not installed.
+    """
+    sentinel = object()
+
+    def fake(_frame):
+        return [sentinel]
+
+    detector, label = resolve_detector("mediapipe", injected=fake)
+    assert label == "injected"
+    assert detector is fake
+    assert detector(None) == [sentinel]
+
+
+def test_an_injected_detector_wins_over_every_backend():
+    for backend in (*FACE_DETECTOR_BACKENDS, "nonsense"):
+        _d, label = resolve_detector(backend, injected=lambda _f: [])
+        assert label == "injected", backend
+
+
+def test_a_missing_model_substitutes_haar_and_names_both_sides(tmp_path):
+    """Requirements 2.3a, 4.2a — the vendored model is absent, so mediapipe is unavailable."""
+    detector, label = resolve_detector("mediapipe", model_dir=tmp_path)
+    assert label == "substituted:mediapipe:haar"
+    assert detector is not None, "the substitution must still produce a working detector"
+    assert detector_marker_for(label) == "face_detector_substituted:mediapipe:haar"
+
+
+def test_a_truncated_model_substitutes_haar(tmp_path):
+    """A file that exists but is the wrong size is not a usable model."""
+    from worker.face_models import MODEL_MANIFEST
+
+    (tmp_path / MODEL_MANIFEST[0].filename).write_bytes(b"\x00" * 32)
+    _detector, label = resolve_detector("mediapipe", model_dir=tmp_path)
+    assert label == "substituted:mediapipe:haar"
+
+
+def test_an_unimportable_mediapipe_substitutes_haar(monkeypatch, tmp_path):
+    """Requirement 4.1 — import failure is one of the four causes sharing the marker."""
+    import worker.effects.reframe as rf
+
+    monkeypatch.setattr(rf, "_mediapipe_detector", lambda *_a, **_k: None)
+    detector, label = resolve_detector("mediapipe")
+    assert label == "substituted:mediapipe:haar"
+    assert detector is not None
+
+
+def test_an_unbuildable_cascade_yields_none_rather_than_raising():
+    """Requirement 4.4 — the bottom rung: no detector at all, and still no exception."""
+
+    class _NoCascade:
+        class data:  # noqa: N801 - mirrors cv2.data
+            haarcascades = "/nonexistent/"
+
+        @staticmethod
+        def CascadeClassifier(_path):  # noqa: N802 - mirrors the cv2 API
+            class _Empty:
+                @staticmethod
+                def empty():
+                    return True
+
+            return _Empty()
+
+    detector, label = resolve_detector("haar", cv2_module=_NoCascade)
+    assert detector is None
+    assert label == "haar"
+
+
+def test_no_cv2_yields_none_rather_than_raising():
+    detector, label = resolve_detector("haar", cv2_module=None)
+    # cv2 is installed here, so this resolves; the contract asserted is only that it never
+    # raises and always reports a label.
+    assert isinstance(label, str) and label
+    assert detector is None or callable(detector)
+
+
+def test_the_resolved_label_never_names_a_backend_that_did_not_run(tmp_path):
+    """Requirement 3.3, stated as the invariant it is.
+
+    Every label this function can return either names the backend that produced the detector
+    it handed back, or encodes a substitution naming both sides. There is no path on which a
+    caller can be told ``mediapipe`` while Haar ran.
+    """
+    for backend in ("haar", "mediapipe", "nonsense"):
+        for model_dir in (None, tmp_path):
+            _d, label = resolve_detector(backend, model_dir=model_dir)
+            marker = detector_marker_for(label)
+            if label.startswith("substituted:"):
+                assert marker == "face_detector_substituted:mediapipe:haar"
+            else:
+                assert label in {"haar", "mediapipe", "injected"}
+                assert marker == f"face_detector:{label}"

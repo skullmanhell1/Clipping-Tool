@@ -92,7 +92,7 @@ running.
     - Change `mediapipe>=0.10,<1.0` to a range whose every member exposes `mediapipe.tasks.python.vision.FaceDetector`, with a comment recording that `mediapipe.solutions` was removed and must not be depended upon.
     - _Requirements: 13.1, 13.2, 13.4_
 
-  - [ ] 1b.6* Test: the installed detector library exposes the API actually called → `tests/test_face_detection_real_binary.py`
+  - [x] 1b.6* Test: the installed detector library exposes the API actually called → `tests/test_face_detection_real_binary.py`
     - Assert `mediapipe.tasks.python.vision.FaceDetector` (or the YuNet equivalent) is importable and that `mediapipe.solutions` is **not** relied upon. This is a drift pin: it fails loudly when a resolver upgrade moves the API out from under the backend, which is the failure this task exists to prevent.
     - _Requirements: 13.1, 13.3_
 
@@ -100,40 +100,40 @@ running.
     - Assert `--check` passes on the working tree with no network; assert a truncated copy in a temp dir fails and names the file. Mirror `scripts/fetch_emoji.py --check`'s existing coverage.
     - _Requirements: 12.4, 12.5_
 
-- [ ] 2. Backend resolution
-  - [ ] 2.1 Add `FACE_DETECTOR_BACKENDS`, `DEFAULT_FACE_DETECTOR_BACKEND`, and `resolve_detector`
+- [x] 2. Backend resolution
+  - [x] 2.1 Add `FACE_DETECTOR_BACKENDS`, `DEFAULT_FACE_DETECTOR_BACKEND`, and `resolve_detector`
     - `resolve_detector(backend, *, injected=None, cv2_module=None, min_score=None) -> tuple[Optional[Callable], str]`. The label is returned by the branch that succeeded, never inferred by the caller. An injected detector resolves to `"injected"`. Never raises; an unbuildable detector returns `(None, label)`.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.6, 3.1, 3.4_
 
-  - [ ] 2.2 Add `_mediapipe_detector(min_score, model_path)` returning `(detect, close)`
+  - [x] 2.2 Add `_mediapipe_detector(min_score, model_path)` returning `(detect, close)`
     - Lazy `import mediapipe` **inside** the function. Use `mediapipe.tasks.python.vision.FaceDetector` with `base_options.model_asset_path=model_path`. **Do not use `mediapipe.solutions` — it has been removed**, and there is therefore no `model_selection` argument; near/far range is a property of the vendored model file.
     - **First, establish empirically whether the tasks API's `bounding_box` is pixels or normalised** (task 3.1 does this). Route it through `relative_box_to_pixels` either way, which then clamps and validates rather than converting if the values are already absolute.
     - Drop detections below `min_score` and degenerate boxes. Apply no absolute minimum-size floor. A missing model file returns `None` rather than raising. Return a `close` for the native graph.
     - _Requirements: 2.1, 2.2, 2.3, 2.3a, 2.3b, 2.4, 2.7, 2.8, 2.9_
 
-  - [ ] 2.3 Wire the Haar → fallback path
+  - [x] 2.3 Wire the Haar → fallback path
     - MediaPipe requested but unimportable, unconstructible, **or its Vendored_Model absent or digest-mismatched** → build Haar and resolve to a substitution label naming both sides. All four causes share one marker; the log line names the specific cause. Leave `_default_haar_detector` byte-identical.
     - _Requirements: 1.3, 3.2, 4.1, 4.2, 4.2a_
 
-  - [ ] 2.4* Unit tests: resolution and substitution → `tests/test_face_detection.py`
+  - [x] 2.4* Unit tests: resolution and substitution → `tests/test_face_detection.py`
     - Default resolves to `haar`; unknown value resolves to `haar` without raising; injected detector resolves to `injected` and is used; a stubbed import failure for mediapipe resolves to the substitution label; an unbuildable cascade yields `(None, ...)` rather than an exception.
     - _Requirements: 1.2, 1.4, 1.6, 3.2, 3.3, 3.4, 4.1, 4.2_
 
-- [ ] 3. Real-library verification — do this before pipeline integration
+- [x] 3. Real-library verification — do this before pipeline integration
   - [x] 3.0 Establish the tasks API's coordinate system empirically
     - Load the Vendored_Model, run the real detector on a real image, and print `detections[0].bounding_box`. Determine whether `origin_x`/`origin_y`/`width`/`height` are absolute pixels or normalised. **Write this finding into the design document before implementing the conversion** — the first draft of this spec was wrong about the library's API twice, and both times the correction came from running it.
     - _Requirements: 2.4, 11.1_
 
-  - [ ] 3.1* Real MediaPipe test: detections are in pixels and in bounds → `tests/test_face_detection_real_binary.py`
+  - [x] 3.1* Real MediaPipe test: detections are in pixels and in bounds → `tests/test_face_detection_real_binary.py`
     - Construct the actual `mediapipe` backend with **no monkeypatching of `mediapipe`**, loading the Vendored_Model. Run it on a real image built from the existing `png_asset` / ffmpeg fixtures. Assert at least one returned dimension exceeds `1` — the assertion that fails if normalised coordinates leak — and that every box lies within frame bounds.
     - **Not** guarded by an availability skip: `mediapipe` is a hard dependency, so a skip here would mean the dependency vanished, which is what the no-skips rule exists to surface.
     - _Requirements: 2.4, 2.5, 2.6, 11.1, 11.2, 11.4_
 
-  - [ ] 3.2* Real MediaPipe test: independent cross-check of the conversion → `tests/test_face_detection_real_binary.py`
+  - [x] 3.2* Real MediaPipe test: independent cross-check of the conversion → `tests/test_face_detection_real_binary.py`
     - Read the `relative_bounding_box` from MediaPipe directly, compute the expected pixel box **in the test**, sharing no code with `relative_box_to_pixels`, and compare. A cross-check that reuses the code under test verifies only self-consistency.
     - _Requirements: 11.1, 11.2_
 
-  - [ ] 3.3 Triage any new warning from importing mediapipe in a new place
+  - [x] 3.3 Triage any new warning from importing mediapipe in a new place
     - If the import surfaces a further `pkg_resources`/protobuf deprecation, add a **targeted** `filterwarnings` ignore in `pyproject.toml` with a comment saying why it cannot be fixed. Never broaden the existing ignores and never relax `filterwarnings = error`.
     - _Requirements: 11.5_
 
@@ -163,7 +163,7 @@ running.
     - `face_detector: str = "haar"`. Validate against `FACE_DETECTOR_BACKENDS` in `from_dict`, falling back to `"haar"` on unknown or malformed values without raising, matching the existing treatment of `reframe_layout` / `reframe_intensity`. Leave every pre-existing field and default unchanged.
     - _Requirements: 1.1, 1.2, 1.4, 10.1, 10.2, 10.6_
 
-  - [ ] 5.2 Add the three settings in `config.py` with `.env.example` entries
+  - [x] 5.2 Add the three settings in `config.py` with `.env.example` entries
     - `face_detector_backend="haar"`, `face_detector_min_score=0.5`, `reframe_coverage_floor=0.35`. Document `0.35` as a starting value chosen as the point where the crop path is interpolated across more frames than it is anchored by — not a measured one; measuring it needs the labelled benchmark (`M4`/`S1`).
     - _Requirements: 2.8, 6.1, 10.4, 10.5_
 
