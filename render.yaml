@@ -38,7 +38,12 @@ services:
       - key: STORAGE_BACKEND
         value: local        # set to "s3" and fill the S3_* vars for durable storage
       - key: WHISPER_MODEL
-        value: base
+        # Was `base`, which silently undid T1. `config.py` raised the default to `small`
+        # because `base` is a noticeable accuracy step down and captions are the most
+        # visible artefact the tool produces - so this blueprint was shipping worse
+        # captions than the code was designed for, on every clip, with no symptom other
+        # than the words being wrong. Keep this equal to `config.py`'s default.
+        value: small
       - key: RETENTION_DAYS
         value: "30"
       - key: LLM_PROVIDER
