@@ -15,6 +15,7 @@ Design:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -27,6 +28,8 @@ from worker import text_metrics
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -696,8 +699,205 @@ def mask_profanity(text: str) -> str:
 FONT_MANIFEST = Path(__file__).resolve().parent.parent / "assets" / "fonts.json"
 
 
+#: Font-file suffixes libass' ``fontsdir`` provider will load.
+_FONT_SUFFIXES: tuple[str, ...] = (".ttf", ".otf", ".ttc")
+
+#: OS/2 ``usWeightClass`` to the fontconfig weight scale, which is what ``assets/fonts.json``
+#: records and what libass prints in its ``fontselect:`` line.
+#:
+#: Two scales for one concept, and mixing them is a silent bug rather than an error: a font file
+#: says 700 for bold, fontconfig says 200, and emitting the file's number in the same ``weight``
+#: field the manifest populates would make a user-supplied regular face (400) look nearly twice as
+#: heavy as a vendored black one (210). Values follow fontconfig's own ``fcweight.c`` table.
+_FC_WEIGHTS: tuple[tuple[int, int], ...] = (
+    (100, 0), (200, 40), (300, 50), (350, 55), (380, 75), (400, 80),
+    (500, 100), (600, 180), (700, 200), (800, 205), (900, 210), (1000, 215),
+)
+
+#: The fontconfig weight at and above which a face is a heavy display face.
+#:
+#: 200 is fontconfig BOLD, and the vendored manifest marks Poppins Bold (200) as heavy - so this
+#: matches the existing declaration rather than inventing a second threshold.
+_HEAVY_FC_WEIGHT = 200
+
+
+def _fc_weight(os2_weight: int) -> int:
+    """``usWeightClass`` on fontconfig's scale, interpolated between the table's rungs."""
+    if os2_weight <= 0:
+        return 0
+    previous_os2, previous_fc = _FC_WEIGHTS[0]
+    for os2, fc in _FC_WEIGHTS:
+        if os2_weight <= os2:
+            if os2 == previous_os2:
+                return fc
+            span = (os2_weight - previous_os2) / (os2 - previous_os2)
+            return int(round(previous_fc + span * (fc - previous_fc)))
+        previous_os2, previous_fc = os2, fc
+    return _FC_WEIGHTS[-1][1]
+
+
+def _font_identity(path: Path) -> Optional[dict]:
+    """The family name, style and weight recorded *inside* the font file (A5).
+
+    Read from the file rather than derived from its filename, and that distinction is the whole
+    reason this function exists. libass and fontconfig both select a face by the family name in
+    its ``name`` table; a picker that offered ``MyBrandFont.ttf`` as "MyBrandFont" would be
+    offering a name that resolves to nothing, and libass answers an unknown family by silently
+    substituting another face. That is exactly the C1 defect - the one this codebase has already
+    shipped once - so a font whose real name cannot be read is *not offered*.
+
+    Returns ``None`` for an unreadable file, and for a variable font: ``fontsdir`` cannot select a
+    named instance of one, so it would substitute too.
+    """
+    handle = None
+    try:
+        from fontTools.ttLib import TTFont
+
+        # Opened here rather than by path so the descriptor is closed even when ``TTFont`` raises
+        # part-way through construction - it takes ownership of the file only once it succeeds, so
+        # ``with TTFont(path)`` leaks one descriptor per unreadable file. A long-running server
+        # scanning a directory containing one bad font would leak on every request.
+        handle = open(path, "rb")
+        with TTFont(handle, lazy=True, fontNumber=0) as font:
+            if "fvar" in font:
+                return None
+            name_table = font["name"]
+            # 16/17 are the typographic family/subfamily and are what a face with more than four
+            # weights records; 1/2 are the legacy pair every font has. Preferring the typographic
+            # name matters for families like Poppins, where the legacy family collapses nine
+            # weights into "Poppins" plus a style nobody can select.
+            family = name_table.getDebugName(16) or name_table.getDebugName(1)
+            style = name_table.getDebugName(17) or name_table.getDebugName(2) or ""
+            weight = 0
+            if "OS/2" in font:
+                weight = int(getattr(font["OS/2"], "usWeightClass", 0) or 0)
+        family = str(family or "").strip()
+        if not family:
+            return None
+        style = str(style).strip()
+        # libass matches on the full name for a non-regular style, so a bold-only file has to be
+        # offered as "Family Bold" or a request for "Family" lands on a synthesised bold.
+        name = family if style.lower() in ("", "regular") else f"{family} {style}"
+        return {
+            "name": name,
+            "family": family,
+            "style": style,
+            # Converted, not passed through: see ``_FC_WEIGHTS``.
+            "weight": _fc_weight(weight),
+        }
+    except Exception:
+        logger.debug("A5: could not read font identity from %s", path, exc_info=True)
+        return None
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+
+def discovered_fonts(manifest_files: frozenset[str] = frozenset()) -> list[dict]:
+    """Caption faces the operator dropped into ``font_assets_dir`` themselves (A5).
+
+    A **server-side directory**, not an upload endpoint. The same reasoning U6 recorded for the
+    brand logo: an upload needs a storage location, a cleanup policy and a retention rule, none
+    of which exist for assets, and inventing three of them to accept a TTF is a larger decision
+    than the feature. Copying a file into a directory the operator already controls needs none.
+
+    No ``fc-cache`` run is required for these to *render*: the renderer passes ``font_assets_dir``
+    to libass as ``fontsdir``, which reads the directory directly. :func:`refresh_font_cache`
+    exists for the fontconfig-mediated paths (ffmpeg's ``drawtext``, and anything outside libass),
+    and is best-effort because a host without ``fc-cache`` is not a broken host.
+
+    Fonts already named in the manifest are skipped, so a vendored face keeps its verified
+    licence and ``use`` metadata rather than being re-derived.
+    """
+    directory = Path(getattr(settings, "font_assets_dir", "") or "")
+    if not directory.is_dir():
+        return []
+
+    found: list[dict] = []
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in _FONT_SUFFIXES:
+            continue
+        if path.name in manifest_files:
+            continue
+        identity = _font_identity(path)
+        if identity is None:
+            continue
+        found.append({
+            **identity,
+            # Read from the file's own weight class rather than guessed from its name, because
+            # "Black" and "Heavy" appear in family names that are not.
+            #
+            # Stated limitation: a *display* face often declares OS/2 weight 400 even though it
+            # draws as heavy - Anton does exactly this, which is why the vendored manifest marks
+            # it heavy by hand. A dropped-in display face will therefore read as not-heavy, and
+            # only affects picker ordering. Guessing from the filename instead would be wrong in
+            # a way that is harder to notice.
+            "heavy": identity["weight"] >= _HEAVY_FC_WEIGHT,
+            # Blank rather than invented: the operator supplied this file, so its licence is
+            # theirs to know. A vendored face carries a verified SPDX id; claiming one here
+            # would be a claim this code cannot check.
+            "license": "",
+            "use": "user-supplied",
+            "source": "user",
+        })
+    return found
+
+
+#: Last-seen mtime of the font directory, so the fontconfig refresh runs on a change and not
+#: on every request.
+_FONT_DIR_STATE: dict[str, float] = {}
+
+
+def refresh_font_cache_if_changed() -> bool:
+    """Refresh the fontconfig cache only when the font directory has changed (A5).
+
+    ``available_fonts`` is what the options endpoint calls on every page load, and that is also
+    exactly the moment a newly dropped-in file should become visible - so the registration belongs
+    here rather than in a startup hook a long-running server never runs again. Gated on the
+    directory's mtime so the common case is one ``stat``, not one subprocess per request.
+    """
+    directory = Path(getattr(settings, "font_assets_dir", "") or "")
+    try:
+        mtime = directory.stat().st_mtime
+    except OSError:
+        return False
+    if _FONT_DIR_STATE.get("mtime") == mtime:
+        return False
+    _FONT_DIR_STATE["mtime"] = mtime
+    return refresh_font_cache()
+
+
+def refresh_font_cache() -> bool:
+    """Best-effort ``fc-cache -f`` over the bundled font directory (A5).
+
+    Returns whether it ran. Not needed for caption rendering - libass reads ``fontsdir``
+    directly - but ffmpeg's ``drawtext`` and any non-libass consumer resolve through fontconfig,
+    which caches its directory scan. Called from the capability/options endpoint rather than per
+    render: it costs a subprocess and the answer only changes when a file is added.
+    """
+    fc = shutil.which("fc-cache")
+    directory = Path(getattr(settings, "font_assets_dir", "") or "")
+    if not fc or not directory.is_dir():
+        return False
+    try:
+        subprocess.run(
+            [fc, "-f", str(directory)],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("A5: fc-cache refresh failed for %s", directory, exc_info=True)
+        return False
+    # The libass family cache is now stale: a newly registered face would otherwise be reported
+    # unavailable until the process restarted.
+    _FONT_CACHE.pop("fonts", None)
+    return True
+
+
 def available_fonts() -> list[dict]:
-    """The vendored caption faces, for a real font picker in the UI (A4).
+    """The caption faces a picker may offer: vendored (A4) plus operator-supplied (A5).
 
     Twelve faces are vendored with licences and a manifest, and nothing exposed them - so the
     only way to change a caption font was to edit a preset in source, and the assets might as
@@ -708,16 +908,22 @@ def available_fonts() -> list[dict]:
     such a family silently resolves to something else, which is exactly the C1 defect. Offering
     a font that will not render is worse than offering fewer.
 
-    Never raises: a missing or malformed manifest yields ``[]``, and the caller falls back to
-    whatever the presets already name.
+    Never raises: a missing or malformed manifest still yields whatever was discovered on disk,
+    and the caller falls back to whatever the presets already name.
     """
+    # A5: register any newly dropped-in file with fontconfig before reporting it, so a face this
+    # call is about to offer is one the non-libass consumers can also resolve.
+    refresh_font_cache_if_changed()
+
+    entries: list = []
     try:
         data = json.loads(FONT_MANIFEST.read_text(encoding="utf-8"))
         entries = data.get("fonts") or []
     except Exception:
-        return []
+        entries = []
 
     fonts: list[dict] = []
+    manifest_files: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict) or entry.get("variable"):
             continue
@@ -725,6 +931,7 @@ def available_fonts() -> list[dict]:
         filename = str(entry.get("file") or "").strip()
         if not name or not filename:
             continue
+        manifest_files.add(filename)
         # Only faces actually present on disk: the manifest is a declaration, and a CI step
         # exists precisely because the two once disagreed.
         if not (FONT_MANIFEST.parent / "fonts" / filename).is_file():
@@ -737,7 +944,19 @@ def available_fonts() -> list[dict]:
             "heavy": bool(entry.get("heavy_face")),
             "license": str(entry.get("license") or ""),
             "use": str(entry.get("use") or ""),
+            "source": "bundled",
         })
+
+    # A5: the manifest wins on a name collision. It carries a verified licence and a `use` note,
+    # and the vendored file is the one CI checks resolves to itself under both providers - so a
+    # dropped-in file with the same family name must not quietly replace that guarantee.
+    known = {font["name"].lower() for font in fonts}
+    for font in discovered_fonts(frozenset(manifest_files)):
+        if font["name"].lower() in known:
+            continue
+        known.add(font["name"].lower())
+        fonts.append(font)
+
     return sorted(fonts, key=lambda f: (not f["heavy"], f["name"]))
 
 
