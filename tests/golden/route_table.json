@@ -1,0 +1,606 @@
+{
+  "builtin": [
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": "openapi",
+      "path": "/openapi.json"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": "swagger_ui_html",
+      "path": "/docs"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": "swagger_ui_redirect",
+      "path": "/docs/oauth2-redirect"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": "redoc_html",
+      "path": "/redoc"
+    }
+  ],
+  "mounts": [
+    {
+      "app": "StaticFiles",
+      "name": "clips",
+      "path": "/clips"
+    },
+    {
+      "app": "StaticFiles",
+      "name": "ui",
+      "path": ""
+    }
+  ],
+  "routes": {
+    "DELETE /api/jobs/{job_id}/source": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "delete_source",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "storage"
+      ]
+    },
+    "DELETE /api/profiles/{profile_id}": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "delete_profile",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "profiles"
+      ]
+    },
+    "GET /api/batches/{batch_id}": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "get_batch",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "GET /api/campaigns": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "list_campaigns",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/clips/{job_id}/{filename}/download": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "download_clip",
+      "response_class": "DefaultPlaceholder",
+      "response_model": null,
+      "status_code": null,
+      "tags": [
+        "clips"
+      ]
+    },
+    "GET /api/clips/{job_id}/{filename}/video": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "download_video_only",
+      "response_class": "DefaultPlaceholder",
+      "response_model": null,
+      "status_code": null,
+      "tags": [
+        "clips"
+      ]
+    },
+    "GET /api/history": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "history",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/info": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "info",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "system"
+      ]
+    },
+    "GET /api/jobs": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "list_jobs",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "GET /api/jobs/{job_id}": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "get_job",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "GET /api/jobs/{job_id}/timings": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "get_job_timings",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "GET /api/profiles": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "list_profiles",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "profiles"
+      ]
+    },
+    "GET /api/profiles/builtin": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "list_builtin_profiles",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "profiles"
+      ]
+    },
+    "GET /api/publish-attempts/{attempt_id}": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "publish_attempt",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/publishers": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "publisher_statuses",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/schedule": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "schedule_window",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/schedule/suggestions": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "schedule_suggestions",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "GET /api/storage": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "storage_status",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "storage"
+      ]
+    },
+    "GET /api/updates": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "check_updates",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "updates"
+      ]
+    },
+    "GET /api/watch": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "watch_status",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "watch"
+      ]
+    },
+    "GET /healthz": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "healthz",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "system"
+      ]
+    },
+    "PATCH /api/jobs/{job_id}/clips/{clip_id}": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "edit_clip",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "PATCH /api/publish-attempts/{attempt_id}/schedule": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "reschedule_publish_attempt",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/campaigns": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "save_campaign",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/captions/preview": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "caption_preview",
+      "response_class": "DefaultPlaceholder",
+      "response_model": null,
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "POST /api/jobs/batch": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "submit_batch",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "POST /api/jobs/url": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "submit_url",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "POST /api/jobs/{job_id}/cancel": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "cancel_job",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "POST /api/jobs/{job_id}/clips/review": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "review_clips",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "POST /api/jobs/{job_id}/clips/{clip_id}/publish": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "publish_clip",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/jobs/{job_id}/clips/{clip_id}/regenerate": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "regenerate_clip_field",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "POST /api/jobs/{job_id}/clips/{clip_id}/rerender": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "rerender_clip_endpoint",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "POST /api/jobs/{job_id}/clips/{clip_id}/review": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "review_clip",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "metadata"
+      ]
+    },
+    "POST /api/jobs/{job_id}/resume": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "resume_job",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "POST /api/preview": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "preview",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "input"
+      ]
+    },
+    "POST /api/profiles": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "save_profile",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "profiles"
+      ]
+    },
+    "POST /api/profiles/{profile_id}/default": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "set_default_profile",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "profiles"
+      ]
+    },
+    "POST /api/publish-attempts/{attempt_id}/approve": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "approve_publish_attempt",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/publish-attempts/{attempt_id}/cancel": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "cancel_publish_attempt",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/publish-attempts/{attempt_id}/retry": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "retry_publish_attempt",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/publishers/{platform}/refresh": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "refresh_publisher_credentials",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "publishing"
+      ]
+    },
+    "POST /api/storage/cleanup": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "storage_cleanup",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "storage"
+      ]
+    },
+    "POST /api/storage/settings": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "update_storage_settings",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "storage"
+      ]
+    },
+    "POST /api/upload": {
+      "dependencies": [
+        "require_api_token",
+        "rate_limit"
+      ],
+      "name": "upload",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "jobs"
+      ]
+    },
+    "POST /api/watch/options": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "watch_options",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "watch"
+      ]
+    },
+    "POST /api/watch/toggle": {
+      "dependencies": [
+        "require_api_token"
+      ],
+      "name": "watch_toggle",
+      "response_class": "DefaultPlaceholder",
+      "response_model": "dict",
+      "status_code": null,
+      "tags": [
+        "watch"
+      ]
+    }
+  }
+}
