@@ -6,9 +6,15 @@ rather than amended, because a handoff document that is wrong is worse than none
 
 ## Start here
 
-**1. There are open PRs, and they are stacked. Merge them in order before doing anything else.**
-See [§1](#1-open-work-merge-this-first). Merging out of order will produce enormous, wrong-looking
-diffs.
+**1. Check that `main` has the work before building on it.** See
+[§1](#1-where-the-work-is). One PR carries the whole Phase 1–4 pass onto `main`; until it
+lands, branching off `main` means rebuilding things that already exist.
+
+```bash
+git fetch origin
+git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
+  || echo "main is BEHIND - see section 1"
+```
 
 **2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
 a priority and effort estimate each, every current value quoted from the code. **140 are now
@@ -26,25 +32,37 @@ on something other than effort.
 and will look like mistakes: every new visual setting defaults *off*, some tests exist purely to fail
 when a constant changes, and one module reports "I cannot do this" rather than doing it badly.
 
-## 1. Open work: merge this first
+## 1. Where the work is
 
-Version `0.11.0`. Four PRs from the last session, stacked — each one's base is the previous branch,
-so GitHub re-targets automatically as each merges.
+Version `0.11.0`. The Phase 1–4 pass was built as a stack of PRs and they have all been merged —
+but into **each other**, not into `main`. Consolidated onto one branch (`integrate/main-sync`) which
+is what carries the lot onto `main`:
 
-| Order | PR | Items | Backend tests |
-| --- | --- | --- | --- |
-| 1 | #61, #62, #63 | *(from an earlier session — still open)* | — |
-| 2 | #71 `feat/selection-transcript` | C19, S7, S8, S12, T9, T10 | 1751 |
-| 3 | #72 `feat/assets-expansion` | A5, A9, A13, A17, A19, A22 | 1808 |
-| 4 | #73 `feat/infra-verification` | I7, I10, I12, I13 | 1827 |
-| 5 | #74 `feat/script-and-placement` | C21, V15, AU9, O8 | 1880 |
+| Merged PR | Items | Backend tests |
+| --- | --- | --- |
+| #61 | T4, T5, T7, M3 | 1028 |
+| #62 | V4, V9, V11, V13, V17, O5, O9, O11 | — |
+| #63 | I4, I6, M5, U8, U10, U13, I11 | — |
+| #64–#70 | the caption, asset, audio, publishing, review and infra batches | 1266 → 1686 |
+| #71 | C19, S7, S8, S12, T9, T10 | 1751 |
+| #72 | A5, A9, A13, A17, A19, A22 | 1808 |
+| #73 | I7, I10, I12, I13 | 1827 |
+| #74 | C21, V15, AU9, O8 | 1880 |
+| #75 | the mutation harness and this document | — |
 
-Plus this branch (`docs/handoff-and-mutation-harness`), which is based on `main` and touches only
-new or independent files, so it can merge at any point without waiting for the chain.
+**Why one branch rather than a chain.** Each PR was based on the previous one, so merging them
+bottom-up landed #72 in `feat/selection-transcript`, #73 in `feat/assets-expansion` and #74 in
+`feat/infra-verification` — none of which is `main`. Only #71 reached
+`integrate/phase4-base`. The consolidation merges both `integrate/phase4-base` *and* the chain tip,
+so nothing is taken on trust: the only conflict was `CHANGELOG.md`, and the incoming version was
+verified to be a strict superset of `main`'s (every `###` heading present, released history
+byte-identical) before it was taken.
 
-Everything in the chain currently targets `integrate/phase4-base`. **Once #61–#63 land, retarget the
-chain to `main`** — that has to be done from the GitHub UI, because the sandbox has no push/fetch
-credentials of its own for arbitrary git operations.
+**#10** (`docs: campaign-briefs spec`) is an older, unrelated documentation PR and is not part of
+this.
+
+Note that the sandbox cannot `git push` or `git fetch` with ordinary credentials — only the GitHub
+tooling authenticates. Retargeting or merging from the UI is a human step.
 
 ## 2. Test baselines
 
