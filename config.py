@@ -704,6 +704,44 @@ class Settings(BaseSettings):
         default="punch_in",
         description="Opening transition: punch_in | zoom_cut | whip_pan | dissolve (V9).",
     )
+    # A22: motion on b-roll stills, and a dip in the bed under b-roll.
+    broll_ken_burns: bool = Field(
+        default=False,
+        description="Slow zoom-and-drift on b-roll *stills* (A22). A still that sits motionless "
+                    "over moving footage is the clearest sign a clip was assembled rather than "
+                    "edited. Off by default because it changes the shipped look: with it on, "
+                    "stills are cover-cropped into a fixed 16:9 box (zoompan needs an explicit "
+                    "output size) instead of keeping their own aspect. Video assets already move "
+                    "and are never affected.",
+    )
+    broll_ken_burns_zoom: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=1.0,
+        description="How far a b-roll still zooms over its window, as a fraction (A22). 0.12 is "
+                    "12% over the whole window - deliberately small: motion that is noticeable "
+                    "on a 2-second overlay is distracting rather than cinematic. Zero disables "
+                    "the motion even with BROLL_KEN_BURNS on.",
+    )
+    broll_duck: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="How far the music bed dips while a b-roll overlay is on screen, as a "
+                    "fraction (A22). 0 (default) leaves the audio graph untouched; 0.35 is a "
+                    "clearly audible accent. Applied to the *bed* only, never the mix - the "
+                    "b-roll is illustrating what is being said, so ducking the speech would "
+                    "invert the point. Additional to the AU2 speech duck, not instead of it.",
+    )
+    # A13: which artwork set the emoji overlay draws from.
+    emoji_style: str = Field(
+        default="noto",
+        description="Emoji artwork set: noto | twemoji | openmoji (A13). Only Noto is vendored; "
+                    "the others are fetched on demand and so need EMOJI_ALLOW_DOWNLOAD or a "
+                    "prior 'scripts/fetch_emoji.py --style <name>'. A glyph missing from the "
+                    "selected style falls back to the vendored Noto file rather than dropping "
+                    "the overlay. An unknown value resolves to noto rather than failing the job.",
+    )
     # C19: where an emoji overlay sits relative to the captions.
     emoji_placement: str = Field(
         default="spread",

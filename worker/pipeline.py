@@ -534,6 +534,12 @@ def run_pipeline(
                 hook_text=md.hook_text, llm_client=llm_client,
                 broll_resolver=broll_resolver,
                 engine_contributions=(compose.contributions if compose is not None else None),
+                # A17: which music track this clip gets, when the mood has several. Built from
+                # facts that survive a re-run - the source's name, the clip's ordinal and its
+                # source-relative start - so the same job produces the same beds while ten clips
+                # from one source get ten different ones. The clip id cannot be used: it carries
+                # a `uuid4`, so keying on it would give a fresh bed on every render.
+                music_select_key=f"{Path(source).name}:{idx}:{c.start:.3f}",
             )
         except fu.FFmpegError:
             rendered = None
