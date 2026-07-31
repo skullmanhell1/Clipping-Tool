@@ -56,8 +56,27 @@ CLIP_COUNT_PRESETS: dict[str, Optional[int]] = {
 
 
 def resolve_length_range(option: str) -> tuple[float, float, float]:
-    """Return ``(min, max, target)`` seconds for a Clip Length UI option."""
-    return CLIP_LENGTH_PRESETS.get((option or "auto").lower(), CLIP_LENGTH_PRESETS["auto"])
+    """Return ``(min, max, target)`` seconds for a Clip Length UI option.
+
+    O7: when a platform output profile is active, its duration ceiling caps the range. A clip
+    longer than the destination accepts is not a clip - it is a file that fails at upload after
+    the whole render has been paid for, and the pre-flight check that catches it runs at the end.
+    Capping here means the clip is *made* publishable instead of being rejected later.
+
+    The floor is never raised, only the ceiling lowered, and the target is pulled down with it so
+    a capped range cannot produce a target above its own maximum.
+    """
+    min_len, max_len, target = CLIP_LENGTH_PRESETS.get(
+        (option or "auto").lower(), CLIP_LENGTH_PRESETS["auto"]
+    )
+
+    from worker import output_profiles
+
+    ceiling = output_profiles.duration_ceiling_s()
+    if ceiling is not None and ceiling > 0 and ceiling < max_len:
+        max_len = max(min_len, float(ceiling))
+        target = min(target, max_len)
+    return min_len, max_len, target
 
 
 def resolve_max_clips(option: str) -> Optional[int]:

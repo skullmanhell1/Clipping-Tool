@@ -20,7 +20,7 @@ fall back to the static reformat.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -32,7 +32,15 @@ from config import settings
 # this module).
 from worker import scene_detect
 from worker.diarization import Speaker_Turn
-from worker.ffmpeg_utils import ASPECT_PRESETS, FFmpegError, _run, h264_args, probe
+from worker.ffmpeg_utils import (
+    ASPECT_PRESETS,
+    FFmpegError,
+    _run,
+    detect_letterbox,
+    escape_filter_path,
+    h264_args,
+    probe,
+)
 
 
 class ReframeUnavailable(RuntimeError):
@@ -190,20 +198,36 @@ def build_sendcmd(
     crop_h: int,
     src_w: int,
     src_h: int,
+    *,
+    origin_x: int = 0,
+    origin_y: int = 0,
+    target: str = "crop",
 ) -> str:
     """Return ``sendcmd`` script text setting the crop x/y over time.
 
     Each line: ``<t> crop x <X>, crop y <Y>;`` where X/Y are the top-left of the
     crop window, derived from the (clamped) centre so the window stays inside
     the frame.
+
+    ``target`` is the filter these commands address. It is ``crop`` for the single-crop
+    follow-active pass, and a ``crop@tN`` *instance* name for split-screen tiles, where several
+    crops share one filtergraph and a bare ``crop`` would broadcast every tile's commands to all
+    of them (V5).
+
+    ``origin_x``/``origin_y`` and ``src_w``/``src_h`` describe the region the crop is allowed to
+    move within, which for a letterboxed source is the content rectangle rather than the whole
+    frame (V16). Confining the *existing* crop is how de-letterboxing is done here: prepending a
+    second ``crop`` filter would be simpler to read but ``sendcmd`` addresses filters by name, so
+    both crops would receive these x/y commands and the bars would be panned around the output.
+    The defaults (origin 0 with full frame dimensions) reproduce the previous script exactly.
     """
     max_x = max(0, src_w - crop_w)
     max_y = max(0, src_h - crop_h)
     lines: list[str] = []
     for c in centers:
-        x = int(round(_clamp(c.cx - crop_w / 2.0, 0, max_x)))
-        y = int(round(_clamp(c.cy - crop_h / 2.0, 0, max_y)))
-        lines.append(f"{c.t:.3f} crop x {x}, crop y {y};")
+        x = origin_x + int(round(_clamp(c.cx - origin_x - crop_w / 2.0, 0, max_x)))
+        y = origin_y + int(round(_clamp(c.cy - origin_y - crop_h / 2.0, 0, max_y)))
+        lines.append(f"{c.t:.3f} {target} x {x}, {target} y {y};")
     return "\n".join(lines) + "\n"
 
 
@@ -649,12 +673,36 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     return samples
 
 
+#: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
+_escape_filter_path = escape_filter_path
+
+
+def _content_rect(video: str | Path, info) -> tuple[int, int, int, int]:
+    """``(width, height, x, y)`` of the real picture inside ``video``'s frame (V16).
+
+    Returns the full frame when de-letterboxing is disabled or when no bars are found, so the
+    non-letterboxed case - which is most sources - is unchanged and costs no extra work beyond
+    the detection probe.
+    """
+    if not getattr(settings, "auto_deletterbox", True):
+        return (info.width, info.height, 0, 0)
+    found = detect_letterbox(video)
+    if not found:
+        return (info.width, info.height, 0, 0)
+    width, height, x, y = found
+    # Never return a rectangle that is not fully inside the frame: a bogus detection would
+    # otherwise produce a crop ffmpeg rejects, turning a cosmetic improvement into a failed clip.
+    if x < 0 or y < 0 or x + width > info.width or y + height > info.height:
+        return (info.width, info.height, 0, 0)
+    return (width, height, x, y)
+
+
 def apply_reframe(
     video: str | Path,
     dest: str | Path,
     aspect: str = "9:16",
     sample_fps: float = 5.0,
-    command_fps: float = 12.0,
+    command_fps: Optional[float] = None,
     smoothing: float = 0.35,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
@@ -671,8 +719,19 @@ def apply_reframe(
     tw, th = ASPECT_PRESETS[aspect]
     aw, ah = _aspect_ratio_parts(aspect)
 
-    crop_w, crop_h = compute_crop_size(info.width, info.height, aw, ah)
-    if crop_w >= info.width and crop_h >= info.height:
+    # V8: the crop-update rate is a setting rather than a fixed 12/s, which was visible as
+    # stepping whenever the subject moved quickly. Only the sendcmd script gets longer.
+    if command_fps is None:
+        command_fps = float(getattr(settings, "reframe_command_fps", 24.0) or 24.0)
+
+    # V16: measure against the content rectangle, not the padded frame. On an already-boxed
+    # source the two differ, and every number below - crop size, clamps, the "is this even a
+    # tighter crop" test - is wrong if it is taken from the frame.
+    content = _content_rect(video, info)
+    src_w, src_h, origin_x, origin_y = content
+
+    crop_w, crop_h = compute_crop_size(src_w, src_h, aw, ah)
+    if crop_w >= src_w and crop_h >= src_h:
         # Target isn't a tighter crop than the source; nothing to follow.
         raise ReframeUnavailable("target aspect is not narrower than source")
 
@@ -690,7 +749,9 @@ def apply_reframe(
 
     smoothed = smooth_centers(samples, alpha=smoothing, cuts=cuts)
     dense = resample_centers(smoothed, command_fps, info.duration)
-    script = build_sendcmd(dense, crop_w, crop_h, info.width, info.height)
+    script = build_sendcmd(
+        dense, crop_w, crop_h, src_w, src_h, origin_x=origin_x, origin_y=origin_y
+    )
 
     cmd_file = dest.with_suffix(".reframe.cmd")
     cmd_file.parent.mkdir(parents=True, exist_ok=True)
@@ -698,8 +759,8 @@ def apply_reframe(
 
     # Initial crop position (first command); sendcmd updates x/y over time.
     first = dense[0]
-    x0 = int(round(_clamp(first.cx - crop_w / 2.0, 0, info.width - crop_w)))
-    y0 = int(round(_clamp(first.cy - crop_h / 2.0, 0, info.height - crop_h)))
+    x0 = origin_x + int(round(_clamp(first.cx - origin_x - crop_w / 2.0, 0, src_w - crop_w)))
+    y0 = origin_y + int(round(_clamp(first.cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
 
     escaped = str(cmd_file.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     vf = (
@@ -792,7 +853,7 @@ def build_follow_active_path(
     crop_w: int,
     crop_h: int,
     intensity: str = "standard",
-    command_fps: float = 12.0,
+    command_fps: Optional[float] = None,
     duration: float,
 ) -> list[Center]:
     """PURE: build the dense follow-active crop-centre path.
@@ -819,6 +880,9 @@ def build_follow_active_path(
     """
     alpha, transition = intensity_params(intensity)
     duration = max(0.0, float(duration))
+    # V8: from settings, was a fixed 12/s.
+    if command_fps is None:
+        command_fps = float(getattr(settings, "reframe_command_fps", 24.0) or 24.0)
     command_fps = max(1.0, float(command_fps))
 
     frame_center = (src_w / 2.0, src_h / 2.0)
@@ -912,6 +976,11 @@ class Region:
     src_cx: float
     src_cy: float
     track_id: str
+    #: V5: the tile's crop centre over time, or ``()`` for a fixed crop.
+    #:
+    #: Defaulted and last so every existing positional construction is unaffected. When empty
+    #: the tile renders exactly as it did before V5: one static crop at ``src_cx``/``src_cy``.
+    centers: tuple[Center, ...] = ()
 
 
 def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, float]]:
@@ -921,6 +990,65 @@ def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, flo
     xs = [b.center[0] for b in track.boxes]
     ys = [b.center[1] for b in track.boxes]
     return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
+def build_region_centers(
+    track: Optional[Face_Track],
+    *,
+    src_w: int,
+    src_h: int,
+    dst_w: int,
+    dst_h: int,
+    duration: float,
+    command_fps: Optional[float] = None,
+    intensity: str = "standard",
+) -> tuple[Center, ...]:
+    """PURE: the crop-centre path for one split-screen tile (V5).
+
+    Split-screen previously froze each tile on the *mean* of its track's boxes for the whole
+    clip. On a still, seated interview that is fine. On anything else the mean is a position the
+    subject occupied only on average: a speaker who leans in and back sits off-centre for most of
+    the clip, and one who moves across frame is cropped out of their own tile entirely - while
+    the single-speaker path has followed faces since v0.7.0. This gives each tile the same
+    treatment: its own smoothed, clamped centre path.
+
+    Uses the same EMA smoothing and clamping as the follow-active path, so a tile cannot drift
+    outside the source frame and does not jitter per detection. Returns ``()`` when there is
+    nothing to follow (no track, no boxes, no duration), which the caller renders as the previous
+    static crop.
+    """
+    duration = max(0.0, float(duration))
+    if track is None or not track.boxes or duration <= 0:
+        return ()
+    if command_fps is None:
+        command_fps = float(getattr(settings, "reframe_command_fps", 24.0) or 24.0)
+    command_fps = max(1.0, float(command_fps))
+
+    crop_w, crop_h = compute_crop_size(src_w, src_h, dst_w, dst_h)
+    alpha, _ = intensity_params(intensity)
+
+    n = max(1, int(round(duration * command_fps)))
+    times = [min(duration, i / command_fps) for i in range(n + 1)]
+
+    xs: list[float] = []
+    ys: list[float] = []
+    last: Optional[tuple[float, float]] = None
+    for t in times:
+        center = track.center_at(t) or last or (src_w / 2.0, src_h / 2.0)
+        last = center
+        xs.append(center[0])
+        ys.append(center[1])
+
+    xs = ema_smooth(xs, alpha=alpha)
+    ys = ema_smooth(ys, alpha=alpha)
+    return tuple(
+        Center(
+            round(t, 3),
+            _clamp(x, crop_w / 2.0, max(crop_w / 2.0, src_w - crop_w / 2.0)),
+            _clamp(y, crop_h / 2.0, max(crop_h / 2.0, src_h - crop_h / 2.0)),
+        )
+        for t, x, y in zip(times, xs, ys)
+    )
 
 
 def _region_source_center(
@@ -939,6 +1067,45 @@ def _region_source_center(
     return (cx, cy)
 
 
+def _grid_regions(
+    shown: list[str],
+    track_by_id: dict[str, Face_Track],
+    target_w: int,
+    target_h: int,
+    src_w: int,
+    src_h: int,
+) -> list[Region]:
+    """Lay ``shown`` out as a 2-column grid filling the target exactly (V6).
+
+    Tiles are emitted in reading order and the geometry is exact rather than nearly exact: the
+    last column absorbs any horizontal rounding remainder and the last row any vertical one, so
+    the tiles tile the frame with no seam and no overlap. ``hstack``/``vstack`` reject mismatched
+    dimensions outright, so "close enough" here is a failed render rather than a soft edge.
+
+    An odd final tile spans the full width. Leaving a black half-cell instead would read as a
+    missing participant.
+    """
+    rows = (len(shown) + 1) // 2
+    base_h = target_h // rows
+    regions: list[Region] = []
+    y = 0
+    for row in range(rows):
+        h = base_h if row < rows - 1 else target_h - base_h * (rows - 1)
+        in_row = shown[row * 2:row * 2 + 2]
+        x = 0
+        for col, tid in enumerate(in_row):
+            w = target_w if len(in_row) == 1 else (
+                target_w // 2 if col == 0 else target_w - target_w // 2
+            )
+            src_cx, src_cy = _region_source_center(
+                track_by_id.get(tid), src_w, src_h, w, h
+            )
+            regions.append(Region(x, y, w, h, src_cx, src_cy, tid))
+            x += w
+        y += h
+    return regions
+
+
 def build_split_screen_layout(
     turns: list[Speaker_Turn],
     assoc: Association,
@@ -949,6 +1116,8 @@ def build_split_screen_layout(
     src_w: int,
     src_h: int,
     max_regions: Optional[int] = None,
+    duration: float = 0.0,
+    intensity: str = "standard",
 ) -> list[Region]:
     """PURE: build the default 2-up split-screen layout.
 
@@ -979,6 +1148,31 @@ def build_split_screen_layout(
     track_by_id = {tr.track_id: tr for tr in tracks}
     regions: list[Region] = []
 
+    def with_motion(region: Region) -> Region:
+        """Attach the V5 per-tile centre path. ``duration=0`` leaves the tile static."""
+        if duration <= 0:
+            return region
+        centers = build_region_centers(
+            track_by_id.get(region.track_id),
+            src_w=src_w, src_h=src_h,
+            dst_w=region.dst_w, dst_h=region.dst_h,
+            duration=duration, intensity=intensity,
+        )
+        return replace(region, centers=centers) if centers else region
+
+    if target_h >= target_w and n >= 3:
+        # V6: three or four speakers in a portrait frame go into a 2-column grid, not a stack.
+        #
+        # Four stacked tiles across 1920 px are 1080x480 each - a 2.25:1 letterbox slot holding a
+        # crop of a face, which is the worst possible use of the space. Two columns give
+        # 540x960 tiles: portrait slots that match the shape of a head and shoulders, so each
+        # speaker is actually recognisable. The last row absorbs the remainder, and with an odd
+        # count the final tile spans the full width rather than leaving a hole.
+        return [
+            with_motion(r)
+            for r in _grid_regions(shown, track_by_id, target_w, target_h, src_w, src_h)
+        ]
+
     if target_h >= target_w:
         # Portrait target: stack tiles vertically, full width.
         base_h = target_h // n
@@ -988,7 +1182,7 @@ def build_split_screen_layout(
             src_cx, src_cy = _region_source_center(
                 track_by_id.get(tid), src_w, src_h, target_w, h
             )
-            regions.append(Region(0, y, target_w, h, src_cx, src_cy, tid))
+            regions.append(with_motion(Region(0, y, target_w, h, src_cx, src_cy, tid)))
             y += h
     else:
         # Landscape target: place tiles side-by-side, full height.
@@ -999,7 +1193,7 @@ def build_split_screen_layout(
             src_cx, src_cy = _region_source_center(
                 track_by_id.get(tid), src_w, src_h, w, target_h
             )
-            regions.append(Region(x, 0, w, target_h, src_cx, src_cy, tid))
+            regions.append(with_motion(Region(x, 0, w, target_h, src_cx, src_cy, tid)))
             x += w
 
     return regions
@@ -1021,6 +1215,9 @@ def build_reframe_filter(
     target_h: int,
     sendcmd_path: Optional[str] = None,
     intensity: str = "standard",
+    tile_sendcmd_paths: Optional[Sequence[str]] = None,
+    origin_x: int = 0,
+    origin_y: int = 0,
 ) -> tuple[list[str], str, list[str]]:
     """PURE: return ``(input_args, filter_string_or_filtergraph, applied_notes)``
     for a SINGLE ffmpeg pass. Does NOT run ffmpeg.
@@ -1047,15 +1244,76 @@ def build_reframe_filter(
             x = int(round(_clamp(rg.src_cx - rcw / 2.0, 0, max(0, src_w - rcw))))
             y = int(round(_clamp(rg.src_cy - rch / 2.0, 0, max(0, src_h - rch))))
             label = f"r{k}"
+
+            # V5: a tile that has a centre path gets its own sendcmd driving its own crop.
+            #
+            # The crop is given the *instance name* `crop@tN`. sendcmd dispatches by target name
+            # across the whole filtergraph, so with several plain `crop` filters in one graph
+            # every tile's commands would be applied to every tile - each crop would jump between
+            # all the speakers' positions. Instance names make each target unambiguous.
+            prefix = ""
+            crop_name = "crop"
+            if rg.centers and tile_sendcmd_paths and k < len(tile_sendcmd_paths):
+                crop_name = f"crop@t{k}"
+                script = build_sendcmd(
+                    list(rg.centers), rcw, rch, src_w, src_h,
+                    origin_x=origin_x, origin_y=origin_y, target=crop_name,
+                )
+                tile_path = Path(tile_sendcmd_paths[k])
+                tile_path.parent.mkdir(parents=True, exist_ok=True)
+                tile_path.write_text(script, encoding="utf-8")
+                prefix = f"sendcmd=f='{_escape_filter_path(tile_path)}',"
+                first = rg.centers[0]
+                x = origin_x + int(
+                    round(_clamp(first.cx - origin_x - rcw / 2.0, 0, max(0, src_w - rcw)))
+                )
+                y = origin_y + int(
+                    round(_clamp(first.cy - origin_y - rch / 2.0, 0, max(0, src_h - rch)))
+                )
+
             parts.append(
-                f"[0:v]crop={rcw}:{rch}:{x}:{y},"
+                f"[0:v]{prefix}{crop_name}={rcw}:{rch}:{x}:{y},"
                 f"scale={rg.dst_w}:{rg.dst_h}[{label}]"
             )
             labels.append(f"[{label}]")
-        stack = "vstack" if portrait else "hstack"
-        joined = "".join(labels)
+
+        # V6: rows first, then stack the rows. For a single-column or single-row layout - which
+        # is every 2-up, and so every graph this produced before V6 - there is exactly one
+        # grouping and the emitted string is unchanged.
+        rows: list[list[int]] = []
+        for k, rg in enumerate(regions):
+            if rows and regions[rows[-1][0]].dst_y == rg.dst_y:
+                rows[-1].append(k)
+            else:
+                rows.append([k])
+
         graph = ";".join(parts)
-        graph += f";{joined}{stack}=inputs={len(labels)},setsar=1[vout]"
+        single_row = len(rows) == 1
+        single_column = all(len(row) == 1 for row in rows)
+
+        if single_row or single_column:
+            # One stack, exactly as before V6.
+            stack = "hstack" if single_row and not single_column else "vstack"
+            if single_row and single_column:
+                stack = "vstack" if portrait else "hstack"
+            graph += (
+                f";{''.join(labels)}{stack}=inputs={len(labels)},setsar=1[vout]"
+            )
+        else:
+            row_labels: list[str] = []
+            for r, row in enumerate(rows):
+                joined = "".join(labels[k] for k in row)
+                row_label = f"[row{r}]"
+                if len(row) == 1:
+                    # A lone tile in a grid row is already full width; copy it into the row
+                    # label rather than hstacking one input, which ffmpeg rejects.
+                    graph += f";{joined}null{row_label}"
+                else:
+                    graph += f";{joined}hstack=inputs={len(row)}{row_label}"
+                row_labels.append(row_label)
+            graph += (
+                f";{''.join(row_labels)}vstack=inputs={len(row_labels)},setsar=1[vout]"
+            )
         return ([], graph, ["speaker_reframe:split_screen"])
 
     # follow_active (default) — mirror apply_reframe's single -vf pass.
@@ -1071,11 +1329,7 @@ def build_reframe_filter(
     x0 = int(round(_clamp(first.cx - crop_w / 2.0, 0, max(0, src_w - crop_w))))
     y0 = int(round(_clamp(first.cy - crop_h / 2.0, 0, max(0, src_h - crop_h))))
 
-    escaped = (
-        str(Path(sendcmd_path).resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        if sendcmd_path is not None
-        else ""
-    )
+    escaped = _escape_filter_path(sendcmd_path) if sendcmd_path is not None else ""
     vf = (
         f"sendcmd=f='{escaped}',"
         f"crop={crop_w}:{crop_h}:{x0}:{y0},"
@@ -1149,12 +1403,17 @@ def apply_speaker_reframe(
         regions = build_split_screen_layout(
             turns, assoc, tracks,
             target_w=tw, target_h=th, src_w=info.width, src_h=info.height,
+            # V5: give each tile a centre path over the clip instead of one fixed crop.
+            duration=info.duration, intensity=intensity,
         )
         if not regions:
             # Fewer than two associated tracks -> follow_active substitution.
             layout = "follow_active"
 
     if layout == "split_screen":
+        tile_files = [
+            dest.with_suffix(f".tile{k}.cmd") for k in range(len(regions or []))
+        ]
         _ia, graph, _notes = build_reframe_filter(
             "split_screen",
             regions=regions,
@@ -1162,6 +1421,7 @@ def apply_speaker_reframe(
             src_w=info.width, src_h=info.height,
             target_w=tw, target_h=th,
             intensity=intensity,
+            tile_sendcmd_paths=[str(p) for p in tile_files],
         )
         cmd = [
             settings.ffmpeg_binary, "-y", "-i", str(video),
@@ -1175,6 +1435,11 @@ def apply_speaker_reframe(
             _run(cmd)
         except FFmpegError as exc:
             raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
+        finally:
+            # The scripts are read during the render only; leaving them behind would litter the
+            # output directory with one file per speaker per clip.
+            for tile in tile_files:
+                tile.unlink(missing_ok=True)
         return dest
 
     # follow_active

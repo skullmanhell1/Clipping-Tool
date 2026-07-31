@@ -469,6 +469,28 @@ def run_pipeline(
                 # visible instead of appearing as silently missing files.
                 logger.warning("O11: could not write sidecar captions for %s: %s", final, exc)
 
+        # 6a-ii. O12: in `soft` or `both` mode, add the captions as a selectable subtitle track.
+        #
+        #        Done here rather than in the compositor because it is a remux of the finished
+        #        file, not a filter: muxing during the composite pass would mean the subtitle
+        #        stream survived every later stage untouched, and POST engines that replace the
+        #        media would silently drop it.
+        caption_mode = str(getattr(settings, "caption_mode", "burned") or "burned")
+        if caption_mode in ("soft", "both") and words:
+            try:
+                srt = subtitle_export.write_sidecars(
+                    words, temp_dir / f"soft_{clip_id}", formats=("srt",)
+                )
+                if srt:
+                    muxed = temp_dir / f"soft_{clip_id}.mp4"
+                    fu.mux_soft_subtitles(final, srt[0], muxed)
+                    muxed.replace(final)
+                    applied.append(f"caption_mode:{caption_mode}")
+            except (fu.FFmpegError, OSError) as exc:
+                # The burned captions (in `both`) or the sidecars (in `soft`) are already there,
+                # so a failed remux costs a convenience, not the clip.
+                logger.warning("O12: could not mux soft captions into %s: %s", final, exc)
+
         # 6b. POST-stage engines see the finished clip, then this clip's engine
         #     lifecycle is closed: durable artifacts are persisted BEFORE the
         #     workspaces are deleted, and a persistence failure only adds an
