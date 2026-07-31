@@ -513,7 +513,18 @@ def test_the_weight_list_covers_every_selection_weight():
         for name in type(settings).model_fields
         if name.startswith("selection_weight_")
     }
-    assert declared == set(SELECTION_WEIGHT_NAMES)
+    missing = declared - set(SELECTION_WEIGHT_NAMES)
+    stale = set(SELECTION_WEIGHT_NAMES) - declared
+    assert declared == set(SELECTION_WEIGHT_NAMES), (
+        f"SELECTION_WEIGHT_NAMES is out of step with the settings.\n"
+        f"  add to the tuple:      {sorted(missing) or '-'}\n"
+        f"  remove from the tuple: {sorted(stale) or '-'}\n"
+        "The tuple drives the normalisation and zero-weight tests in this file, so a weight "
+        "missing from it is a weight whose contribution to the ranking is never checked - and a "
+        "ranking bug does not raise, it produces a plausible ordering that nothing downstream can "
+        "contradict. Also add a matching entry to .env.example, which "
+        "tests/test_config_documentation.py requires."
+    )
 
 
 def test_all_weights_zero_does_not_divide_by_zero(monkeypatch):
