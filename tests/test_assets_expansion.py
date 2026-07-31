@@ -279,15 +279,30 @@ def test_a5_an_unreadable_font_does_not_leak_a_file_descriptor(tmp_path, monkeyp
         (directory / f"broken{index}.ttf").write_bytes(b"definitely not a font")
     monkeypatch.setattr(settings, "font_assets_dir", directory, raising=False)
 
-    def open_descriptors() -> int:
-        return len(list(Path("/proc/self/fd").iterdir()))
+    def open_font_descriptors() -> list[str]:
+        """Descriptors pointing at the fixture's own font files.
+
+        Counted by *target* rather than by total descriptor count: the total moves for reasons
+        that have nothing to do with this code - pytest's own capture handles, another test's
+        sockets - which makes a total-count assertion flaky under random test ordering while
+        proving nothing extra.
+        """
+        targets: list[str] = []
+        for entry in Path("/proc/self/fd").iterdir():
+            try:
+                target = str(entry.resolve())
+            except OSError:
+                continue
+            if target.startswith(str(directory)):
+                targets.append(target)
+        return targets
 
     cap.discovered_fonts()          # warm any lazy imports
-    before = open_descriptors()
     for _ in range(3):
         cap.discovered_fonts()
-    # 36 more scans of a bad file; a leak of one each would be unmistakable.
-    assert open_descriptors() <= before + 2
+    # 48 scans of a file that cannot be parsed; a leak of one descriptor each would be unmistakable.
+    leaked = open_font_descriptors()
+    assert leaked == [], f"{len(leaked)} font descriptor(s) still open: {leaked[:3]}"
 
 
 def test_a5_a_variable_font_is_excluded_for_the_same_reason_the_manifest_excludes_them(

@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
+
+- **`C21` — a caption font that can actually render what was said.** Captions were drawn in a Latin
+  display face regardless of the language. On Arabic, Hebrew, Chinese, Japanese, Korean or Thai that
+  produces a line of `.notdef` boxes — tofu — and **nothing in the pipeline can see it**: libass
+  reports no error, the ASS file is valid, the encode succeeds, and the clip record says `captions`.
+  The only symptom is in the pixels.
+
+  Coverage is decided by reading the font's own `cmap`, never by asking fontconfig. `fc-match` is a
+  *best match*, not a coverage test — it always answers, and `fc-match ':lang=ar'` on the machine
+  this was written on returns `NotoSans[wdth,wght].ttf`, which contains **no Arabic at all**.
+  Candidate families come from `fc-list :lang=xx`, which returns nothing when there is nothing, and
+  are then re-verified against each file's `cmap` anyway.
+
+  **The vendored gap is now stated rather than assumed.** The plan's note says "Noto covers CJK",
+  which is true of the Noto *project* and not of the vendored `NotoSans[wdth,wght].ttf` — CJK lives
+  in Noto Sans CJK, a separate family of ~100 MB per weight. Measured: Latin everywhere, Cyrillic
+  in four faces, Greek in two, Devanagari in four (including all three Poppins), and **nothing
+  vendored for Arabic, Hebrew, Thai, Han, Hiragana or Hangul**. `unsupported_scripts()` makes that
+  answerable without rendering a clip and looking at it.
+
+  Resolution keeps the requested font when it covers the script — a creator's chosen face is a brand
+  decision, and overriding it because a clip contains one Greek letter would be worse than the
+  problem. Otherwise a vendored face (so an offline install still works, and the manifest's
+  display-first order keeps the substitution close to the intended look), then a verified system
+  family. When nothing can render it, the requested font is kept and the clip records
+  `caption_script_unsupported:<script>`: substituting a different Latin face would not help either,
+  so the honest outcome is to render the same thing *and say so*.
+
+  Finally, **measured wrapping is switched off for shaping scripts**. C6 sums per-glyph advance
+  widths, which is a fair approximation for Latin and simply wrong for Arabic, where letters join and
+  a word's rendered width is not the sum of its isolated forms — and for Devanagari and Thai, where
+  marks reorder. Those get `WrapStyle: 0` so libass wraps them: less control, but control based on a
+  wrong measurement is worse than none. Hebrew is deliberately *not* in that set — it is RTL but
+  unjoined, so widths add up and the reordering is libass' job via FriBidi. No bidi reordering
+  happens here, or the text would be reversed twice.
+- **`V15` — captions off the speaker's mouth.** Caption position is a fixed choice and the face is
+  wherever the footage put it; on a lot of vertical footage those collide and three lines of heavy
+  display type land across the speaker's mouth. The crop is right and the captions are right — only
+  their combination is wrong, which is why nothing upstream catches it.
+
+  Three rules keep this from being a look change. It **only acts on an actual overlap**, so a
+  library of clips that had no problem comes back identical. It **only moves between the nine C13
+  positions**, keeping the horizontal alignment the preset chose — answering "bottom-left covers the
+  mouth" with "centre-top" changes two things to fix one — and never invents a pixel offset nobody
+  picked. And when **no position clears the face** (a close-up filling the frame, or a three-speaker
+  panel that occupies every band) it changes nothing and records
+  `caption_face_overlap_unavoidable`, because moving the text from the mouth to the eyes is not an
+  improvement — and that marker is what distinguishes the case from "no faces detected".
+
+  The mouth is taken as the lower third of a detected face box, generously: the cost of being wrong
+  that way is moving a caption that would have been fine. It is not mouth *detection*, and it is
+  not called that. Bands are unioned across every sampled frame, because a caption that is clear for
+  two seconds and covers the mouth for one is still wrong — and that is the case hardest to notice
+  when reviewing a still. Off by default: it costs a face-detection pass a collision-free render
+  would be paying for nothing.
+- **`AU9` — sound-effect stings on cuts and emoji.** A cut or an emoji arriving is a visual accent
+  with no audible counterpart, so the edit reads as a picture change rather than as a beat.
+
+  **What is synthesised and what is not is the substance here,** because A15 already recorded what
+  goes wrong when that is blurred. `pop` and `click` **are** generated, honestly: a pop *is* a short
+  band-passed noise burst with a fast attack, so generating one is not an approximation of the real
+  thing — hence no degradation marker, because there is no degradation. `whoosh` and `swipe` are
+  **not** generated at all: a whoosh is noise under a filter that *moves* across the sound, ffmpeg
+  cannot express a time-varying filter frequency in one pass (`bandpass` takes no expression and has
+  no `eval=frame`), and a static band-passed noise swell is a hiss. Shipping a hiss under a name
+  that promises a sweep is exactly the mislabelling A15 exists to stop, so those require a file in
+  `SFX_DIR` and record `sfx_missing:<name>` without one.
+
+  Mixed with `amix normalize=0`, which matters more than it looks: with normalisation on, `amix`
+  divides every input by the input count, so adding one sting would make the **speech** 1/n quieter
+  for the whole clip — a global change caused by a local accent, and one nobody would attribute to
+  the feature that caused it. Verified by measurement, not by reading the flag. `duration=first`
+  keeps the clip's own length, and `adelay=...:all=1` delays every channel — without `all=1` a
+  stereo sting arrives on the left and then the right, audible as a flam.
+
+  Two stings within 350 ms become one, and a **transition wins a contested slot at its own moment**:
+  a cut is structural and an emoji is decoration. Applied within the gap window rather than only at
+  exactly equal times, because a single pass keeping the earlier candidate would drop a transition at
+  1.05 s in favour of an emoji at 1.00 s.
+- **`O8` — optional hardware H.264 encoding.** Routed through the single `h264_args` builder, so an
+  encoder swap cannot reach seven of the eight encode sites and leave clips whose quality depends on
+  which stage wrote them.
+
+  **Availability is decided by actually encoding a frame,** not by reading `ffmpeg -encoders`. The
+  distinction is not hypothetical: the ffmpeg this project develops against *lists* `h264_v4l2m2m`
+  and fails the moment it is asked for a frame, and `h264_nvenc` does the same on a host with the
+  libraries and no card. Reading the list turns a missing GPU into a failed job at the point where
+  the transcription has already been paid for. The probe is cached, so it costs one frame per
+  process.
+
+  **The quality flag is not `-crf` anywhere else,** and three encoders use a different *scale*:
+  NVENC needs `-rc vbr -cq` (without `-rc vbr`, `-cq` is accepted and ignored and the encoder uses
+  its default bitrate), QSV uses `-global_quality`, VAAPI uses `-qp`, and VideoToolbox uses `-q:v` on
+  a **1–100 scale where higher is better** — inverted. Passing `-crf 20` to VideoToolbox is not an
+  error; it is ignored. Passing `20` to `-q:v` asks for near-worst quality. Either way the output is
+  wrong and nothing says so, so the mapping is a table with the scale written down. Presets are
+  translated too (`veryfast` → NVENC `p2`) or omitted, since VideoToolbox has no preset concept and
+  an unrecognised one is a hard error on some builds.
+
+  `h264_v4l2m2m` is **deliberately refused with a reason** rather than quietly absent: it has no
+  constant-quality mode, only `-b:v`, so using it would switch the whole pipeline from a quality
+  target to a bitrate target without saying so.
+
+  The default stays `libx264`, **not** `auto`. These encoders are not comparable with x264 at the
+  same nominal quality, so `auto` would change the output of every existing install the first time
+  it landed on a machine with a GPU, with no setting changed — and would make the M1 golden renders
+  machine-dependent. A *named* request that falls back records `encoder_unavailable:`, because
+  silently ignoring it is how someone spends a week believing their GPU is in use; `auto` falling
+  back records nothing, since it asked for "the best available" and software is available.
+
 ### Fixed — deployment and ingest, both previously unexercised (I7, I10, I12, I13)
 
 - **`I12` — the Docker image had never been built.** A Dockerfile nobody has run is a deployment
