@@ -515,6 +515,28 @@ class Settings(BaseSettings):
         description="Weight of how closely the clip matches the requested length. Replaces the "
                     "old rule that simply kept the longest segments.",
     )
+    # S7/S8/S12: what the passage says, not just how it was delivered.
+    #
+    # Lower than the delivery weights on purpose. These are lexical rules over ASR output, so they
+    # are the least certain signals in the set - a mis-transcribed opener can make a complete
+    # thought look like a fragment - and until the S1 dataset can measure them, a weight large
+    # enough to overturn the acoustic signals would be a guess with consequences.
+    selection_weight_structure: float = Field(
+        default=0.15,
+        description="Weight of question/answer and list structure in fallback ranking (S7).",
+    )
+    selection_weight_standalone: float = Field(
+        default=0.20,
+        description="Weight of standalone completeness (S12). The highest of the three text "
+                    "signals: nothing downstream can supply context a clip is missing, whereas "
+                    "boundary snapping can still fix an unfinished ending.",
+    )
+    selection_weight_intensity: float = Field(
+        default=0.10,
+        description="Weight of lexical emotional intensity (S8). The lowest: it overlaps with "
+                    "the S2 energy signal, and double-counting emphasis would let one loud, "
+                    "strongly-worded moment dominate a whole source.",
+    )
     # S15: how much two candidates may overlap before the lower-scoring one is dropped.
     # Measured as a fraction of the *shorter* candidate, so a short clip wholly inside a long
     # one reads as 1.0 rather than as the small IoU that would let it through.
@@ -682,6 +704,15 @@ class Settings(BaseSettings):
         default="punch_in",
         description="Opening transition: punch_in | zoom_cut | whip_pan | dissolve (V9).",
     )
+    # C19: where an emoji overlay sits relative to the captions.
+    emoji_placement: str = Field(
+        default="spread",
+        description="Emoji placement: spread (three slots across the frame, the shipped "
+                    "behaviour) or caption (just clear of the caption block, C19). 'caption' "
+                    "only makes sense because C19 puts the emoji on the word the caption "
+                    "highlights - a glyph beside a caption illustrating a different word would "
+                    "read as a mistake.",
+    )
     # C20: pick the caption's outline/box colour from the video behind it.
     caption_auto_contrast: bool = Field(
         default=False,
@@ -748,6 +779,16 @@ class Settings(BaseSettings):
         description="How captions are delivered: burned | soft | both (O12). 'soft' adds a "
                     "selectable mov_text track instead of burning pixels; note mov_text is "
                     "plain text, so preset animation and highlighting are lost in that track.",
+    )
+    # T10: an English subtitle track alongside the original-language captions.
+    subtitle_translation: bool = Field(
+        default=False,
+        description="Add a translated (English) subtitle track and sidecar beside the "
+                    "original-language captions (T10). A bool rather than a target language "
+                    "because Whisper's translate task only ever produces English, so a "
+                    "language field would be a control that silently ignores its value. Costs "
+                    "a second ASR pass over the source (cached separately by T8), so it is off "
+                    "by default and skipped entirely when the source is already English.",
     )
     # AU4: speech de-noise.
     speech_denoise: str = Field(

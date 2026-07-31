@@ -21,6 +21,7 @@ from config import settings
 from worker import (
     audio_features,
     candidate_ranking,
+    discourse,
     hook_score,
     intermediate_cache,
     scene_detect,
@@ -106,6 +107,13 @@ def _segment_annotation(
                 tags.append("quiet")
             if energy.quiet_fraction >= 0.5:
                 tags.append("mostly silent")
+
+    # S7/S8/S12: what the segment *says*, alongside how it was said. Same rule as the delivery
+    # tags above - only departures are described, so an unremarkable segment still renders exactly
+    # as it did before S10 and the annotated ones stand out.
+    note = discourse.prompt_note(segment.text or "")
+    if note:
+        tags.append(note)
 
     return f" ({', '.join(tags)})" if tags else ""
 
@@ -294,6 +302,9 @@ def _fallback(
     selection_features.annotate_candidates(candidates, words, total_duration)
     audio_features.annotate_candidates(candidates, envelope)
     hook_score.annotate_candidates(candidates, words, envelope=envelope)
+    # S7/S8/S12: text-structure signals. Pure and offline - no media, no model call - so this runs
+    # on every path rather than being gated like the acoustic measurements.
+    discourse.annotate_candidates(candidates)
     candidates = candidate_ranking.rank_candidates(
         candidates, target=target, min_len=min_len, max_len=max_len
     )
@@ -360,6 +371,7 @@ def select_moments(
         selection_features.annotate_candidates(found, transcript.words, total_duration)
         audio_features.annotate_candidates(found, envelope)
         hook_score.annotate_candidates(found, transcript.words, envelope=envelope)
+        discourse.annotate_candidates(found)
         return found
 
     def _fallback_result() -> list[ClipCandidate]:
