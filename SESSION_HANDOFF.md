@@ -6,15 +6,8 @@ rather than amended, because a handoff document that is wrong is worse than none
 
 ## Start here
 
-**1. Check that `main` has the work before building on it.** See
-[§1](#1-where-the-work-is). One PR carries the whole Phase 1–4 pass onto `main`; until it
-lands, branching off `main` means rebuilding things that already exist.
-
-```bash
-git fetch origin
-git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
-  || echo "main is BEHIND - see section 1"
-```
+**1. `main` has the Phase 1–4 work.** It landed in PR #76. Branch from `main` and you are
+building on all of it — see [§1](#1-where-the-work-is) for what is there.
 
 **2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
 a priority and effort estimate each, every current value quoted from the code. **140 are now
@@ -34,9 +27,15 @@ when a constant changes, and one module reports "I cannot do this" rather than d
 
 ## 1. Where the work is
 
-Version `0.11.0`. The Phase 1–4 pass was built as a stack of PRs and they have all been merged —
-but into **each other**, not into `main`. Consolidated onto one branch (`integrate/main-sync`) which
-is what carries the lot onto `main`:
+Version `0.11.0`. **All of the Phase 1–4 work is on `main`.**
+
+It was built as a stack of PRs that were merged into *each other* rather than into `main`, which
+is why an earlier version of this section told you to verify that and gave you a `git cat-file`
+check to run. PR #76 consolidated the stack onto `integrate/main-sync` and merged it, so that
+warning is now the opposite of the truth and has been removed rather than softened — a handoff
+that is wrong is worse than none, and this section was the example.
+
+What each PR in that stack contributed:
 
 | Merged PR | Items | Backend tests |
 | --- | --- | --- |
@@ -50,13 +49,25 @@ is what carries the lot onto `main`:
 | #74 | C21, V15, AU9, O8 | 1880 |
 | #75 | the mutation harness and this document | — |
 
-**Why one branch rather than a chain.** Each PR was based on the previous one, so merging them
-bottom-up landed #72 in `feat/selection-transcript`, #73 in `feat/assets-expansion` and #74 in
-`feat/infra-verification` — none of which is `main`. Only #71 reached
-`integrate/phase4-base`. The consolidation merges both `integrate/phase4-base` *and* the chain tip,
-so nothing is taken on trust: the only conflict was `CHANGELOG.md`, and the incoming version was
-verified to be a strict superset of `main`'s (every `###` heading present, released history
-byte-identical) before it was taken.
+**Why it needed one consolidation branch rather than a chain of merges.** Each PR was based on the
+previous one, so merging them bottom-up landed #72 in `feat/selection-transcript`, #73 in
+`feat/assets-expansion` and #74 in `feat/infra-verification` — none of which is `main`. Only #71
+reached `integrate/phase4-base`. The consolidation merged both `integrate/phase4-base` *and* the
+chain tip, so nothing was taken on trust: the only conflict was `CHANGELOG.md`, and the incoming
+version was verified to be a strict superset of `main`'s (every `###` heading present, released
+history byte-identical) before it was taken.
+
+**Landed since, on top of that:**
+
+| Merged PR | What |
+| --- | --- |
+| #77 | `font_available` consults the vendored `fontsdir`, so all 14 presets stop rendering in Noto Sans anywhere `fc-cache` has not run; an opencv-import guard; a test that required a `.venv` at one path |
+| #79 | Phase 1 security: shared-secret auth on `/api/*` and `/clips/*`, SSRF guard on URL ingest, rate limiting, non-root container, ruff `S` |
+
+**A remediation programme is in progress.** Its phases each land as one PR, in order, and each
+carries its own gates. Check the open PR list before starting anything — Phase 4 restructures
+`worker/effects/compositor.py` and `api/main.py`, and Phase 5 the frontend, so those are the two
+worth knowing about before you edit either area.
 
 **#10** (`docs: campaign-briefs spec`) is an older, unrelated documentation PR and is not part of
 this.

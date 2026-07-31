@@ -22,8 +22,26 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
-      # Set this to your site's origin, e.g. https://ai-video-clipper.onrender.com
-      # (or your custom domain). It is deliberately left blank rather than defaulted:
+      # ---------------------------------------------------------------------
+      # BOTH OF THE NEXT TWO MUST BE SET BEFORE THE FIRST DEPLOY.
+      #
+      # With ENVIRONMENT=production the app refuses to boot without them. That is
+      # deliberate: this blueprint sets autoDeploy: true and publishes the service on
+      # the open internet, so "started successfully but unauthenticated" is not a state
+      # worth offering. An unset value fails at startup with a message naming the
+      # variable, rather than logging a warning that scrolls past in the platform log.
+      # ---------------------------------------------------------------------
+      #
+      # The shared secret for every /api/* and /clips/* request. Send it as
+      # `Authorization: Bearer <token>` or `X-API-Token: <token>`; the dashboard reads it
+      # from localStorage (`clipper_token`), so set it once in the browser after deploy.
+      # Generate one with e.g. `openssl rand -hex 32`.
+      #
+      # This is a single shared secret, not user accounts.
+      - key: API_AUTH_TOKEN
+        sync: false
+      # Your site's origin, e.g. https://ai-video-clipper.onrender.com (or a custom
+      # domain). Left blank rather than defaulted:
       #
       #   * The application default is "*", which is fine for local development but
       #     lets any site call this API once it is public.
@@ -31,14 +49,24 @@ services:
       #     CORS specification forbids combining "*" with
       #     Access-Control-Allow-Credentials and browsers reject such a response.
       #
-      # Leaving it unset boots with the wildcard and logs a warning on every start,
-      # since ENVIRONMENT is production here. Comma-separate multiple origins.
+      # Comma-separate multiple origins.
       - key: CORS_ORIGINS
         sync: false
+      # Behind Render's proxy every request otherwise appears to come from the proxy, so
+      # the whole deployment would share one rate-limit bucket. Only safe to enable
+      # because Render terminates and rewrites this header; do not copy it to a
+      # directly-exposed host, where a client can forge it.
+      - key: TRUST_FORWARDED_FOR
+        value: "true"
       - key: STORAGE_BACKEND
         value: local        # set to "s3" and fill the S3_* vars for durable storage
+      # `small`, matching config.py. This said `base` while the application default was
+      # raised to `small` by plan item T1 — so the blueprint silently reverted a completed
+      # P0 on every deploy, and captions are the most visible artefact in the product.
+      # An env var in a blueprint overrides the code default without leaving a trace that
+      # it did.
       - key: WHISPER_MODEL
-        value: base
+        value: small
       - key: RETENTION_DAYS
         value: "30"
       - key: LLM_PROVIDER

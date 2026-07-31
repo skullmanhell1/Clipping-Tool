@@ -3,7 +3,7 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.8.0 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
+> **Status:** v0.11.0 — **Phases 1–5, the Tier 1 creator-output upgrade, speaker diarisation & multi-speaker reframe, and the Phase 1–4 improvement pass are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
@@ -224,42 +224,75 @@ Instagram / X.
 
 ## Project layout
 
+Grouped by what each part is responsible for rather than exhaustively — `worker/` alone is 40
+modules. The three things worth knowing before navigating it: the **pipeline** is the spine, the
+**engines** are a plugin layer with their own lifecycle, and `compositor.py` is where almost every
+visual effect ends up as one ffmpeg pass.
+
 ```
 .
-├── api/main.py                     # FastAPI app (health, info, placeholder page)
+├── api/
+│   ├── main.py                     # FastAPI app: 47 routes, grouped by `tags=[...]`
+│   └── security.py                 # shared-secret auth + in-process rate limiting
 ├── worker/
-│   ├── tasks.py                    # re-export shim; currently unused (jobs.py is imported directly)
-│   ├── ffmpeg_utils.py             # FFmpeg/FFprobe helpers
-│   ├── transcribe.py               # faster-whisper transcription
-│   ├── selection.py                # AI "best moment" selection
-│   ├── metadata.py                 # titles / descriptions / hashtags
-│   ├── captions.py                 # subtitle build + burn-in
-│   ├── llm_client.py               # pluggable OpenAI/Anthropic client
-│   └── effects/                    # Phase 4 visual effects
-│       ├── overlays.py             # zoom/color/fade/progress filter builders
-│       ├── audio.py                # mood music beds + mixing
-│       ├── reframe.py              # face-tracking auto-reframe
-│       ├── emoji.py                # word-synced Twemoji overlays
-│       ├── filler.py               # filler-word / pause removal
-│       └── compositor.py           # single-pass effect composition
+│   ├── pipeline.py                 # the spine: probe → transcribe → select → per-clip render
+│   ├── jobs.py                     # JobManager/JobStore; durable job records, cancellation
+│   ├── models.py                   # ProcessingOptions, Job, ClipResult (the shared vocabulary)
+│   │
+│   │                               # -- choosing what to clip --------------------------------
+│   ├── selection.py                # LLM moment selection + deterministic fallback
+│   ├── candidate_ranking.py        # blends hook/pace/energy/structure/standalone/intensity
+│   ├── discourse.py                # question/list/standalone/intensity signals (pure)
+│   ├── audio_features.py           # RMS envelope, speech rate  ·  hook_score.py
+│   ├── visual_selection.py         # keyframe-aided selection   ·  scene_detect.py
+│   │
+│   │                               # -- transcript ------------------------------------------
+│   ├── transcribe.py               # faster-whisper  ·  transcript_cache.py, transcript_filter.py
+│   ├── diarization.py              # speaker turns   ·  language.py, script_support.py
+│   │
+│   │                               # -- captions --------------------------------------------
+│   ├── captions.py                 # ASS build, the font resolver + fallback ladder
+│   ├── caption_placement.py        # safe areas, face avoidance  ·  caption_contrast.py
+│   ├── text_metrics.py             # measured wrapping           ·  caption_preview.py
+│   │
+│   │                               # -- render ----------------------------------------------
+│   ├── ffmpeg_utils.py             # the one place that names libx264/-crf (guarded by a test)
+│   ├── video_encoders.py           # hardware encoder probing + refusals
+│   ├── output_profiles.py          # per-platform output  ·  subtitle_export.py, thumbnail.py
+│   ├── branding.py                 # brand kit           ·  rerender.py, intermediate_cache.py
+│   │
+│   ├── effects/                    # one ffmpeg pass, assembled here
+│   │   ├── compositor.py           # ← builds that pass; captions + look + emoji + b-roll + music
+│   │   ├── overlays.py             # zoom/colour/fade/progress/end-card filter fragments
+│   │   ├── audio.py                # music beds, loudness normalisation, ducking, limiting
+│   │   ├── reframe.py              # face-tracking and speaker-aware reframe
+│   │   ├── emoji.py  broll.py  filler.py  sfx.py  caption_presets.py
+│   │
+│   └── engines/                    # optional AV plugins (~10.7k lines), all default-off
+│       ├── base.py                 # Engine protocol, Engine_Context, stage enum
+│       ├── host.py                 # Engine_Host: runs engines per stage, adopts or discards
+│       ├── capabilities.py         # real-binary probing (ffmpeg filters, fonts, models)
+│       ├── kinetic.py              # kinetic typography (COMPOSE stage)
+│       ├── stems.py                # stem separation / inpainting (AUDIO stage)
+│       └── registry.py  loader.py  artifacts.py  timebase.py
 ├── publishers/
-│   ├── base.py                     # common publisher interface + status
-│   ├── history.py                  # SQLite clip/publish/campaign history
-│   ├── manager.py                  # routing + throttled scheduler
+│   ├── base.py                     # publisher interface + credential status
+│   ├── manager.py                  # routing + throttled scheduler  ·  retry.py, best_times.py
+│   ├── preflight.py                # per-platform media validation before upload
+│   ├── history.py                  # SQLite clip/publish/campaign history  ·  tailoring.py
 │   └── {whop,youtube,tiktok,instagram,x}.py
 ├── publisher_bridge/               # Node @whop/sdk upload bridge
 ├── storage_backends/               # local + S3 + retention/cleanup
-├── assets/emoji/                   # Twemoji PNGs
+├── evaluation/                     # selection benchmark harness (S1) + WER, golden renders
+├── scripts/                        # setup_dev_env, docker_smoke, smoke_reel, mutate, eval_*
+├── assets/                         # fonts (+ licences & manifest), emoji, music
 ├── frontend/                       # React + Tailwind dashboard
-├── storage/{uploads,temp,clips}/   # local storage (bind-mounted in Docker)
-├── .github/workflows/ci.yml
-├── config.py                       # pydantic settings
-├── VERSION
-├── CHANGELOG.md
-├── requirements.txt
-├── .env.example
-├── docker-compose.yml
-└── Dockerfile
+├── tests/                          # ~2000 tests, incl. real-binary and mutation specs
+├── .github/workflows/              # ci.yml (backend/frontend/docker/deploy), mutation.yml
+├── config.py                       # pydantic settings — `.env.example` is its contract
+├── docs/IMPROVEMENT_PLAN.md        # the 154-item backlog (an audit of v0.10.0)
+├── SESSION_HANDOFF.md              # read this first
+└── Dockerfile  docker-compose.yml  render.yaml  VERSION  CHANGELOG.md
 ```
 
 ---

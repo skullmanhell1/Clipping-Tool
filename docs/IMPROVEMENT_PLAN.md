@@ -18,6 +18,17 @@ here" documents — `P0`–`P3` are phase rows rather than items, excluding ever
 `publishers/preflight.py`, labelled `O10`). **The "current values" quoted throughout this
 document are as of 0.10.0 and most are now stale** — verify against the code before acting on one.
 
+> **This document is an audit of v0.10.0, not a description of the current system.** Every
+> "what we emit today" table — §1 (captions), §4 (transcription), §5 (reframe), §6 (audio)
+> and §7 (encoding) — records what the code did *then*. Several are now inverted rather than
+> merely out of date: the caption font is no longer `Arial`, music is no longer two sine
+> waves, the encoder sets `pix_fmt`/`profile`/`-r`, and thirteen features the audit found
+> default-off now default on. Individual rows that have landed are struck through and
+> annotated, but treat an unannotated "current value" as a historical measurement.
+>
+> The audit is kept in this form on purpose. It is the reasoning behind 140 changes, and
+> rewriting it into present tense would destroy the record of *why* each was worth making.
+
 ---
 
 ## How to read this
@@ -115,7 +126,7 @@ the "plain" impression.
 | **C18** | Caption preview endpoint: render a 2-second sample of a preset over a still, so a user can pick a style without a full render. | **P1** | M |
 | **C19** | Emoji inline *and* caption-adjacent placement, driven by the highlighted keyword rather than a time budget (see §3). | **P1** | M |
 | **C20** | Auto-contrast: sample the frame behind the caption and pick outline/box colour for legibility. | **P2** | M |
-| **C21** | RTL and CJK handling — `WrapStyle: 2` plus a Latin font will fail on Arabic/Hebrew/Chinese. Noto covers CJK; nothing selects it per language. | **P2** | M |
+| **C21** | ~~RTL and CJK handling.~~ **DONE**, but read the correction: this row says "Noto covers CJK", which is true of the Noto *project* and **not** of the vendored `NotoSans[wdth,wght].ttf` — nothing shipped here covers Arabic, Hebrew, Thai or CJK. So `worker/script_support.py` reports `caption_script_unsupported` rather than substituting a font that cannot render the text. Coverage is decided by reading the font's own `cmap`, never by `fc-match`, which is a *best match* and always answers — `fc-match ':lang=ar'` returns a font containing no Arabic. | **P2** | M |
 | **C22** | Profanity masking option for captions. | **P3** | S |
 
 **Context on why this matters:** analysis published by OpusClip reports captions appear in
@@ -299,7 +310,7 @@ tile on that speaker's **mean** centre — static, with `intensity` ignored.
 
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
-| **V1** | **Reframe is off by default**, so the default output is a centre crop that decapitates any off-centre speaker. Turn it on. | **P0** | S |
+| **V1** | ~~**Reframe is off by default**, so the default output is a centre crop that decapitates any off-centre speaker. Turn it on.~~ **DONE** — `reframe` now defaults to `True` in `ProcessingOptions`. | **P0** | S |
 | **V2** | Replace Haar with a modern detector (MediaPipe Face Detection / BlazeFace, or YOLO-face). Haar is from 2001, misses profiles and non-frontal faces, and false-positives on texture. | **P1** | M |
 | **V3** | Active-speaker detection so multi-person footage follows whoever is talking, rather than the largest face. This is the single biggest reframe quality gap; open models exist (TalkNet, Light-ASD). | **P1** | L |
 | **V4** | Reset tracking on shot changes — currently the EMA smooths *across* a cut, so the crop drifts through the new shot. Pair with **S9**. | **P1** | M |
@@ -375,7 +386,7 @@ Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
 | **PB1** | **Verify all five publishers against live accounts.** None has ever run against a real platform, including the approve/retry path. This is the largest untested surface in the repo. | **P0** | M |
-| **PB2** | Wire `/api/publish-attempts/{id}/approve` and `/retry` into the UI. Verified: **zero references** in `frontend/src/`. The endpoints exist but are unreachable from the dashboard. | **P0** | S |
+| **PB2** | ~~Wire `/api/publish-attempts/{id}/approve` and `/retry` into the UI.~~ **DONE.** The "Verified: zero references in `frontend/src/`" note above was true when written and is now false — both are wired in `HistoryView.jsx` (lines 46 and 57), with the file's own comment recording that they previously had no references. | **P0** | S |
 | **PB3** | Pre-flight media validation per platform (see **O10**). | **P0** | M |
 | **PB4** | Token refresh and expiry handling; nothing refreshes OAuth tokens. | **P1** | M |
 | **PB5** | Retry with exponential backoff for transient failures, separate from human review. | **P1** | M |
@@ -390,7 +401,7 @@ Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
 
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
-| **U1** | **Change the defaults.** A default run enables only captions, 9:16, `ai` strategy and metadata. Off: reframe, zoom, transitions, fades, hook title, progress bar, music, filler removal, b-roll, kinetic typography, speaker reframe, visual selection, emoji. The tool ships looking worse than it is capable of. | **P0** | S |
+| **U1** | ~~**Change the defaults.**~~ **DONE.** The list in this row is the *old* state and is now wrong in both directions. Verified against `ProcessingOptions()` rather than from memory — defaulting **on**: reframe, zoom, transitions, fades, hook title, progress bar, `emoji="standard"`, keyword highlighting, visual selection, silence trimming, loudness normalisation and music ducking. Still **off**: filler removal (hard cuts without a j-cut are audible — see `V10`), music, b-roll, kinetic typography, speaker reframe, diarisation, and every setting added after this pass — see `SESSION_HANDOFF.md` §5 for why a new visual setting must default to previously-shipped behaviour. | **P0** | S |
 | **U2** | Ship 3–4 opinionated **profiles** ("Podcast", "Gaming", "Talking head", "Educational") that set a whole coherent bundle. | **P0** | M |
 | **U3** | Preview player with scrubbing before publishing. | **P1** | M |
 | **U4** | Transcript-based trimming — click words to cut. This is the feature Descript-class tools are chosen for. | **P1** | L |
