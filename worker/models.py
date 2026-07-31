@@ -645,6 +645,13 @@ class Job:
     # known only inside the job body and thrown away, which is why re-rendering one clip
     # previously meant re-downloading and re-running the whole job.
     source_path: str = ""
+    # I5: the windows selection chose, as ``{"start", "end", "reason", "score"}`` dicts.
+    #
+    # Recorded so an interrupted job can be resumed rather than restarted. Without it a resume
+    # would have to re-run selection, which with an LLM in it is not deterministic - so the
+    # clips already on disk might not correspond to any window the second run chose, and the
+    # user would get a mix of two different selections.
+    planned_clips: list[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: Optional[str] = None
     status: JobStatus = JobStatus.QUEUED
@@ -673,6 +680,8 @@ class Job:
             "source": self.source,
             # U7: needed to re-render one clip without re-downloading the source.
             "source_path": self.source_path,
+            # I5: the selected windows, so an interrupted job can resume the missing ones.
+            "planned_clips": self.planned_clips,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
@@ -709,6 +718,7 @@ class Job:
             source=str(data.get("source") or ""),
             options=ProcessingOptions.from_dict(data.get("options")),
             source_path=str(data.get("source_path") or ""),
+            planned_clips=list(data.get("planned_clips") or []),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,

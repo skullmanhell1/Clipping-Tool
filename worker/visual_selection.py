@@ -28,7 +28,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from config import settings
-from worker import candidate_ranking
+from worker import candidate_ranking, intermediate_cache
 from worker import ffmpeg_utils as fu
 from worker import segmentation as seg
 from worker import selection as sel
@@ -106,6 +106,17 @@ def sample_keyframes(
 
         def _default_sampler(src, t, _dir=tmp_dir, _width=width):
             dest = os.path.join(_dir, f"kf_{t:.3f}.jpg")
+            # I3: an already-extracted frame is reused rather than decoded again.
+            #
+            # This is the line that makes the content-addressed frames directory worth having:
+            # without it the cache would hand back a directory of correct frames and then
+            # overwrite every one of them, paying the 48 seeks it was supposed to save. A
+            # zero-byte file is treated as absent, since a run killed mid-write leaves one.
+            try:
+                if os.path.getsize(dest) > 0:
+                    return dest
+            except OSError:
+                pass
             try:
                 fu.generate_thumbnail(src, dest, at=t, width=_width)
                 return dest
@@ -364,13 +375,34 @@ def select_moments_visual(
     # paths must still be readable while `derive_visual_cues` reads their brightness.
     try:
         limit = int(getattr(settings, "keyframe_sample_limit", 12))
-        with tempfile.TemporaryDirectory(prefix="kf-") as frames_dir:
+        width = int(getattr(settings, "keyframe_sample_width", 480) or 480)
+        # I3: reuse this source's already-extracted frames when they are still on disk.
+        #
+        # Keyframes are files, so they are cached as files in a content-addressed directory rather
+        # than serialised. `sample_keyframes` skips a frame whose file already exists, so a second
+        # run over the same source performs no seeks at all - 48 decodes at 480 px saved.
+        #
+        # The directory is *not* a TemporaryDirectory in this path: deleting it is what would make
+        # the cache useless. `intermediate_cache.prune` bounds it instead, which is the same trade
+        # the transcript cache makes.
+        cached_dir = intermediate_cache.frames_dir_for(
+            source_path, {"limit": limit, "width": width}
+        )
+        if cached_dir is not None:
             frames = derive_visual_cues(
                 sample_keyframes(
                     source_path, total_duration, limit=limit, sampler=sampler,
-                    frames_dir=frames_dir,
+                    frames_dir=str(cached_dir),
                 )
             )
+        else:
+            with tempfile.TemporaryDirectory(prefix="kf-") as frames_dir:
+                frames = derive_visual_cues(
+                    sample_keyframes(
+                        source_path, total_duration, limit=limit, sampler=sampler,
+                        frames_dir=frames_dir,
+                    )
+                )
     except Exception:
         frames = []
 

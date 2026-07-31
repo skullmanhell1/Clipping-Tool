@@ -137,6 +137,12 @@ export const api = {
     }).then(jsonOrThrow),
   cancelPublishAttempt: (attemptId) =>
     fetch(`/api/publish-attempts/${attemptId}/cancel`, { method: "POST" }).then(jsonOrThrow),
+  // I5: render a failed job's unfinished clips, keeping the ones it already produced. An
+  // interrupted job used to be marked failed wholesale, so the only way forward was to re-submit
+  // the source and pay for every clip again — including the ones that had succeeded.
+  resumeJob: (jobId) =>
+    fetch(`/api/jobs/${jobId}/resume`, { method: "POST" }).then(jsonOrThrow),
+
   // U7: re-render one clip with changed settings, instead of resubmitting the whole source.
   // Resubmitting re-downloads, re-transcribes, re-selects and re-renders every other clip — and
   // because selection is not deterministic with an LLM in it, you get a *different set* of clips

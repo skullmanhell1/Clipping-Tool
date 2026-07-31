@@ -811,6 +811,22 @@ class Settings(BaseSettings):
     publish_retry_max_seconds: float = Field(
         default=3600.0, description="Ceiling on the retry delay (PB5)."
     )
+    # I3: cache the per-source measurements that need a whole-file decode.
+    intermediate_cache_enabled: bool = Field(
+        default=True,
+        description="Cache silence maps, energy envelopes and sampled keyframes by source "
+                    "content hash (I3). T8 already caches transcripts; these are the other "
+                    "whole-file decodes that repeated on every run of the same video.",
+    )
+    intermediate_cache_dir: Optional[Path] = Field(
+        default=None,
+        description="Where I3 intermediates live. Defaults to <temp_dir>/intermediates.",
+    )
+    intermediate_cache_max_entries: int = Field(
+        default=200,
+        description="Cache entries retained before the oldest are pruned (I3). 0 disables "
+                    "pruning, which on a long-lived instance is a slow disk leak.",
+    )
     # PB4: how early an expiring access token is renewed.
     publish_token_refresh_margin_seconds: float = Field(
         default=300.0,
