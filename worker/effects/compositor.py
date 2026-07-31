@@ -170,6 +170,7 @@ def render_clip(
     emoji_resolver=None,
     broll_resolver: Optional[Callable[[], list]] = None,
     engine_contributions: Optional[Sequence["Compose_Contribution"]] = None,
+    music_select_key: str = "",
 ) -> Optional[RenderResult]:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -461,13 +462,23 @@ def render_clip(
     # limitation invisible.
     music_bed: Optional[audio.MusicBed] = None
     if options.music:
-        music_bed = audio.resolve_music_bed(options.music, duration, temp_dir)
+        # A17: `music_select_key` picks among several tracks for the mood. Supplied by the caller
+        # rather than derived here, because the only keys that work are ones this function cannot
+        # see: the clip's temp filename carries a `uuid4`, so keying on anything local would give
+        # a different bed on every re-run and break the M1 golden renders.
+        music_bed = audio.resolve_music_bed(
+            options.music, duration, temp_dir, select_key=music_select_key
+        )
     if not info.has_audio:
         # No audio track to work with; ignore music/fade on audio.
         music_bed = None
     music_path: Optional[Path] = None if music_bed is None else music_bed.path
 
     # --- b-roll cues (already resolved via the injected resolver) ---------
+    # A22: filled in once the overlay graph is built, so only windows that are actually on screen
+    # duck the bed.
+    broll_duck_windows: list[tuple[float, float]] = []
+    broll_duck_amount = float(getattr(settings, "broll_duck", 0.0) or 0.0)
     broll_cues: list = []
     if broll_resolver is not None:
         try:
@@ -508,6 +519,10 @@ def render_clip(
             broll_input_args, broll_graph, broll_notes = broll.build_broll_overlay(
                 broll_cues, base_label=broll_base, out_label="vbroll",
                 width=width, height=height, fps=fps, input_offset=broll_offset,
+                # A22: motion on stills. Off by default - it cover-crops them into a fixed box,
+                # which is a visible change to the shipped look.
+                ken_burns=bool(getattr(settings, "broll_ken_burns", False)),
+                zoom=float(getattr(settings, "broll_ken_burns_zoom", 0.0) or 0.0),
             )
         except Exception:
             broll_input_args, broll_graph, broll_notes = [], "", []
@@ -515,6 +530,12 @@ def render_clip(
                 applied.append("broll_degraded")
         if broll_graph:
             broll_records = [broll.broll_asset_record(c) for c in broll_cues]
+            # A22: the windows the audio side ducks under. Taken from the cues that actually
+            # produced a graph, so a failed overlay does not leave an unexplained dip in the bed.
+            broll_duck_windows = [
+                (max(0.0, float(c.start)), max(0.0, float(c.end)))
+                for c in broll_cues if float(c.end) > float(c.start)
+            ]
 
     num_broll_inputs = broll_input_args.count("-i")
     emoji_offset = broll_offset + num_broll_inputs
@@ -566,6 +587,17 @@ def render_clip(
         graph_parts.append(emoji_graph)
         video_out = "vout"
         applied.append(f"emoji:{options.emoji}")
+        # A13: record the artwork set, and record it *separately* when a glyph came from the
+        # vendored Noto fallback instead. The fallback keeps the overlay rather than dropping it,
+        # which is the right trade, but it means the rendered look is not the one that was asked
+        # for - and a cosmetic difference nobody is told about is a bug report later.
+        emoji_style = emoji.resolve_style()
+        if emoji_style.name != emoji.DEFAULT_STYLE:
+            applied.append(f"emoji_style:{emoji_style.name}")
+            wanted = emoji.style_assets_dir(emoji_style).resolve()
+            used = [Path(emoji_inputs[i + 1]) for i, a in enumerate(emoji_inputs) if a == "-i"]
+            if any(path.resolve().parent != wanted for path in used):
+                applied.append(f"emoji_style_degraded:{emoji_style.name}")
     else:
         video_out = video_label
 
@@ -623,17 +655,30 @@ def render_clip(
             audio.music_mix_filter(speech_label, f"{music_index}:a", "aout",
                                    options.music_volume, duration,
                                    fade=options.fades,
-                                   duck=options.music_duck)
+                                   duck=options.music_duck,
+                                   # A22: dip the bed under each b-roll window, so a visual
+                                   # accent has an audible one. Only the windows that actually
+                                   # composited - a cue whose asset failed to resolve is not on
+                                   # screen, and ducking under nothing is a hole in the bed.
+                                   broll_windows=broll_duck_windows,
+                                   broll_duck=broll_duck_amount)
         )
         audio_out = "aout"
         audio_changed = True
         applied.append(f"music:{options.music}")
         if options.music_duck:
             applied.append("music_ducked")
+        if broll_duck_windows and broll_duck_amount > 0.0:
+            applied.append(f"broll_ducked:{len(broll_duck_windows)}")
         if music_bed is not None and music_bed.synthesised:
             # A15: a labelled last resort, not a track. Recorded next to the music marker
             # so a clip's own record says which of the two it got.
             applied.append("music_degraded:synthesised")
+        elif music_bed is not None and music_bed.track_count > 1:
+            # A17: which of the mood's tracks this clip drew. The point of A17 is that two clips
+            # in a batch do not share a bed, and nothing in a clip record would otherwise show
+            # whether that happened - the path is not in the record, only the marker is.
+            applied.append(f"music_track:{music_bed.track_index}/{music_bed.track_count}")
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
         graph_parts.append(

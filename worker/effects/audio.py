@@ -25,11 +25,12 @@ optionally, matching fade in/out.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from config import settings
 from worker.ffmpeg_utils import _run, escape_filter_path
@@ -53,14 +54,86 @@ def available_moods() -> list[str]:
     return list(_MOOD_SYNTH.keys())
 
 
-def find_user_track(mood: str) -> Optional[Path]:
-    """Return a user-supplied ``music_dir/<mood>.<ext>`` track if one exists."""
+def find_user_tracks(mood: str) -> list[Path]:
+    """Every user-supplied track for ``mood``, in a stable order (A17).
+
+    One track per mood meant every clip in a batch of ten carried the *same* bed. That is the
+    single most obvious way a set of clips reads as machine-produced - a viewer scrolling a
+    creator's feed hears the same eight bars under all of them.
+
+    Three layouts are accepted, because the natural way to hold twenty tracks is not the natural
+    way to hold one:
+
+    * ``music_dir/<mood>.mp3`` - the original single-file layout, still first;
+    * ``music_dir/<mood>/*.mp3`` - a directory per mood, which is what a real library looks like;
+    * ``music_dir/<mood>_2.mp3``, ``<mood>-3.mp3``, ``<mood> 4.mp3`` - numbered siblings.
+
+    Sorted by name rather than by mtime or directory order. Both of those change when files are
+    copied between machines, and this list has to be identical on two installs for the selection
+    below to be reproducible at all.
+    """
     base = Path(settings.music_dir)
+    if not base.is_dir():
+        return []
+
+    exact: list[Path] = []
     for ext in _AUDIO_EXTS:
         candidate = base / f"{mood}{ext}"
-        if candidate.exists():
-            return candidate
-    return None
+        if candidate.is_file():
+            exact.append(candidate)
+
+    variants: list[Path] = []
+    mood_dir = base / mood
+    if mood_dir.is_dir():
+        variants += [
+            path for path in mood_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in _AUDIO_EXTS
+        ]
+    for path in base.iterdir():
+        if not path.is_file() or path.suffix.lower() not in _AUDIO_EXTS:
+            continue
+        stem = path.stem
+        # `<mood>` followed by a separator, so "upbeat_2" matches and "upbeatish" does not - a
+        # prefix test alone would pull an unrelated mood's tracks into this one.
+        if len(stem) > len(mood) and stem[: len(mood)] == mood and stem[len(mood)] in "_- ":
+            variants.append(path)
+
+    # The exact-name file first so a single-track install is byte-identical to before, then the
+    # rest by name.
+    return exact + sorted(variants, key=lambda p: (p.name, str(p)))
+
+
+def find_user_track(mood: str) -> Optional[Path]:
+    """The first user-supplied track for ``mood``, or ``None``.
+
+    Retained because it is the published single-track entry point; :func:`find_user_tracks` is
+    what A17 selects from.
+    """
+    tracks = find_user_tracks(mood)
+    return tracks[0] if tracks else None
+
+
+def choose_track(tracks: Sequence[Path], select_key: str) -> Optional[Path]:
+    """Pick one of ``tracks`` deterministically from ``select_key`` (A17).
+
+    **Deterministic, not random.** A batch wants variety *between* clips, and re-running the same
+    job wants the same output - the M1 golden renders depend on the second, and a creator
+    re-rendering one clip of ten to fix a typo does not want a different bed under it. Random
+    selection gives variety and loses reproducibility; hashing a stable key gives both.
+
+    The hash is **blake2b, not** :func:`hash`. Python's ``hash`` of a string is salted per process
+    unless ``PYTHONHASHSEED`` is set, so a ``hash(key) % len(tracks)`` selection would be stable
+    within one run and different on the next - reproducible in exactly the tests that would catch
+    it and not in production.
+
+    An empty ``select_key`` returns the first track, which is the pre-A17 behaviour.
+    """
+    if not tracks:
+        return None
+    if len(tracks) == 1 or not select_key:
+        return tracks[0]
+    digest = hashlib.blake2b(select_key.encode("utf-8"), digest_size=8).digest()
+    return tracks[int.from_bytes(digest, "big") % len(tracks)]
 
 
 def synth_bed_filter(mood: str) -> str:
@@ -122,6 +195,14 @@ class MusicBed:
     path: Path
     mood: str
     source: str
+    #: Which of the mood's tracks this is, and how many there were (A17). ``(0, 0)`` for the
+    #: synthesised bed, which is one drone per mood by construction.
+    #:
+    #: Reported so the *variety* is visible. A17's whole purpose is that two clips in a batch do
+    #: not share a bed, and a caller looking at two clip records could not otherwise tell whether
+    #: that happened - the paths are not in the record, only the marker is.
+    track_index: int = 0
+    track_count: int = 0
 
     @property
     def synthesised(self) -> bool:
@@ -130,19 +211,27 @@ class MusicBed:
 
 
 def resolve_music_bed(
-    mood: str, duration: float, temp_dir: str | Path
+    mood: str, duration: float, temp_dir: str | Path, *, select_key: str = ""
 ) -> Optional[MusicBed]:
-    """Resolve a bed for ``mood``, reporting whether it is a real track (A15).
+    """Resolve a bed for ``mood``, reporting whether it is a real track (A15) and which (A17).
 
     Returns ``None`` when ``mood`` is empty or unknown, or when synthesis is the only
     option and ``settings.music_allow_synthesis`` is off — in which case the clip is
     rendered without music rather than with a drone the caller did not ask for.
+
+    ``select_key`` chooses among several tracks for the mood, deterministically - see
+    :func:`choose_track`. Empty means "the first one", which is the pre-A17 behaviour, so a
+    caller that does not opt in gets byte-identical output.
     """
     if not mood:
         return None
-    user = find_user_track(mood)
+    tracks = find_user_tracks(mood)
+    user = choose_track(tracks, select_key)
     if user is not None:
-        return MusicBed(path=user, mood=mood, source=SOURCE_USER_TRACK)
+        return MusicBed(
+            path=user, mood=mood, source=SOURCE_USER_TRACK,
+            track_index=tracks.index(user) + 1, track_count=len(tracks),
+        )
     # A16 note: a user track is returned as-is here and fitted to the clip by
     # :func:`bed_fit_filter` inside the mix, rather than being pre-rendered to length. Cutting a
     # separate correctly-sized file first would cost an extra encode per clip for something the
@@ -224,6 +313,71 @@ def bed_fit_filter(
     return ",".join(parts) + f"[{label_out}]"
 
 
+def broll_duck_filter(
+    label_in: str,
+    label_out: str,
+    windows: Sequence[tuple[float, float]],
+    *,
+    amount: float,
+    ramp: float = 0.25,
+) -> str:
+    """Dip ``label_in`` while a b-roll overlay is on screen (A22).
+
+    A b-roll insert is a visual accent with no audible counterpart, so it reads as an image
+    dropped on top of the clip rather than as a beat in it. Dipping the bed under it is the
+    audio half of the same edit.
+
+    **The bed, not the mix.** Ducking the finished mix would duck the speech, and the speech is
+    the reason the clip exists - the b-roll is illustrating what is being said, so burying it
+    would invert the point. This is applied to the music bed only, and it is *additional* to the
+    AU2 speech duck: during a b-roll window over speech, the bed is under both.
+
+    Built as one ``volume`` expression with ``eval=frame`` rather than a chain of ``volume``
+    filters, because a chain multiplies on overlapping windows and two adjacent b-roll cues would
+    drive the bed to silence. The expression takes the *deepest* applicable dip instead.
+
+    ``ramp`` fades each dip in and out over that many seconds. A hard step in level is audible as
+    a click on a sustained bed, which is a worse artefact than the one this is fixing.
+    """
+    spans = [
+        (max(0.0, float(start)), max(0.0, float(end)))
+        for start, end in windows
+        if float(end) > float(start)
+    ]
+    floor = max(0.0, min(1.0, 1.0 - float(amount)))
+    if not spans or floor >= 1.0:
+        # Nothing to duck, or a zero dip: emit a pass-through relabel rather than a filter, so a
+        # disabled feature adds no processing at all to the graph.
+        return f"[{label_in}]anull[{label_out}]"
+
+    ramp = max(0.0, float(ramp))
+    terms: list[str] = []
+    for start, end in spans:
+        if ramp <= 0.0:
+            terms.append(f"between(t,{start:.3f},{end:.3f})*{1.0 - floor:.3f}")
+            continue
+        # A trapezoid: rise over `ramp`, hold, fall over `ramp`. Clamped so a window shorter than
+        # two ramps still dips (partially) rather than producing a negative hold.
+        rise_end = start + ramp
+        fall_start = max(rise_end, end - ramp)
+        terms.append(
+            f"between(t,{start:.3f},{rise_end:.3f})*{1.0 - floor:.3f}"
+            f"*(t-{start:.3f})/{ramp:.3f}"
+        )
+        if fall_start > rise_end:
+            terms.append(f"between(t,{rise_end:.3f},{fall_start:.3f})*{1.0 - floor:.3f}")
+        terms.append(
+            f"between(t,{fall_start:.3f},{end:.3f})*{1.0 - floor:.3f}"
+            f"*({end:.3f}-t)/{ramp:.3f}"
+        )
+
+    # max() over the terms, so overlapping windows take the deepest dip instead of compounding.
+    depth = terms[0]
+    for term in terms[1:]:
+        depth = f"max({depth},{term})"
+    return f"[{label_in}]volume=volume='1-({depth})':eval=frame[{label_out}]"
+
+
 def music_mix_filter(
     original_label: str,
     music_label: str,
@@ -233,6 +387,8 @@ def music_mix_filter(
     fade: bool = False,
     fade_dur: float = 0.4,
     duck: bool = True,
+    broll_windows: Sequence[tuple[float, float]] = (),
+    broll_duck: float = 0.0,
 ) -> str:
     """Return a ``-filter_complex`` snippet mixing a music bed under speech.
 
@@ -248,6 +404,9 @@ def music_mix_filter(
 
     The speech is duplicated with ``asplit``: one copy keys the compressor, the other is
     mixed. It has to be both, and a filter output cannot be consumed twice.
+
+    ``broll_windows``/``broll_duck`` add A22's dip under each b-roll overlay - see
+    :func:`broll_duck_filter`. Zero (the default) leaves the graph exactly as it was.
     """
     vol = max(0.0, min(1.0, volume))
     ratio = max(1.0, float(settings.music_duck_ratio))
@@ -268,7 +427,12 @@ def music_mix_filter(
     # the bed again: two overlapping out-fades multiply and would pull the ending to silence
     # early. The speech keeps the caller's fades exactly as before.
     parts.append(bed_fit_filter(music_label, "bedfit", duration))
-    parts.append(f"[bedfit]volume={vol:.3f}[bedv]")
+    parts.append(f"[bedfit]volume={vol:.3f}[bedlvl]")
+    # A22: dip the bed under each b-roll window. Before the AU2 speech duck, so the two compose -
+    # a b-roll insert over speech puts the bed under both rather than under whichever ran last.
+    parts.append(
+        broll_duck_filter("bedlvl", "bedv", broll_windows, amount=broll_duck)
+    )
 
     # --- the speech: optional fades, then a split when ducking -------------
     speech_chain = f"[{original_label}]"

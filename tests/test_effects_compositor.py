@@ -391,7 +391,7 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     # now, because a bare path cannot say whether it is a real track (A15).
     monkeypatch.setattr(
         compositor.audio, "resolve_music_bed",
-        lambda mood, duration, temp_dir: compositor.audio.MusicBed(
+        lambda mood, duration, temp_dir, **_kw: compositor.audio.MusicBed(
             path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
         ),
     )
