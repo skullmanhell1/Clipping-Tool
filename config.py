@@ -429,8 +429,90 @@ class Settings(BaseSettings):
 
     # ---------------------------------- visual selection (Tier 1) ---------
     # Cap on keyframes sampled per source for visual/prompt clip finding.
+    #
+    # S14: raised from 12. Twelve frames across an hour-long source is one every five minutes,
+    # which cannot distinguish one clip-length window from its neighbour - every candidate in a
+    # five-minute stretch got the same visual score, so the signal was constant where it needed
+    # to discriminate. 48 gives roughly one frame per minute on a long source and several per
+    # candidate on a short one.
     keyframe_sample_limit: int = Field(
-        default=12, description="Max keyframes sampled per source for visual selection."
+        default=48, description="Max keyframes sampled per source for visual selection."
+    )
+    # S14: sampling width. Was hard-coded at 160 px, at which the motion proxy is measuring
+    # little more than JPEG noise: a 160x90 thumbnail averages away exactly the frame-to-frame
+    # difference it is supposed to detect. 480 is still tiny to decode and gives the brightness
+    # and motion proxies something to work with.
+    keyframe_sample_width: int = Field(
+        default=480, description="Pixel width of sampled keyframes for visual selection (S14)."
+    )
+
+    # ---------------------------------- selection scoring (S11, S15, S17) --
+    # Per-signal weights for the deterministic fallback's ranking. Exposed as settings rather
+    # than literals so the blend can be tuned against the S1 benchmark without a code change
+    # (S17). They are relative, not required to sum to 1 - the scorer normalises by their total.
+    #
+    # The defaults are a starting point, not a measured optimum: the honest way to set these is
+    # to run scripts/eval_selection.py against labelled footage and move them. What *is*
+    # defensible without labels is that all four beat "keep the longest segments", which is what
+    # they replace (S11).
+    selection_weight_hook: float = Field(
+        default=0.40,
+        description="Weight of the S6 hook score in fallback ranking. Highest of the four "
+                    "because retention is decided in the opening seconds.",
+    )
+    selection_weight_pace: float = Field(
+        default=0.20,
+        description="Weight of speech-rate deviation from the speaker's own norm (S4).",
+    )
+    selection_weight_energy: float = Field(
+        default=0.20,
+        description="Weight of audio energy relative to the source median (S2).",
+    )
+    selection_weight_length: float = Field(
+        default=0.20,
+        description="Weight of how closely the clip matches the requested length. Replaces the "
+                    "old rule that simply kept the longest segments.",
+    )
+    # S15: how much two candidates may overlap before the lower-scoring one is dropped.
+    # Measured as a fraction of the *shorter* candidate, so a short clip wholly inside a long
+    # one reads as 1.0 rather than as the small IoU that would let it through.
+    selection_max_overlap: float = Field(
+        default=0.5,
+        description="Max overlap (fraction of the shorter clip) before a candidate is treated "
+                    "as a duplicate (S15). 1.0 disables overlap de-duplication.",
+    )
+    selection_max_text_similarity: float = Field(
+        default=0.7,
+        description="Max content-word Jaccard similarity before two candidates are treated as "
+                    "the same moment (S15). 1.0 disables text de-duplication.",
+    )
+    # S6: relative weights inside the hook score itself.
+    hook_weight_promptness: float = Field(
+        default=0.40, description="Weight of how promptly speech starts, in the hook score (S6)."
+    )
+    hook_weight_pace: float = Field(
+        default=0.20, description="Weight of hook pace vs the clip's own pace (S6)."
+    )
+    hook_weight_energy: float = Field(
+        default=0.25, description="Weight of hook energy vs the clip's own energy (S6)."
+    )
+    hook_weight_text: float = Field(
+        default=0.15,
+        description="Weight of textual opener signals in the hook score (S6). Lowest on "
+                    "purpose: a keyword list is the component most easily fired by coincidence.",
+    )
+    # S2: energy envelope resolution. One reading per this many seconds, measured in a single
+    # ffmpeg astats pass over the source.
+    energy_envelope_window_s: float = Field(
+        default=1.0,
+        description="Seconds per audio-energy reading (S2). Smaller resolves individual words "
+                    "and adds noise; larger blurs the laughs and shouts worth detecting.",
+    )
+    # S10: show the measured per-segment features to the LLM alongside the transcript text.
+    selection_features_in_prompt: bool = Field(
+        default=True,
+        description="Annotate transcript lines with measured pace/energy in the selection "
+                    "prompt (S10), so the model can see that a moment was loud or animated.",
     )
 
     # How long the per-area directory sizes reported by /api/storage may be reused.
