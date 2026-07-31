@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — caching, resumable jobs, and golden-output tests (I3, I5, I8, M1)
+
+- **`I3` — cache the other whole-file decodes.** `T8` cached transcription and stopped there, so
+  three full decodes still ran on every job for the same source: silence detection
+  (`silencedetect` cannot work without decoding the audio), the energy envelope (one `astats` pass
+  over the whole file), and keyframe sampling (48 seeks at 480 px). None depends on anything a user
+  changes between runs, so re-running a source to try a different caption preset paid for all three
+  again.
+
+  Keyed on **content**, following `T8`: the usual path-and-mtime shortcut is wrong in exactly the
+  case that matters — footage re-exported over the same filename. Every parameter that shapes a
+  measurement is in the key too, because a silence map measured at −30 dB is not interchangeable
+  with one at −25, and serving the wrong one silently is worse than having no cache. An **empty**
+  result is cached like any other: "no detectable silence" is a real and expensive answer, and
+  treating it as a miss would re-decode the whole file on exactly the sources where the measurement
+  costs most.
+
+  The keyframe half needed one line to be worth anything: the sampler now skips a frame whose file
+  already exists. Without it the cache handed back a directory of correct frames and then overwrote
+  every one of them. A zero-byte file counts as absent, since a run killed mid-write leaves one.
+- **`I5` — resume a partially-completed job.** An interrupted job was marked failed *wholesale*:
+  the clips it had already rendered were on disk and listed in the record, and the only way forward
+  was to re-submit the source and pay for everything again, including re-rendering the clips that
+  had succeeded.
+
+  `Job.planned_clips` records the windows selection chose, before any rendering starts. A resume
+  then renders only the windows with no clip — reusing `U7`'s explicit-candidate path, so selection
+  does not re-run. That last part is correctness, not speed: selection is non-deterministic with an
+  LLM in it, so re-running it could leave the user with clips from two different selections.
+
+  Window matching allows a second of slack, because `AU7` silence trimming and `S9` cut snapping
+  both move a clip's boundaries *after* the plan is recorded — exact equality would re-render clips
+  that already exist. The interrupted-job message now distinguishes the two cases, since telling
+  someone to re-submit a job whose finished clips are on disk costs them the whole render twice.
+- **`I8` — frontend coverage beyond `api.js` and `Dropdown`.** 33 tests to 98, adding `ClipCard`,
+  `JobCard`, `ReviewBar`, `ClipPlayer`, `CaptionStylePicker` and `BrandKitPanel`. The `U11`
+  keyboard-shortcut tests matter most: a handler bound on the *window* is exactly the kind of code
+  that works when tried by hand and misfires in a situation nobody demonstrated. The one that would
+  hurt is typing — `a` must insert an `a` while someone edits a caption, not approve the clip behind
+  it, and that failure is silent.
+
+  Building them surfaced a real UI defect: the batch and per-clip verdict buttons had **identical
+  accessible names**, so "Approve" was ambiguous to a screen reader as well as to a test. The batch
+  ones are now "Approve selected clips".
+- **`M1` — golden-output rendering tests.** The v0.8.0 parity gate compares *filter graphs*, which
+  is blind to everything that changes pixels without changing the graph: a font resolving to a
+  different face, a LUT that silently did nothing, an overlay drawn off-frame, a colour-matrix shift
+  from an encoder upgrade.
+
+  Renders are compared by **perceptual** frame hash rather than exact hash. An exact hash is
+  reproducible for one ffmpeg build only, so a golden of exact hashes fails on every upgrade, gets
+  re-frozen without inspection, and stops meaning anything — the failure mode a golden exists to
+  prevent.
+
+  Finding a signal that actually discriminated took measuring rather than reasoning. An average hash
+  compares each cell to the frame's own mean, so it is invariant to contrast **by construction**: a
+  burned-in caption bar moved 11 bits, a contrast/saturation change moved 2. Adding the mean luma
+  did not separate them either — the graded clip moved 0.47 levels against 0.06 for a CRF 20→32
+  re-encode. The luma **spread** is what does: 49.5 unchanged, 49.5 re-encoded, 75.5 graded. All
+  three signals are stored, each covering what the others miss.
+
+  Stated plainly: this detects *visible* change, not pixel-exact equality. A one-pixel caption
+  offset or a metrically similar font substitution is below its resolution.
+
 ### Added — review workflow and brand kit (U3, U5, U6, U7, U9, U11)
 
 - **`U3` — a review player instead of a playback one.** The clip surface was a bare

@@ -286,7 +286,7 @@ class JobManager:
 
     # -- execution ---------------------------------------------------------
 
-    def _run(self, job_id: str) -> None:
+    def _run(self, job_id: str, resume: bool = False) -> None:
         """Worker entrypoint: ingest then run the pipeline, tracking progress.
 
         The whole body runs inside :func:`worker.observability.job_context`, so every log line
@@ -335,9 +335,83 @@ class JobManager:
             )
 
         with observability.job_context(job_id):
-            self._execute(job, job_id, progress, close_stage, metrics)
+            self._execute(job, job_id, progress, close_stage, metrics, resume)
 
-    def _execute(self, job, job_id, progress, close_stage, metrics) -> None:
+    #: How close two windows must be to count as the same planned moment, in seconds (I5).
+    #:
+    #: Not exact equality: `AU7` silence trimming and `S9` cut snapping both move a clip's
+    #: boundaries *after* the plan is recorded, so a rendered clip's start rarely matches the
+    #: window it came from to the millisecond. A second is comfortably larger than either
+    #: adjustment and far smaller than the gap between two distinct moments.
+    WINDOW_MATCH_TOLERANCE_S = 1.0
+
+    def _missing_windows(self, job) -> Optional[list]:
+        """The planned windows with no rendered clip, as candidates. ``None`` when unknowable.
+
+        Returning ``None`` means "no usable plan", and the caller then renders normally - which is
+        the pre-I5 behaviour and the only honest answer for a job interrupted before selection
+        finished.
+        """
+        planned = list(job.planned_clips or [])
+        if not planned:
+            return None
+
+        from worker.selection import ClipCandidate
+
+        done = [(float(c.start), float(c.end)) for c in (job.clips or [])]
+        missing = []
+        for window in planned:
+            try:
+                start = float(window.get("start"))
+                end = float(window.get("end"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            already = any(
+                abs(start - s) <= self.WINDOW_MATCH_TOLERANCE_S
+                and abs(end - e) <= self.WINDOW_MATCH_TOLERANCE_S
+                for s, e in done
+            )
+            if not already:
+                missing.append(
+                    ClipCandidate(
+                        start=start,
+                        end=end,
+                        reason=str(window.get("reason") or ""),
+                        score=float(window.get("score") or 0.0),
+                    )
+                )
+        return missing or None
+
+    def resume(self, job_id: str) -> bool:
+        """Re-run a failed job's unfinished clips, keeping the ones it already produced (I5).
+
+        An interrupted job was marked failed *wholesale*: the clips it had already rendered were
+        on disk and listed in the record, and the only way forward was to re-submit the source and
+        pay for everything again - including re-rendering the clips that had succeeded.
+
+        Returns ``False`` when the job cannot be resumed, which the API turns into a 409 naming
+        the reason rather than silently starting a full re-run.
+        """
+        job = self.store.get(job_id)
+        if job is None:
+            return False
+        if job.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
+            return False
+        if self._missing_windows(job) is None:
+            return False
+
+        cancellation.clear(job_id)
+        self.store.update(
+            job_id,
+            status=JobStatus.QUEUED,
+            stage="Queued (resuming)",
+            error=None,
+            progress=0.0,
+        )
+        self._executor.submit(self._run, job_id, True)
+        return True
+
+    def _execute(self, job, job_id, progress, close_stage, metrics, resume: bool = False) -> None:
         """The job body. Split out so ``_run`` is only the context and callback wiring."""
         try:
             # I4: a queued job stops here, before any work begins - no worker has claimed it, so
@@ -394,6 +468,26 @@ class JobManager:
             clips_dir = Path(settings.clips_dir) / job_id
             temp_dir = Path(settings.temp_dir) / job_id
 
+            # I5: on a resume, render only the windows that have no clip on disk yet. The
+            # already-rendered clips are kept and the new ones appended, so a job interrupted
+            # after seven of ten clips costs three renders rather than ten.
+            resume_windows = self._missing_windows(job) if resume else None
+            existing_clips = list(job.clips or []) if resume else []
+
+            def record_plan(candidates) -> None:
+                self.store.update(
+                    job_id,
+                    planned_clips=[
+                        {
+                            "start": float(getattr(c, "start", 0.0)),
+                            "end": float(getattr(c, "end", 0.0)),
+                            "reason": str(getattr(c, "reason", "")),
+                            "score": float(getattr(c, "score", 0.0)),
+                        }
+                        for c in candidates
+                    ],
+                )
+
             clips = run_pipeline(
                 source_path,
                 job.options,
@@ -401,7 +495,13 @@ class JobManager:
                 temp_dir=temp_dir,
                 progress_cb=progress,
                 start_progress=start_progress,
+                explicit_candidates=resume_windows,
+                # Not recorded on a resume: the plan is already stored, and overwriting it with
+                # only the windows being retried would lose the ones already finished.
+                on_plan=None if resume else record_plan,
             )
+            if resume:
+                clips = existing_clips + clips
 
             # Persist every created clip: history record, sidecar metadata, and
             # mirror into the active storage backend (same call path for local

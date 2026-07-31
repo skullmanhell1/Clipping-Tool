@@ -65,23 +65,28 @@ export default function ReviewBar({
             type="button"
             onClick={onApprove}
             disabled={busy || !hasSelection}
+            // Named "selected" to distinguish it from the per-clip button, which is a different
+            // action on a different scope: one clip versus everything ticked.
+            aria-label="Approve selected clips"
             className="rounded border border-emerald-500/50 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
           >
-            ✓ Approve
+            ✓ Approve selected
           </button>
           <button
             type="button"
             onClick={onReject}
             disabled={busy || !hasSelection}
+            aria-label="Reject selected clips"
             className="rounded border border-rose-500/50 px-2 py-0.5 text-[10px] font-semibold text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
           >
-            ✕ Reject
+            ✕ Reject selected
           </button>
           <button
             type="button"
             onClick={onReset}
             disabled={busy || !hasSelection}
             className={chip}
+            aria-label="Reset selected clips"
             title="Clear the verdict on the selected clips"
           >
             Reset
