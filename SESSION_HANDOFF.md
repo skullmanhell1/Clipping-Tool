@@ -115,8 +115,16 @@ no-skips rule means a test needing either cannot be added. `requirements-ml.txt`
 ## 4. Environment
 
 ```bash
-bash /projects/sandbox/.tools/setup-env.sh   # if ffmpeg vanishes from PATH after a sandbox recycle
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+bash scripts/setup_dev_env.sh    # ffmpeg, Liberation fonts, the opencv runtime libs
 ```
+
+**Run `scripts/setup_dev_env.sh` before trusting a green suite**, and re-run it if ffmpeg
+disappears from `PATH` — which happens on a sandbox recycle, since only the workspace survives. It
+prints what it found, so a partial setup is visible immediately rather than surfacing later as a
+skip. This matters more than it looks: the suite has no skips by design, and an earlier ffmpeg gap
+went unnoticed for several releases precisely because ~90 tests quietly stopped running while CI
+reported green.
 
 - The venv is at `.venv/` (Python 3.11). Use `.venv/bin/python`, not bare `python`.
 - **`/tmp` does not persist between separate shell invocations** in the sandbox. Stage anything that
