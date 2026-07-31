@@ -966,6 +966,171 @@ def resolve_detector(
     return _haar(), "haar"
 
 
+@dataclass(frozen=True)
+class Sample_Report:
+    """The samples, plus what was learned while producing them.
+
+    ``coverage`` is computed **here**, from the very sample set the crop path is derived from.
+    A second sampling pass could disagree with the first -- different frames, a different
+    detector state -- and the disagreement would be invisible: the reported confidence would
+    describe one set of frames while the framing was built from another.
+    """
+
+    samples: list[tuple[float, list[Detection]]]
+    resolved_backend: str
+    effective_fps: float
+    requested_fps: float
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of sampled frames containing at least one detection."""
+        return detection_coverage(self.samples)
+
+    @property
+    def capped(self) -> bool:
+        """Whether the sample cap actually reduced the rate below what was asked for.
+
+        Compared with a small tolerance rather than ``<``: the effective rate is a division of
+        two measured quantities, so an uncapped clip lands a hair either side of the requested
+        value and a bare comparison would report the cap as binding on roughly half of them.
+        """
+        return self.effective_fps < (self.requested_fps - 0.05)
+
+    def as_tuples(self) -> list[tuple[float, list[tuple[int, int, int, int]]]]:
+        """The samples in the ``(t, [(x, y, w, h), ...])`` form pre-existing callers expect."""
+        return [(t, [d.as_tuple() for d in boxes]) for t, boxes in self.samples]
+
+
+def sample_face_report(
+    video: str | Path,
+    *,
+    sample_fps: float,
+    max_samples: Optional[int] = None,
+    detector: Optional[Callable] = None,
+    backend: Optional[str] = None,
+    min_score: Optional[float] = None,
+    model_dir: Optional[Path] = None,
+) -> Sample_Report:
+    """Sample frames across ``video``, detect faces, and report what happened.
+
+    The additive sibling of :func:`_sample_face_boxes`, which is now a thin wrapper over this.
+    Split this way round -- report as the implementation, tuple list as the wrapper -- because
+    the wrapper's signature and return type are load-bearing: ``FRAME_SAMPLER`` in
+    ``worker/pipeline.py`` is patched *by name*, and the existing reframe tests call it
+    directly. An additive sibling changes neither.
+
+    Never raises. A missing ``cv2``, an unopenable video, or no constructible detector yields
+    an empty sample list, which the caller already treats as "degrade to the static reformat".
+    """
+    requested = float(sample_fps)
+    empty = Sample_Report(
+        samples=[], resolved_backend="", effective_fps=0.0, requested_fps=requested
+    )
+
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return replace(empty, resolved_backend="none")
+
+    resolved_detector, label = resolve_detector(
+        backend if backend is not None else DEFAULT_FACE_DETECTOR_BACKEND,
+        injected=detector,
+        cv2_module=cv2,
+        min_score=min_score,
+        model_dir=model_dir,
+    )
+    if resolved_detector is None:
+        return replace(empty, resolved_backend=label)
+
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        # Still report which backend was resolved: "no samples because the video would not
+        # open" and "no samples because no detector could be built" are different faults and
+        # the marker is the only place a caller can tell them apart.
+        _release_detector(resolved_detector)
+        return replace(empty, resolved_backend=label)
+
+    out: list[tuple[float, list[Detection]]] = []
+    frames_read = 0
+    fps = 30.0
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        if not fps or fps <= 0:
+            fps = 30.0
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        step = max(1, int(round(fps / max(0.5, sample_fps))))
+
+        # Widen the step so we never emit more than ``max_samples`` frames.
+        if max_samples and max_samples > 0 and frame_count:
+            approx = int(frame_count // step) + 1
+            if approx > max_samples:
+                step = max(step, int(math.ceil(frame_count / max_samples)))
+
+        idx = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames_read = idx + 1
+            if idx % step == 0:
+                out.append((idx / fps, _detect_frame(resolved_detector, idx)(frame)))
+                if max_samples and max_samples > 0 and len(out) >= max_samples:
+                    break
+            idx += 1
+    finally:
+        cap.release()
+        # Requirement 2.9: MediaPipe holds a native graph. Released here rather than by the
+        # caller, and in a `finally` so it happens even when sampling raises.
+        _release_detector(resolved_detector)
+
+    # Effective rate from the sample count and the span actually scanned, not from the
+    # requested rate -- the point of the marker is to say what really happened.
+    scanned_seconds = frames_read / fps if fps > 0 else 0.0
+    effective = (len(out) / scanned_seconds) if scanned_seconds > 0 else 0.0
+    return Sample_Report(
+        samples=out,
+        resolved_backend=label,
+        effective_fps=effective,
+        requested_fps=requested,
+    )
+
+
+def _release_detector(detector: Optional[Callable]) -> None:
+    """Call a backend's ``close`` if it has one. Haar has nothing to release."""
+    close = getattr(detector, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        logger.debug("face detector close() failed", exc_info=True)
+
+
+def _detect_frame(detector: Callable, idx: int) -> Callable[[object], list[Detection]]:
+    """Wrap one detector call so a frame that raises becomes a zero-detection frame.
+
+    Requirement 4.3, and deliberately **not** a rung on the degradation ladder: one bad frame
+    is not a broken backend, and aborting would discard every frame that worked. The zero also
+    lowers reported coverage, which is the honest signal -- a backend that throws on a third of
+    the frames really did find faces in fewer of them.
+    """
+
+    def _run(frame) -> list[Detection]:
+        try:
+            raw = detector(frame)
+        except Exception:
+            logger.debug("face detector raised on sampled frame %d", idx, exc_info=True)
+            return []
+        out: list[Detection] = []
+        for box in raw or []:
+            coerced = _as_detection(box)
+            if coerced is not None:
+                out.append(coerced)
+        return out
+
+    return _run
+
+
 def _sample_face_boxes(
     video: str | Path,
     *,
@@ -984,50 +1149,15 @@ def _sample_face_boxes(
 
     ``detector`` is an injected callable ``frame -> list[(x, y, w, h)]``; when
     ``None`` the default lazy-cv2 Haar cascade is used.
+
+    A thin wrapper over :func:`sample_face_report` since the detection-confidence work. The
+    signature and return type are unchanged on purpose: ``FRAME_SAMPLER`` in
+    ``worker/pipeline.py`` is patched by name and the existing reframe tests call this
+    directly, so the report is an additive sibling rather than a signature change.
     """
-    try:
-        import cv2  # type: ignore
-    except Exception:
-        return []
-
-    cap = cv2.VideoCapture(str(video))
-    if not cap.isOpened():
-        return []
-
-    try:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        if not fps or fps <= 0:
-            fps = 30.0
-        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-        step = max(1, int(round(fps / max(0.5, sample_fps))))
-
-        # Widen the step so we never emit more than ``max_samples`` frames.
-        if max_samples and max_samples > 0 and frame_count:
-            approx = int(frame_count // step) + 1
-            if approx > max_samples:
-                step = max(step, int(math.ceil(frame_count / max_samples)))
-
-        if detector is None:
-            detector = _default_haar_detector(cv2)
-            if detector is None:
-                return []
-
-        out: list[tuple[float, list[tuple[int, int, int, int]]]] = []
-        idx = 0
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if idx % step == 0:
-                boxes = list(detector(frame))
-                out.append((idx / fps, boxes))
-                if max_samples and max_samples > 0 and len(out) >= max_samples:
-                    break
-            idx += 1
-    finally:
-        cap.release()
-
-    return out
+    return sample_face_report(
+        video, sample_fps=sample_fps, max_samples=max_samples, detector=detector
+    ).as_tuples()
 
 
 def detect_faces(

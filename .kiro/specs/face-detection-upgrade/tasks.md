@@ -137,24 +137,24 @@ running.
     - If the import surfaces a further `pkg_resources`/protobuf deprecation, add a **targeted** `filterwarnings` ignore in `pyproject.toml` with a comment saying why it cannot be fixed. Never broaden the existing ignores and never relax `filterwarnings = error`.
     - _Requirements: 11.5_
 
-- [ ] 4. Sampler report
-  - [ ] 4.1 Add `Sample_Report` and `sample_face_report(...)`
+- [x] 4. Sampler report
+  - [x] 4.1 Add `Sample_Report` and `sample_face_report(...)`
     - Frozen `Sample_Report` (`samples`, `resolved_backend`, `effective_fps`, `requested_fps`) with a `coverage` property computing from the same sample set the crop path uses. Compute `effective_fps` from the sample count and the duration actually used.
     - _Requirements: 5.1, 5.5, 8.1, 8.3_
 
-  - [ ] 4.2 Keep `_sample_face_boxes` as a thin wrapper returning `report.samples`
+  - [x] 4.2 Keep `_sample_face_boxes` as a thin wrapper returning `report.samples`
     - Preserve the existing signature and return type exactly. `FRAME_SAMPLER` in `worker/pipeline.py:78-80` is patched by name and the existing reframe tests call this directly — an additive sibling, not a signature change.
     - _Requirements: 9.1, 9.2_
 
-  - [ ] 4.3 Make a per-frame detector exception a zero-detection frame
+  - [x] 4.3 Make a per-frame detector exception a zero-detection frame
     - Wrap the per-frame `detector(frame)` call so one raising frame contributes zero detections and sampling continues. Deliberately not a degradation rung: one bad frame is not a broken backend, and the zero correctly lowers reported coverage.
     - _Requirements: 4.3, 4.6_
 
-  - [ ] 4.4 Release MediaPipe resources in a `finally`
+  - [x] 4.4 Release MediaPipe resources in a `finally`
     - Call the backend's `close` alongside the existing `cap.release()`, including when sampling raises.
     - _Requirements: 2.9_
 
-  - [ ] 4.5* Unit tests: the wrapper is unchanged and the report is consistent → `tests/test_effects_reframe.py`
+  - [x] 4.5* Unit tests: the wrapper is unchanged and the report is consistent → `tests/test_effects_reframe.py`
     - Assert `_sample_face_boxes` returns what it returned before for an injected detector; assert `sample_face_report(...).samples` is that same value; assert a detector raising on one frame yields a zero-detection sample and does not abort sampling; assert `close` is called even when sampling raises.
     - _Requirements: 4.3, 4.6, 2.9, 9.1_
 
