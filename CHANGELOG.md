@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — clip selection now measures the audio and scores the opening (S2, S6, S10, S17)
+
+- **`S2` — audio energy.** One `astats` pass per source produces an RMS envelope at one reading
+  per second, from which each candidate gets its mean/peak level, how far it sits above the
+  source's own median, and what fraction of it is silence. Two details carry it: readings are
+  regrouped with `asetnsamples` first, because otherwise "RMS per frame" silently means a
+  different window length per codec; and `-inf` (which ffmpeg reports for digital silence) is
+  floored, because letting it into a mean or median poisons every comparison downstream without
+  raising anything.
+- **`S6` — hook scoring** for the first 2.5 s specifically. Retention is decided there and
+  nothing modelled it: a clip whose best line sat forty seconds in scored the same as one that
+  opened on it. Combines how promptly speech starts, pace and energy *relative to the clip's own
+  average* (a hook is front-loading, not loudness), and a low-weighted textual-opener signal.
+  Silence at the opening is disqualifying rather than merely costly.
+- **`S10` — the measured signals now reach the LLM.** Transcript lines in the selection prompt
+  carry a short delivery note (`fast`, `loud`, `mostly silent`) where a segment departs from the
+  speaker's own norm. Words rather than numbers, on purpose: the model is picking moments, not
+  doing arithmetic, and raw figures invite it to invent a formula from a scale it cannot
+  calibrate. Ordinary segments get no note, so the annotated ones stand out — which is the
+  entire signal.
+- **`S17` — every weight is a setting.** The defaults are a starting point, not a measured
+  optimum; tuning them against the `S1` benchmark is now a config edit rather than a release.
+
+### Changed — the fallback ranks on measured signals instead of clip length (S11, S14, S15)
+
+- **`S11`** — `segment_video` capped the count by keeping the **longest** segments, which is
+  worse than arbitrary: the longest silence-delimited segment is usually the stretch where
+  nobody paused, so a monologue with no beats outranked every punchy exchange. And this was not
+  a rare path — it runs with no API key, on any failed LLM call, and on every `fixed`/`silence`
+  run by choice. The fallback now takes every segment, scores it on hook/pace/energy/length-fit,
+  and caps afterwards. Verified on a 120-second render: the loud, fast window ranks first where
+  the old rule put a quiet 45-second opening there.
+- **`S15` — overlapping and duplicate candidates are dropped, before the count is capped.** The
+  model routinely proposes `12.0-45.0` and `14.5-47.0` for one moment and both used to ship.
+  Overlap is measured against the *shorter* candidate, so a clip wholly inside another reads as
+  1.0 rather than the low IoU that would let it through. De-duplicating before the cap is what
+  lets a genuinely different moment take the freed slot instead of the user simply getting fewer
+  clips.
+- **`S14`** — keyframe sampling raised from 12 frames at 160 px to 48 at 480 px. Twelve frames
+  across an hour is one every five minutes, so every candidate in a five-minute stretch scored
+  identically; and at 160 px the motion proxy averages away the frame-to-frame difference it
+  exists to detect.
+
+### Fixed — three defects found while building the above
+
+- **Measured features were silently discarded whenever visual selection ran.** `merge_scores`
+  and `_snap_candidates` rebuilt `ClipCandidate` without copying `features`, so every S2/S4/S6
+  measurement vanished — and `U1` had made visual selection a default, so that was the normal
+  path. Nothing failed; the clips were fine and the features were simply gone.
+- **Sentence snapping could annex a neighbouring clip.** Snapping moves the start to the nearest
+  segment start and the end to the nearest segment end, so on a coarsely-segmented transcript any
+  window inside one long segment became that entire segment — two distinct moments collapsing to
+  one identical window, and **two byte-identical clips shipping**. Snapping is now skipped when
+  it would swallow another candidate's midpoint. Found because `S15` spotted the collision and
+  dropped a clip, which is how the pre-existing duplicate came to light.
+- **De-duplication compared word *sets*, which called different clips identical.** Two long
+  windows drawn from a small vocabulary shared a content-word set and scored 1.0, so a real
+  120-second render returned two clips where three were asked for. Now count-aware, which scored
+  that pair 0.25 while still scoring a genuinely reordered recap above 0.9. A minimum token count
+  guards the same error in the other direction: Jaccard over two words is noise, and acting on
+  noise here deletes a moment the user wanted with no trace it was ever a candidate.
+
 ### Added — transcription can be told what to expect, and says when it is unsure (T4, T5, T7, M3)
 
 - **`T4` — vocabulary prompt.** Whisper has no reason to expect a person's name, a product or

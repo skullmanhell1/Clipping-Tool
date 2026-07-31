@@ -28,6 +28,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from config import settings
+from worker import candidate_ranking
 from worker import ffmpeg_utils as fu
 from worker import segmentation as seg
 from worker import selection as sel
@@ -98,10 +99,15 @@ def sample_keyframes(
         tmp_dir = frames_dir or tempfile.mkdtemp(prefix="kf-")
         os.makedirs(tmp_dir, exist_ok=True)
 
-        def _default_sampler(src, t, _dir=tmp_dir):
+        # S14: width was hard-coded at 160, at which the motion proxy measures little beyond
+        # JPEG noise - a 160px-wide thumbnail averages away exactly the frame-to-frame
+        # difference it exists to detect. Now a setting, defaulting to 480.
+        width = int(getattr(settings, "keyframe_sample_width", 480) or 480)
+
+        def _default_sampler(src, t, _dir=tmp_dir, _width=width):
             dest = os.path.join(_dir, f"kf_{t:.3f}.jpg")
             try:
-                fu.generate_thumbnail(src, dest, at=t, width=160)
+                fu.generate_thumbnail(src, dest, at=t, width=_width)
                 return dest
             except Exception:
                 # Single-frame failure -> skip this frame (never raise here).
@@ -224,6 +230,12 @@ def merge_scores(
                 reason=cand.reason,
                 title=cand.title,
                 text=cand.text,
+                # Carried across explicitly. This rebuild dropped `features` silently, so every
+                # measured signal (S2/S4/S6) vanished the moment visual selection was involved
+                # - and U1 made visual selection a default, so that was the normal path. The
+                # dict is copied rather than shared: two candidates aliasing one features dict
+                # would let a later annotation overwrite an earlier candidate's measurements.
+                features=dict(cand.features),
             )
         )
     merged.sort(key=lambda c: c.score, reverse=True)
@@ -253,15 +265,39 @@ def _snap_candidates(
     transcript: Transcript,
     total_duration: float,
 ) -> list[ClipCandidate]:
-    """Snap each candidate to sentence boundaries and re-clamp to the clip."""
+    """Snap each candidate to sentence boundaries and re-clamp to the clip.
+
+    **Snapping may move a boundary; it may not annex a neighbouring moment.** A snap is
+    skipped when the snapped window would swallow another candidate's midpoint.
+
+    ``snap_to_sentences`` moves the start to the nearest segment start and the end to the
+    nearest segment end, which on a coarsely-segmented transcript means *any* window inside
+    one long segment becomes that whole segment. With a single 0-4 s segment covering two
+    2-second candidates, both snapped to 0-4: the same window twice, and the pipeline shipped
+    two byte-identical clips. Found while adding S15 de-duplication, which spotted the
+    collision and dropped one - revealing that the duplicate had been shipping all along.
+
+    Keeping the unsnapped window is the right repair rather than dropping the clip. The user
+    asked for N moments and gets N distinct ones; the cost is one boundary not sitting on a
+    sentence edge, which is all "snap where possible" ever promised. Dropping instead would
+    silently return fewer clips than were requested.
+    """
     segments = transcript.segments
     out: list[ClipCandidate] = []
-    for c in candidates:
+    midpoints = [((c.start + c.end) / 2.0) for c in candidates]
+    for index, c in enumerate(candidates):
         s, e = sel.snap_to_sentences(c.start, c.end, segments)
         s = max(0.0, s)
         if total_duration:
             e = min(total_duration, e)
         if e <= s:  # snapping collapsed the range -> keep the merged window
+            s, e = c.start, c.end
+        annexes = any(
+            s <= mid <= e
+            for other, mid in enumerate(midpoints)
+            if other != index and not (c.start <= mid <= c.end)
+        )
+        if annexes:
             s, e = c.start, c.end
         out.append(
             ClipCandidate(
@@ -271,6 +307,7 @@ def _snap_candidates(
                 reason=c.reason,
                 title=c.title,
                 text=c.text,
+                features=dict(c.features),   # same silent-drop bug as merge_scores
             )
         )
     return out
@@ -347,9 +384,11 @@ def select_moments_visual(
         snapped = _snap_candidates(merged, transcript, total_duration)
         snapped.sort(key=lambda c: c.score, reverse=True)
         max_clips = seg.resolve_max_clips(getattr(options, "num_clips", "auto"))
-        if max_clips is not None:
-            snapped = snapped[:max_clips]
-        return snapped
+        # S15 again here, not only in select_moments: snapping to sentence boundaries can *make*
+        # two candidates overlap that did not before, by pulling both onto the same segment
+        # edges. De-duplicating upstream only would leave that case shipping two files for one
+        # moment, and this is the default path now that visual selection is on by default.
+        return candidate_ranking.deduplicate(snapped, limit=max_clips)
     except Exception:
         # Ranking/snapping failed unexpectedly -> transcript-only (Req 15.5).
         return transcript_candidates
