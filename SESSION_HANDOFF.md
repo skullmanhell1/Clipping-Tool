@@ -1,157 +1,209 @@
 # Session Handoff
 
-Rewritten after the reliability and tooling pass that followed the specs completing. The
-previous version described the work that is now merged as "what is left", so it has been
-replaced rather than amended.
+Rewritten after the Phase 1–4 improvement pass. The previous version described the five completed
+specs and said "no PRs are open", which is no longer true of either half — it has been replaced
+rather than amended, because a handoff document that is wrong is worse than none.
 
 ## Start here
 
-**If you are picking this up fresh, read `docs/IMPROVEMENT_PLAN.md` before anything else.**
-It is the prioritised backlog: 154 numbered items across captions, assets, selection,
-transcription, reframe, audio, encoding, publishing, UX, infrastructure and measurement,
-each with a priority and effort estimate, and every current value quoted from the code.
+**1. There are open PRs, and they are stacked. Merge them in order before doing anything else.**
+See [§1](#1-open-work-merge-this-first). Merging out of order will produce enormous, wrong-looking
+diffs.
 
-The one-line diagnosis it reaches: **the rendering capability is well ahead of the assets
-and defaults feeding it.** Captions request a font that is not installed and whose fallback
-resolves to the same missing font; emoji request images that are not shipped and are
-upscaled 2.1x; "background music" is two synthesised sine waves; and thirteen features that
-make short-form video look modern are default-off. Of the 29 P0 items, only four are new
-capability — the rest are bugs, missing assets or defaults.
+**2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
+a priority and effort estimate each, every current value quoted from the code. **140 are now
+implemented.** The 14 that remain are listed in [§3](#3-what-is-actually-left), and most are blocked
+on something other than effort.
 
-**Phase 1 of that document is the highest-value work available** and is mostly a few days
-of small changes. Do not start on clip-selection quality (§3) before building the
-evaluation harness (item **S1**), or the results cannot be judged.
+> If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
+> figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
+> everything starting with `P` also silently drops `PB1`–`PB9`. And an item can be implemented
+> without carrying its own ID: `PB3` is satisfied by `publishers/preflight.py`, which is labelled
+> `O10` because the plan entry says "see O10". Grep undercounts; check before believing it.
 
-## 1. Status
+**3. Before changing anything with a measurable output, read
+[§5](#5-conventions-that-are-not-obvious-from-the-code).** Several conventions here are deliberate
+and will look like mistakes: every new visual setting defaults *off*, some tests exist purely to fail
+when a constant changes, and one module reports "I cannot do this" rather than doing it badly.
 
-**All five specs are complete — 388/388 tasks, nothing open.** Version `0.10.0`.
+## 1. Open work: merge this first
 
-| Spec | Tasks |
-| --- | --- |
-| `av-engines-foundation` | 91/91 |
-| `kinetic-typography` | 76/76 |
-| `tier1-creator-output-upgrade` | 69/69 |
-| `speaker-diarization-reframe` | 66/66 |
-| `audio-stem-inpainting` | 86/86 |
+Version `0.11.0`. Four PRs from the last session, stacked — each one's base is the previous branch,
+so GitHub re-targets automatically as each merges.
 
-Two AV engines are registered and advertised by `/api/info`, both **default-off**:
-`kinetic_typography` (COMPOSE) and `stem_inpainting` (AUDIO).
+| Order | PR | Items | Backend tests |
+| --- | --- | --- | --- |
+| 1 | #61, #62, #63 | *(from an earlier session — still open)* | — |
+| 2 | #71 `feat/selection-transcript` | C19, S7, S8, S12, T9, T10 | 1751 |
+| 3 | #72 `feat/assets-expansion` | A5, A9, A13, A17, A19, A22 | 1808 |
+| 4 | #73 `feat/infra-verification` | I7, I10, I12, I13 | 1827 |
+| 5 | #74 `feat/script-and-placement` | C21, V15, AU9, O8 | 1880 |
 
-No PRs are open. [#42](https://github.com/skullmanhell1/Clipping-Tool/pull/42) (stem epics
-9-20) and [#43](https://github.com/skullmanhell1/Clipping-Tool/pull/43) (reliability and
-tooling) are both merged.
+Plus this branch (`docs/handoff-and-mutation-harness`), which is based on `main` and touches only
+new or independent files, so it can merge at any point without waiting for the chain.
+
+Everything in the chain currently targets `integrate/phase4-base`. **Once #61–#63 land, retarget the
+chain to `main`** — that has to be done from the GitHub UI, because the sandbox has no push/fetch
+credentials of its own for arbitrary git operations.
 
 ## 2. Test baselines
 
-Run with `python -m pytest` from the repo root. Configuration lives in `pyproject.toml`.
+Do not let these go down. A drop means something stopped running, which is worse than a failure
+because it looks like success.
 
-| Environment | Result |
+| Gate | Expected |
 | --- | --- |
-| Full `requirements-dev.txt` + ffmpeg + fonts + `libGL` (what CI and Docker have) | **724 passed, 0 failed, 0 skipped, 0 warnings** |
-| No ffmpeg on `PATH` (a bare developer checkout) | **616 passed, 108 skipped, 0 failed** |
+| `pytest` | **1880 passed, 0 skipped, 0 warnings** |
+| `npm run test:run` | **98 passed** |
+| `ruff check .` | clean |
+| `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
+| `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
+| `npm audit --audit-level=critical` | exits 0 |
 
-Frontend: `npm run lint` → 0 errors (2 `exhaustive-deps` warnings, see §5), `npm run test:run`
-→ 24 passed, `npm run build` → OK.
+**Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
+README's Testing section. The full backend suite takes about five minutes.
 
-Three things to know before trusting a green run:
+`npm audit` still reports **9 high advisories** and that is a decision, not an oversight: a
+`brace-expansion` DoS reachable only through eslint's own `minimatch` chain. Both available fixes
+were tried and both are worse than the finding — `npm audit fix --force` *downgrades*
+`eslint-plugin-react` to 7.22.0, and overriding `brace-expansion` to a patched 5.x breaks
+`minimatch@3` so eslint crashes outright. Hence the gate is `--audit-level=critical`.
 
-* **A skip is not a pass.** The 108 skips are the `requires_ffmpeg` gate. CI installs ffmpeg
-  and **fails if any test is skipped**, so a skip there means a dependency went missing and
-  the coverage it gated has silently stopped running.
-* **Warnings are errors** (`filterwarnings = ["error", ...]`). Adding a dependency that emits
-  a new deprecation will fail the suite until it is triaged.
-* **CI needs full git history.** `.github/workflows/ci.yml` sets `fetch-depth: 0` on the
-  backend job, because two parity guards diff against `origin/main`. With the default shallow
-  checkout they skip, which the no-skip gate then reports — that is how it was discovered
-  they had *never* run in CI.
+## 3. What is actually left
 
-## 3. The most important lesson from the last pass
+14 items. Only three are a matter of effort.
 
-The `stem_inpainting` engine shipped, merged, and **could not run on any machine** — while
-598 tests passed.
+### Buildable now
 
-`ffmpeg -filters` prints a three-character flag column per row. The capability probe
-identified it with `not parts[0].isalnum()`, which is true for `T..`/`..C` but **false for
-`TSC`** (every flag set, so alphanumeric). Those rows fell through to a bare-name branch that
-recorded `"TSC"` as the filter name and dropped the real one — hiding **124 of ffmpeg 7.0's
-486 filters**, including the `highpass` and `lowpass` that the stem ffmpeg backend requires.
+| Item | What | Why it was left |
+| --- | --- | --- |
+| **U4** | Transcript-based trimming — click words to cut | P1 and genuinely large. The Descript-class feature; needs a frontend transcript editor plus a backend cut list. `U7`'s `run_pipeline(explicit_candidates=…)` is the seam to build on. |
+| **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
+| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
 
-It was invisible because **every capability test mocked the probe**, and every canned
-`-filters` fixture used dot-bearing flag groups only. `tests/test_capabilities_real_binary.py`
-now cross-checks the probe against `ffmpeg -h filter=<name>`, an independent mechanism that
-shares no parsing code with the `-filters` table. Reverting the fix makes 12 of those fail.
+### Blocked on model weights CI cannot have
 
-Generalise from it: **for anything that parses another program's output, test against the real
-program.** Three defects in the stem repair filter itself were found the same way, by running
-ffmpeg rather than reading the design.
+`S5` laughter/applause detection (YAMNet) · `S13` real vision signals · `T2` forced alignment
+(wav2vec2) · `T6` pyannote diarisation · `V3` active-speaker detection · `V7` subject detection ·
+`AU6` demucs source separation · `I2` GPU support.
 
-## 4. Kinetic P12: could not be reproduced
+Each of these already has the *seam* built — an injectable backend and a degraded fallback that is
+labelled as degraded. What is missing is a checkpoint file and a runtime dependency, and the
+no-skips rule means a test needing either cannot be added. `requirements-ml.txt` and the
+`INSTALL_ML=true` build arg exist for whoever has the hardware.
 
-An older handoff described `test_p12_malformed_timings_degrade_instead_of_raising` as
-known-red and asked for its own bugfix spec. **It does not reproduce.**
+> The `INSTALL_ML=true` image has **not** been built. Only the default path is verified.
 
-* 4000 fresh Hypothesis examples with the example database disabled — clean.
-* A deterministic sweep of 1020 cases (5 degenerate timeline shapes × 17 fps values, including
-  the `14.0` the old analysis named, × 3 sample rates × 4 durations) — clean.
-* The predicate that analysis blamed (`later_start > cue_start`, `worker/engines/kinetic.py`
-  ~line 1639) is **still present**, so this is not a silent fix — the diagnosis was wrong.
+### Blocked on credentials or API access
 
-That handoff also blamed ffmpeg being on `PATH`, which is definitely wrong: P12 is a pure
-planner property with no ffmpeg dependency. The likeliest explanation is a stale counterexample
-in a local `.hypothesis` database.
+- **PB9** — more publishing destinations (LinkedIn, Facebook Reels, Snapchat, Threads). P3/L. Each
+  needs an app registration and review before a single line can be tested against anything real. The
+  `publishers/base.py` interface plus `publishers/preflight.py` is the seam; adding a class is the
+  small part.
+- **PB1** is *implemented* but cannot be exercised here — it needs live publisher credentials. The
+  same applies to verifying any real upload.
 
-**Recommendation:** keep the property test as the guard, do not open the spec. Absence of a
-counterexample is not proof of absence — if it reappears, capture the counterexample *and* the
-generator versions before analysing.
+### Blocked on data that does not exist yet
 
-## 5. What is actually left
+- **M4 / S1** — the labelled selection benchmark. **This is the gating item for all selection
+  quality work.** Do not tune ranking before it exists, or improvements and regressions are
+  indistinguishable.
+- **S16** — recording published-clip performance. Needs `PB8` and real posted clips.
+- **S18** — calibrating the virality score. Depends on M4; today it is an LLM's unanchored 0–100
+  opinion and is documented as a shortlist rather than a verdict.
 
-No spec work. Everything below is unplanned, and none of it is a regression.
+## 4. Environment
 
-### Only you can close these — they need credentials or a real deploy
+```bash
+bash /projects/sandbox/.tools/setup-env.sh   # if ffmpeg vanishes from PATH after a sandbox recycle
+```
 
-1. **Publishers are entirely unverified.** TikTok, Instagram, X, YouTube and Whop have never
-   been exercised against a live platform, including the `/approve` and `/retry` endpoints.
-   Their logic is covered by test doubles only. **This is the largest untested surface in the
-   repository** — treat it as unproven, not as working.
-2. **URL ingest is untested.** Only local files have been pushed through the pipeline; `yt-dlp`
-   has never actually downloaded anything in a verified run.
-3. **The Docker image has never been built end to end.** The `INSTALL_ML` shell logic and the
-   frontend stage were validated in isolation; a full build was not run.
+- The venv is at `.venv/` (Python 3.11). Use `.venv/bin/python`, not bare `python`.
+- **`/tmp` does not persist between separate shell invocations** in the sandbox. Stage anything that
+  must survive somewhere under the workspace.
+- The sandbox has **open internet** and **docker**. That is what made `I12` and `I13` verifiable at
+  all; earlier sessions could not run either.
+- `git fetch origin` fails with `Missing header field, please provide AuthToken`. Only the GitHub
+  tooling authenticates — use it for push and PR operations, never bare `git push`.
 
-### Deliberate deferrals — each is its own change, not a loose end
+## 5. Conventions that are not obvious from the code
 
-4. **Formatting is not enforced.** `black` is in `requirements-dev.txt` and has never run;
-   adopting it reformats essentially every file.
-5. **ruff `UP` (~450 findings) and `B` (~30) are not selected.** Both are worth adopting; each
-   is a mechanical sweep that should not be mixed with behavioural changes. The enforced set is
-   pinned in `pyproject.toml` to `F`/`E4`/`E7`/`E9`/`I`.
-6. **`redis` and `rq` are declared dependencies that no code imports.** `worker/tasks.py` is
-   imported by nothing. Either wire up the distributed worker or drop them — right now the
-   dependency list overstates the architecture.
-7. **11 dev-only npm advisories** (`brace-expansion` via eslint, `esbuild` via vite/vitest).
-   None reach the shipped bundle; clearing them needs `vite@8`, a breaking upgrade.
-8. **Frontend test coverage is thin.** Only `api.js` and `Dropdown` are covered; the other ten
-   components have none.
-9. **Two `react-hooks/exhaustive-deps` warnings** in `App.jsx` (`jobs`) and `HistoryView.jsx`
-   (`load`). Both are polling effects where naively adding the dependency causes a
-   re-subscribe loop, so they need thought rather than a quick edit.
+These cost real time to rediscover. Each one is deliberate.
 
-### Notes for whoever works here next
+**Every new visual or output setting defaults to previously shipped behaviour.** `ZOOM_EASE=false`,
+`CAPTION_AUTO_CONTRAST=false`, `EMOJI_PLACEMENT=spread`, `BROLL_KEN_BURNS=false`, `BROLL_DUCK=0.0`,
+`SFX_MODE=off`, `CAPTION_AVOID_FACES=false`, `VIDEO_ENCODER=libx264`, `SUBTITLE_TRANSLATION=false`.
+The alternative — defaulting a feature on and re-freezing the parity goldens — means re-freezing them
+every release, which stops the gate detecting an *accidental* change. That is the whole value of
+having them.
 
-* **Node 20 is the target.** CI and the Dockerfile both use it. `frontend/package.json` declares
-  `engines` and `frontend/.npmrc` sets `engine-strict=true`, so an incompatible dependency now
-  fails at install time — added after `jsdom@30` (Node ≥22) was installed on a newer local
-  runtime and broke CI with `webidl.util.markAsUncloneable is not a function`. `npm ci` had
-  exited 0 with only warnings.
-* **Job state is durable** (`storage/jobs.db`, `JOBS_DB`). A job stored as `queued`/`processing`
-  is resolved to `failed` on load, because no worker thread survives a restart to advance it.
-* **Real stem separation is opt-in.** `torch`/`demucs` are not in `requirements.txt`; see
-  `requirements-ml.txt`. Without them the engine degrades to an ffmpeg approximation and records
-  `degraded:python_pkg:demucs`. The checkpoint is a *separate* step on purpose — the engine treats
-  a model that would need downloading as unavailable, so that probing a capability can never
-  become a silent network fetch.
-* **`.env.example` is a contract**, not a sample: `config.Settings` points at it for the full
-  list, and `tests/test_config_documentation.py` fails if a setting is undocumented or a
-  documented key is not a real setting. It had drifted to 67 of 93, with one stale key that
-  silently did nothing.
+**Drift pins: tests that exist to fail when a constant changes.** They are not redundant, and
+updating them is part of the change rather than a nuisance:
+
+- Adding a field to `CaptionPreset` → `tests/test_kinetic_compositor.py::test_caption_preset_values_are_unchanged`
+  needs three updates: the pinned dataclass field list, the six frozen `to_dict` goldens, **and** the
+  `sorted(BUILTIN_PRESETS)` name list.
+- Adding a `selection_weight_*` setting → `tests/test_selection_scoring.py` has a
+  `SELECTION_WEIGHT_NAMES` tuple compared against `type(settings).model_fields`.
+- Adding any setting → `tests/test_config_documentation.py` requires a matching `.env.example` entry.
+- Naming `libx264` or `-crf` outside `worker/ffmpeg_utils.py` / `worker/video_encoders.py` →
+  `tests/test_output_compat.py` fails. Both guards exist because those flags were once duplicated
+  across seven call sites, which is how three of them came to be missing from all seven.
+
+**Deliberate refusals.** Several modules decline to do something rather than doing it approximately,
+and each refusal is load-bearing:
+
+- `worker/effects/sfx.py` synthesises `pop` and `click` but **not** `whoosh` — a whoosh needs a filter
+  that moves across the sound, ffmpeg cannot express a time-varying filter frequency in one pass, and
+  a static band-passed noise swell is a hiss. Shipping a hiss called "whoosh" is the mislabelling
+  `A15` exists to stop.
+- `worker/language.py` returns **no language** for Han script. It is used by Chinese *and* Japanese.
+- `worker/script_support.py` reports `caption_script_unsupported` rather than substituting a font
+  that cannot help. Nothing vendored covers Arabic, Hebrew, Thai or CJK — the plan's "Noto covers
+  CJK" is true of the Noto *project*, not of the vendored `NotoSans`.
+- `worker/video_encoders.py` refuses `h264_v4l2m2m`: no constant-quality mode, so using it would
+  switch the pipeline from a quality target to a bitrate target.
+
+**Ask the font, not fontconfig.** `fc-match` is a *best match* and always answers —
+`fc-match ':lang=ar'` returns a font containing no Arabic. Use `fc-list :lang=xx` (which returns
+nothing when there is nothing) and verify against the file's `cmap`.
+
+**A listed encoder is not a usable one.** `ffmpeg -encoders` reports what was compiled in. This
+ffmpeg lists `h264_v4l2m2m` and fails on the first frame. Availability is a real one-frame encode.
+
+**Degradations are markers on the clip record, not log lines.** `music_degraded:synthesised`,
+`caption_script_unsupported:*`, `encoder_unavailable:*`, `sfx_missing:*`,
+`caption_face_overlap_unavoidable`, `subtitle_translation:skipped_*`. The rule: an absent feature
+with no explanation is indistinguishable from a broken one, and the clip record is the only thing a
+caller sees.
+
+### Small things that will bite
+
+- `ClipCandidate` lives in `worker/selection.py`, not `worker/models.py`.
+- `Transcript` / `TranscriptSegment` / `Word` live in `worker/transcribe.py`.
+- `captions.Cue` has `start`, `end`, `words` — **no `text` field**.
+- `ProcessingOptions` has no `to_dict()`; use `dataclasses.asdict`.
+- The setting is `font_assets_dir`, not `fonts_dir`.
+- `assets/fonts.json`'s `weight` is on **fontconfig's** scale (regular 80, bold 200, black 210), not
+  OS/2's (400/700/900). `captions._fc_weight` converts.
+- ASS colours are byte-reversed `&HAABBGGRR`. See `worker/branding.py`.
+- `sendcmd` addresses filters **by name**, so multiple `crop` filters need instance names (`crop@t0`).
+- ffmpeg's `movie=filename=…` source filter avoids adding an input — compositor input indices are
+  load-bearing and counted from the argv.
+- Presets are frozen and shared across every clip in a job. Use `dataclasses.replace`, never mutate.
+
+## 6. How to work here
+
+Read the README's **Testing** section, including `scripts/mutate.py`. The short version: a passing
+suite proves the tests agree with the code, not that they would disagree with the *wrong* code — and
+almost nothing in this project fails loudly. Ranking changes produce plausible orderings; a caption
+in the wrong font still encodes.
+
+Mutation testing is what has been catching those. Recent escapes were, every time, a real defect
+rather than a missing assertion: a leaked file descriptor on each unreadable font file, an overlay
+box that was only even-sided at one frame width, a compositor wiring that could be replaced with an
+empty list while every unit test still passed, and two cases of one fact being stated in two places
+so that changing either had no effect.
+
+Add a spec per batch under `tests/mutations/`. `tests/mutations/example.json` is the template and
+doubles as a self-test for the tool.

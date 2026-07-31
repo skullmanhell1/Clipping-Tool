@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "A worked example and a self-test for scripts/mutate.py.",
+    "",
+    "It mutates worker/ffmpeg_utils.h264_args, which is a good demonstration target for the reason",
+    "the whole technique exists here: getting these flags wrong does not raise. A missing -pix_fmt",
+    "produces a file that plays fine for the person who made it and is rejected by half the",
+    "platforms it is uploaded to, so the only thing between that and a release is a test that",
+    "fails. Three of these flags were in fact missing from all seven encode call sites once.",
+    "",
+    "Note the `command`: it points at tests/test_output_compat.py, not tests/test_ffmpeg_utils.py.",
+    "The latter covers subprocess timeouts and passes happily with every compatibility flag",
+    "removed - which is worth knowing, because pointing a mutation run at the wrong test file",
+    "produces a page of escapes that look like missing coverage and are actually a wrong command.",
+    "",
+    "Add a spec per feature batch, next to its tests. Keep each mutation SMALL - one flag, one",
+    "comparison, one constant - because a large mutation that gets caught tells you nothing about",
+    "which part of it was noticed."
+  ],
+
+  "command": [".venv/bin/python", "-m", "pytest", "tests/test_output_compat.py", "-q", "-x"],
+
+  "mutations": [
+    {
+      "name": "drop_pix_fmt",
+      "file": "worker/ffmpeg_utils.py",
+      "old": "    \"-pix_fmt\", OUTPUT_PIX_FMT,\n",
+      "new": "",
+      "why": "without -pix_fmt yuv420p the encode succeeds and the file is rejected on upload; nothing in the pipeline can see it"
+    },
+    {
+      "name": "wrong_profile",
+      "file": "worker/ffmpeg_utils.py",
+      "old": "OUTPUT_PROFILE = \"high\"",
+      "new": "OUTPUT_PROFILE = \"baseline\"",
+      "why": "the profile is part of the compatibility contract, and a wrong one still encodes"
+    },
+    {
+      "name": "fps_normalisation_always_on",
+      "file": "worker/ffmpeg_utils.py",
+      "old": "    if normalise_fps:\n        args += [\"-r\", str(int(settings.output_fps))]",
+      "new": "    args += [\"-r\", str(int(settings.output_fps))]",
+      "why": "an intermediate about to be re-encoded must not be resampled twice, so this has to stay opt-in"
+    },
+    {
+      "name": "reorder_the_compat_flags",
+      "file": "worker/ffmpeg_utils.py",
+      "old": "    \"-pix_fmt\", OUTPUT_PIX_FMT,\n    \"-profile:v\", OUTPUT_PROFILE,\n    \"-level\", OUTPUT_LEVEL,",
+      "new": "    \"-level\", OUTPUT_LEVEL,\n    \"-profile:v\", OUTPUT_PROFILE,\n    \"-pix_fmt\", OUTPUT_PIX_FMT,",
+      "equivalent": true,
+      "why": "declared equivalent: ffmpeg does not care about the order of these three, and the test checks each flag and its value rather than the sequence - so this SHOULD escape. Included to show what a legitimate `equivalent: true` looks like: the mutation changes the source and provably nothing observable. Use it sparingly, and never to silence an escape you have not understood."
+    }
+  ]
+}
