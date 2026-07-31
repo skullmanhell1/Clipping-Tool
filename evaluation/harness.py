@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Protocol, Sequence
+from typing import Any, Callable, Optional, Protocol, Sequence, cast
 
 from evaluation import baselines
 from evaluation.dataset import Dataset, LabelledSource
@@ -144,7 +144,7 @@ def run_selector(
             score_source(
                 name=source.name,
                 predictions=run.predictions,
-                labels=source.moments,
+                labels=cast(Any, source.moments),
                 k=k,
             )
         )

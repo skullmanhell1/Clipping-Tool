@@ -273,7 +273,7 @@ class ProcessingOptions:
         # Coerce numeric fields that may arrive as strings from form data.
         for num_field in ("range_start", "range_end", "schedule_at"):
             v = valid.get(num_field)
-            if v in ("", None):
+            if v is None or v == "":
                 valid[num_field] = None
             else:
                 try:

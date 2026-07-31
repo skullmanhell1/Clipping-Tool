@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -392,6 +393,79 @@ def test_prompt_note_uses_words_not_numbers():
     ) or ""
     assert note
     assert not any(char.isdigit() for char in note)
+
+
+def test_prompt_note_reports_an_unanswered_question():
+    """The `elif structure.question` branch, which nothing reached.
+
+    Worth its own test rather than being folded into the answered case: the two notes are
+    mutually exclusive by construction, and the *unanswered* one is the negative signal — a clip
+    that poses a question and never answers it is the one a viewer bounces off.
+    """
+    note = discourse.prompt_note("Why did the backups never run?") or ""
+    assert "asks an unanswered question" in note
+    assert "answers a question" not in note
+
+
+def test_prompt_note_reports_a_back_reference_in_preference_to_a_dangling_opener():
+    """The `standalone.back_reference` branch, and the precedence it has over `dangling_opener`.
+
+    Both can be true of one sentence — "And as I said before, ..." opens with a conjunction *and*
+    refers back. Only one note is emitted, and it is the more specific one, because "refers back"
+    tells the model what is missing while "starts mid-thought" only says something is.
+    """
+    note = discourse.prompt_note("And as I mentioned earlier, the disk filled up.") or ""
+    assert "refers back" in note
+    assert "starts mid-thought" not in note
+
+
+def test_shouting_raises_intensity_above_the_same_words_in_lower_case():
+    """The caps branch of `emotional_intensity`, which nothing reached.
+
+    Isolated by comparing one text against its own lower-cased self, so the strong/moderate term
+    density is identical and the *only* difference is the capitalisation. Asserting an absolute
+    number instead would pass just as well if the branch never ran.
+    """
+    shouted = "This is COMPLETELY INSANE and TOTALLY UNACCEPTABLE behaviour from them"
+    normal = shouted.lower()
+
+    assert discourse.emotional_intensity(shouted).score > (
+        discourse.emotional_intensity(normal).score
+    )
+
+
+def test_short_words_do_not_count_as_shouting():
+    """`len(word) > 2`, so "I", "A" and "OK" are not shouting.
+
+    Without the floor, ordinary text containing "I" repeatedly would drift over the caps
+    threshold and every clip would read as emphatic — which is the same as none of them doing.
+    """
+    text = "I am OK with A plan that nobody at all bothered to write down anywhere"
+    assert discourse.emotional_intensity(text).score == pytest.approx(
+        discourse.emotional_intensity(text.lower()).score
+    )
+
+
+def test_describe_emits_exactly_the_keys_the_ranker_reads():
+    """The contract between two modules that share nothing but three dictionary keys.
+
+    `discourse.describe()` writes into `candidate.features`; `candidate_ranking.score_candidate`
+    reads `structure_score`, `standalone_score` and `intensity_score` back out with a default of
+    0.5. So renaming a key in either module silently reverts that signal to neutral for every
+    candidate — no error, no marker, just a ranking that quietly stopped using a third of its
+    inputs. Nothing else asserts the join.
+    """
+    emitted = discourse.describe("Why did it fail? The disk filled up overnight.")
+    for key in ("structure_score", "standalone_score", "intensity_score"):
+        assert key in emitted, f"{key} is read by score_candidate but no longer emitted"
+        assert 0.0 <= emitted[key] <= 1.0, f"{key}={emitted[key]} is outside the ranker's clamp"
+
+    source = (Path(candidate_ranking.__file__)).read_text(encoding="utf-8")
+    for key in ("structure_score", "standalone_score", "intensity_score"):
+        assert f'"{key}"' in source, (
+            f"score_candidate no longer mentions {key!r}; describe() is emitting a key nothing "
+            "reads, which presents as the signal having no effect"
+        )
 
 
 # --------------------------------------------------------------------------- #

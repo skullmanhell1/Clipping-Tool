@@ -15,7 +15,8 @@ segmentation so the pipeline always produces clips.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional, Sequence, cast
 
 from config import settings
 from worker import (
@@ -70,8 +71,8 @@ _SYSTEM = (
 
 def _segment_annotation(
     segment: TranscriptSegment,
-    words,
-    envelope,
+    words: Sequence[Any],
+    envelope: Sequence[Any],
     *,
     pace_baseline: Optional[float],
     energy_baseline: Optional[float],
@@ -121,8 +122,8 @@ def _segment_annotation(
 def _format_transcript(
     segments: list[TranscriptSegment],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[Any] = (),
 ) -> str:
     """Render segments as ``[index] start-end{delivery}: text`` lines for the prompt.
 
@@ -161,8 +162,8 @@ def _build_prompt(
     max_len: float,
     max_clips: Optional[int],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[Any] = (),
 ) -> str:
     """Construct the selection prompt from the transcript + user options.
 
@@ -250,13 +251,13 @@ def _text_between(segments: list[TranscriptSegment], start: float, end: float) -
 
 
 def _fallback(
-    path,
+    path: str | Path,
     total_duration: float,
     options: ProcessingOptions,
     max_clips: Optional[int],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[Any] = (),
     segments: Optional[list[TranscriptSegment]] = None,
 ) -> list[ClipCandidate]:
     """Deterministic fallback, now with real scoring rather than "keep the longest" (S11).
@@ -316,7 +317,7 @@ def _fallback(
 def select_moments(
     transcript: Transcript,
     options: ProcessingOptions,
-    source_path,
+    source_path: str | Path,
     total_duration: float,
     client: Optional[BaseLLMClient] = None,
 ) -> list[ClipCandidate]:
@@ -405,8 +406,10 @@ def select_moments(
         if not isinstance(item, dict):
             continue
         try:
-            start = float(item.get("start"))
-            end = float(item.get("end"))
+            # cast, not `or 0.0`: a missing key must keep raising TypeError so the
+            # `except` below skips the item, rather than silently becoming 0.0.
+            start = float(cast(Any, item.get("start")))
+            end = float(cast(Any, item.get("end")))
         except (TypeError, ValueError):
             continue
         if end <= start:

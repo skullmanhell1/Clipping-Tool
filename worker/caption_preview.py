@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from config import settings
 from worker import captions as cap
@@ -108,7 +108,10 @@ def render_preview(
     # same line breaks the clip would get. Previewing an unwrapped caption would misrepresent
     # exactly the property C6 exists to fix.
     fit = cap.TextFit.for_preset(preset, video_width=width)
-    cues = cap.words_to_cues(words, max_words=6, fit=fit)
+    # `_SampleWord` is a local stand-in with the start/end/text that `words_to_cues` reads;
+    # it is not the transcribe.Word dataclass, which carries ASR fields a preview has no
+    # source for.
+    cues = cap.words_to_cues(cast(Any, words), max_words=6, fit=fit)
 
     keyword_indices = set()
     if highlight_index is not None and 0 <= highlight_index < len(words):

@@ -40,6 +40,57 @@ markers = [
 ]
 
 
+[tool.mypy]
+# `mypy` has been in requirements-dev.txt since the beginning and had never been run. First run:
+# 143 findings, 63 of them outside tests — including a store method annotated
+# `-> Optional[object]` whose own docstring says it returns a clip, which made every
+# `clip.to_dict()` in `api/main.py` unverifiable.
+#
+# Non-strict on purpose. The value here is catching the errors that a fully typed codebase would
+# have prevented, not converting 30k lines to strict typing in one change — that would be a
+# mechanical sweep of the kind the working agreement says not to mix with behavioural work, and it
+# is what plan item I9 covers for formatting.
+python_version = "3.11"
+ignore_missing_imports = true
+warn_redundant_casts = true
+# `warn_unused_ignores` is deliberately OFF. It reported five unused `# type: ignore` comments, all
+# on imports of the optional ML stack (`faster_whisper`, `cv2`, `demucs`) — and whether those
+# ignores are needed depends on whether `requirements-ml.txt` is installed. Enabling it therefore
+# makes the check pass or fail based on the environment rather than the code: clean in CI, five
+# errors on a developer machine with the extras, and the reverse once `ignore_missing_imports`
+# changes. A gate whose result depends on which optional dependencies happen to be present is the
+# kind nobody trusts, and this repository already has the `ruff check . || true` scar from that.
+# Off deliberately: `--check-untyped-defs` produced 112 `annotation-unchecked` notes and would turn
+# every unannotated helper into a wall of findings. The per-module ratchet below is how coverage
+# grows, one module at a time, in changes that can each be reviewed.
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# The ratchet. These five are the typed core: the data models every stage passes around, the two
+# selection modules whose numbers become a ranking, and the two abstract bases third parties
+# implement. An untyped function *here* is a defect waiting to surface somewhere else, which is not
+# true of, say, a one-off script.
+module = [
+    "worker.models",
+    "worker.selection",
+    "worker.candidate_ranking",
+    "publishers.base",
+    "storage_backends.base",
+]
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Tests are excluded from type checking, not from review. 80 of the 143 first-run findings were
+# here, and nearly all are the deliberate shapes a test needs: a 5-field stand-in for a dataclass,
+# a fake that implements two of an interface's ten methods, a monkeypatched attribute with a
+# narrower type than the real one. Requiring those to type-check means making the doubles heavier
+# than the things they stand in for, which makes the tests worse.
+#
+# The suite's own correctness is enforced by it passing, and by `filterwarnings = error` and the
+# no-skip gate.
+module = ["tests.*"]
+ignore_errors = true
+
 [tool.ruff]
 # Previously there was no ruff configuration at all, so the enforced rule set was
 # whatever the installed ruff version happened to default to — 857 findings on ruff 0.16

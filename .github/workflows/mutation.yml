@@ -1,0 +1,98 @@
+name: Mutation testing
+
+# Scheduled and manual, deliberately **not** per-PR.
+#
+# `scripts/mutate.py` answers a question the ordinary suite cannot: not "do the tests agree with the
+# code?" but "would they disagree with the *wrong* code?" That matters here more than in most
+# projects, because almost nothing in this one fails loudly — a ranking change produces a plausible
+# ordering, a caption in the wrong font still encodes, and a mis-ordered filter still writes a file.
+# Every escape it has caught so far was a real defect rather than a missing assertion: a leaked file
+# descriptor per unreadable font file, an overlay box that was only even-sided at one frame width, a
+# compositor wiring that could be replaced with an empty list while every unit test passed, and two
+# cases of one fact being stated in two places so that changing either had no effect.
+#
+# Off the PR path for two reasons. It re-runs the suite once per mutant, so it is minutes-to-tens-of
+# minutes rather than seconds — long enough that people start skipping CI. And a surviving mutant is
+# a prompt to think, not a defect to block a merge on: the honest response is sometimes "that
+# mutation is behaviourally equivalent".
+#
+# Previously this ran only when somebody remembered, which is the same as not running.
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "Mutation spec under tests/mutations/ (default: all of them)"
+        required: false
+        default: ""
+  schedule:
+    # Mondays 04:17 UTC. Off the hour on purpose — scheduled runs on the hour queue behind
+    # everyone else's, and GitHub drops rather than delays a cron it cannot service.
+    - cron: "17 4 * * 1"
+
+# A second scheduled run while the first is still going would just compete for a runner.
+concurrency:
+  group: mutation
+  cancel-in-progress: false
+
+jobs:
+  mutate:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    # Generous but bounded: an unbounded mutation run can sit on a runner for six hours.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The parity guards in tests/test_stems_parity.py diff against origin/main, and a
+          # shallow checkout makes them skip — which the no-skip rule then reports as a failure.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Same system dependencies as the backend job. A mutation run that cannot render is a
+      # mutation run where every mutant "survives" for the wrong reason.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # The bundled caption faces, registered as the Dockerfile does. Without this the font
+      # resolver disagrees with what libass will actually render.
+      - name: Register the bundled caption faces
+        run: |
+          sudo mkdir -p /usr/share/fonts/clipping-tool
+          sudo cp assets/fonts/*.ttf /usr/share/fonts/clipping-tool/
+          sudo fc-cache -f
+
+      # `mutate.py` takes one spec at a time; there is no run-all mode. Iterating here rather than
+      # adding one to the script keeps the tool's single responsibility and makes each spec a
+      # separately readable block in the log.
+      #
+      # `SPEC` is passed through the environment rather than interpolated into the shell, so a
+      # workflow_dispatch input cannot inject a command.
+      - name: Run mutations
+        env:
+          SPEC: ${{ inputs.spec }}
+        run: |
+          set -o pipefail
+          status=0
+          if [ -n "$SPEC" ]; then
+            specs="tests/mutations/$SPEC"
+          else
+            specs=$(ls tests/mutations/*.json)
+          fi
+          for spec in $specs; do
+            echo "::group::$spec"
+            python scripts/mutate.py --spec "$spec" || status=1
+            echo "::endgroup::"
+          done
+          exit $status

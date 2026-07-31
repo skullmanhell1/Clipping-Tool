@@ -510,8 +510,15 @@ def _candidate_keys(token: str) -> list[str]:
     if token.endswith("ly") and len(token) > 4:
         keys.append(token[:-2])
 
+    # Order-preserving dedupe. Written as a loop rather than the
+    # `not (key in seen or seen.add(key))` idiom, which depends on `set.add` returning None.
     seen: set[str] = set()
-    return [key for key in keys if not (key in seen or seen.add(key))]
+    unique: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
 
 
 def lookup_emoji(token: str, mapping: dict[str, str]) -> str:

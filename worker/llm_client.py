@@ -85,7 +85,9 @@ class OpenAIClient(BaseLLMClient):
         self._model = model or settings.openai_model
 
     def complete(self, prompt, system=None, temperature=0.7, max_tokens=1024) -> str:
-        messages = []
+        # list[Any]: the SDK's parameter type is a union of six TypedDicts, and building those
+        # here would couple this adapter to openai's internal type names for no runtime gain.
+        messages: list[Any] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -122,7 +124,9 @@ class AnthropicClient(BaseLLMClient):
                 max_tokens=max_tokens,
             )
             # Concatenate any text blocks in the response.
-            parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+            # getattr rather than `b.text`: only TextBlock carries `.text`, and the runtime
+            # filter above is on `b.type`, which the checker cannot use to narrow the union.
+            parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text"]
             return "".join(parts).strip()
         except Exception as exc:
             raise LLMError(f"Anthropic request failed: {exc}") from exc

@@ -102,6 +102,13 @@ jobs:
           print(f"all {len(manifest['fonts'])} fonts vendored")
           PY
 
+      # Blocking. `mypy` had been a declared dev dependency that never ran; its first run found
+      # 143 issues, including two store methods annotated `-> Optional[object]` whose docstrings
+      # say they return a clip — which made every attribute access on a clip in `api/main.py`
+      # unverifiable. Configuration, including the per-module ratchet, is in pyproject.toml.
+      - name: Type check (mypy)
+        run: mypy .
+
       # Fails on warnings as well as failures: filterwarnings=error in pyproject.toml. The
       # capability bug that made the stem engine unreachable was invisible partly because
       # nothing in the suite objected to anything.
@@ -109,34 +116,118 @@ jobs:
       # The suite is also required to run *clean of skips*. A skipped test is not a passing
       # test: ffmpeg and the fonts are installed above, so a skip means a dependency
       # silently went missing and the ~90 tests it gates have quietly stopped running —
-      # exactly how the earlier ffmpeg gap went unnoticed. `set -o pipefail` keeps pytest's
-      # own exit status meaningful through the pipe.
+      # exactly how the earlier ffmpeg gap went unnoticed.
+      #
+      # The skip check reads the JUnit XML rather than grepping pytest's summary prose. The
+      # previous `grep -qE '[0-9]+ skipped'` was brittle in both directions: pytest is free to
+      # reword its summary (which would silently disable the gate), and the pattern matches any
+      # line containing that phrasing — including a test *name* or a captured log line. Counting
+      # `<skipped>` elements in a machine-readable report cannot drift either way.
+      #
+      # Coverage is measured and reported but deliberately NOT gated. A number nobody has agreed
+      # on becomes a target to game; publishing it first means the threshold can be argued from
+      # evidence.
       - name: Tests
         run: |
-          set -o pipefail
-          pytest 2>&1 | tee /tmp/pytest.log
-          if grep -qE '[0-9]+ skipped' /tmp/pytest.log; then
-            echo "::error::Tests were skipped; a required dependency is probably missing."
-            grep -E 'SKIPPED' /tmp/pytest.log || true
-            exit 1
-          fi
+          pytest --junitxml=pytest-report.xml \
+                 --cov=. --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Fail if any test was skipped
+        if: always()
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          # A collection failure must not read as success. Checking only for skips passes
+          # vacuously on an empty report — a broken conftest, a bad -k, or a report that never
+          # got written all produce "no skips across 0 tests". The floor is a canary for that,
+          # not a coverage target: it is far below the real count (1958 at time of writing) and
+          # should never need adjusting for ordinary growth.
+          MINIMUM_TESTS = 1000
+
+          root = ET.parse("pytest-report.xml").getroot()
+          cases = list(root.iter("testcase"))
+          skipped = [c for c in cases if c.find("skipped") is not None]
+
+          if skipped:
+              print(f"::error::{len(skipped)} test(s) were skipped; a required dependency is "
+                    "probably missing. A skipped test is not a passing test.")
+              for case in skipped:
+                  reason = (case.find("skipped").get("message") or "").splitlines()[:1]
+                  print(f"  {case.get('classname')}.{case.get('name')}: {reason[0] if reason else ''}")
+              sys.exit(1)
+
+          if len(cases) < MINIMUM_TESTS:
+              print(f"::error::only {len(cases)} tests in the report, expected at least "
+                    f"{MINIMUM_TESTS}. Collection probably failed, so a green result here means "
+                    "nothing.")
+              sys.exit(1)
+
+          print(f"no skips across {len(cases)} tests")
+          PY
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: warn
+
+      # M2: one clip with every effect enabled, rendered by the real ffmpeg. It exists because
+      # "nothing measured the real output" is the theme connecting this project's worst defects —
+      # a caption in the wrong font still encodes, and a mis-ordered filter still produces a file.
+      # Running it only when someone remembered made it a script rather than a check. The artifact
+      # is the point: it is reviewable by eye, which is the only way some of these regress visibly.
+      - name: Smoke reel (renders one clip with every effect)
+        run: |
+          mkdir -p smoke-reel
+          python scripts/smoke_reel.py --out smoke-reel/reel.mp4
+
+      - name: Upload smoke reel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-reel
+          path: smoke-reel
+          if-no-files-found: warn
+
+      # Dependency advisories for Python, matching the frontend's `npm audit`. Report-only for
+      # now: `pip-audit` findings usually need a version bump that belongs in the supply-chain
+      # phase, and a gate that blocks every PR on an upstream advisory nobody can action here
+      # gets disabled rather than fixed.
+      - name: Audit Python dependencies (report only)
+        if: always()
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit --strict --desc || true
 
   frontend:
-    name: Frontend (lint + tests + build)
+    name: Frontend (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      # Both runtimes `frontend/.npmrc` declares support for. Node 22 is what the Dockerfile
+      # builds with; Node 20 was a *supported but untested* configuration, and the `.npmrc`
+      # comment records that it has already broken once — `jsdom@30` (Node >=22) was installed on
+      # a newer local runtime and broke the Node 20 job with
+      # `webidl.util.markAsUncloneable is not a function`, while `npm ci` exited 0 with warnings.
+      # `engine-strict` catches that at install time now, but only on a runtime someone runs.
+      #
+      # fail-fast off: when one runtime breaks, the useful information is whether the other did.
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
-      # Node 22: vite 8 requires ^20.19.0 || >=22.12.0 (I10). "20" here resolves to the latest
-      # 20.x, which satisfies that today, but pinning the major we actually target means CI
-      # cannot start testing on a runtime the Dockerfile does not use.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -154,6 +245,13 @@ jobs:
 
       - name: Tests (vitest)
         run: npm run test:run
+
+      # Reported, not gated. Only run on one runtime: the number is a property of the tests,
+      # not of the Node version, so measuring it twice would just produce two identical
+      # numbers and double the runtime.
+      - name: Coverage (vitest)
+        if: matrix.node == '22'
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
