@@ -189,6 +189,47 @@ def run_pipeline(
         )
     else:
         transcript = Transcript(language="none", segments=[])
+
+    # T10: an English subtitle track *alongside* the original-language captions.
+    #
+    # `task=translate` replaces the transcript text, so asking for a translation used to cost
+    # the original-language captions entirely - a Spanish creator's clip came back with English
+    # burned into the pixels. Here the burned captions stay in the source language and English
+    # arrives as a separate track, which is the only form a viewer can switch off.
+    #
+    # Run once per source rather than per clip: it is a full ASR pass, and slicing it per clip
+    # costs nothing. Skipped outright when it could not add anything, with a marker saying so,
+    # because a silently-absent track is indistinguishable from a broken one.
+    translated: Optional[Transcript] = None
+    translation_marker = ""
+    if settings.subtitle_translation and transcript.segments:
+        if options.translate:
+            # The main pass is already English; a second translate pass would decode the same
+            # audio to the same text and label it as a translation of itself.
+            translation_marker = "subtitle_translation:skipped_already_translated"
+        elif str(transcript.language or "").lower() in ("en", "eng", "english"):
+            translation_marker = "subtitle_translation:skipped_english"
+        else:
+            report(_P_TRANSCRIBE_END * 0.9, "Translating subtitles")
+            try:
+                translated = transcribe(
+                    source,
+                    language=options.language,
+                    translate=True,
+                    vocabulary=getattr(options, "vocabulary", "") or "",
+                )
+            except Exception as exc:      # noqa: BLE001 - see below
+                # Deliberately broad: this is an extra track on a job whose expensive work is
+                # still ahead of it, and every failure mode of a model call (OOM, a missing
+                # weight file, a corrupt download) is a reason to ship the clips without the
+                # translation rather than to lose the job.
+                logger.warning("T10: translated transcription failed for %s: %s", source, exc)
+                translation_marker = "subtitle_translation:failed"
+            else:
+                if not translated.words:
+                    translated = None
+                    translation_marker = "subtitle_translation:empty"
+
     report(_P_TRANSCRIBE_END, "Finding the best moments")
 
     # --- AI highlight selection (with process-range + fallback) -----------
@@ -309,6 +350,12 @@ def run_pipeline(
         geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
+        # T10: why a requested translated track is not on this clip. Recorded per clip even
+        # though the reason is a property of the source, because the clip record is the only
+        # thing a caller sees - an absent track with no explanation is indistinguishable from
+        # a broken one.
+        if translation_marker:
+            applied.append(translation_marker)
         broll_assets: list[dict] = []
         # Filler keep-plan for this clip (None unless filler removal tightened
         # the timeline). Used to rebase speaker turns onto the same tightened
@@ -349,6 +396,13 @@ def run_pipeline(
 
         # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
         words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []
+        # T10: the same window of the translated transcript. Sliced from the translated pass's
+        # own timings rather than mapped from the original's, because translation reorders
+        # words - a German verb arriving at the end of the clause is an English verb in the
+        # middle - so there is no word-to-word correspondence to map through.
+        translated_words = (
+            cap.slice_words(translated, c.start, c.end) if translated is not None else []
+        )
 
         # 3. filler-word / long-pause removal (adjusts the timeline + words).
         if options.filler_removal and words:
@@ -360,6 +414,11 @@ def run_pipeline(
                     raw.unlink(missing_ok=True)
                     raw = trimmed
                     words = filler.rebase_words(words, plan.keeps)
+                    # T10: the translated track is timed against the same media, so it has to
+                    # follow every cut made to it. Left un-rebased it would drift by the total
+                    # removed duration and read as a sync bug in the player.
+                    if translated_words:
+                        translated_words = filler.rebase_words(translated_words, plan.keeps)
                     keep_plan = plan.keeps
                     clip_duration = sum(k.duration for k in plan.keeps)
                     applied.append("filler_removal")
@@ -504,6 +563,13 @@ def run_pipeline(
         if getattr(options, "subtitle_sidecar", False):
             try:
                 subtitle_export.write_sidecars(words, final.with_suffix(""))
+                # T10: the translation goes beside it as `clip_N.en.srt`/`.vtt`, tagged so an
+                # upload form can tell the two apart. The untagged pair keeps its existing
+                # names, so nothing that already consumes them has to change.
+                if translated_words:
+                    subtitle_export.write_sidecars(
+                        translated_words, final.with_suffix(""), language="en"
+                    )
             except OSError as exc:
                 # A sidecar is an extra, never a reason to lose a clip that has already cost
                 # minutes of CPU. Logged rather than swallowed, so a permissions problem is
@@ -516,21 +582,44 @@ def run_pipeline(
         #        file, not a filter: muxing during the composite pass would mean the subtitle
         #        stream survived every later stage untouched, and POST engines that replace the
         #        media would silently drop it.
+        #
+        #        T10's translated track is muxed in the SAME call, not a second one, because
+        #        `-metadata:s:s:N` numbers subtitle streams by their position in the output: a
+        #        follow-up remux of a file that already carries one track would have to know how
+        #        many there were to avoid re-labelling the first. One call makes the indices a
+        #        property of the argument list.
         caption_mode = str(getattr(settings, "caption_mode", "burned") or "burned")
-        if caption_mode in ("soft", "both") and words:
-            try:
+        subtitle_tracks: list[tuple[Path, str]] = []
+        track_markers: list[str] = []
+        try:
+            if caption_mode in ("soft", "both") and words:
                 srt = subtitle_export.write_sidecars(
                     words, temp_dir / f"soft_{clip_id}", formats=("srt",)
                 )
                 if srt:
-                    muxed = temp_dir / f"soft_{clip_id}.mp4"
-                    fu.mux_soft_subtitles(final, srt[0], muxed)
-                    muxed.replace(final)
-                    applied.append(f"caption_mode:{caption_mode}")
-            except (fu.FFmpegError, OSError) as exc:
-                # The burned captions (in `both`) or the sidecars (in `soft`) are already there,
-                # so a failed remux costs a convenience, not the clip.
-                logger.warning("O12: could not mux soft captions into %s: %s", final, exc)
+                    # Labelled with the language actually spoken, not a fixed "eng": a track
+                    # menu offering two entries both called English is worse than no menu.
+                    subtitle_tracks.append(
+                        (srt[0], subtitle_export.iso639_2(transcript.language))
+                    )
+                    track_markers.append(f"caption_mode:{caption_mode}")
+            if translated_words:
+                srt_en = subtitle_export.write_sidecars(
+                    translated_words, temp_dir / f"soft_{clip_id}", formats=("srt",),
+                    language="en",
+                )
+                if srt_en:
+                    subtitle_tracks.append((srt_en[0], "eng"))
+                    track_markers.append("subtitle_translation:track")
+            if subtitle_tracks:
+                muxed = temp_dir / f"soft_{clip_id}.mp4"
+                fu.mux_subtitle_tracks(final, subtitle_tracks, muxed)
+                muxed.replace(final)
+                applied.extend(track_markers)
+        except (fu.FFmpegError, OSError) as exc:
+            # The burned captions (in `both`) or the sidecars (in `soft`) are already there,
+            # so a failed remux costs a convenience, not the clip.
+            logger.warning("O12/T10: could not mux subtitle tracks into %s: %s", final, exc)
 
         # 6b. POST-stage engines see the finished clip, then this clip's engine
         #     lifecycle is closed: durable artifacts are persisted BEFORE the

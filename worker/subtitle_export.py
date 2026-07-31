@@ -139,11 +139,44 @@ def render_vtt(cues: Iterable[tuple[float, float, str]]) -> str:
     return "\n".join(blocks)
 
 
+# ISO 639-1 (what Whisper reports) to ISO 639-2/B (what an MP4 subtitle track's `language`
+# metadata is expected to carry). Deliberately partial: it covers the languages Whisper
+# detects with any reliability, and everything else resolves to ``und`` - "undetermined",
+# a real code - rather than to the two-letter form. Passing "de" through would produce a
+# track whose language field is not a valid ISO 639-2 code, which players handle by either
+# ignoring it or displaying the raw string in the track menu; `und` at least means what it says.
+ISO_639_2: dict[str, str] = {
+    "ar": "ara", "bn": "ben", "cs": "ces", "da": "dan", "de": "deu", "el": "ell",
+    "en": "eng", "es": "spa", "fa": "fas", "fi": "fin", "fr": "fra", "he": "heb",
+    "hi": "hin", "hu": "hun", "id": "ind", "it": "ita", "ja": "jpn", "ko": "kor",
+    "ms": "msa", "nl": "nld", "no": "nor", "pl": "pol", "pt": "por", "ro": "ron",
+    "ru": "rus", "sv": "swe", "th": "tha", "tr": "tur", "uk": "ukr", "ur": "urd",
+    "vi": "vie", "zh": "zho",
+}
+
+
+def iso639_2(language: str | None) -> str:
+    """Map a transcript's language code to the three-letter form, or ``"und"``.
+
+    A three-letter code is passed through unchanged when it is one this table knows, so a
+    caller that already holds ``"eng"`` need not care which form it has.
+    """
+    code = str(language or "").strip().lower()
+    if not code:
+        return "und"
+    if code in ISO_639_2:
+        return ISO_639_2[code]
+    if code in set(ISO_639_2.values()):
+        return code
+    return "und"
+
+
 def write_sidecars(
     words: Sequence[Any],
     dest_stem: str | Path,
     *,
     formats: Iterable[str] = ("srt", "vtt"),
+    language: str = "",
 ) -> list[Path]:
     """Write sidecar caption files next to a clip and return the paths written.
 
@@ -153,6 +186,10 @@ def write_sidecars(
 
     Returns ``[]`` rather than raising when there are no words: a clip over music has nothing
     to export, and that is not a failure.
+
+    ``language`` tags the filename - ``clip_0.en.srt`` rather than ``clip_0.srt`` - which is what
+    every player and upload form uses to tell two sidecars for the same video apart (T10). Left
+    empty for the single-track case so existing filenames are unchanged.
     """
     cues = cues_from_words(words)
     if not cues:
@@ -162,12 +199,17 @@ def write_sidecars(
     stem.parent.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     renderers = {"srt": render_srt, "vtt": render_vtt}
+    tag = f".{language.strip()}" if str(language).strip() else ""
     for name in formats:
         key = str(name).lower().lstrip(".")
         renderer = renderers.get(key)
         if renderer is None:
             continue
-        path = stem.with_suffix(f".{key}")
+        # Built by concatenation, not ``with_suffix``: with a language tag the stem ends in
+        # ``.en``, which ``with_suffix`` reads as an existing extension and *replaces* - so
+        # ``clip_0.en`` would be written as ``clip_0.srt``, overwriting the original-language
+        # sidecar with the translation.
+        path = stem.with_name(f"{stem.name}{tag}.{key}")
         path.write_text(renderer(cues), encoding="utf-8")
         written.append(path)
     return written
