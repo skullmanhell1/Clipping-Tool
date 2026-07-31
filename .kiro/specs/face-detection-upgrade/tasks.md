@@ -158,8 +158,8 @@ running.
     - Assert `_sample_face_boxes` returns what it returned before for an injected detector; assert `sample_face_report(...).samples` is that same value; assert a detector raising on one frame yields a zero-detection sample and does not abort sampling; assert `close` is called even when sampling raises.
     - _Requirements: 4.3, 4.6, 2.9, 9.1_
 
-- [ ] 5. Options, config, and API/UI surface
-  - [ ] 5.1 Add `face_detector` to `ProcessingOptions` in `worker/models.py`
+- [x] 5. Options, config, and API/UI surface
+  - [x] 5.1 Add `face_detector` to `ProcessingOptions` in `worker/models.py`
     - `face_detector: str = "haar"`. Validate against `FACE_DETECTOR_BACKENDS` in `from_dict`, falling back to `"haar"` on unknown or malformed values without raising, matching the existing treatment of `reframe_layout` / `reframe_intensity`. Leave every pre-existing field and default unchanged.
     - _Requirements: 1.1, 1.2, 1.4, 10.1, 10.2, 10.6_
 
@@ -167,15 +167,15 @@ running.
     - `face_detector_backend="haar"`, `face_detector_min_score=0.5`, `reframe_coverage_floor=0.35`. Document `0.35` as a starting value chosen as the point where the crop path is interpolated across more frames than it is anchored by — not a measured one; measuring it needs the labelled benchmark (`M4`/`S1`).
     - _Requirements: 2.8, 6.1, 10.4, 10.5_
 
-  - [ ] 5.3 Surface the option through the API and UI
+  - [x] 5.3 Surface the option through the API and UI
     - `OptionsModel` in `api/main.py`, the `/api/upload` form fields (loose optional string, per the existing convention that an unrecognised value falls back to the documented default rather than 422-ing), `/api/info` domains, `App.jsx` `DEFAULT_SETTINGS` **and** `toOptions()`, and `SettingsPanel.jsx`.
     - _Requirements: 1.5, 10.3_
 
-  - [ ] 5.4 Verify the drift pins
+  - [x] 5.4 Verify the drift pins
     - `tests/test_config_documentation.py` for the three new settings. Check `tests/conftest.py` `EFFECTS_OFF` / `assert_effects_off_is_exhaustive()` — `face_detector` is a string rather than a default-on boolean effect so it should not need listing, but **verify rather than assume**.
     - _Requirements: 10.5, 10.6_
 
-  - [ ] 5.5* Property test: `face_detector` round-trips and unknown values default → `tests/test_options_roundtrip.py`
+  - [x] 5.5* Property test: `face_detector` round-trips and unknown values default → `tests/test_options_roundtrip.py`
     - **Property 6** — for any options dict, `face_detector` survives `from_dict(asdict(...))`, and any unrecognised value resolves to `haar` without raising.
     - _Requirements: 10.2, 1.4_ · _Properties: P6_
 

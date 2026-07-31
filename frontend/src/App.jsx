@@ -118,6 +118,7 @@ const DEFAULT_SETTINGS = {
   speaker_reframe: false,
   reframe_layout: "follow_active",
   reframe_intensity: "standard",
+  face_detector: "haar",
   // Advanced AV engines — every flag/option default, forwarded generically
   ...DEFAULT_ENGINE_SETTINGS,
 };
@@ -206,6 +207,7 @@ function toOptions(settings, publishing) {
     speaker_reframe: settings.speaker_reframe,
     reframe_layout: settings.reframe_layout,
     reframe_intensity: settings.reframe_intensity,
+    face_detector: settings.face_detector,
     // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
     ...engineOptions(settings),
   };
