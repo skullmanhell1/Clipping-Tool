@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 from config import settings
-from worker import branding
+from worker import branding, caption_contrast
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
@@ -307,6 +307,16 @@ def render_clip(
             # typeface. Inert when no kit is configured.
             preset, brand_markers = branding.apply_brand(preset, options)
             applied.extend(brand_markers)
+
+            # C20: choose the outline/box colour from the footage behind the caption. After the
+            # brand kit deliberately - the kit sets the *fill*, and this reacts to whatever fill is
+            # in force by adjusting only the legibility layer around it. Inert unless enabled.
+            preset, contrast_markers = caption_contrast.choose_for_clip(
+                base_clip, preset,
+                duration=duration, video_width=width, video_height=height,
+                position=options.caption_position or None,
+            )
+            applied.extend(contrast_markers)
 
             # Keyword highlighting: compute indices only when enabled. When
             # disabled we pass ``None`` and make NO llm call (Req 3.6).

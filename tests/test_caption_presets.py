@@ -330,8 +330,29 @@ def test_p6_keyword_highlight_distinct_and_timing_preserving(name, word):
     highlighted = build_word_span(word, preset, True, cue_start=0.0)
     plain = build_word_span(word, preset, False, cue_start=0.0)
 
-    # Timing / animation preserved: the highlight only wraps the plain span.
-    assert plain in highlighted
+    # Timing / animation preserved. This is asserted against the *animation core* rather than by
+    # `plain in highlighted`, which was the original check and held only because no shipped preset
+    # exercised C10's punch: the punch is applied to a plain word and deliberately **suppressed** on
+    # a highlighted one (two competing `\fscx` spans on one word would fight, and which applied would
+    # depend on tag order rather than intent). So the plain span carries a scale ramp the highlighted
+    # one does not, and substring containment cannot hold for such a preset.
+    #
+    # `karaoke_bold` (C14) is the first preset to set `punch_scale`, which is what surfaced it. The
+    # requirement being validated is that the highlight leaves the word's *timing* untouched, and
+    # that is what the animation core encodes.
+    animation = preset.animation
+    if animation == "karaoke_fill":
+        core = f"{{\\kf{max(1, int(round((word.end - word.start) * 100)))}}}"
+    elif animation == "typewriter":
+        core = "\\alpha&HFF&"
+    elif animation == "pop":
+        core = "\\fscx60\\fscy60"
+    else:
+        core = None
+
+    if core is not None:
+        assert core in highlighted
+        assert core in plain, "the animation core differs between plain and highlighted"
 
     # Distinct highlight colour present only when highlighted.
     colour_tag = f"\\c{preset.colors.highlight}&"
