@@ -31,6 +31,10 @@ class JobStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    # I4: distinct from FAILED on purpose - a job the user stopped did not go
+    # wrong, and collapsing the two would both mislead the operator and inflate
+    # any failure rate computed from these records.
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -50,6 +54,10 @@ class ProcessingOptions:
     num_clips: str = "auto"              # auto | 1 | 3 | 5 | 10 | max
     strategy: str = "ai"                 # ai | silence | fixed
     captions: bool = True                # burn captions
+    # O11: also write .srt/.vtt beside the clip. The burn-in is unchanged; this is
+    # for platforms that accept uploaded captions, and for anyone who needs the
+    # text rather than an image of it.
+    subtitle_sidecar: bool = False
 
     # --- Phase 2: smart selection & metadata (Advanced settings) ----------
     topic: str = ""                      # Clip Topic / Keywords to bias toward
@@ -203,6 +211,23 @@ class ProcessingOptions:
     stem_model: str = "htdemucs"               # separation checkpoint name
     stem_retain_stems: bool = False            # keep per-stem WAVs as durable artifacts
 
+    # --- U6: brand kit ----------------------------------------------------
+    #
+    # A creator's look was spread across places that could not be saved together: the caption
+    # font and colours lived inside a preset editable only in source, the CTA was regenerated per
+    # clip by the LLM so it varied run to run, and a logo could not be applied at all.
+    #
+    # All empty by default, and each is additive - an unset field leaves the preset's own value
+    # alone rather than overwriting it with a default.
+    brand_font: str = ""                       # caption font, overriding the preset's
+    brand_primary_color: str = ""              # "#RRGGBB"; converted to ASS internally
+    brand_highlight_color: str = ""            # "#RRGGBB"
+    brand_cta: str = ""                        # standing call to action (also the V14 end card)
+    brand_logo: str = ""                       # path to a png/jpg/webp watermark
+    brand_logo_position: str = "top_right"     # top_left|top_right|bottom_left|bottom_right
+    brand_logo_scale: float = 0.16             # fraction of frame width
+    brand_logo_opacity: float = 0.85           # 0..1
+
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
     # ``from_dict`` has already expanded the bundle into the individual fields by the time
@@ -264,6 +289,7 @@ class ProcessingOptions:
                 valid["hashtag_count"] = 5
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in ("reframe", "zoom", "transitions", "hook_title", "fades",
+                           "subtitle_sidecar",
                            "progress_bar", "emoji_animate", "filler_removal",
                            # Phase 6 / Tier 1 boolean flags
                            "caption_keyword_highlight", "caption_keyword_ai",
@@ -570,6 +596,18 @@ class ClipResult:
     # ``to_dict`` via ``asdict``.
     broll_assets: list[dict] = field(default_factory=list)
 
+    # --- U9: batch review ------------------------------------------------
+    #
+    # A job produces up to ten clips and every one of them had to be judged, edited and
+    # published individually. There was nowhere to record "I have looked at this and it is
+    # good" or "this one is not usable", so a review pass over twenty clips left no trace and
+    # had to be redone from the top after any interruption.
+    #
+    # ``pending`` is the default so every existing clip - and every clip a running job is
+    # about to produce - reads as unreviewed rather than silently approved.
+    review_state: str = "pending"      # pending | approved | rejected
+    review_note: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -601,6 +639,19 @@ class Job:
     input_type: str                       # "url" | "file"
     source: str                           # URL or original filename
     options: ProcessingOptions
+    # U7: the resolved *local* file the pipeline actually read.
+    #
+    # ``source`` is the URL for a URL job, so it cannot be re-read. The download path was
+    # known only inside the job body and thrown away, which is why re-rendering one clip
+    # previously meant re-downloading and re-running the whole job.
+    source_path: str = ""
+    # I5: the windows selection chose, as ``{"start", "end", "reason", "score"}`` dicts.
+    #
+    # Recorded so an interrupted job can be resumed rather than restarted. Without it a resume
+    # would have to re-run selection, which with an LLM in it is not deterministic - so the
+    # clips already on disk might not correspond to any window the second run chose, and the
+    # user would get a mix of two different selections.
+    planned_clips: list[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: Optional[str] = None
     status: JobStatus = JobStatus.QUEUED
@@ -611,6 +662,12 @@ class Job:
     thumbnail: Optional[str] = None
     error: Optional[str] = None
     clips: list[ClipResult] = field(default_factory=list)
+    # U8: progress was a single coarse fraction plus a free-text stage string, so the UI could
+    # only ever show one bar and a sentence. These make the *structure* of the work visible:
+    # which stage of how many, and what each has cost so far (M5).
+    stage_index: int = 0
+    stage_total: int = 0
+    stage_timings: list[dict] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -621,9 +678,16 @@ class Job:
             "batch_id": self.batch_id,
             "input_type": self.input_type,
             "source": self.source,
+            # U7: needed to re-render one clip without re-downloading the source.
+            "source_path": self.source_path,
+            # I5: the selected windows, so an interrupted job can resume the missing ones.
+            "planned_clips": self.planned_clips,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
+            "stage_index": self.stage_index,
+            "stage_total": self.stage_total,
+            "stage_timings": self.stage_timings,
             "title": self.title,
             "duration": self.duration,
             "thumbnail": self.thumbnail,
@@ -653,6 +717,8 @@ class Job:
             input_type=str(data.get("input_type") or "file"),
             source=str(data.get("source") or ""),
             options=ProcessingOptions.from_dict(data.get("options")),
+            source_path=str(data.get("source_path") or ""),
+            planned_clips=list(data.get("planned_clips") or []),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,
@@ -663,6 +729,11 @@ class Job:
             thumbnail=data.get("thumbnail"),
             error=data.get("error"),
             clips=[ClipResult.from_dict(c) for c in (data.get("clips") or [])],
+            # U8/M5: restored so a completed job's timing report survives a restart. Coerced
+            # defensively because these come back from JSON written by a possibly older build.
+            stage_index=int(data.get("stage_index") or 0),
+            stage_total=int(data.get("stage_total") or 0),
+            stage_timings=list(data.get("stage_timings") or []),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
         )

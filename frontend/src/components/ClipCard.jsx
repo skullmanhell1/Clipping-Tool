@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, formatDuration } from "../api.js";
+import ClipPlayer from "./ClipPlayer.jsx";
 
 const PLATFORM_LABELS = {
   whop: "Whop",
@@ -18,6 +19,14 @@ const ATTEMPT_COLORS = {
   scheduled: "text-violet-400",
   queued: "text-slate-300",
   uploading: "text-cyan-400",
+};
+
+// U9: the verdict recorded on a clip. `pending` is deliberately styled as neutral rather than as
+// a warning — an unreviewed clip is the normal state, not a problem.
+const REVIEW_STYLES = {
+  approved: "border-emerald-500/50 bg-emerald-500/15 text-emerald-300",
+  rejected: "border-rose-500/50 bg-rose-500/15 text-rose-300",
+  pending: "border-slate-700 bg-slate-800/60 text-slate-400",
 };
 
 function scoreColor(score) {
@@ -67,6 +76,13 @@ export default function ClipCard({
   attempts,
   onUpdated,
   onPublished,
+  // U9/U11: batch selection and keyboard review are driven by the parent, which is the only
+  // place that knows about the *other* clips.
+  selected = false,
+  onToggleSelected,
+  onRegisterPlayer,
+  focused = false,
+  settings,
 }) {
   const [form, setForm] = useState({
     title: clip.title || "",
@@ -84,6 +100,8 @@ export default function ClipCard({
   const [publishingNow, setPublishingNow] = useState(false);
   const [busyField, setBusyField] = useState("");
   const [error, setError] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+  const [rerendering, setRerendering] = useState(false);
 
   useEffect(() => {
     setSelectedPlatforms(publishing?.platforms || []);
@@ -190,6 +208,41 @@ export default function ClipCard({
     }
   };
 
+  // U9: record a verdict. Toggling the same verdict clears it, so a mis-click is one keystroke
+  // to undo rather than a state you cannot leave.
+  const setReview = useCallback(
+    async (state) => {
+      const next = clip.review_state === state ? "pending" : state;
+      setReviewing(true);
+      setError("");
+      try {
+        const updated = await api.reviewClip(jobId, clip.id, next);
+        onUpdated?.(updated);
+      } catch (reviewError) {
+        setError(reviewError.message || "Could not record the review.");
+      } finally {
+        setReviewing(false);
+      }
+    },
+    [clip.id, clip.review_state, jobId, onUpdated],
+  );
+
+  // U7: re-render this clip with the settings currently in the panel. Resubmitting the source
+  // would re-download, re-transcribe, re-select and re-render every other clip — and would
+  // produce a *different set* of clips, because selection is not deterministic with an LLM.
+  const rerender = useCallback(async () => {
+    setRerendering(true);
+    setError("");
+    try {
+      const updated = await api.rerenderClip(jobId, clip.id, settings || {});
+      onUpdated?.(updated);
+    } catch (rerenderError) {
+      setError(rerenderError.message || "Re-render failed.");
+    } finally {
+      setRerendering(false);
+    }
+  }, [clip.id, jobId, onUpdated, settings]);
+
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand-accent";
   const sortedAttempts = [...(attempts || [])].sort(
@@ -197,14 +250,21 @@ export default function ClipCard({
   );
 
   return (
-    <div className="flex flex-col gap-3 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 p-3 sm:flex-row">
+    <div
+      data-testid={`clip-${clip.id}`}
+      data-review-state={clip.review_state || "pending"}
+      className={`flex flex-col gap-3 overflow-hidden rounded-xl border bg-slate-900 p-3 sm:flex-row ${
+        focused ? "border-brand-accent ring-1 ring-brand-accent" : "border-slate-800"
+      } ${clip.review_state === "rejected" ? "opacity-60" : ""}`}
+    >
       <div className="relative w-full flex-shrink-0 sm:w-44">
-        <video
+        {/* U3: a review player rather than a playback one — scrubbing, frame stepping and a
+            time readout, because judging a clip means landing on a specific frame (does it open
+            mid-word, is the caption in sync, is the last frame a blink). */}
+        <ClipPlayer
           src={api.clipUrl(clip.video_url)}
           poster={clip.thumbnail_url ? api.clipUrl(clip.thumbnail_url) : undefined}
-          controls
-          preload="metadata"
-          className="aspect-[9/16] w-full rounded-lg bg-black object-contain"
+          onRegisterControls={onRegisterPlayer}
         />
         <span
           className={`absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-bold text-white ${scoreColor(
@@ -229,6 +289,59 @@ export default function ClipCard({
         >
           Video only
         </a>
+
+        {/* U9: the verdict, and U7: re-render with the current settings. */}
+        <div className="mt-2 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setReview("approved")}
+            disabled={reviewing}
+            aria-pressed={clip.review_state === "approved"}
+            title="Approve (a)"
+            className={`flex-1 rounded-lg border py-1 text-xs font-semibold disabled:opacity-50 ${
+              clip.review_state === "approved"
+                ? REVIEW_STYLES.approved
+                : "border-slate-700 text-slate-400 hover:border-emerald-500/50"
+            }`}
+          >
+            ✓ Approve
+          </button>
+          <button
+            type="button"
+            onClick={() => setReview("rejected")}
+            disabled={reviewing}
+            aria-pressed={clip.review_state === "rejected"}
+            title="Reject (x)"
+            className={`flex-1 rounded-lg border py-1 text-xs font-semibold disabled:opacity-50 ${
+              clip.review_state === "rejected"
+                ? REVIEW_STYLES.rejected
+                : "border-slate-700 text-slate-400 hover:border-rose-500/50"
+            }`}
+          >
+            ✕ Reject
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={rerender}
+          disabled={rerendering}
+          title="Re-render just this clip with the settings currently selected above"
+          className="mt-1 w-full rounded-lg border border-slate-700 py-1 text-xs text-slate-300 hover:border-brand-accent disabled:opacity-50"
+        >
+          {rerendering ? "Re-rendering…" : "↻ Re-render this clip"}
+        </button>
+        {onToggleSelected ? (
+          <label className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggleSelected(clip.id)}
+              aria-label={`Select clip ${clip.id} for batch review`}
+              className="accent-brand-accent"
+            />
+            Select for batch
+          </label>
+        ) : null}
       </div>
 
       <div className="flex-1 space-y-3">

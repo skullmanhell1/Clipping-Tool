@@ -1,4 +1,6 @@
 import { useState } from "react";
+import BrandKitPanel from "./BrandKitPanel.jsx";
+import CaptionStylePicker from "./CaptionStylePicker.jsx";
 import Dropdown from "./Dropdown.jsx";
 
 // Option lists mirror the backend's accepted values (see /api/info).
@@ -306,6 +308,10 @@ export default function SettingsPanel({
   engines = [],
   capabilities = null,
 }) {
+  // U5: the presets' real values, so the picker can preview them. Falls back to the name-only
+  // dropdown when the server does not report them, which keeps an older backend working.
+  const presetDetails = effects?.caption_preset_details || [];
+  const captionFonts = effects?.caption_fonts || [];
   const reframeLayoutOptions = labelledOptions(
     effects?.reframe_layouts,
     REFRAME_LAYOUT_LABELS,
@@ -491,6 +497,13 @@ export default function SettingsPanel({
             onChange={setFlag("visual_selection")}
           />
 
+          <Toggle
+            label="Subtitle files (.srt / .vtt)"
+            hint="Write caption files beside each clip as well as burning them in — for platforms that accept uploaded captions, and for anyone who needs the text rather than an image of it"
+            checked={settings.subtitle_sidecar}
+            onChange={setFlag("subtitle_sidecar")}
+          />
+
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
@@ -518,8 +531,23 @@ export default function SettingsPanel({
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               Captions
             </div>
+            {/* U5: the presets were a dropdown of six names, so choosing between them meant
+                rendering a clip to find out what you had picked. */}
+            {presetDetails.length > 0 ? (
+              <div className="mb-3">
+                <div className="mb-1 text-xs font-medium text-slate-400">Caption style</div>
+                <CaptionStylePicker
+                  presets={presetDetails}
+                  value={settings.caption_preset}
+                  onChange={set("caption_preset")}
+                  brand={settings}
+                />
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} />
+              {presetDetails.length === 0 ? (
+                <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} />
+              ) : null}
               <Dropdown label="Caption Position" value={settings.caption_position} onChange={set("caption_position")} options={CAPTION_POSITIONS} />
             </div>
             <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -549,6 +577,10 @@ export default function SettingsPanel({
               />
             </div>
           </div>
+
+          {/* U6: the brand kit sits with the caption settings it overrides, so the relationship
+              between "style" and "identity" is visible rather than documented elsewhere. */}
+          <BrandKitPanel settings={settings} onChange={onChange} fonts={captionFonts} />
 
           {/* Kinetic typography (Req 17.6) — an unavailable engine disables the
               whole group so a creator cannot enable a silent degradation. A

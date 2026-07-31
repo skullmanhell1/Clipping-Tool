@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from config import settings
-from publishers import build_publishers, preflight
+from publishers import build_publishers, preflight, retry, tailoring
 from publishers.base import PublishRequest, PublishState
 from publishers.history import HistoryStore, get_history
 
@@ -59,7 +59,9 @@ class PublishManager:
         return processed
     def _execute(self,item,pub):
         self.history.update_attempt(item["id"],state=PublishState.UPLOADING.value,started_at=time.time())
-        data=item["request_json"]
+        # PB6: fit the copy to *this* platform. The stored request keeps the full text, so a retry
+        # or a re-route re-tailors from the original rather than shortening what was already cut.
+        data=tailoring.tailor_request(item["request_json"] or {},pub.name)
         req=PublishRequest(video_path=Path(data["video_path"]),title=data.get("title",""),
           description=data.get("description",""),hashtags=data.get("hashtags",[]),hook_text=data.get("hook_text",""),
           cta=data.get("cta",""),mentions=data.get("mentions",[]),account_id=data.get("account_id",""),
@@ -76,10 +78,78 @@ class PublishManager:
             self.history.update_attempt(item["id"],state="failed",
               error=f"Clip rejected before upload - {report.summary()}",
               result_json=report.to_dict(),completed_at=time.time()); return
+        # PB4: renew an access token that is about to expire *before* spending the upload.
+        # Only publishers that can actually refresh do anything here; the rest report
+        # `token_kind="static"` and are left alone, since retrying a dead static token cannot help.
+        self._ensure_credentials(pub, req.account_id)
+
         result=pub.publish(req)
+        if not result.success and result.state == PublishState.FAILED:
+            if self._schedule_retry(item, pub, result):
+                return
         self.history.update_attempt(item["id"],state=result.state.value,url=result.url,external_id=result.external_id,
           error=result.error,message=result.message,result_json=result.to_dict(),completed_at=time.time())
         self._maybe_delete_local(req.video_path, result)
+
+    def _ensure_credentials(self, pub, account_id: str) -> None:
+        """Refresh a token that is within the expiry margin (PB4). Never raises.
+
+        A refresh failure is deliberately *not* fatal here: the publish is attempted anyway. If
+        the credential really is dead the platform says so, and that error is far more useful to
+        whoever reads it than one this layer invented from an expiry timestamp.
+        """
+        try:
+            status = pub.status(account_id)
+            if status.token_kind != "refreshable" or not status.configured:
+                return
+            expires_at = status.token_expires_at
+            if expires_at is None:
+                return
+            if float(expires_at) - settings.publish_token_refresh_margin_seconds > time.time():
+                return
+            pub.refresh_credentials(account_id)
+        except Exception:
+            pass
+
+    def _schedule_retry(self, item, pub, result) -> bool:
+        """Re-queue a transiently-failed attempt with backoff. True when a retry was scheduled.
+
+        Only ``failed`` results reach here - a ``review_required`` attempt is waiting on a person
+        and is never retried automatically, which is the same line ``/approve`` and ``/retry``
+        draw in the API.
+        """
+        retry_count = int(item.get("retry_count") or 0)
+        error = result.error or "publish failed"
+        if not retry.should_retry(retry_count, error):
+            if retry_count:
+                # Say how hard we tried: "failed after 4 attempts over two hours" and "failed
+                # immediately" call for different responses, and the platform error alone cannot
+                # tell them apart.
+                self.history.update_attempt(
+                    item["id"], state=PublishState.FAILED.value,
+                    error=retry.exhausted_message(retry_count, error),
+                    message=result.message, result_json=result.to_dict(),
+                    completed_at=time.time(),
+                )
+                return True
+            return False
+
+        delay = retry.backoff_seconds(retry_count + 1)
+        when = time.time() + delay
+        self.history.update_attempt(
+            item["id"],
+            state=PublishState.SCHEDULED.value,
+            scheduled_at=when,
+            retry_count=retry_count + 1,
+            error=error,
+            message=f"Transient failure; retry {retry_count + 1} of "
+                    f"{retry.max_attempts() - 1} in {delay:.0f}s",
+            result_json=result.to_dict(),
+            # Cleared so the record describes the run in flight rather than the last one.
+            started_at=None,
+            completed_at=None,
+        )
+        return True
     def _maybe_delete_local(self, video_path: Path, result):
         """Delete the local clip after a successful publish, if the toggle is on.
 

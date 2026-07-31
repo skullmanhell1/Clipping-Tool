@@ -212,6 +212,37 @@ def energy_in_window(
     return Energy(_readings_in_window(envelope, float(start), float(end)), baseline=baseline)
 
 
+def detect_onsets(
+    envelope: Sequence[tuple[float, float]],
+    *,
+    rise_db: float = 6.0,
+    min_gap: float = 0.6,
+) -> list[float]:
+    """Times where the level jumps sharply - a usable beat/accent proxy (V19).
+
+    **This is onset detection, not beat tracking, and the difference matters.** Real beat
+    tracking estimates a tempo and a phase, and can place a beat where no sound occurred.
+    This only reports moments where the energy actually rose by ``rise_db`` between adjacent
+    readings, which is a weaker claim and a true one: every returned time has a real transient
+    at it. On speech-led footage - which is what this tool is pointed at - there is often no
+    steady tempo to track at all, so the stronger algorithm would mostly be inventing structure.
+
+    It also costs nothing: the envelope is already measured for S2, so this is one pass over a
+    short list rather than any new decode.
+
+    ``min_gap`` suppresses the run of consecutive readings a single loud event produces, keeping
+    only its first - otherwise one door slam becomes four "beats" a second apart.
+    """
+    onsets: list[float] = []
+    previous_db: Optional[float] = None
+    for t, db in envelope:
+        if previous_db is not None and (db - previous_db) >= rise_db:
+            if not onsets or (t - onsets[-1]) >= min_gap:
+                onsets.append(round(float(t), 3))
+        previous_db = db
+    return onsets
+
+
 def annotate_candidates(
     candidates: Iterable[Any],
     envelope: Sequence[tuple[float, float]],

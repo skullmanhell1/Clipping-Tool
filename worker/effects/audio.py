@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import settings
-from worker.ffmpeg_utils import _run
+from worker.ffmpeg_utils import _run, escape_filter_path
 
 # Per-mood synthesis parameters: two tones (root + interval) and a tremolo rate.
 # Frequencies are chosen to be pleasant and unobtrusive; this is a mood *bed*,
@@ -143,6 +143,10 @@ def resolve_music_bed(
     user = find_user_track(mood)
     if user is not None:
         return MusicBed(path=user, mood=mood, source=SOURCE_USER_TRACK)
+    # A16 note: a user track is returned as-is here and fitted to the clip by
+    # :func:`bed_fit_filter` inside the mix, rather than being pre-rendered to length. Cutting a
+    # separate correctly-sized file first would cost an extra encode per clip for something the
+    # existing mix pass can do in the same graph.
     if mood not in _MOOD_SYNTH:
         return None
     if not settings.music_allow_synthesis:
@@ -163,6 +167,61 @@ def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[
     """
     bed = resolve_music_bed(mood, duration, temp_dir)
     return None if bed is None else bed.path
+
+
+#: How long a bed takes to fade out at the end of a clip, in seconds (A16).
+#:
+#: Long enough to read as an ending rather than as a dropout. A bed that stops dead at the final
+#: frame is the single most obvious sign a clip was cut by a machine - the music is mid-phrase and
+#: simply gone. This cannot make the ending *musical* (that needs beat detection, and a bed cut
+#: anywhere is mid-phrase whatever we do), but a fade turns an abrupt stop into a deliberate one.
+BED_FADE_OUT_S = 1.2
+
+#: And a shorter fade in, so a bed does not begin mid-note either.
+BED_FADE_IN_S = 0.35
+
+
+def bed_fit_filter(
+    label_in: str,
+    label_out: str,
+    duration: float,
+    *,
+    fade_in: float = BED_FADE_IN_S,
+    fade_out: float = BED_FADE_OUT_S,
+) -> str:
+    """Loop or trim a music bed to exactly ``duration``, with fades at both ends (A16).
+
+    Three things in order, and the order matters:
+
+    * ``aloop`` repeats the bed indefinitely, because a track shorter than the clip previously
+      just stopped part-way through and the rest of the clip played dry - silence appearing
+      mid-clip, which reads as a fault rather than as a choice.
+    * ``atrim`` + ``asetpts`` cut it back to the clip length. Without resetting the timestamps
+      the looped audio keeps the source's own PTS and the mix drifts out of alignment.
+    * ``afade`` at each end. The out-fade is positioned from the clip's own duration, so it
+      always lands on the ending regardless of how many times the bed looped.
+
+    A clip shorter than the fades gets proportionally shorter ones rather than overlapping
+    fades, which would attenuate the whole bed towards silence.
+    """
+    span = max(0.1, float(duration))
+    # Never let the two fades exceed the clip: on a 1-second clip a 1.2s out-fade plus a 0.35s
+    # in-fade would overlap and multiply, leaving the bed inaudible.
+    fade_in = max(0.0, min(float(fade_in), span * 0.25))
+    fade_out = max(0.0, min(float(fade_out), span * 0.5))
+    out_start = max(0.0, span - fade_out)
+
+    parts = [
+        # -1 = loop forever; the atrim below is what bounds it.
+        f"[{label_in}]aloop=loop=-1:size=2147483647",
+        f"atrim=0:{span:.3f}",
+        "asetpts=N/SR/TB",
+    ]
+    if fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={fade_in:.3f}")
+    if fade_out > 0:
+        parts.append(f"afade=t=out:st={out_start:.3f}:d={fade_out:.3f}")
+    return ",".join(parts) + f"[{label_out}]"
 
 
 def music_mix_filter(
@@ -197,15 +256,19 @@ def music_mix_filter(
     parts: list[str] = []
     out_start = max(0.0, duration - fade_dur)
 
-    # --- the bed: level, then optional fades -------------------------------
-    bed_chain = f"[{music_label}]volume={vol:.3f}"
-    if fade:
-        bed_chain += (
-            f",afade=t=in:st=0:d={fade_dur:.3f}"
-            f",afade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
-        )
-    bed_chain += "[bedv]"
-    parts.append(bed_chain)
+    # --- the bed: fitted to the clip, levelled, then optional fades --------
+    #
+    # A16: the bed is looped or trimmed to the clip length first. Before this it was mixed as-is
+    # with ``amix=duration=first``, which bounded the *mix* to the speech but did nothing about a
+    # bed shorter than the clip - that simply ran out, leaving the rest of the clip dry, which
+    # sounds like a fault rather than an ending. A bed longer than the clip was cut dead at the
+    # final frame instead.
+    #
+    # ``bed_fit_filter`` carries its own fades, so the ``fade`` flag's fades are not applied to
+    # the bed again: two overlapping out-fades multiply and would pull the ending to silence
+    # early. The speech keeps the caller's fades exactly as before.
+    parts.append(bed_fit_filter(music_label, "bedfit", duration))
+    parts.append(f"[bedfit]volume={vol:.3f}[bedv]")
 
     # --- the speech: optional fades, then a split when ducking -------------
     speech_chain = f"[{original_label}]"
@@ -240,6 +303,105 @@ def music_mix_filter(
 # --------------------------------------------------------------------------- #
 # Loudness normalisation (AU1)
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Speech repair: de-noise (AU4) and de-ess (AU5)
+# --------------------------------------------------------------------------- #
+#
+# Both are OFF by default and both are deliberately conservative when on. Noise reduction and
+# sibilance reduction are the two processes most likely to make a recording *worse* while
+# measurably improving the thing they target: over-reduced noise leaves speech sounding
+# underwater and gated, and an aggressive de-esser turns an "s" into a "th". A clip that is
+# slightly noisy is publishable; one that sounds processed is not.
+
+#: ``afftdn`` settings per strength: ``(noise_reduction_db, noise_floor_db)``.
+#:
+#: ``nr`` is how much to remove, ``nf`` the assumed floor. The floor matters more than the
+#: reduction: set it too high and the filter treats quiet speech as noise and gates it. These
+#: pair a modest reduction with a floor low enough to sit under real room tone.
+DENOISE_LEVELS: dict[str, tuple[float, float]] = {
+    "light":    (6.0, -30.0),
+    "standard": (12.0, -25.0),
+    "strong":   (20.0, -20.0),
+}
+
+#: ``deesser`` intensity per strength (its ``i`` parameter, 0..1).
+#:
+#: Even "strong" is 0.6 rather than 1.0. At full intensity the filter removes so much of the
+#: 4-8 kHz band that consonants lose definition, which is a different defect, not a fix.
+DEESSER_LEVELS: dict[str, float] = {
+    "light":    0.2,
+    "standard": 0.4,
+    "strong":   0.6,
+}
+
+
+def denoise_filter(
+    strength: Optional[str] = None, model_path: Optional[str] = None
+) -> Optional[str]:
+    """Speech de-noise, or ``None`` when disabled (AU4).
+
+    Uses ``afftdn`` (spectral gating) by default. ``arnndn`` is the better filter and *is*
+    compiled into ffmpeg, but it is useless without a trained ``.rnnn`` model, and ffmpeg ships
+    none - the models live in a separate repository. So ``arnndn`` is available here only when
+    the operator supplies a model, and naming that dependency is the difference between a
+    setting that works and one that fails the render on a missing file.
+
+    An ``arnndn`` model that is configured but absent degrades to ``afftdn`` rather than
+    failing: the point of de-noising is a publishable clip, and refusing to render one over a
+    missing optional model would invert that.
+    """
+    if strength is None:
+        strength = str(getattr(settings, "speech_denoise", "off") or "off")
+    strength = strength.strip().lower()
+    if strength in ("", "off", "none"):
+        return None
+
+    if model_path is None:
+        model_path = str(getattr(settings, "speech_denoise_model", "") or "")
+    if model_path:
+        model = Path(model_path).expanduser()
+        if model.is_file():
+            return f"arnndn=m='{escape_filter_path(model)}'"
+
+    nr, nf = DENOISE_LEVELS.get(strength, DENOISE_LEVELS["standard"])
+    return f"afftdn=nr={nr:g}:nf={nf:g}"
+
+
+def deesser_filter(strength: Optional[str] = None) -> Optional[str]:
+    """Sibilance reduction, or ``None`` when disabled (AU5).
+
+    **This is the de-esser half of AU5 only.** AU5 also asks for de-reverb, and ffmpeg has no
+    de-reverb filter - not a filter this build lacks, one that does not exist upstream. Real
+    de-reverberation needs spectral deconvolution or a trained model, i.e. an external tool and
+    a new dependency, so it is out of scope for an ffmpeg-only pipeline rather than quietly
+    approximated. A high-pass and a noise gate are sometimes offered as "de-reverb"; they are
+    not, and shipping them under that name would be worse than not shipping it.
+    """
+    if strength is None:
+        strength = str(getattr(settings, "deesser", "off") or "off")
+    strength = strength.strip().lower()
+    if strength in ("", "off", "none"):
+        return None
+    intensity = DEESSER_LEVELS.get(strength, DEESSER_LEVELS["standard"])
+    return f"deesser=i={intensity:g}"
+
+
+def speech_repair_chain(
+    *, denoise: Optional[str] = None, deess: Optional[str] = None
+) -> list[str]:
+    """The ordered speech-cleanup filters: de-noise then de-ess (AU4, AU5).
+
+    That order is not arbitrary. De-noising changes the spectrum in exactly the band a de-esser
+    keys on, so de-essing first means setting its threshold against a signal that is about to
+    change underneath it. Cleaning first, then correcting sibilance, is how the same chain is
+    built by hand.
+
+    Returns ``[]`` when both are off, which is the default and leaves the audio graph exactly as
+    it was before AU4/AU5.
+    """
+    return [f for f in (denoise_filter(denoise), deesser_filter(deess)) if f]
+
+
 #: Integrated-loudness targets per publish platform, in LUFS.
 #:
 #: A clip quieter than the platform's target is turned *up* on playback, which lifts its

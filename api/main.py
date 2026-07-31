@@ -45,12 +45,14 @@ from pydantic import BaseModel
 
 from config import settings
 from profiles import get_profile_store
+from publishers import best_times
 from publishers.base import PublishState
 from publishers.history import get_history
 from publishers.manager import get_publish_manager
 from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
+from worker import captions as cap
 from worker.download import DownloadError, fetch_metadata, is_url
 from worker.effects import broll, caption_presets
 
@@ -80,6 +82,15 @@ logger = logging.getLogger(__name__)
 
 def _run_startup() -> None:
     """Ensure storage dirs exist and start the background retention sweeper."""
+    # I6: attach the job-attribution filter before anything can log. Installed here rather than
+    # at import time so a host that configures its own logging (a container platform capturing
+    # stdout) has already done so and keeps its handlers - this only adds the filter and format.
+    try:
+        from worker import observability
+
+        observability.install()
+    except Exception:  # pragma: no cover - logging setup must never stop the app booting
+        logger.exception("could not install job-scoped log context")
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
     if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
@@ -252,12 +263,59 @@ class RegenerateRequest(BaseModel):
     platform: Optional[str] = None
 
 
+class CaptionPreviewModel(BaseModel):
+    """Request a rendered caption sample for a preset (C18)."""
+
+    preset: str = "karaoke"
+    text: str = ""
+    aspect: str = "9:16"
+    position: str = ""
+    #: Preset fields to override before rendering, so a panel can preview an edited style.
+    overrides: dict = {}
+
+
+class RerenderRequest(BaseModel):
+    """Re-render one clip, optionally with changed settings (U7).
+
+    ``settings`` is a partial options blob; unknown keys are ignored, so a UI can send its whole
+    settings object without knowing which fields this build understands.
+    """
+
+    settings: dict = {}
+
+
+class ClipReviewModel(BaseModel):
+    """Set the review state of one clip (U9)."""
+
+    review_state: str
+    review_note: str = ""
+
+
+class BatchReviewModel(BaseModel):
+    """Set the review state of many clips at once (U9).
+
+    ``clip_ids`` is scoped to one job, which is how review actually happens - you work through
+    the clips a job produced. A cross-job version would need per-job permission checks that do
+    not exist yet in a single-tenant product.
+    """
+
+    clip_ids: list[str]
+    review_state: str
+    review_note: str = ""
+
+
 class PublishClipRequest(BaseModel):
     platforms: list[str] = []
     campaign_id: str = ""
     mode: str = "auto"
     schedule_at: Optional[float] = None
     routes: dict[str, dict[str, str]] = {}
+
+
+class RescheduleModel(BaseModel):
+    """A new time for a pending publish attempt (PB7)."""
+
+    schedule_at: float
 
 
 class CampaignModel(BaseModel):
@@ -334,9 +392,27 @@ def info() -> dict[str, object]:
             "emoji_intensities": ["off", "subtle", "standard", "heavy"],
             "emoji_modes": ["keyword", "ai"],
             "caption_templates": ["karaoke", "boxed", "minimal"],
-            "caption_positions": ["bottom", "center", "top"],
+            # C13: nine positions, up from three. The original three stay first and keep their
+            # names, so a client that only knows them is unaffected.
+            "caption_positions": list(cap.VALID_CAPTION_POSITIONS),
+            # A4: the twelve vendored faces were shipped with licences and a manifest and
+            # nothing exposed them, so the only way to change a caption font was to edit a
+            # preset in source. Variable fonts are filtered out here rather than offered and
+            # then silently substituted (C1).
+            "caption_fonts": cap.available_fonts(),
+            # C12: the platform safe-area profiles a client may select.
+            "caption_safe_areas": list(cap.SAFE_AREA_INSETS.keys()),
             # Tier 1 — Creator Output Upgrade (additive; Reqs 1.4, 8.7, 22.3)
             "caption_presets": list(caption_presets.BUILTIN_PRESETS.keys()),
+            # U5: the presets' actual values, not just their names. A style picker cannot
+            # preview a look it only knows the name of, so the previous names-only list left
+            # the UI unable to show a creator what "hormozi" or "typewriter" would look like
+            # before spending a render finding out. Colours are added in `#RRGGBB` form
+            # alongside the ASS originals, because a colour input cannot display `&H00FFFFFF`.
+            "caption_preset_details": [
+                _preset_detail(preset)
+                for preset in caption_presets.BUILTIN_PRESETS.values()
+            ],
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
             "broll_intensities": list(broll.BROLL_INTENSITY.keys()),
@@ -624,6 +700,7 @@ async def upload(
     num_clips: str = Form("auto"),
     strategy: str = Form("ai"),
     captions: bool = Form(True),
+    subtitle_sidecar: str = Form("false"),
     topic: str = Form(""),
     vocabulary: str = Form(""),
     vibe: str = Form(""),
@@ -751,6 +828,7 @@ async def upload(
             "num_clips": num_clips,
             "strategy": strategy,
             "captions": captions,
+            "subtitle_sidecar": subtitle_sidecar,
             "topic": topic,
             "vocabulary": vocabulary,
             "vibe": vibe,
@@ -841,6 +919,57 @@ def get_job(job_id: str) -> dict:
     return job.to_dict()
 
 
+@app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])
+def cancel_job(job_id: str) -> dict:
+    """Ask a queued or running job to stop (I4).
+
+    ``409`` rather than ``404`` for a job that has already finished: the job exists, it simply
+    cannot be cancelled, and answering 404 would tell the client the wrong thing about why.
+
+    The response says ``cancelling`` for a job that was mid-render, because the worker stops at
+    its next checkpoint and a job already inside an ffmpeg pass finishes that pass first. Saying
+    "cancelled" while a render is still writing would be a claim the API cannot back.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    was_running = job.status.value == "processing"
+    if not manager.cancel(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job.status.value} and cannot be cancelled",
+        )
+    return {
+        "job_id": job_id,
+        "state": "cancelling" if was_running else "cancelled",
+        "detail": (
+            "Stopping at the next checkpoint; a pass already in progress will finish first."
+            if was_running else "Stopped before processing began."
+        ),
+    }
+
+
+@app.get("/api/jobs/{job_id}/timings", tags=["jobs"])
+def get_job_timings(job_id: str) -> dict:
+    """Per-stage render timings for a job (M5).
+
+    Read from the job record rather than from the live metrics registry, so the numbers survive
+    a restart and remain available for a job that finished long ago - which is when someone
+    actually asks where the time went.
+    """
+    job = get_manager().store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    timings = list(job.stage_timings or [])
+    return {
+        "job_id": job_id,
+        "status": job.status.value,
+        "total_seconds": round(sum(float(t.get("seconds") or 0.0) for t in timings), 3),
+        "stages": timings,
+    }
+
+
 @app.get("/api/batches/{batch_id}", tags=["jobs"])
 def get_batch(batch_id: str) -> dict:
     jobs = get_manager().store.by_batch(batch_id)
@@ -863,6 +992,206 @@ def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, clip)
     return clip.to_dict()
+
+
+def _preset_detail(preset) -> dict:
+    """A caption preset serialised for the UI, with web-usable colours (U5).
+
+    The preset's own ``to_dict`` keeps ASS ``&HAABBGGRR`` colours, which is right for the
+    renderer and unusable in a browser: no colour input or CSS property accepts one. The hex
+    equivalents are *added* rather than substituted, so the API still reports exactly what the
+    renderer will use.
+    """
+    from worker import branding
+
+    data = preset.to_dict()
+    colors = data.get("colors") or {}
+    data["colors_hex"] = {
+        key: branding.ass_to_hex(value)
+        for key, value in colors.items()
+        if branding.ass_to_hex(value)
+    }
+    return data
+
+
+@app.post("/api/jobs/{job_id}/resume", tags=["jobs"])
+def resume_job(job_id: str) -> dict:
+    """Render a failed job's unfinished clips, keeping the ones it already produced (I5).
+
+    An interrupted job was marked failed *wholesale*: the clips it had already rendered were on
+    disk and listed in the record, and the only way forward was to re-submit the source and pay for
+    everything again - including re-rendering the clips that had succeeded.
+
+    ``409`` names why a job cannot be resumed rather than silently starting a full re-run, because
+    a full re-run is exactly the expensive thing the caller was trying to avoid.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status.value not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job.status.value!r}; only a failed or cancelled job can be resumed",
+        )
+    if not job.planned_clips:
+        raise HTTPException(
+            status_code=409,
+            detail="This job was interrupted before it chose its clips, so there is nothing to "
+                   "resume. Re-submit the source.",
+        )
+    if not manager.resume(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Every planned clip for this job has already been rendered.",
+        )
+    return manager.store.get(job_id).to_dict()
+
+
+@app.post("/api/captions/preview", tags=["metadata"])
+def caption_preview(req: CaptionPreviewModel) -> FileResponse:
+    """Render a two-second caption sample for a preset (C18).
+
+    The settings panel's style picker (U5) draws its preview in CSS, which can show the typeface,
+    colours, case and placement but *not* the things that distinguish these presets: the word-by-word
+    fill, the active-word punch, the per-word pill, the dual stroke, the measured wrapping. Those are
+    libass' work, so previewing them honestly means letting libass do it.
+
+    Returns the video inline. Two seconds rather than a still, because a still cannot show a sweep or
+    a reveal - which is most of what a preset is.
+    """
+    from worker import caption_preview as preview_module
+    from worker.ffmpeg_utils import ASPECT_PRESETS as ASPECT_CHOICES
+
+    reference: object = req.preset
+    if req.overrides:
+        # A caller that has already changed the font or colours (U6) wants to preview *that*, not
+        # the shipped preset. Merging here rather than making the client send a whole preset keeps
+        # the request small and the defaults authoritative.
+        from worker.effects.caption_presets import resolve_preset
+
+        base, _ = resolve_preset(req.preset)
+        merged = base.to_dict()
+        merged.update({k: v for k, v in req.overrides.items() if k in merged})
+        reference = merged
+
+    target = Path(settings.temp_dir) / "previews" / f"caption_{uuid.uuid4().hex[:10]}.mp4"
+    try:
+        preview_module.render_preview(
+            reference,
+            target,
+            text=req.text or preview_module.SAMPLE_TEXT,
+            aspect=req.aspect if req.aspect in ASPECT_CHOICES else "9:16",
+            position=req.position or None,
+        )
+    except Exception as exc:
+        logger.exception("C18: caption preview failed")
+        raise HTTPException(status_code=500, detail=f"Preview failed: {exc}") from exc
+
+    return FileResponse(
+        target,
+        media_type="video/mp4",
+        filename="caption-preview.mp4",
+        # The preview is disposable and named with a random id, so nothing benefits from caching it
+        # and a stale one would show the previous preset after a settings change.
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+#: Review states a clip may be moved to (U9).
+REVIEW_STATES = frozenset({"pending", "approved", "rejected"})
+
+
+def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list[dict]:
+    """Apply a review state to several clips of one job. Returns the updated clips."""
+    if state not in REVIEW_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_state must be one of {sorted(REVIEW_STATES)}",
+        )
+    manager = get_manager()
+    if manager.store.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    updated: list[dict] = []
+    missing: list[str] = []
+    for clip_id in clip_ids:
+        clip = manager.store.update_clip(
+            job_id, clip_id, {"review_state": state, "review_note": note}
+        )
+        if clip is None:
+            missing.append(clip_id)
+        else:
+            updated.append(clip.to_dict())
+    if missing and not updated:
+        raise HTTPException(
+            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
+        )
+    # A partial result is reported rather than raised: the point of a batch action is to get
+    # through a list, and failing the whole call because one clip has since been deleted would
+    # discard the decisions the user made about all the others.
+    return updated
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/review", tags=["metadata"])
+def review_clip(job_id: str, clip_id: str, req: ClipReviewModel) -> dict:
+    """Approve, reject or reset one clip (U9)."""
+    updated = _set_review(job_id, [clip_id], req.review_state, req.review_note)
+    return updated[0]
+
+
+@app.post("/api/jobs/{job_id}/clips/review", tags=["metadata"])
+def review_clips(job_id: str, req: BatchReviewModel) -> dict:
+    """Approve or reject many clips of one job in a single call (U9).
+
+    A job produces up to ten clips and each had to be judged individually with nowhere to record
+    the verdict, so an interrupted review pass had to be redone from the top.
+    """
+    if not req.clip_ids:
+        raise HTTPException(status_code=400, detail="clip_ids must not be empty")
+    updated = _set_review(job_id, req.clip_ids, req.review_state, req.review_note)
+    return {"updated": updated, "count": len(updated)}
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender", tags=["metadata"])
+def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> dict:
+    """Re-render one clip, optionally with changed settings (U7).
+
+    Changing one setting previously meant resubmitting the whole source: the download, the
+    transcription, the selection call, the metadata generation and every *other* clip. It also
+    produced a different set of clips, because selection is not deterministic with an LLM in it.
+
+    This runs synchronously. A re-render is a cut, a geometry pass and a composite of one clip -
+    seconds to a minute - and the caller is a user who has just pressed a button and is watching
+    for the result. Handing back a job id to poll would be the right shape for a whole-source
+    run and the wrong one here.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+
+    from worker import rerender as rerender_module
+
+    try:
+        updated = rerender_module.rerender_clip(
+            job, clip, option_overrides=req.settings or None
+        )
+    except rerender_module.RerenderError as exc:
+        # 409 rather than 500: the request was well-formed and the state of the world is the
+        # problem (a deleted source, most often), which the message names.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("U7: re-render failed for %s/%s", job_id, clip_id)
+        raise HTTPException(status_code=500, detail=f"Re-render failed: {exc}") from exc
+
+    fields = {
+        name: getattr(updated, name)
+        for name in ("duration", "effects_applied", "broll_assets", "start", "end")
+    }
+    stored = manager.store.update_clip(job_id, clip_id, fields)
+    return (stored or updated).to_dict()
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"])
@@ -1056,6 +1385,140 @@ def approve_publish_attempt(attempt_id: str) -> dict:
     it, so such attempts stopped permanently.
     """
     return _resume_attempt(attempt_id, force_direct=True)
+
+
+#: States whose scheduled time can still be changed (PB7).
+#:
+#: An attempt that is uploading or finished has no future to move. ``failed`` is excluded too:
+#: rescheduling a failure would look like a retry while skipping every check ``/retry`` performs.
+RESCHEDULABLE_PUBLISH_STATES = frozenset(
+    {PublishState.QUEUED.value, PublishState.SCHEDULED.value}
+)
+
+
+@app.get("/api/schedule", tags=["publishing"])
+def schedule_window(start: Optional[float] = None, end: Optional[float] = None) -> dict:
+    """Publish attempts scheduled within a window, for the calendar view (PB7).
+
+    Defaults to the 30 days around now. Returns every state, not just pending ones: a calendar
+    that hid what had already gone out would show an operator an empty week they had in fact
+    filled, and "what did I post on Tuesday" is the same question as "what am I posting Thursday".
+    """
+    now = time.time()
+    begin = float(start) if start is not None else now - 30 * 86400
+    finish = float(end) if end is not None else now + 30 * 86400
+    if finish < begin:
+        raise HTTPException(status_code=400, detail="end must not be before start")
+    return {
+        "start": begin,
+        "end": finish,
+        "attempts": get_history().scheduled_between(begin, finish),
+    }
+
+
+@app.get("/api/schedule/suggestions", tags=["publishing"])
+def schedule_suggestions(platform: str = "", days: int = 7, per_day: int = 2) -> dict:
+    """Suggested posting times for a platform (PB7).
+
+    The response carries ``basis`` describing where the numbers come from, and it is not
+    flattering: these are published third-party heuristics, not measurements of this account's
+    audience. Per-account timing needs post-publish engagement data (PB8), which is not collected
+    yet, and a UI that presented a guess as an analysis would be the actual harm here.
+    """
+    horizon = max(1, min(int(days), 30))
+    each = max(1, min(int(per_day), 6))
+    now = time.time()
+    taken = [
+        float(a["scheduled_at"])
+        for a in get_history().scheduled_between(now, now + horizon * 86400)
+        if a.get("scheduled_at")
+        and (not platform or a.get("platform") == platform)
+    ]
+    found = best_times.suggest(
+        platform, days=horizon, per_day=each, now=now, taken=taken
+    )
+    return {
+        "platform": platform,
+        "basis": best_times.BASIS,
+        "suggestions": [s.to_dict() for s in found],
+    }
+
+
+@app.patch("/api/publish-attempts/{attempt_id}/schedule", tags=["publishing"])
+def reschedule_publish_attempt(attempt_id: str, req: RescheduleModel) -> dict:
+    """Move a pending attempt to a different time (PB7).
+
+    Before this, a scheduled post could not be moved at all: the time was fixed when the attempt
+    was created, and the only recourse was to let it publish or leave it stuck.
+    """
+    store = get_history()
+    item = store.get_attempt(attempt_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Publish attempt not found")
+    state = str(item.get("state") or "")
+    if state not in RESCHEDULABLE_PUBLISH_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Attempt is {state!r}; only "
+                   f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
+        )
+    when = float(req.schedule_at)
+    # A time in the past means "publish now", which is a legitimate request, but it must be
+    # recorded as `queued` rather than left `scheduled` in the past - the scheduler treats both as
+    # due, and a state that disagrees with the clock is what makes a queue hard to reason about.
+    state_now = (
+        PublishState.SCHEDULED.value if when > time.time() + 1
+        else PublishState.QUEUED.value
+    )
+    store.update_attempt(attempt_id, scheduled_at=when, state=state_now)
+    return store.get_attempt(attempt_id) or {}
+
+
+@app.post("/api/publish-attempts/{attempt_id}/cancel", tags=["publishing"])
+def cancel_publish_attempt(attempt_id: str) -> dict:
+    """Cancel a pending attempt so it never publishes (PB7).
+
+    Recorded as ``failed`` with an explicit message rather than deleted. The attempt is part of
+    the audit trail - somebody chose to schedule it - and a row that vanishes is
+    indistinguishable from one that never existed when a post is later found missing.
+    """
+    store = get_history()
+    item = store.get_attempt(attempt_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Publish attempt not found")
+    state = str(item.get("state") or "")
+    if state not in RESCHEDULABLE_PUBLISH_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Attempt is {state!r} and can no longer be cancelled",
+        )
+    store.update_attempt(
+        attempt_id,
+        state=PublishState.FAILED.value,
+        error="Cancelled before publishing",
+        completed_at=time.time(),
+    )
+    return store.get_attempt(attempt_id) or {}
+
+
+@app.post("/api/publishers/{platform}/refresh", tags=["publishing"])
+def refresh_publisher_credentials(platform: str) -> dict:
+    """Force an OAuth token refresh for one platform (PB4).
+
+    Returns ``refreshed: false`` for the four publishers that cannot refresh - TikTok, Instagram
+    and X use long-lived tokens an operator pasted in, Whop an API key - rather than pretending to
+    act. The status in the response says which kind each is, so the answer is actionable.
+    """
+    manager = get_publish_manager()
+    publisher = manager.publishers.get(platform)
+    if publisher is None:
+        raise HTTPException(status_code=404, detail=f"Unknown platform {platform!r}")
+    refreshed = bool(publisher.refresh_credentials())
+    return {
+        "platform": platform,
+        "refreshed": refreshed,
+        "status": publisher.status().to_dict(),
+    }
 
 
 @app.post("/api/publish-attempts/{attempt_id}/retry", tags=["publishing"])
@@ -1279,18 +1742,89 @@ else:
 
     @app.get("/", response_class=HTMLResponse, tags=["ui"])
     def index() -> str:
-        """Fallback page when the frontend has not been built."""
+        """Fallback page when the frontend has not been built (U13)."""
+        return fallback_index_html()
+
+
+def fallback_index_html() -> str:
+    """Fallback page when the frontend has not been built (U13).
+
+    Reports the instance's *actual* state rather than static prose. Someone who reaches this
+    page has almost always got here by accident - a bare API, a deploy where the frontend
+    build did not run - and the questions they need answered are "is the backend healthy"
+    and "what is missing". A page that only says "the UI is not built" answers neither, and
+    sends them to read logs for facts the process already knows.
+
+    Every probe is individually guarded: this page must render when things are broken, since
+    that is precisely when it is read.
+    """
+    def _row(label: str, value: str, ok: bool = True) -> str:
+        colour = "#3fb950" if ok else "#f85149"
         return (
-            "<!doctype html><html><head><meta charset='utf-8'>"
-            "<title>AI Video Clipper</title>"
-            "<style>body{background:#0b0f17;color:#e6edf3;font-family:sans-serif;"
-            "display:flex;min-height:100vh;align-items:center;justify-content:center;"
-            "margin:0}a{color:#00d2ff}.c{max-width:560px;padding:40px}</style></head>"
-            "<body><div class='c'><h1>AI Video Clipper</h1>"
-            "<p>API is running. The React UI has not been built yet.</p>"
-            "<p>Build it with <code>cd frontend &amp;&amp; npm install &amp;&amp; "
-            "npm run build</code>, or run the dev server with "
-            "<code>npm run dev</code> (proxies to this API).</p>"
-            "<p><a href='/docs'>API docs</a> &middot; <a href='/api/info'>Info</a> "
-            "&middot; <a href='/healthz'>Health</a></p></div></body></html>"
+            f"<tr><td style='padding:4px 16px 4px 0;color:#8b949e'>{label}</td>"
+            f"<td style='color:{colour}'>{value}</td></tr>"
         )
+
+    rows = [_row("Version", APP_VERSION), _row("Environment", settings.environment)]
+
+    try:
+        import shutil
+
+        # Resolved rather than merely reported: "ffmpeg" as a configured value tells the
+        # reader nothing, and a missing binary is the single most common reason a deploy of
+        # this app does not work. shutil.which answers the question they actually have.
+        resolved = shutil.which(str(settings.ffmpeg_binary))
+        rows.append(_row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})",
+                         bool(resolved)))
+    except Exception:
+        rows.append(_row("ffmpeg", "could not be resolved", ok=False))
+
+    try:
+        rows.append(_row("Whisper model", str(settings.whisper_model)))
+        rows.append(_row("Storage backend", str(settings.storage_backend.value)))
+    except Exception:
+        pass
+
+    try:
+        jobs = get_manager().store.all()
+        active = sum(1 for j in jobs if j.status.value in ("queued", "processing"))
+        rows.append(_row("Jobs", f"{len(jobs)} known, {active} active"))
+    except Exception:
+        rows.append(_row("Jobs", "job store unavailable", ok=False))
+
+    try:
+        # _engines_info returns (engine_rows, capabilities); only the rows are wanted here.
+        # Unpacking explicitly, because iterating the tuple enumerates the capabilities mapping
+        # instead - which is how the first version of this quietly reported "could not be
+        # listed" on a perfectly healthy instance, the exact class of failure this page exists
+        # to make visible.
+        engines, _capabilities = _engines_info()
+        names = ", ".join(
+            f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}"
+            for e in engines
+        ) or "none registered"
+        rows.append(_row("Engines", names))
+    except Exception:
+        rows.append(_row("Engines", "could not be listed", ok=False))
+
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<title>{settings.app_name}</title>"
+        "<style>body{background:#0b0f17;color:#e6edf3;font-family:ui-sans-serif,sans-serif;"
+        "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}"
+        "a{color:#22d3ee}.c{max-width:640px;padding:40px}code{background:#161b22;"
+        "padding:2px 6px;border-radius:4px;font-size:13px}"
+        "table{border-collapse:collapse;font-size:14px;margin:20px 0}"
+        "h1{margin:0 0 4px;font-size:22px}.s{color:#8b949e;font-size:14px}"
+        "</style></head><body><div class='c'>"
+        f"<h1>{settings.app_name}</h1>"
+        "<p class='s'>The API is running. The React UI has not been built, so this page is "
+        "standing in for it.</p>"
+        f"<table>{''.join(rows)}</table>"
+        "<p class='s'>To get the interface: <code>cd frontend &amp;&amp; npm install "
+        "&amp;&amp; npm run build</code>, then reload. For development use "
+        "<code>npm run dev</code>, which proxies to this API.</p>"
+        "<p><a href='/docs'>API docs</a> &middot; <a href='/api/info'>Capabilities</a> "
+        "&middot; <a href='/api/jobs'>Jobs</a> &middot; <a href='/healthz'>Health</a></p>"
+        "</div></body></html>"
+    )
