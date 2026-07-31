@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — speech repair and per-platform output (AU4, AU5, O7, O12)
+
+- **`AU4` — speech de-noise.** `SPEECH_DENOISE` (off | light | standard | strong) applies
+  `afftdn` to the speech before anything is mixed into it. Off by default and conservative when
+  on: over-reduced noise leaves speech sounding underwater and gated, which is a worse defect
+  than the room tone it removed.
+
+  The plan item notes that `arnndn` "is available in ffmpeg". The *filter* is; the *capability*
+  is not, because ffmpeg ships no `.rnnn` models — they live in a separate repository. So
+  `arnndn` is used only when `SPEECH_DENOISE_MODEL` points at a real model file, and a
+  configured-but-missing model degrades to `afftdn` rather than failing the render. A test
+  asserts both halves of this, so nobody removes the `afftdn` path believing `arnndn` was ready.
+- **`AU5` — de-esser.** `DEESSER` (off | light | standard | strong) reduces sibilance on a harsh
+  or close-miked source. Even "strong" is intensity 0.6 rather than 1.0: at full intensity the
+  4–8 kHz band loses so much energy that consonants lose definition, which is a different defect
+  rather than a fix.
+
+  **The de-reverb half of AU5 is deliberately not implemented.** ffmpeg has no de-reverb filter —
+  not one this build lacks, one that does not exist upstream. Real de-reverberation needs
+  spectral deconvolution or a trained model, i.e. an external dependency. A high-pass plus a gate
+  is sometimes sold as "de-reverb"; it is not, and shipping it under that name would be worse
+  than the gap. A test asserts no such function appears and that the de-esser chain contains
+  neither filter, so the gap cannot be quietly papered over later.
+- **`O7` — per-platform output profiles.** `OUTPUT_PLATFORM` selects a destination profile
+  (`tiktok`, `instagram`, `youtube`, `youtube_shorts`, `x`, `whop`) which sets the resolution,
+  the VBV ceiling and the clip-length cap. Capping length at render time matters: a clip longer
+  than the destination accepts otherwise fails at upload having already cost a full render, and
+  the pre-flight check that catches it (`O10`) runs at the end.
+
+  Three boundaries were drawn deliberately. **The aspect is advisory only** — reported for the UI
+  to recommend, never applied, because silently re-shaping an explicit 9:16 request into 16:9
+  because a platform was named is a setting that fights the interface. **An explicit
+  `OUTPUT_SHORT_SIDE` or `OUTPUT_MAX_BITRATE_KBPS` always wins**; the profile only fills in what
+  the operator has not chosen. And **this selects one profile, not N renders** — a variant per
+  platform is N encodes, N thumbnails and N publish records per clip, a job-model change rather
+  than an encoder setting.
+
+  Duration ceilings are read *from* `publishers.preflight.PLATFORM_LIMITS` rather than restated,
+  so the encoder and the validator cannot disagree about the same number. `youtube_shorts` is the
+  one override: preflight has no Shorts entry — correctly, since a Shorts upload *is* a YouTube
+  upload and is validated as one — so reading the table gave a Shorts profile with a one-hour
+  ceiling. It is pinned to the Shorts product limit of 3 minutes.
+- **`O12` — burned-in vs soft captions.** `CAPTION_MODE` (burned | soft | both). Burned-in
+  remains the default and is right for short-form — the feeds autoplay muted and nobody enables a
+  subtitle track — but it is a permanent, untranslatable, un-hideable decision baked into the
+  pixels. `soft` adds a selectable `mov_text` track instead; `both` does each.
+
+  `mov_text` is plain text, so preset animation, per-word highlighting, glyphs and positioning
+  cannot survive in the soft track. That is a limit of what MP4 can carry, not of this tool, and
+  it is why `both` exists rather than `soft` simply replacing `burned`. The mux is a stream copy,
+  so it costs a remux rather than a re-encode — verified by comparing the video stream's MD5
+  before and after. It runs in the pipeline on the finished file rather than in the compositor,
+  because a subtitle stream added mid-pipeline would be silently dropped by any POST-stage engine
+  that replaces the media.
+
+### Fixed
+
+- **One filter-path escaper, not four.** `captions`, `overlays` and `reframe` had each grown their
+  own copy and they had *diverged*: two resolved the path and escaped backslashes, the third
+  (added with the V18 LUT) did neither and rewrote backslashes as forward slashes. Both are
+  defensible; the combination is not, since which behaviour you got depended on which effect you
+  enabled. All four now delegate to `ffmpeg_utils.escape_filter_path`.
+
 ### Added — visual polish: framing, grading and motion (V5, V6, V8, V14, V16, V18, V19)
 
 - **`V16` — de-letterbox before reframing.** Source footage is very often already boxed: a 16:9

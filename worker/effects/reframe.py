@@ -37,6 +37,7 @@ from worker.ffmpeg_utils import (
     FFmpegError,
     _run,
     detect_letterbox,
+    escape_filter_path,
     h264_args,
     probe,
 )
@@ -672,18 +673,8 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     return samples
 
 
-def _escape_filter_path(path: str | Path) -> str:
-    """Escape a filesystem path for use inside an ffmpeg filter argument.
-
-    ``:`` separates filter options and ``\\``/``'`` are the escape characters, so an unescaped
-    path under a directory with a colon in it produces a filtergraph parse error.
-    """
-    return (
-        str(Path(path).resolve())
-        .replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-    )
+#: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
+_escape_filter_path = escape_filter_path
 
 
 def _content_rect(video: str | Path, info) -> tuple[int, int, int, int]:

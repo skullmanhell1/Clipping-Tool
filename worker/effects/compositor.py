@@ -220,7 +220,11 @@ def render_clip(
 
     # --- captions + hook title (single combined ASS) ---------------------
     subtitles_filter: Optional[str] = None
-    need_caps = options.captions and bool(words)
+    # O12: in `soft` mode the captions are delivered as a selectable track by the pipeline
+    # instead of being burned in here. The hook title is unaffected - it is a title card, not a
+    # caption, and there is no soft equivalent of one.
+    burn_captions = str(getattr(settings, "caption_mode", "burned") or "burned") != "soft"
+    need_caps = options.captions and bool(words) and burn_captions
     need_hook = options.hook_title and bool(hook_text.strip())
 
     # Caption ownership (Reqs 3.2, 3.9). ``None`` on every v0.8.0 / all-off run,
@@ -537,13 +541,36 @@ def render_clip(
     # Audio graph.
     audio_out = "0:a"
     audio_changed = False
+
+    # AU4/AU5: clean the speech *first*, before anything is mixed into it.
+    #
+    # Position matters: de-noising after the music mix would attack the bed as well as the room
+    # tone, and a de-esser keyed on a signal that already has music in it is keying on the wrong
+    # spectrum. Both filters are off by default, so this adds nothing to an unconfigured graph.
+    #
+    # One honest limitation. Loudness normalisation measures the *source file* (its two-pass
+    # measurement runs before this graph exists), so heavy de-noising shifts the integrated
+    # loudness slightly away from what was measured. The true-peak limiter at the end of the
+    # chain is what keeps that safe; the residual error is well under a LU, which is below the
+    # threshold any platform normalises against.
+    repair = audio.speech_repair_chain()
+    if repair and info.has_audio:
+        graph_parts.append(f"[0:a]{','.join(repair)}[aclean]")
+        audio_out = "aclean"
+        audio_changed = True
+        if audio.denoise_filter():
+            applied.append("speech_denoise")
+        if audio.deesser_filter():
+            applied.append("deesser")
+
+    speech_label = audio_out
     if music_path is not None:
         # Music follows the engine block and precedes the b-roll/emoji inputs, so
         # its index is 1 on every run without an engine contribution (i.e. the
         # label is byte-identically ``1:a`` for every v0.8.0 caller).
         inputs += ["-i", str(music_path)]
         graph_parts.append(
-            audio.music_mix_filter("0:a", f"{music_index}:a", "aout",
+            audio.music_mix_filter(speech_label, f"{music_index}:a", "aout",
                                    options.music_volume, duration,
                                    fade=options.fades,
                                    duck=options.music_duck)
@@ -560,7 +587,8 @@ def render_clip(
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
         graph_parts.append(
-            f"[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st={out_start:.3f}:d=0.400[aout]"
+            f"[{speech_label}]afade=t=in:st=0:d=0.400"
+            f",afade=t=out:st={out_start:.3f}:d=0.400[aout]"
         )
         audio_out = "aout"
         audio_changed = True

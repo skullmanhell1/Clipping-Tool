@@ -20,6 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
+from worker.ffmpeg_utils import escape_filter_path
+
 # Colour presets -> an ffmpeg `eq`/`hue` filter chain.
 COLOR_PRESETS: dict[str, str] = {
     "vivid": "eq=contrast=1.12:saturation=1.35:brightness=0.02",
@@ -32,14 +34,8 @@ COLOR_PRESETS: dict[str, str] = {
 MUSIC_MOODS = ("upbeat", "chill", "dramatic", "corporate", "suspense")
 
 
-def _escape_filter_path(path: str) -> str:
-    """Escape a path for use inside an ffmpeg filter argument.
-
-    ``:`` separates filter options and ``\\`` and ``'`` are the escape characters, so a LUT
-    stored under a Windows-style path or in a directory with a colon in it silently produces a
-    filtergraph parse error rather than a wrong-looking image.
-    """
-    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+#: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
+_escape_filter_path = escape_filter_path
 
 
 def lut_filter(lut_path: str | None) -> Optional[str]:
