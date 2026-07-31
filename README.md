@@ -288,6 +288,66 @@ The Docker image builds the React UI and serves it together with the API, so
 dropping a video into `./storage/watch` (a fixed path, not configurable) triggers watch-folder processing when
 that mode is enabled.
 
+## Testing
+
+```bash
+ruff check .                       # lint (blocking in CI)
+pytest                             # warnings are errors; skips fail CI
+python scripts/fetch_emoji.py --check   # the emoji the keyword map can emit are vendored
+scripts/docker_smoke.sh            # build the image and check it serves the app
+cd frontend && npm run lint && npm run test:run && npm run build
+```
+
+Two things about the suite are deliberate and worth knowing before you change it.
+
+**Warnings are errors** (`filterwarnings = error` in `pyproject.toml`). A capability bug that made
+one engine unreachable was invisible partly because nothing in the suite objected to anything.
+
+**A skipped test fails CI.** ffmpeg, the fonts and the opencv runtime libraries are all installed by
+the workflow, so a skip means a dependency silently went missing and the tests it gates have quietly
+stopped running — which is exactly how an earlier ffmpeg gap went unnoticed for several releases.
+
+### Mutation testing
+
+A passing suite proves the tests agree with the code. It does not prove they would *disagree* with
+the wrong code, and for most of what this project does that is the distinction that matters: a
+ranking change produces a plausible ordering, an emoji on the wrong word still renders, a caption in
+a substituted font still encodes. None of those raise, so a test that merely exercises the path
+passes either way.
+
+`scripts/mutate.py` breaks the code on purpose and checks that something notices:
+
+```bash
+# one inline mutation
+python scripts/mutate.py --file worker/captions.py \
+    --old 'if not cue.words:' --new 'if False:' \
+    -- pytest tests/test_captions.py -q -x
+
+# a batch, defined next to the tests it belongs to
+python scripts/mutate.py --spec tests/mutations/example.json
+python scripts/mutate.py --spec tests/mutations/example.json --list
+```
+
+- **CAUGHT** — a test failed. The behaviour is genuinely pinned.
+- **ESCAPED** — everything passed. Either the tests do not cover the behaviour, or the mutation was
+  *equivalent* and changed nothing observable.
+
+Those two need different fixes, and the difference matters. A missing test wants a test. An
+equivalent mutant usually means the same fact is stated in two places, so changing one has no
+effect — and the right response is to remove the redundancy, not to mark the mutation as expected.
+Both happened while building the current batches: `SFX_NAMES` and `synth_filter` each independently
+decided whether a sound effect could be synthesised, and `plan_hits` interpreted its mode in three
+places, which made its own guard provably dead code.
+
+Every escape found so far has pointed at something real — a leaked file descriptor on each
+unreadable font file, an overlay box that was only even-sided at one frame width, a compositor
+wiring that could be replaced with an empty list while every unit test still passed.
+
+Keep each mutation small. One flag, one comparison, one constant: a large mutation that gets caught
+tells you nothing about which part of it was noticed. Anchors must match exactly once — the tool
+refuses an ambiguous or stale one rather than guessing, and it restores the working tree on every
+exit path including a signal.
+
 ## Local development (without Docker)
 
 **Backend:**
