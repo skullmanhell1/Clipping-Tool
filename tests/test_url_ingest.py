@@ -47,8 +47,20 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @pytest.fixture
-def media_server(tmp_path):
-    """Serve ``tmp_path`` over HTTP and yield ``base_url``."""
+def media_server(tmp_path, monkeypatch):
+    """Serve ``tmp_path`` over HTTP and yield ``base_url``.
+
+    ``allow_private_url_ingest`` is enabled for the duration, and the reason belongs right
+    here next to the loopback bind: the SSRF guard in ``download.assert_safe_url`` refuses
+    loopback, link-local and private addresses, which is exactly what this fixture serves
+    from. Serving locally is deliberate (see the module docstring) - it exercises the whole
+    yt-dlp path without making CI depend on the public internet - so the guard has to be
+    opted out of, not worked around.
+
+    The guard's default-deny behaviour is covered directly in ``tests/test_api_auth.py``,
+    including the loopback and cloud-metadata cases, so relaxing it here loses no coverage.
+    """
+    monkeypatch.setattr(settings, "allow_private_url_ingest", True, raising=False)
     handler = functools.partial(_QuietHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
