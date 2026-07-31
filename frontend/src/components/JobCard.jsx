@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClipCard from "./ClipCard.jsx";
+import ReviewBar from "./ReviewBar.jsx";
 import { api, formatDuration } from "../api.js";
 
 const STATUS_STYLES = {
@@ -42,10 +43,141 @@ export default function JobCard({
   publishAttempts,
   onClipUpdated,
   onPublished,
+  settings,
 }) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
   const [timings, setTimings] = useState(null);
+  // U9: which clips a batch action applies to. Scoped to this job, because that is how a review
+  // pass actually happens - you work through what one source produced.
+  const [selectedClips, setSelectedClips] = useState(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchError, setBatchError] = useState("");
+  // U11: which clip the keyboard is acting on.
+  const [focusIndex, setFocusIndex] = useState(0);
+  const playerRef = useRef(null);
+
+  // Memoised because `job.clips || []` allocates a fresh array on every render, which would make
+  // the keyboard effect below re-bind its window listener continuously.
+  const clips = useMemo(() => job.clips || [], [job.clips]);
+
+  const toggleSelected = useCallback((clipId) => {
+    setSelectedClips((previous) => {
+      const next = new Set(previous);
+      if (next.has(clipId)) next.delete(clipId);
+      else next.add(clipId);
+      return next;
+    });
+  }, []);
+
+  const applyBatch = useCallback(
+    async (state) => {
+      const ids = [...selectedClips];
+      if (!ids.length) return;
+      setBatchBusy(true);
+      setBatchError("");
+      try {
+        const result = await api.reviewClips(job.id, ids, state);
+        (result.updated || []).forEach((clip) => onClipUpdated?.(job.id, clip));
+        // Cleared only on success: leaving the selection intact after a failure means the user can
+        // retry without picking twenty clips again.
+        setSelectedClips(new Set());
+      } catch (error) {
+        setBatchError(error.message || "Batch review failed.");
+      } finally {
+        setBatchBusy(false);
+      }
+    },
+    [job.id, onClipUpdated, selectedClips],
+  );
+
+  const reviewFocused = useCallback(
+    async (state) => {
+      const clip = clips[focusIndex];
+      if (!clip) return;
+      const next = clip.review_state === state ? "pending" : state;
+      try {
+        const updated = await api.reviewClip(job.id, clip.id, next);
+        onClipUpdated?.(job.id, updated);
+      } catch (error) {
+        setBatchError(error.message || "Could not record the review.");
+      }
+    },
+    [clips, focusIndex, job.id, onClipUpdated],
+  );
+
+  const counts = useMemo(() => {
+    const tally = { approved: 0, rejected: 0, pending: 0 };
+    clips.forEach((clip) => {
+      const state = clip.review_state || "pending";
+      tally[state] = (tally[state] || 0) + 1;
+    });
+    return tally;
+  }, [clips]);
+
+  // U11: keyboard shortcuts for review.
+  //
+  // Reviewing twenty clips is twenty rounds of aim-and-click at small controls. These are the
+  // standard review keys (j/k to move, a/x to judge, space to play) so they need no learning.
+  //
+  // Bound on the window rather than per card, because the target is "the clip I am looking at"
+  // rather than whatever the browser thinks has focus. Deliberately inert while a text field or
+  // a select has focus: `a` must type an `a` when the user is writing a caption, and getting that
+  // wrong would silently approve clips while someone edits metadata.
+  useEffect(() => {
+    if (!clips.length) return undefined;
+    const onKeyDown = (event) => {
+      const tag = (event.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) {
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      switch (event.key) {
+        case "j":
+          setFocusIndex((index) => Math.min(clips.length - 1, index + 1));
+          break;
+        case "k":
+          setFocusIndex((index) => Math.max(0, index - 1));
+          break;
+        case "a":
+          reviewFocused("approved");
+          break;
+        case "x":
+          reviewFocused("rejected");
+          break;
+        case "s":
+          toggleSelected(clips[focusIndex]?.id);
+          break;
+        case " ":
+          // Prevented, or space scrolls the page out from under the clip being reviewed.
+          event.preventDefault();
+          playerRef.current?.togglePlay?.();
+          break;
+        case ",":
+          playerRef.current?.step?.(-1);
+          break;
+        case ".":
+          playerRef.current?.step?.(1);
+          break;
+        case "ArrowLeft":
+          playerRef.current?.skip?.(-1);
+          break;
+        case "ArrowRight":
+          playerRef.current?.skip?.(1);
+          break;
+        default:
+          return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clips, focusIndex, reviewFocused, toggleSelected]);
+
+  useEffect(() => {
+    // Keep the focus inside the list when clips arrive or disappear.
+    setFocusIndex((index) => Math.max(0, Math.min(index, Math.max(0, clips.length - 1))));
+  }, [clips.length]);
 
   const percentage = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
@@ -170,12 +302,45 @@ export default function JobCard({
               </p>
             </div>
           ) : (
+            <>
+            <ReviewBar
+              counts={counts}
+              total={clips.length}
+              selectedCount={selectedClips.size}
+              busy={batchBusy}
+              error={batchError}
+              onSelectAll={() => setSelectedClips(new Set(clips.map((clip) => clip.id)))}
+              onSelectNone={() => setSelectedClips(new Set())}
+              onSelectPending={() =>
+                setSelectedClips(
+                  new Set(
+                    clips
+                      .filter((clip) => (clip.review_state || "pending") === "pending")
+                      .map((clip) => clip.id),
+                  ),
+                )
+              }
+              onApprove={() => applyBatch("approved")}
+              onReject={() => applyBatch("rejected")}
+              onReset={() => applyBatch("pending")}
+            />
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {job.clips.map((clip) => (
+              {clips.map((clip, index) => (
                 <ClipCard
                   key={clip.id}
                   jobId={job.id}
                   clip={clip}
+                  settings={settings}
+                  selected={selectedClips.has(clip.id)}
+                  onToggleSelected={toggleSelected}
+                  focused={index === focusIndex}
+                  onRegisterPlayer={
+                    index === focusIndex
+                      ? (controls) => {
+                          playerRef.current = controls;
+                        }
+                      : undefined
+                  }
                   llmAvailable={llmAvailable}
                   publishing={publishing}
                   publisherStatuses={publisherStatuses}
@@ -188,6 +353,7 @@ export default function JobCard({
                 />
               ))}
             </div>
+            </>
           )}
 
           {/* M5: the timing breakdown is behind a click rather than always shown. It answers a

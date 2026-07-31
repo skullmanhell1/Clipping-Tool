@@ -263,6 +263,36 @@ class RegenerateRequest(BaseModel):
     platform: Optional[str] = None
 
 
+class RerenderRequest(BaseModel):
+    """Re-render one clip, optionally with changed settings (U7).
+
+    ``settings`` is a partial options blob; unknown keys are ignored, so a UI can send its whole
+    settings object without knowing which fields this build understands.
+    """
+
+    settings: dict = {}
+
+
+class ClipReviewModel(BaseModel):
+    """Set the review state of one clip (U9)."""
+
+    review_state: str
+    review_note: str = ""
+
+
+class BatchReviewModel(BaseModel):
+    """Set the review state of many clips at once (U9).
+
+    ``clip_ids`` is scoped to one job, which is how review actually happens - you work through
+    the clips a job produced. A cross-job version would need per-job permission checks that do
+    not exist yet in a single-tenant product.
+    """
+
+    clip_ids: list[str]
+    review_state: str
+    review_note: str = ""
+
+
 class PublishClipRequest(BaseModel):
     platforms: list[str] = []
     campaign_id: str = ""
@@ -363,6 +393,15 @@ def info() -> dict[str, object]:
             "caption_safe_areas": list(cap.SAFE_AREA_INSETS.keys()),
             # Tier 1 — Creator Output Upgrade (additive; Reqs 1.4, 8.7, 22.3)
             "caption_presets": list(caption_presets.BUILTIN_PRESETS.keys()),
+            # U5: the presets' actual values, not just their names. A style picker cannot
+            # preview a look it only knows the name of, so the previous names-only list left
+            # the UI unable to show a creator what "hormozi" or "typewriter" would look like
+            # before spending a render finding out. Colours are added in `#RRGGBB` form
+            # alongside the ASS originals, because a colour input cannot display `&H00FFFFFF`.
+            "caption_preset_details": [
+                _preset_detail(preset)
+                for preset in caption_presets.BUILTIN_PRESETS.values()
+            ],
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
             "broll_intensities": list(broll.BROLL_INTENSITY.keys()),
@@ -942,6 +981,122 @@ def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, clip)
     return clip.to_dict()
+
+
+def _preset_detail(preset) -> dict:
+    """A caption preset serialised for the UI, with web-usable colours (U5).
+
+    The preset's own ``to_dict`` keeps ASS ``&HAABBGGRR`` colours, which is right for the
+    renderer and unusable in a browser: no colour input or CSS property accepts one. The hex
+    equivalents are *added* rather than substituted, so the API still reports exactly what the
+    renderer will use.
+    """
+    from worker import branding
+
+    data = preset.to_dict()
+    colors = data.get("colors") or {}
+    data["colors_hex"] = {
+        key: branding.ass_to_hex(value)
+        for key, value in colors.items()
+        if branding.ass_to_hex(value)
+    }
+    return data
+
+
+#: Review states a clip may be moved to (U9).
+REVIEW_STATES = frozenset({"pending", "approved", "rejected"})
+
+
+def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list[dict]:
+    """Apply a review state to several clips of one job. Returns the updated clips."""
+    if state not in REVIEW_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_state must be one of {sorted(REVIEW_STATES)}",
+        )
+    manager = get_manager()
+    if manager.store.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    updated: list[dict] = []
+    missing: list[str] = []
+    for clip_id in clip_ids:
+        clip = manager.store.update_clip(
+            job_id, clip_id, {"review_state": state, "review_note": note}
+        )
+        if clip is None:
+            missing.append(clip_id)
+        else:
+            updated.append(clip.to_dict())
+    if missing and not updated:
+        raise HTTPException(
+            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
+        )
+    # A partial result is reported rather than raised: the point of a batch action is to get
+    # through a list, and failing the whole call because one clip has since been deleted would
+    # discard the decisions the user made about all the others.
+    return updated
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/review", tags=["metadata"])
+def review_clip(job_id: str, clip_id: str, req: ClipReviewModel) -> dict:
+    """Approve, reject or reset one clip (U9)."""
+    updated = _set_review(job_id, [clip_id], req.review_state, req.review_note)
+    return updated[0]
+
+
+@app.post("/api/jobs/{job_id}/clips/review", tags=["metadata"])
+def review_clips(job_id: str, req: BatchReviewModel) -> dict:
+    """Approve or reject many clips of one job in a single call (U9).
+
+    A job produces up to ten clips and each had to be judged individually with nowhere to record
+    the verdict, so an interrupted review pass had to be redone from the top.
+    """
+    if not req.clip_ids:
+        raise HTTPException(status_code=400, detail="clip_ids must not be empty")
+    updated = _set_review(job_id, req.clip_ids, req.review_state, req.review_note)
+    return {"updated": updated, "count": len(updated)}
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender", tags=["metadata"])
+def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> dict:
+    """Re-render one clip, optionally with changed settings (U7).
+
+    Changing one setting previously meant resubmitting the whole source: the download, the
+    transcription, the selection call, the metadata generation and every *other* clip. It also
+    produced a different set of clips, because selection is not deterministic with an LLM in it.
+
+    This runs synchronously. A re-render is a cut, a geometry pass and a composite of one clip -
+    seconds to a minute - and the caller is a user who has just pressed a button and is watching
+    for the result. Handing back a job id to poll would be the right shape for a whole-source
+    run and the wrong one here.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+
+    from worker import rerender as rerender_module
+
+    try:
+        updated = rerender_module.rerender_clip(
+            job, clip, option_overrides=req.settings or None
+        )
+    except rerender_module.RerenderError as exc:
+        # 409 rather than 500: the request was well-formed and the state of the world is the
+        # problem (a deleted source, most often), which the message names.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("U7: re-render failed for %s/%s", job_id, clip_id)
+        raise HTTPException(status_code=500, detail=f"Re-render failed: {exc}") from exc
+
+    fields = {
+        name: getattr(updated, name)
+        for name in ("duration", "effects_applied", "broll_assets", "start", "end")
+    }
+    stored = manager.store.update_clip(job_id, clip_id, fields)
+    return (stored or updated).to_dict()
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"])

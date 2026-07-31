@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 from config import settings
+from worker import branding
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
@@ -300,6 +301,13 @@ def render_clip(
             # the user turned in-caption emoji on.
             preset = replace(preset, emoji_inline=bool(options.caption_emoji))
 
+            # U6: the brand kit's typography overrides the preset's. A preset is a *look* - how
+            # captions animate, where they sit - and the kit is an *identity*, so choosing the
+            # hormozi preset with a brand font should give hormozi's animation in the brand's
+            # typeface. Inert when no kit is configured.
+            preset, brand_markers = branding.apply_brand(preset, options)
+            applied.extend(brand_markers)
+
             # Keyword highlighting: compute indices only when enabled. When
             # disabled we pass ``None`` and make NO llm call (Req 3.6).
             keyword_indices = None
@@ -386,10 +394,16 @@ def render_clip(
         duration,
         video_width=width,
         video_height=height,
+        # U6: a brand kit's standing CTA is the end card. Without this the CTA was regenerated
+        # per clip by the LLM, so a creator with one standing ask got a different wording on
+        # every clip. The global END_CARD_TEXT setting remains the fallback.
+        text=branding.end_card_text(options) or None,
     )
     if end_card_path is not None:
         caption_chain.append(cap.subtitles_filter(end_card_path))
         applied.append("end_card")
+
+
 
     if options.progress_bar:
         # V13: position/style/colour/thickness come from settings; the defaults are exactly the
@@ -534,6 +548,21 @@ def render_clip(
     else:
         video_out = video_label
 
+    # U6: the brand logo, on top of everything - captions and emoji included. A watermark that
+    # an emoji overlay could cover is not a watermark.
+    #
+    # Read with the `movie` source filter rather than a second ffmpeg input. The input indices
+    # here are load-bearing: engine contributions, music, b-roll and emoji each compute offsets
+    # from them, and that accounting is what keeps the v0.8.0 parity guarantee. Adding an input
+    # for a watermark would put all of those at risk to save nothing.
+    logo_graph = branding.logo_filter(
+        options, width, height, base_label=video_out, out_label="vbrand"
+    )
+    if logo_graph:
+        graph_parts.append(logo_graph)
+        video_out = "vbrand"
+        applied.append("brand_logo")
+
     # Record composited b-roll (only the cues actually in the graph, Req 9.4).
     if broll_graph:
         applied.extend(broll_notes)
@@ -643,7 +672,10 @@ def render_clip(
     inputs += broll_input_args
     inputs += emoji_inputs
 
-    video_changed = bool(look_chain) or bool(caption_chain) or bool(broll_graph) or bool(emoji_graph)
+    video_changed = (
+        bool(look_chain) or bool(caption_chain) or bool(broll_graph)
+        or bool(emoji_graph) or bool(logo_graph)
+    )
     if not video_changed and not audio_changed:
         return None  # nothing to do
 

@@ -211,6 +211,23 @@ class ProcessingOptions:
     stem_model: str = "htdemucs"               # separation checkpoint name
     stem_retain_stems: bool = False            # keep per-stem WAVs as durable artifacts
 
+    # --- U6: brand kit ----------------------------------------------------
+    #
+    # A creator's look was spread across places that could not be saved together: the caption
+    # font and colours lived inside a preset editable only in source, the CTA was regenerated per
+    # clip by the LLM so it varied run to run, and a logo could not be applied at all.
+    #
+    # All empty by default, and each is additive - an unset field leaves the preset's own value
+    # alone rather than overwriting it with a default.
+    brand_font: str = ""                       # caption font, overriding the preset's
+    brand_primary_color: str = ""              # "#RRGGBB"; converted to ASS internally
+    brand_highlight_color: str = ""            # "#RRGGBB"
+    brand_cta: str = ""                        # standing call to action (also the V14 end card)
+    brand_logo: str = ""                       # path to a png/jpg/webp watermark
+    brand_logo_position: str = "top_right"     # top_left|top_right|bottom_left|bottom_right
+    brand_logo_scale: float = 0.16             # fraction of frame width
+    brand_logo_opacity: float = 0.85           # 0..1
+
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
     # ``from_dict`` has already expanded the bundle into the individual fields by the time
@@ -579,6 +596,18 @@ class ClipResult:
     # ``to_dict`` via ``asdict``.
     broll_assets: list[dict] = field(default_factory=list)
 
+    # --- U9: batch review ------------------------------------------------
+    #
+    # A job produces up to ten clips and every one of them had to be judged, edited and
+    # published individually. There was nowhere to record "I have looked at this and it is
+    # good" or "this one is not usable", so a review pass over twenty clips left no trace and
+    # had to be redone from the top after any interruption.
+    #
+    # ``pending`` is the default so every existing clip - and every clip a running job is
+    # about to produce - reads as unreviewed rather than silently approved.
+    review_state: str = "pending"      # pending | approved | rejected
+    review_note: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -610,6 +639,12 @@ class Job:
     input_type: str                       # "url" | "file"
     source: str                           # URL or original filename
     options: ProcessingOptions
+    # U7: the resolved *local* file the pipeline actually read.
+    #
+    # ``source`` is the URL for a URL job, so it cannot be re-read. The download path was
+    # known only inside the job body and thrown away, which is why re-rendering one clip
+    # previously meant re-downloading and re-running the whole job.
+    source_path: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: Optional[str] = None
     status: JobStatus = JobStatus.QUEUED
@@ -636,6 +671,8 @@ class Job:
             "batch_id": self.batch_id,
             "input_type": self.input_type,
             "source": self.source,
+            # U7: needed to re-render one clip without re-downloading the source.
+            "source_path": self.source_path,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
@@ -671,6 +708,7 @@ class Job:
             input_type=str(data.get("input_type") or "file"),
             source=str(data.get("source") or ""),
             options=ProcessingOptions.from_dict(data.get("options")),
+            source_path=str(data.get("source_path") or ""),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,

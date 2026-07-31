@@ -92,6 +92,16 @@ const DEFAULT_SETTINGS = {
   filler_removal: false,
   // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
   caption_preset: "karaoke",
+  // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
+  // blob, so a kit is saved, applied and set as default by machinery that already exists.
+  brand_font: "",
+  brand_primary_color: "",
+  brand_highlight_color: "",
+  brand_cta: "",
+  brand_logo: "",
+  brand_logo_position: "top_right",
+  brand_logo_scale: 0.16,
+  brand_logo_opacity: 0.85,
   caption_animation: "",
   caption_keyword_highlight: false,
   caption_keyword_ai: false,
@@ -172,6 +182,14 @@ function toOptions(settings, publishing) {
     filler_removal: settings.filler_removal,
     // Tier 1 — animated captions / b-roll / visual selection
     caption_preset: settings.caption_preset,
+    brand_font: settings.brand_font,
+    brand_primary_color: settings.brand_primary_color,
+    brand_highlight_color: settings.brand_highlight_color,
+    brand_cta: settings.brand_cta,
+    brand_logo: settings.brand_logo,
+    brand_logo_position: settings.brand_logo_position,
+    brand_logo_scale: settings.brand_logo_scale,
+    brand_logo_opacity: settings.brand_logo_opacity,
     caption_animation: settings.caption_animation,
     caption_keyword_highlight: settings.caption_keyword_highlight,
     caption_keyword_ai: settings.caption_keyword_ai,
@@ -576,6 +594,9 @@ export default function App() {
                     publishAttempts={publishAttempts}
                     onClipUpdated={handleClipUpdated}
                     onPublished={handlePublished}
+                    // U7: a re-render applies whatever is selected in the panel right now, which
+                    // is what makes "change one setting and see it" a single click.
+                    settings={toOptions(settings, publishing)}
                   />
                 ))}
               </section>
