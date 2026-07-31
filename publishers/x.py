@@ -21,7 +21,9 @@ class XPublisher(BasePublisher):
         ok=bool(settings.x_access_token); approved=settings.x_direct_post_approved
         msg=("Media upload and posting approved" if approved else "X user-context approval/token required; review only") if ok else "Set X_ACCESS_TOKEN (OAuth user context)"
         return PublisherStatus(self.name,ok,ok,approved,"ready" if ok else "not_configured",msg,
-          account_id or (settings.x_account_id or ""),not approved)
+          account_id or (settings.x_account_id or ""),not approved,
+          # PB4: static OAuth user-context token; renewal is a manual step.
+          token_kind="static")
     def _h(self): return {"Authorization":f"Bearer {settings.x_access_token}"}
     def publish(self,request):
         st=self.status(request.account_id)

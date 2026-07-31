@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from config import settings
 
@@ -175,6 +175,7 @@ def plan_emoji(
     mode: str = "keyword",
     client=None,
     hold: float = 1.3,
+    keyword_indices: Optional[set[int]] = None,
 ) -> list[EmojiCue]:
     """Plan emoji overlays for a clip.
 
@@ -185,6 +186,9 @@ def plan_emoji(
         mode: ``keyword`` or ``ai``.
         client: optional LLM client for ``ai`` mode (falls back to keyword map).
         hold: how long each emoji stays on screen (s).
+        keyword_indices: flat indices of the words the *captions* highlight (C19). When given,
+            a mapped word in that set outranks every word outside it, so the emoji lands on the
+            word the viewer is already being pointed at.
 
     Returns a spacing-respecting, chronologically ordered list of cues.
     """
@@ -198,24 +202,109 @@ def plan_emoji(
         if ai_map:
             mapping = {**KEYWORD_EMOJI, **ai_map}
 
-    cues: list[EmojiCue] = []
-    last_t = -spacing
-    slot = 0
-    for w in words:
+    # A11: rank the candidates by salience and keep the strongest, instead of taking whichever
+    # matching word happens to arrive first after the stopwatch has elapsed.
+    #
+    # The old rule was purely temporal: `standard` allows one emoji per five seconds, so the
+    # first mapped word after each interval won regardless of whether it mattered. On
+    # "so anyway the money was completely gone", "so" is not mapped but "anyway"-class filler
+    # often is, and it would take the slot that "money" wanted. Salience is the same signal
+    # C11 uses to choose which word to *emphasise*, so the emoji now lands on the same word the
+    # caption highlights rather than on an unrelated one a second earlier.
+    # C19: the highlighted words, when the caller knows them.
+    #
+    # A11 already ranked by the *same scorer* the caption highlighter uses, which makes the two
+    # agree most of the time. Most of the time is the problem: the highlighter applies a per-cue
+    # budget and a floor (the C11 follow-up), so its final selection is not a pure function of
+    # salience - and where the two disagreed, the emoji landed on one word while the caption
+    # emphasised another. To a viewer that reads as a bug even though each component is behaving
+    # exactly as written. Taking the *actual* indices removes the second opinion.
+    highlighted = keyword_indices or set()
+
+    candidates: list[tuple[float, float, float, str]] = []
+    for index, w in enumerate(words):
         key = _norm(getattr(w, "text", ""))
         glyph = lookup_emoji(key, mapping) if key else ""
         if not glyph:
             continue
-        start = float(getattr(w, "start", 0.0))
-        if start - last_t < spacing:
+        try:
+            start = float(getattr(w, "start", 0.0))
+        except (TypeError, ValueError):
             continue
+        if start != start:      # NaN
+            continue
+        # A highlighted word sorts ahead of every unhighlighted one regardless of salience, which
+        # is the whole point: agreement with the caption matters more than this module's own
+        # opinion about which word is strongest.
+        priority = 1.0 if index in highlighted else 0.0
+        candidates.append((priority, _emoji_salience(w, key), start, glyph))
+
+    if not candidates:
+        return []
+
+    # Strongest first; ties break on time so the result stays a pure function of the input -
+    # the kinetic determinism properties depend on that.
+    candidates.sort(key=lambda c: (-c[0], -c[1], c[2]))
+
+    chosen: list[tuple[float, str]] = []
+    used_glyphs: set[str] = set()
+    cap = _emoji_cap(intensity, duration)
+    for _priority, _salience, start, glyph in candidates:
+        if len(chosen) >= cap:
+            break
+        # A12: the same glyph twice in one clip reads as a template rather than as a reaction,
+        # and two identical emoji a few seconds apart is the single most obvious way an
+        # automatic overlay looks automatic.
+        if glyph in used_glyphs:
+            continue
+        # Spacing is still enforced, but now against every already-chosen cue rather than only
+        # against the previous one in time order - the list is no longer in time order here.
+        if any(abs(start - other) < spacing for other, _g in chosen):
+            continue
+        if min(duration, start + hold) <= start:
+            continue
+        chosen.append((start, glyph))
+        used_glyphs.add(glyph)
+
+    cues: list[EmojiCue] = []
+    for slot, (start, glyph) in enumerate(sorted(chosen)):
         end = min(duration, start + hold)
-        if end <= start:
-            continue
         cues.append(EmojiCue(glyph, round(start, 3), round(end, 3), slot % 3))
-        last_t = start
-        slot += 1
     return cues
+
+
+def _emoji_salience(word: Any, key: str) -> float:
+    """How much this word deserves the emoji slot (A11).
+
+    Deliberately reuses the caption keyword planner's own scorer rather than inventing a second
+    notion of importance: two different answers to "which word matters here" would put the
+    emoji on one word and the highlight on another, which looks like a bug to a viewer even
+    though each component is behaving as written.
+
+    Falls back to a length proxy if that import is unavailable, so this module keeps working
+    standalone - it is imported by the overlay builder, which must not depend on caption code.
+    """
+    try:
+        from worker.effects.caption_presets import _keyword_salience
+
+        base = float(_keyword_salience(word))
+    except Exception:
+        base = 2.0 if len(key) >= 6 else 1.0
+    # A longer key is a more specific match: "celebrate" carries more than "up".
+    return base + min(0.9, len(key) / 20.0)
+
+
+def _emoji_cap(intensity: str, duration: float) -> int:
+    """The most emoji one clip may carry (A12).
+
+    A cap is needed independently of spacing, because spacing alone scales with clip length: a
+    three-minute clip at `heavy` could carry sixty emoji and still satisfy every gap. Scaled by
+    duration so a 15-second clip and a 3-minute one are both proportionate, with a floor of one -
+    an intensity the user switched on should produce at least one.
+    """
+    per_minute = {"subtle": 3, "standard": 6, "heavy": 12}.get(intensity, 6)
+    minutes = max(0.25, float(duration or 0.0) / 60.0)
+    return max(1, int(round(per_minute * minutes)))
 
 
 def _ai_emoji_map(words: list, client) -> dict[str, str]:
@@ -325,6 +414,50 @@ def _emoji_px(frame_width: int, size_frac: float) -> int:
     return px - (px % 2)
 
 
+#: Emoji placement modes (C19).
+#:
+#: ``spread`` is the shipped behaviour: three fixed slots across the frame, chosen so consecutive
+#: emoji do not stack. It treats the emoji as decoration of the *frame*.
+#:
+#: ``caption`` treats it as decoration of the *word*, sitting the glyph just clear of the caption
+#: block. That is the placement the reference look uses, and it is only sensible now that C19 puts
+#: the emoji on the same word the caption highlights - an emoji next to a caption illustrating a
+#: word three seconds earlier would read as a mistake rather than as a pairing.
+PLACEMENTS: tuple[str, ...] = ("spread", "caption")
+
+#: Vertical offsets, as a fraction of frame height, for the emoji band relative to the caption.
+#:
+#: The caption block sits inside the C12 safe area; these place the glyph *outside* it on the side
+#: away from the frame edge, so the emoji never overlaps the text and never lands under platform
+#: chrome. Bottom captions get an emoji above them, top captions get one below, centred captions
+#: get one above - there being no "outside" for a centred block, and above reads better than below
+#: because the eye arrives at the text after the glyph.
+_CAPTION_ADJACENT_Y: dict[str, float] = {
+    "bottom": 0.60,
+    "top": 0.26,
+    "center": 0.34,
+}
+
+#: Horizontal slots for caption-adjacent emoji: centre, then offset either side.
+#:
+#: Centre first because a single emoji paired with a caption belongs above its middle. The offsets
+#: exist only so two emoji close in time do not overlap - with one emoji, this is just "centred".
+_CAPTION_ADJACENT_X: tuple[float, ...] = (0.5, 0.28, 0.72)
+
+
+def _caption_adjacent_slot(slot: int, caption_position: str) -> tuple[float, float]:
+    """``(x_fraction, y_fraction)`` for a caption-adjacent emoji (C19)."""
+    place = (caption_position or "bottom").strip().lower()
+    # A nine-position caption (C13) reduces to the three vertical bands that matter here.
+    if place.startswith("top"):
+        key = "top"
+    elif place.startswith("center"):
+        key = "center"
+    else:
+        key = "bottom"
+    return _CAPTION_ADJACENT_X[slot % 3], _CAPTION_ADJACENT_Y[key]
+
+
 def build_overlay(
     cues: list[EmojiCue],
     base_label: str,
@@ -336,6 +469,8 @@ def build_overlay(
     animate: bool = True,
     resolver: Optional[Callable[[str], Optional[Path]]] = None,
     input_offset: int = 1,
+    placement: str = "spread",
+    caption_position: str = "bottom",
 ) -> tuple[list[str], str]:
     """Build ffmpeg inputs + a ``-filter_complex`` snippet for emoji overlays.
 
@@ -354,6 +489,11 @@ def build_overlay(
         resolver: ``char -> Path`` resolver (defaults to :func:`resolve_asset`).
         input_offset: ffmpeg input index of the first emoji PNG (after existing
             inputs such as the base video and any music).
+        placement: ``spread`` (the shipped behaviour - three slots across the frame) or
+            ``caption`` (C19), which sits the emoji just clear of the caption block so the glyph
+            and the word it illustrates read as one element rather than two.
+        caption_position: where the captions are, so ``caption`` placement knows which side of
+            them to sit on. Ignored by ``spread``.
 
     Returns ``(input_args, filtergraph)``. When no emoji resolve, returns
     ``([], "")`` and the caller should keep using ``base_label``.
@@ -383,7 +523,10 @@ def build_overlay(
         prep += f"[e{i}]"
         steps.append(prep)
 
-        sx, sy = _SLOT_X[cue.slot % 3], _SLOT_Y[cue.slot % 3]
+        if placement == "caption":
+            sx, sy = _caption_adjacent_slot(cue.slot, caption_position)
+        else:
+            sx, sy = _SLOT_X[cue.slot % 3], _SLOT_Y[cue.slot % 3]
         nxt = out_label if i == len(resolved) - 1 else f"ov{i}"
         steps.append(
             f"[{current}][e{i}]overlay=x='(W-w)*{sx:g}':y='H*{sy:g}':"

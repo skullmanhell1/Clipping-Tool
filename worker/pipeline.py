@@ -20,13 +20,21 @@ status to the UI.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
-from worker import diarization, segmentation, visual_selection
+from worker import (
+    diarization,
+    intermediate_cache,
+    segmentation,
+    subtitle_export,
+    thumbnail,
+    visual_selection,
+)
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 
@@ -44,6 +52,8 @@ from worker.engines.host import Engine_Host
 from worker.llm_client import BaseLLMClient
 from worker.models import ClipResult, ProcessingOptions, effective_options
 from worker.transcribe import Transcript, transcribe
+
+logger = logging.getLogger(__name__)
 
 # progress_cb(fraction: float, stage: str)
 ProgressCallback = Callable[[float, str], None]
@@ -99,6 +109,8 @@ def run_pipeline(
     progress_cb: Optional[ProgressCallback] = None,
     start_progress: float = 0.0,
     llm_client: Optional[BaseLLMClient] = None,
+    explicit_candidates: Optional[list] = None,
+    on_plan: Optional[Callable[[list], None]] = None,
 ) -> list[ClipResult]:
     """Run the full pipeline on ``source`` and return the produced clips.
 
@@ -111,9 +123,19 @@ def run_pipeline(
         start_progress: Fraction already consumed before this call (0..1).
         llm_client: Optional LLM client (dependency injection for tests). When
             ``None`` the configured client is used (if any).
+        explicit_candidates: Windows to render, skipping selection entirely (U7).
+            ``None`` - the default and every pre-U7 caller - selects as before.
 
     Returns:
         A list of :class:`ClipResult` ordered by virality score (best first).
+
+    The ``candidates`` argument is what makes a single clip re-renderable without
+    re-running a whole job. It is a parameter rather than a separate clip-render function
+    on purpose: the per-clip path below is two hundred lines of filler removal, diarisation
+    rebasing, b-roll, engine stages, captions and thumbnailing, and a second copy of it
+    would drift from this one within a release. Passing the window in reuses that path
+    exactly, so a re-rendered clip is byte-for-byte what a full run would have produced
+    from the same options.
     """
     cb = progress_cb or _noop
     source = Path(source)
@@ -167,6 +189,47 @@ def run_pipeline(
         )
     else:
         transcript = Transcript(language="none", segments=[])
+
+    # T10: an English subtitle track *alongside* the original-language captions.
+    #
+    # `task=translate` replaces the transcript text, so asking for a translation used to cost
+    # the original-language captions entirely - a Spanish creator's clip came back with English
+    # burned into the pixels. Here the burned captions stay in the source language and English
+    # arrives as a separate track, which is the only form a viewer can switch off.
+    #
+    # Run once per source rather than per clip: it is a full ASR pass, and slicing it per clip
+    # costs nothing. Skipped outright when it could not add anything, with a marker saying so,
+    # because a silently-absent track is indistinguishable from a broken one.
+    translated: Optional[Transcript] = None
+    translation_marker = ""
+    if settings.subtitle_translation and transcript.segments:
+        if options.translate:
+            # The main pass is already English; a second translate pass would decode the same
+            # audio to the same text and label it as a translation of itself.
+            translation_marker = "subtitle_translation:skipped_already_translated"
+        elif str(transcript.language or "").lower() in ("en", "eng", "english"):
+            translation_marker = "subtitle_translation:skipped_english"
+        else:
+            report(_P_TRANSCRIBE_END * 0.9, "Translating subtitles")
+            try:
+                translated = transcribe(
+                    source,
+                    language=options.language,
+                    translate=True,
+                    vocabulary=getattr(options, "vocabulary", "") or "",
+                )
+            except Exception as exc:      # noqa: BLE001 - see below
+                # Deliberately broad: this is an extra track on a job whose expensive work is
+                # still ahead of it, and every failure mode of a model call (OOM, a missing
+                # weight file, a corrupt download) is a reason to ship the clips without the
+                # translation rather than to lose the job.
+                logger.warning("T10: translated transcription failed for %s: %s", source, exc)
+                translation_marker = "subtitle_translation:failed"
+            else:
+                if not translated.words:
+                    translated = None
+                    translation_marker = "subtitle_translation:empty"
+
     report(_P_TRANSCRIBE_END, "Finding the best moments")
 
     # --- AI highlight selection (with process-range + fallback) -----------
@@ -181,7 +244,8 @@ def run_pipeline(
     # disabled or degrades (no LLM / sampling failure / unconfigured provider),
     # so behaviour is identical to before when the feature is off (Reqs 13.2,
     # 15.4).
-    candidates = visual_selection.select_moments_visual(
+    # U7: an explicit window skips selection (and its LLM call) entirely.
+    candidates = explicit_candidates or visual_selection.select_moments_visual(
         ranged if (options.range_start is not None or options.range_end is not None)
         else transcript,
         options,
@@ -194,6 +258,17 @@ def run_pipeline(
         candidates = [c for c in candidates if c.end > options.range_start]
         for c in candidates:
             c.start = max(c.start, options.range_start)
+
+    # I5: publish the plan before any rendering starts. A job interrupted halfway can then be
+    # resumed against the windows it actually chose, instead of re-running a selection that -
+    # with an LLM in it - is not deterministic and could return different moments, leaving the
+    # user with clips from two different selections.
+    if on_plan is not None:
+        try:
+            on_plan(list(candidates))
+        except Exception:
+            # The plan is an aid to resuming, never a precondition for rendering.
+            logger.warning("I5: could not record the clip plan", exc_info=True)
 
     report(_P_SELECT_END, f"Creating {len(candidates)} clip(s)")
     if not candidates:
@@ -252,7 +327,17 @@ def run_pipeline(
     source_silences: list[tuple[float, float]] = []
     if options.trim_silence:
         try:
-            source_silences = segmentation.detect_silences(source)
+            # I3: cached by source content. `silencedetect` needs a whole-file decode, and the
+            # answer depends on nothing a user changes between runs of the same video - so a
+            # re-run to try a different caption preset was paying for this again.
+            source_silences = [
+                (float(a), float(b))
+                for a, b in intermediate_cache.memoise(
+                    "silences",
+                    source,
+                    lambda: [list(pair) for pair in segmentation.detect_silences(source)],
+                )
+            ]
         except (fu.FFmpegError, OSError):
             source_silences = []
 
@@ -265,6 +350,12 @@ def run_pipeline(
         geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
+        # T10: why a requested translated track is not on this clip. Recorded per clip even
+        # though the reason is a property of the source, because the clip record is the only
+        # thing a caller sees - an absent track with no explanation is indistinguishable from
+        # a broken one.
+        if translation_marker:
+            applied.append(translation_marker)
         broll_assets: list[dict] = []
         # Filler keep-plan for this clip (None unless filler removal tightened
         # the timeline). Used to rebase speaker turns onto the same tightened
@@ -305,6 +396,13 @@ def run_pipeline(
 
         # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
         words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []
+        # T10: the same window of the translated transcript. Sliced from the translated pass's
+        # own timings rather than mapped from the original's, because translation reorders
+        # words - a German verb arriving at the end of the clause is an English verb in the
+        # middle - so there is no word-to-word correspondence to map through.
+        translated_words = (
+            cap.slice_words(translated, c.start, c.end) if translated is not None else []
+        )
 
         # 3. filler-word / long-pause removal (adjusts the timeline + words).
         if options.filler_removal and words:
@@ -316,6 +414,11 @@ def run_pipeline(
                     raw.unlink(missing_ok=True)
                     raw = trimmed
                     words = filler.rebase_words(words, plan.keeps)
+                    # T10: the translated track is timed against the same media, so it has to
+                    # follow every cut made to it. Left un-rebased it would drift by the total
+                    # removed duration and read as a sync bug in the player.
+                    if translated_words:
+                        translated_words = filler.rebase_words(translated_words, plan.keeps)
                     keep_plan = plan.keeps
                     clip_duration = sum(k.duration for k in plan.keeps)
                     applied.append("filler_removal")
@@ -446,9 +549,77 @@ def run_pipeline(
         # 6. thumbnail from the finished clip
         thumb = clips_dir / f"clip_{clip_id}.jpg"
         try:
-            fu.generate_thumbnail(final, thumb, at=min(1.0, c.duration / 2))
+            # V17: score a few candidate frames rather than taking a fixed position, which on a
+            # clip opening on a cut or a blink chose exactly the wrong still.
+            fu.generate_thumbnail(
+                final, thumb, at=thumbnail.choose_thumbnail_time(final, c.duration)
+            )
         except fu.FFmpegError:
             thumb = None
+
+        # 6a. O11: sidecar caption files alongside the clip, for platforms that accept uploaded
+        #     captions and for anyone who needs the text rather than the burn-in. Written from
+        #     the clip-relative words, so they are in sync with the file they sit next to.
+        if getattr(options, "subtitle_sidecar", False):
+            try:
+                subtitle_export.write_sidecars(words, final.with_suffix(""))
+                # T10: the translation goes beside it as `clip_N.en.srt`/`.vtt`, tagged so an
+                # upload form can tell the two apart. The untagged pair keeps its existing
+                # names, so nothing that already consumes them has to change.
+                if translated_words:
+                    subtitle_export.write_sidecars(
+                        translated_words, final.with_suffix(""), language="en"
+                    )
+            except OSError as exc:
+                # A sidecar is an extra, never a reason to lose a clip that has already cost
+                # minutes of CPU. Logged rather than swallowed, so a permissions problem is
+                # visible instead of appearing as silently missing files.
+                logger.warning("O11: could not write sidecar captions for %s: %s", final, exc)
+
+        # 6a-ii. O12: in `soft` or `both` mode, add the captions as a selectable subtitle track.
+        #
+        #        Done here rather than in the compositor because it is a remux of the finished
+        #        file, not a filter: muxing during the composite pass would mean the subtitle
+        #        stream survived every later stage untouched, and POST engines that replace the
+        #        media would silently drop it.
+        #
+        #        T10's translated track is muxed in the SAME call, not a second one, because
+        #        `-metadata:s:s:N` numbers subtitle streams by their position in the output: a
+        #        follow-up remux of a file that already carries one track would have to know how
+        #        many there were to avoid re-labelling the first. One call makes the indices a
+        #        property of the argument list.
+        caption_mode = str(getattr(settings, "caption_mode", "burned") or "burned")
+        subtitle_tracks: list[tuple[Path, str]] = []
+        track_markers: list[str] = []
+        try:
+            if caption_mode in ("soft", "both") and words:
+                srt = subtitle_export.write_sidecars(
+                    words, temp_dir / f"soft_{clip_id}", formats=("srt",)
+                )
+                if srt:
+                    # Labelled with the language actually spoken, not a fixed "eng": a track
+                    # menu offering two entries both called English is worse than no menu.
+                    subtitle_tracks.append(
+                        (srt[0], subtitle_export.iso639_2(transcript.language))
+                    )
+                    track_markers.append(f"caption_mode:{caption_mode}")
+            if translated_words:
+                srt_en = subtitle_export.write_sidecars(
+                    translated_words, temp_dir / f"soft_{clip_id}", formats=("srt",),
+                    language="en",
+                )
+                if srt_en:
+                    subtitle_tracks.append((srt_en[0], "eng"))
+                    track_markers.append("subtitle_translation:track")
+            if subtitle_tracks:
+                muxed = temp_dir / f"soft_{clip_id}.mp4"
+                fu.mux_subtitle_tracks(final, subtitle_tracks, muxed)
+                muxed.replace(final)
+                applied.extend(track_markers)
+        except (fu.FFmpegError, OSError) as exc:
+            # The burned captions (in `both`) or the sidecars (in `soft`) are already there,
+            # so a failed remux costs a convenience, not the clip.
+            logger.warning("O12/T10: could not mux subtitle tracks into %s: %s", final, exc)
 
         # 6b. POST-stage engines see the finished clip, then this clip's engine
         #     lifecycle is closed: durable artifacts are persisted BEFORE the

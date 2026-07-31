@@ -1477,6 +1477,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": False, "border_style": 3,
         "uppercase": False, "outline": 0, "shadow": 0,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
     "hormozi": {
         "name": "hormozi", "animation": "pop", "font": "Anton", "font_weight": 800, "font_size": 104,
@@ -1486,6 +1493,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": True, "border_style": 1,
         "uppercase": True, "outline": 10, "shadow": 5,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
     "karaoke": {
         "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
@@ -1495,6 +1509,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
     "minimal": {
         "name": "minimal", "animation": "none", "font": "Poppins", "font_weight": 700, "font_size": 84,
@@ -1504,6 +1525,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 6, "shadow": 3,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
     "pop": {
         "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
@@ -1513,6 +1541,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
     "typewriter": {
         "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_weight": 700, "font_size": 96,
@@ -1522,6 +1557,13 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "emoji_inline": False, "border_style": 1,
         "uppercase": False, "outline": 8, "shadow": 4,
         "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0, "punch_ms": 110,
+        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "max_lines": 2,
+        "word_pill": 0.0,
+        "word_pill_color": "",
+        "outline2": 0,
+        "outline2_color": "&H00000000",
     },
 }
 
@@ -1669,8 +1711,13 @@ def test_caption_preset_values_are_unchanged():
     field sets are pinned too, so an added field — which would silently widen every
     preset — fails here rather than surfacing as a rendering change.
     """
+    # C14 adds eight presets. The pin's job is to catch a *changed* preset, not to forbid new
+    # ones - a new name cannot alter any existing render, whereas a changed field silently does.
+    # So the six v0.8.0 presets are still pinned field-for-field, and the additions are required to
+    # be additions rather than replacements.
     assert sorted(caption_presets.BUILTIN_PRESETS) == [
-        "boxed", "hormozi", "karaoke", "minimal", "pop", "typewriter",
+        "boxed", "comic", "headline", "hormozi", "karaoke", "karaoke_bold", "minimal", "pill",
+        "pill_green", "pop", "spotlight", "sticker", "subtitle", "typewriter",
     ]
     for name, expected in sorted(_EXPECTED_BUILTIN_PRESETS.items()):
         preset = caption_presets.BUILTIN_PRESETS[name]
@@ -1685,17 +1732,30 @@ def test_caption_preset_values_are_unchanged():
 
     # ``font_weight`` (C3), ``uppercase`` (C7), ``outline``/``shadow`` (C8) and
     # ``low_confidence_threshold``/``low_confidence_alpha`` (T7) are the six fields added since
-    # v0.8.0. Each exists because the value it holds used to be implicit: the Bold flag was
+    # v0.8.0, plus punch_scale/punch_ms (C10) and spacing/scale_x/scale_y (C15), which are
+    # updated here deliberately - every one defaults to the previous behaviour, so no
+    # preset's rendered output changes. Each exists because the value it holds was implicit: the Bold flag was
     # always -1 even for a face already drawn heavy, only the hook title was upper-cased,
     # outline/shadow were inferred from the animation style, and every word was asserted with
     # identical confidence including the ones the model barely guessed at.
     #
     # This list is updated deliberately, which is the point of the pin: the two T7 fields
     # default to 0.0/0.55, and 0.0 means the behaviour is off, so no existing preset changes.
+    #
+    # ``max_lines`` (C16) is added the same way, defaulting to 2. It cannot change a rendered
+    # caption on its own: it is a budget consumed by the C6 wrapper, and before C6 there was no
+    # wrapping at all - the file declares `WrapStyle: 2`, so libass broke only at an explicit `\N`
+    # that nothing inserted. A preset that fits on one line still renders on one line.
+    #
+    # ``word_pill``/``word_pill_color`` (C9) and ``outline2``/``outline2_color`` (C17) likewise
+    # default to off - 0.0 and 0 respectively - so every one of the six presets pinned below emits
+    # exactly the tags it did before. The new C14 presets are the only ones that set them.
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
         "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
         "font_weight", "highlight_keywords", "highlight_scale", "low_confidence_alpha",
-        "low_confidence_threshold", "name", "outline", "position", "shadow", "uppercase",
+        "low_confidence_threshold", "max_lines", "name", "outline", "outline2", "outline2_color",
+        "position", "punch_ms", "punch_scale", "scale_x", "scale_y", "shadow", "spacing",
+        "uppercase", "word_pill", "word_pill_color",
     ]
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
         "box", "highlight", "outline", "primary",

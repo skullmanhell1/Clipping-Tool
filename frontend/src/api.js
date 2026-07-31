@@ -47,6 +47,14 @@ export const api = {
   listJobs: () => fetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => fetch(`/api/jobs/${id}`).then(jsonOrThrow),
 
+  // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
+  // which jsonOrThrow surfaces as an error carrying the API's own explanation.
+  cancelJob: (id) =>
+    fetch(`/api/jobs/${id}/cancel`, { method: "POST" }).then(jsonOrThrow),
+
+  // M5: per-stage render timings for a finished (or running) job.
+  jobTimings: (id) => fetch(`/api/jobs/${id}/timings`).then(jsonOrThrow),
+
   editClip: (jobId, clipId, fields) =>
     fetch(`/api/jobs/${jobId}/clips/${clipId}`, {
       method: "PATCH",
@@ -103,6 +111,72 @@ export const api = {
     fetch(`/api/publish-attempts/${attemptId}/approve`, { method: "POST" }).then(jsonOrThrow),
   retryPublishAttempt: (attemptId) =>
     fetch(`/api/publish-attempts/${attemptId}/retry`, { method: "POST" }).then(jsonOrThrow),
+
+  // PB7: scheduling. A scheduled post could not be seen in context, moved, or cancelled — the
+  // time was fixed when the attempt was created and the only recourse was to let it publish.
+  schedule: (start, end) => {
+    const params = new URLSearchParams();
+    if (start != null) params.set("start", String(start));
+    if (end != null) params.set("end", String(end));
+    const query = params.toString();
+    return fetch(`/api/schedule${query ? `?${query}` : ""}`).then(jsonOrThrow);
+  },
+  // Suggestions carry a `basis` string describing where they come from. Render it: they are
+  // published heuristics, not measurements of this account's audience, and presenting a guess
+  // as an analysis is the actual harm available here.
+  scheduleSuggestions: (platform = "", days = 7, perDay = 2) =>
+    fetch(
+      `/api/schedule/suggestions?platform=${encodeURIComponent(platform)}` +
+        `&days=${days}&per_day=${perDay}`,
+    ).then(jsonOrThrow),
+  reschedulePublishAttempt: (attemptId, scheduleAt) =>
+    fetch(`/api/publish-attempts/${attemptId}/schedule`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schedule_at: scheduleAt }),
+    }).then(jsonOrThrow),
+  cancelPublishAttempt: (attemptId) =>
+    fetch(`/api/publish-attempts/${attemptId}/cancel`, { method: "POST" }).then(jsonOrThrow),
+  // I5: render a failed job's unfinished clips, keeping the ones it already produced. An
+  // interrupted job used to be marked failed wholesale, so the only way forward was to re-submit
+  // the source and pay for every clip again — including the ones that had succeeded.
+  resumeJob: (jobId) =>
+    fetch(`/api/jobs/${jobId}/resume`, { method: "POST" }).then(jsonOrThrow),
+
+  // U7: re-render one clip with changed settings, instead of resubmitting the whole source.
+  // Resubmitting re-downloads, re-transcribes, re-selects and re-renders every other clip — and
+  // because selection is not deterministic with an LLM in it, you get a *different set* of clips
+  // rather than the same one restyled.
+  rerenderClip: (jobId, clipId, settings = {}) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/rerender`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    }).then(jsonOrThrow),
+
+  // U9: record a verdict on a clip, one at a time or many at once. Without this a review pass
+  // over twenty clips left no trace and had to be redone from the top after any interruption.
+  reviewClip: (jobId, clipId, reviewState, reviewNote = "") =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_state: reviewState, review_note: reviewNote }),
+    }).then(jsonOrThrow),
+  reviewClips: (jobId, clipIds, reviewState, reviewNote = "") =>
+    fetch(`/api/jobs/${jobId}/clips/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clip_ids: clipIds,
+        review_state: reviewState,
+        review_note: reviewNote,
+      }),
+    }).then(jsonOrThrow),
+
+  refreshPublisherCredentials: (platform) =>
+    fetch(`/api/publishers/${encodeURIComponent(platform)}/refresh`, {
+      method: "POST",
+    }).then(jsonOrThrow),
 
   // --- Phase 5: storage, profiles, updates ---
   storage: () => fetch("/api/storage").then(jsonOrThrow),

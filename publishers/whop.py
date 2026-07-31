@@ -23,7 +23,9 @@ class WhopPublisher(BasePublisher):
         return PublisherStatus(self.name,configured,available,True,
           "ready" if available else "not_configured",
           "Ready via @whop/sdk" if available else "Set WHOP_API_KEY and install publisher_bridge dependencies",
-          account_id or (settings.whop_company_id or ""))
+          account_id or (settings.whop_company_id or ""),
+          # PB4: an API key, not a token - there is nothing to expire or refresh.
+          token_kind="none")
     def publish(self, request):
         st=self.status(request.account_id)
         if not st.available:

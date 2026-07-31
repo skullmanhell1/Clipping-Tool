@@ -19,7 +19,10 @@ class TikTokPublisher(BasePublisher):
         ok=bool(settings.tiktok_access_token); approved=settings.tiktok_direct_post_approved
         msg=("Direct Post approved" if approved else "Draft/private upload only until TikTok audit approval") if ok else "Set TIKTOK_ACCESS_TOKEN"
         return PublisherStatus(self.name,ok,ok,approved,"ready" if ok else "not_configured",msg,
-          account_id or (settings.tiktok_open_id or ""),not approved)
+          account_id or (settings.tiktok_open_id or ""),not approved,
+          # PB4: a long-lived token the operator pasted in. Nothing here can renew it, and
+          # its expiry is not visible to us - which is different from "it does not expire".
+          token_kind="static")
     def publish(self,request):
         st=self.status(request.account_id)
         if not st.configured:return PublishResult(False,PublishState.FAILED,self.name,error=st.message)

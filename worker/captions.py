@@ -14,6 +14,7 @@ Design:
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -22,8 +23,9 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config import settings
+from worker import text_metrics
 from worker.effects.caption_presets import CaptionPreset
-from worker.ffmpeg_utils import _run, h264_args
+from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
 
 
@@ -58,6 +60,55 @@ def slice_words(transcript: Transcript, start: float, end: float) -> list[Word]:
     return out
 
 
+@dataclass(frozen=True)
+class TextFit:
+    """How wide a caption line may be, and in which font (C6, C16).
+
+    Bundled as one object rather than five parameters because every caller needs all of them
+    together and they must agree: measuring in one font and rendering in another produces
+    confident wrong numbers, which is worse than not measuring.
+    """
+
+    font: str
+    font_size: float
+    max_width_px: float
+    max_lines: int = 2
+    spacing: float = 0.0
+    scale_x: float = 100.0
+
+    def fits(self, text: str) -> bool:
+        return text_metrics.fits_in_lines(
+            text, font=self.font, font_size=self.font_size,
+            max_width_px=self.max_width_px, max_lines=self.max_lines,
+            spacing=self.spacing, scale_x=self.scale_x,
+        )
+
+    def wrap(self, text: str) -> list[str]:
+        return text_metrics.wrap_text(
+            text, font=self.font, font_size=self.font_size,
+            max_width_px=self.max_width_px, max_lines=self.max_lines,
+            spacing=self.spacing, scale_x=self.scale_x,
+        )
+
+    @classmethod
+    def for_preset(
+        cls,
+        preset: Any,
+        *,
+        video_width: int,
+        fraction: float = text_metrics.DEFAULT_LINE_WIDTH_FRACTION,
+    ) -> "TextFit":
+        """Build a fit from a :class:`CaptionPreset` and the output width."""
+        return cls(
+            font=str(getattr(preset, "font", "") or ""),
+            font_size=float(getattr(preset, "font_size", 96) or 96),
+            max_width_px=text_metrics.line_budget_px(video_width, fraction),
+            max_lines=max(1, int(getattr(preset, "max_lines", 2) or 2)),
+            spacing=float(getattr(preset, "spacing", 0) or 0),
+            scale_x=float(getattr(preset, "scale_x", 100) or 100),
+        )
+
+
 def words_to_cues(
     words: Iterable[Word],
     # C5: three words, not five. Five words at a readable size gives long thin lines that
@@ -66,12 +117,21 @@ def words_to_cues(
     max_words: int = 3,
     max_gap: float = 0.6,
     max_duration: float = 3.0,
+    *,
+    fit: Optional["TextFit"] = None,
 ) -> list[Cue]:
     """Group ``words`` into readable cues.
 
     A new cue is started when the current cue reaches ``max_words``, spans more
     than ``max_duration`` seconds, or when the silent gap before a word exceeds
     ``max_gap`` seconds.
+
+    ``fit`` (C6/C16) additionally breaks a cue when its text would no longer fit the frame in the
+    preset's line budget, *measured* in the font that will draw it. A word count alone cannot
+    decide this: three words in Anton at 96 px occupy a different width from three words in
+    Archivo Black, and the same three words are a comfortable line or an overflowing one depending
+    on which letters they contain. Without it the wrap below has to drop words to stay inside the
+    frame, which is a caption missing its ending.
     """
     cues: list[Cue] = []
     current: list[Word] = []
@@ -82,7 +142,11 @@ def words_to_cues(
         if current:
             gap = w.start - current[-1].end
             span = w.end - current[0].start
-            if len(current) >= max_words or gap > max_gap or span > max_duration:
+            too_wide = False
+            if fit is not None:
+                candidate = " ".join([_word_text(word) for word in [*current, w]])
+                too_wide = not fit.fits(candidate)
+            if len(current) >= max_words or gap > max_gap or span > max_duration or too_wide:
                 cues.append(Cue(current[0].start, current[-1].end, current))
                 current = []
         current.append(w)
@@ -120,12 +184,113 @@ def _escape(text: str) -> str:
 HIGHLIGHT_COLOUR = "&H0000E5FF"
 
 # Caption position (UI value) -> ASS numpad alignment + default vertical margin.
-# ASS alignments: 2 = bottom-centre, 5 = middle-centre, 8 = top-centre.
+# ASS alignments: 1-3 = bottom (left/centre/right), 4-6 = middle, 7-9 = top.
+#
+# C13: nine positions rather than three. The margins are the C12 safe-area figures below, so
+# every position is platform-aware rather than only the three that existed.
 _POSITION_ALIGN: dict[str, tuple[int, int]] = {
     "bottom": (2, 220),
+    "bottom_left": (1, 220),
+    "bottom_right": (3, 220),
     "center": (5, 0),
+    "center_left": (4, 0),
+    "center_right": (6, 0),
     "top": (8, 200),
+    "top_left": (7, 200),
+    "top_right": (9, 200),
 }
+
+#: Every position name a caller may pass, in a stable order for the UI.
+VALID_CAPTION_POSITIONS: tuple[str, ...] = tuple(_POSITION_ALIGN)
+
+# --------------------------------------------------------------------------- #
+# C12 - platform safe areas
+# --------------------------------------------------------------------------- #
+# The vertical margins above were hard-coded at 220/200 and are not TikTok-aware. Every
+# short-form platform draws its own chrome over the video - a caption sitting under the
+# username, the caption text, the action rail or a progress bar is unreadable, and the
+# creator cannot tell from the rendered file because the chrome is not in it.
+#
+# Expressed as a **fraction of frame height**, not pixels, because the same clip is rendered at
+# 720/1080/1440/2160 (O9) and a pixel margin means a different physical inset at each. The
+# figures are conservative approximations collected as data rather than a specification:
+# platform UI changes without notice and differs by app version, so each is a little larger
+# than the strictest measurement, since a caption slightly too high is survivable and one under
+# the action rail is not.
+#
+# Bottom is much larger than top on every platform: that is where the caption, username and
+# button rail all live.
+SAFE_AREA_INSETS: dict[str, dict[str, float]] = {
+    # username + caption + action rail; the tallest bottom chrome of the three.
+    "tiktok": {"top": 0.09, "bottom": 0.22, "side": 0.06},
+    # Reels: similar bottom stack, slightly shallower.
+    "instagram": {"top": 0.08, "bottom": 0.20, "side": 0.055},
+    # Shorts: title at the top, a shorter bottom bar.
+    "youtube": {"top": 0.10, "bottom": 0.16, "side": 0.05},
+    # No known chrome. Chosen to reproduce the pre-C12 literals *exactly* at 1080x1920 -
+    # 220/200 vertical and 80 horizontal - so asking for the generic profile is provably a
+    # no-op on the default frame size rather than approximately one. A first attempt used
+    # rounder numbers and came out a pixel off, which is the kind of difference that shows up
+    # later as an unexplained golden-file mismatch.
+    "none": {"top": 200 / 1920, "bottom": 220 / 1920, "side": 80 / 1080},
+}
+
+#: What ``platform=None`` resolves to.
+DEFAULT_SAFE_AREA = "none"
+
+
+def safe_area_margins(
+    video_width: int,
+    video_height: int,
+    platform: str | None = None,
+) -> dict[str, int]:
+    """Pixel margins keeping captions clear of a platform's own UI (C12).
+
+    Returns ``{"top", "bottom", "side"}`` in pixels for this frame size. The ``none`` profile
+    reproduces the previous hard-coded 220/200 at 1920 tall, so an unconfigured render is
+    unchanged - the insets are a *choice* being made available, not a silent reframing of every
+    existing clip.
+    """
+    profile = SAFE_AREA_INSETS.get(
+        (platform or DEFAULT_SAFE_AREA).strip().lower(), SAFE_AREA_INSETS[DEFAULT_SAFE_AREA]
+    )
+    height = max(1, int(video_height or 1))
+    width = max(1, int(video_width or 1))
+    return {
+        "top": int(round(height * profile["top"])),
+        "bottom": int(round(height * profile["bottom"])),
+        "side": int(round(width * profile["side"])),
+    }
+
+
+def resolve_margins(
+    position: str,
+    video_width: int,
+    video_height: int,
+    *,
+    platform: str | None = None,
+    offset: int = 0,
+) -> tuple[int, int, int]:
+    """``(margin_l, margin_r, margin_v)`` for a position (C12, C13).
+
+    ``offset`` nudges the caption further from its edge in pixels - positive only, and only
+    away from the edge. A negative offset would push text *into* the chrome the safe area
+    exists to avoid, which is the one direction no caller should be able to ask for by
+    accident; it is clamped rather than rejected so a stray value cannot fail a render.
+
+    A centred caption ignores the vertical inset: ASS reads ``MarginV`` as a distance from the
+    edge, and for alignments 4-6 it has no meaning. Adding one would silently do nothing, which
+    is worse than not offering it.
+    """
+    align = _POSITION_ALIGN.get(position, _POSITION_ALIGN["bottom"])[0]
+    margins = safe_area_margins(video_width, video_height, platform)
+    side = margins["side"]
+    offset = max(0, int(offset or 0))
+
+    if align in (4, 5, 6):
+        return side, side, 0
+    edge = "top" if align in (7, 8, 9) else "bottom"
+    return side, side, margins[edge] + offset
 
 
 def _caption_style(
@@ -368,7 +533,13 @@ def build_word_span(
     the animation span, so both apply while the word's spoken timing is left
     unchanged (Reqs 3.1, 3.5). Word text is escaped via :func:`_escape`.
     """
-    escaped = _escape(_word_text(word))
+    text = _word_text(word)
+    if getattr(settings, "caption_mask_profanity", False):
+        # C22: applied to the word's *text* only. Timings, emphasis selection and emoji lookup
+        # all read the original word, so masking changes what is drawn and nothing about when or
+        # how - a masked word must not become a different word to the rest of the pipeline.
+        text = mask_profanity(text)
+    escaped = _escape(text)
     animation = getattr(preset, "animation", "none")
     w_start, w_end = _word_bounds(word)
     rel_ms = max(0, int(round((w_start - cue_start) * 1000)))
@@ -388,6 +559,28 @@ def build_word_span(
     else:
         span = escaped
 
+    # C10: a punch on the active word, independent of the animation style. Applied *before* the
+    # highlight wrap so the highlight's own scale still wins on an emphasised word - two
+    # competing \fscx spans on one word would otherwise fight, and which one applied would
+    # depend on tag order rather than on intent.
+    if not highlighted and animation != "pop":
+        punch = _punch_span(preset, rel_ms)
+        if punch:
+            span = f"{punch}{span}{{\\fscx100\\fscy100}}"
+
+    # C9: the pill goes on *before* the highlight wrap, so an emphasised word ends up as
+    # highlight(pill(animation)) rather than pill(highlight(animation)).
+    #
+    # Both orders render acceptably - the pill sets `\3c` (border colour) and the highlight sets
+    # `\c` (fill), so they do not contest the same attribute. The order matters for a different
+    # reason: the documented contract is that a highlight only *wraps* the span a plain word would
+    # produce, which the property test checks by substring. With the pill outermost that stops being
+    # literally true, and a contract enforced by substring is a contract that has to stay
+    # syntactically true, not merely true in spirit.
+    pill = _word_pill_span(preset)
+    if pill:
+        span = f"{pill[0]}{span}{pill[1]}"
+
     if highlighted:
         colors = getattr(preset, "colors", None)
         highlight = getattr(colors, "highlight", "&H0000E5FF")
@@ -404,6 +597,175 @@ def build_word_span(
         # a word that earned emphasis has already been judged worth stating.
         span = f"{{{_dim_alpha_tag(preset)}}}{span}{{\\alpha&H00&}}"
     return span
+
+
+def _word_pill_span(preset: CaptionPreset) -> Optional[tuple[str, str]]:
+    """The ``(open, close)`` override pair drawing a pill behind one word (C9), or ``None``.
+
+    A thick border in a solid colour, not a drawn rectangle. ASS has no per-word background, and a
+    real box would need the rendered text width, which is not known where these tags are emitted.
+    A heavy border hugs the glyphs instead - which is closer to the reference look than a rectangle
+    would be, and is why the parameter is a *scale* of the font size rather than a pixel padding.
+    """
+    try:
+        strength = float(getattr(preset, "word_pill", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if strength <= 0:
+        return None
+
+    colors = getattr(preset, "colors", None)
+    fill = str(getattr(preset, "word_pill_color", "") or "") or str(
+        getattr(colors, "highlight", "&H0000E5FF")
+    )
+    # Scaled from the font size so one preset works at every output resolution (O9 renders 720 to
+    # 2160), and capped: past a certain thickness adjacent words' pills merge into a bar.
+    size = float(getattr(preset, "font_size", 96) or 96)
+    width = max(1, min(40, int(round(size * min(0.35, strength) * 0.25))))
+
+    restore_border = max(0, int(getattr(preset, "outline", 0) or 0))
+    restore_colour = str(getattr(colors, "outline", "&H00000000"))
+    return (
+        f"{{\\bord{width}\\3c{fill}&}}",
+        f"{{\\bord{restore_border}\\3c{restore_colour}&}}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# C22 - profanity masking
+# --------------------------------------------------------------------------- #
+# Off by default. Burned captions are permanent, so masking is a publishing decision - a
+# creator whose whole voice is profane would be censored by their own tool - but a creator
+# posting to a brand account or a platform that demotes profanity has no way to comply short of
+# re-recording.
+#
+# The list is deliberately short and covers the words platforms actually act on. A long list
+# starts catching the Scunthorpe problem, and the cost of a false positive here is a masked
+# word the speaker did say innocently, which reads as a rendering fault rather than a policy.
+_PROFANITY: frozenset[str] = frozenset({
+    "fuck", "fucking", "fucked", "fucker", "motherfucker",
+    "shit", "shitty", "bullshit", "cunt", "cock", "dick",
+    "bitch", "bastard", "asshole", "arsehole", "whore", "slut",
+    "nigger", "faggot", "retard", "retarded",
+})
+
+#: What a masked character becomes.
+MASK_CHARACTER = "*"
+
+_WORD_CHARS = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def is_profane(text: str) -> bool:
+    """Whether ``text``, stripped of punctuation, is on the mask list (C22).
+
+    Matches whole words only. Substring matching is what produces "Scunthorpe" and
+    "classic" - a masked word inside an innocent one is far more conspicuous than an unmasked
+    profanity, because the viewer can see the tool got it wrong.
+    """
+    stripped = "".join(ch for ch in (text or "").lower() if _WORD_CHARS.match(ch))
+    return stripped in _PROFANITY
+
+
+def mask_profanity(text: str) -> str:
+    """Mask a profane word, keeping its first letter and its punctuation (C22).
+
+    ``fucking!`` becomes ``f******!``. The first letter and the length stay, because the point
+    is that the viewer can follow the sentence - a fully blanked word makes the caption
+    unreadable, which defeats having captions at all.
+
+    Non-profane text is returned unchanged and identically, so this is safe to apply to every
+    word rather than only to matches.
+    """
+    if not is_profane(text):
+        return text
+    out = []
+    seen_letter = False
+    for ch in text:
+        if _WORD_CHARS.match(ch):
+            if seen_letter:
+                out.append(MASK_CHARACTER)
+            else:
+                out.append(ch)
+                seen_letter = True
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+#: Path to the vendored-font manifest.
+FONT_MANIFEST = Path(__file__).resolve().parent.parent / "assets" / "fonts.json"
+
+
+def available_fonts() -> list[dict]:
+    """The vendored caption faces, for a real font picker in the UI (A4).
+
+    Twelve faces are vendored with licences and a manifest, and nothing exposed them - so the
+    only way to change a caption font was to edit a preset in source, and the assets might as
+    well not have been shipped.
+
+    Returns the *usable* subset with only the fields a picker needs. Variable fonts are excluded
+    because libass' ``fontsdir`` provider cannot select a named instance of one - a request for
+    such a family silently resolves to something else, which is exactly the C1 defect. Offering
+    a font that will not render is worse than offering fewer.
+
+    Never raises: a missing or malformed manifest yields ``[]``, and the caller falls back to
+    whatever the presets already name.
+    """
+    try:
+        data = json.loads(FONT_MANIFEST.read_text(encoding="utf-8"))
+        entries = data.get("fonts") or []
+    except Exception:
+        return []
+
+    fonts: list[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("variable"):
+            continue
+        name = str(entry.get("name") or "").strip()
+        filename = str(entry.get("file") or "").strip()
+        if not name or not filename:
+            continue
+        # Only faces actually present on disk: the manifest is a declaration, and a CI step
+        # exists precisely because the two once disagreed.
+        if not (FONT_MANIFEST.parent / "fonts" / filename).is_file():
+            continue
+        fonts.append({
+            "name": name,
+            "family": str(entry.get("family") or name),
+            "style": str(entry.get("style") or ""),
+            "weight": int(entry.get("weight") or 0),
+            "heavy": bool(entry.get("heavy_face")),
+            "license": str(entry.get("license") or ""),
+            "use": str(entry.get("use") or ""),
+        })
+    return sorted(fonts, key=lambda f: (not f["heavy"], f["name"]))
+
+
+def _punch_span(preset: CaptionPreset, rel_ms: int) -> str:
+    """The opening ASS override for C10's active-word punch, or ``""`` when disabled.
+
+    Ramps *down* from the punched size to 100, so the word arrives large and settles - the
+    accent lands on the syllable being spoken. Ramping up would peak after the word had already
+    been said, which reads as lag rather than as emphasis.
+    """
+    try:
+        amount = float(getattr(preset, "punch_scale", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if amount <= 0.0:
+        return ""
+    # Clamped: an unbounded value would push glyphs outside the frame, and a negative one would
+    # mirror the text.
+    amount = min(1.0, amount)
+    try:
+        length = max(10, int(getattr(preset, "punch_ms", 110) or 110))
+    except (TypeError, ValueError):
+        length = 110
+    peak = int(round((1.0 + amount) * 100))
+    return (
+        f"{{\\fscx{peak}\\fscy{peak}"
+        f"\\t({rel_ms},{rel_ms + length},\\fscx100\\fscy100)}}"
+    )
 
 
 def _is_doubted(word: Any, preset: CaptionPreset) -> bool:
@@ -525,12 +887,37 @@ def ass_bold_flag(preset: CaptionPreset) -> int:
     return 0 if int(getattr(preset, "font_weight", 0)) >= _FACE_SUPPLIES_BOLD else -1
 
 
+#: Glyph-scale bounds. Below the minimum text is unreadable; above the maximum glyphs leave the
+#: frame. Both look like a rendering fault rather than a bad setting, which is why they are
+#: clamped rather than passed through.
+MIN_GLYPH_SCALE = 10
+MAX_GLYPH_SCALE = 400
+
+
+def _glyph_scale(value: Any) -> int:
+    """Coerce a preset's ScaleX/ScaleY to a usable percentage (C15).
+
+    ``0`` and ``None`` mean "unset" and resolve to 100, rather than being clamped to the
+    minimum: a caller who writes 0 means "leave the metrics alone", and silently rendering
+    their captions at a tenth of width would be a strange reading of that. Genuinely
+    out-of-range values *are* clamped.
+    """
+    try:
+        scale = int(value)
+    except (TypeError, ValueError):
+        return 100
+    if scale == 0:
+        return 100
+    return max(MIN_GLYPH_SCALE, min(MAX_GLYPH_SCALE, abs(scale)))
+
+
 def _preset_style_line(
     preset: CaptionPreset,
     font: str,
     font_size: int,
     align: int,
     margin_v: int,
+    margin_h: int = 80,
 ) -> str:
     """Build the ``Style: Default`` line from a :class:`CaptionPreset`.
 
@@ -551,10 +938,31 @@ def _preset_style_line(
     # heavier treatment and a 2-unit outline at PlayRes 1920 was effectively invisible.
     outline_w = max(0, int(preset.outline))
     shadow = max(0, int(preset.shadow))
+    # C17: a second, wider stroke in its own colour - the "3D"/sticker edge.
+    #
+    # ASS carries one border width and one border colour, so a genuine dual stroke needs the text
+    # drawn twice. The shadow slot is repurposed instead: at offset 0 with its own colour it renders
+    # as an outer stroke around the inner one, giving the two-tone edge in a single event. It
+    # replaces the shadow when set, which is the honest trade and why it is opt-in - a preset cannot
+    # have both a drop shadow and an outer stroke this way.
+    outline2 = max(0, int(getattr(preset, "outline2", 0) or 0))
+    if outline2:
+        shadow = outline2
+        back_col = str(getattr(preset, "outline2_color", "&H00000000") or "&H00000000")
+    # C15: previously the literals 100,100,0 - identical metrics for every preset whatever face
+    # it named. Clamped rather than trusted: ScaleX of 0 makes text invisible and a huge value
+    # pushes glyphs off frame, and both would look like a rendering bug rather than a bad value.
+    scale_x = _glyph_scale(getattr(preset, "scale_x", 100))
+    scale_y = _glyph_scale(getattr(preset, "scale_y", 100))
+    try:
+        spacing = int(getattr(preset, "spacing", 0) or 0)
+    except (TypeError, ValueError):
+        spacing = 0
     return (
         f"Style: Default,{font},{font_size},{primary},{secondary},{outline_col},"
-        f"{back_col},{ass_bold_flag(preset)},0,0,0,100,100,0,0,{preset.border_style},"
-        f"{outline_w},{shadow},{align},80,80,{margin_v},1"
+        f"{back_col},{ass_bold_flag(preset)},0,0,0,{scale_x},{scale_y},{spacing},0,"
+        f"{preset.border_style},"
+        f"{outline_w},{shadow},{align},{margin_h},{margin_h},{margin_v},1"
     )
 
 
@@ -608,8 +1016,13 @@ def build_ass(
 
     if preset is not None:
         style_line, hook_style = _preset_header_styles(
-            preset, position, hook_font_size, notes
+            preset, position, hook_font_size, notes,
+            video_width=video_width, video_height=video_height,
+            # C12/C13: both inert unless configured, so an unconfigured render is byte-identical.
+            safe_area=(getattr(settings, "caption_safe_area", "") or "") or None,
+            caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
         )
+        # C6/C16: measure in the font that will draw the text, at the frame's real width.
         body = _preset_dialogue_lines(
             cues,
             preset,
@@ -618,6 +1031,7 @@ def build_ass(
             permissibility=permissibility,
             emoji_glyph_available=emoji_glyph_available,
             emoji_downloader=emoji_downloader,
+            fit=TextFit.for_preset(preset, video_width=video_width),
         )
     else:
         legacy_position = position if position is not None else "bottom"
@@ -665,6 +1079,123 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return dest
 
 
+#: Fade lengths for the end card, in milliseconds.
+#:
+#: Asymmetric on purpose: it appears quickly enough to be read, and does not fade out at all -
+#: the clip ends under it, so a fade-out would only take the words away before the viewer's
+#: decision point.
+END_CARD_FADE_IN_MS = 300
+
+
+def end_card_dialogue(
+    clip_duration: float,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    text: Optional[str] = None,
+    seconds: Optional[float] = None,
+) -> str:
+    """One ASS dialogue line for the closing call-to-action, or ``""`` (V14).
+
+    Every clip currently ends the instant the speech does, which wastes the one moment the
+    viewer has already decided to watch to the end. A short "follow for more" over the tail is
+    the standard ask, and there was no way to add one without re-editing the export by hand.
+
+    Rendered as an ASS event rather than ``drawtext`` deliberately: this module renders all text
+    through libass so it works on ffmpeg builds without freetype, and a ``drawtext`` end card
+    would be the one piece of text that vanished on such a build.
+
+    Returns ``""`` when disabled, when there is no text, or when the clip is too short to give
+    the card a full appearance - a card that fades in as the video cuts is worse than none.
+    """
+    if text is None:
+        text = str(getattr(settings, "end_card_text", "") or "")
+    if seconds is None:
+        seconds = float(getattr(settings, "end_card_seconds", 2.0) or 0.0)
+    text = text.strip()
+    duration = max(0.0, float(clip_duration))
+    if not text or seconds <= 0 or duration <= 0:
+        return ""
+    # The card must fit, and still leave clip before it: on a 3 s clip a 2 s card is most of the
+    # video, which is an advert with a clip attached rather than the reverse.
+    seconds = min(float(seconds), duration / 2.0)
+    if seconds < END_CARD_FADE_IN_MS / 1000.0:
+        return ""
+
+    start = _ass_timestamp(duration - seconds)
+    end = _ass_timestamp(duration)
+    # Slide up a little as it fades in. `\move` is relative to PlayRes, so the distance scales
+    # with the output height rather than being a fixed pixel count that is invisible at 4K.
+    rise = max(12, int(round(video_height * 0.02)))
+    y_from = int(round(video_height * 0.78)) + rise
+    y_to = int(round(video_height * 0.78))
+    # Numeric, not an expression: ASS override tags take literal numbers, so `PlayResX/2` here
+    # would be parsed as a malformed argument and the card would land wherever libass recovered
+    # to rather than centred.
+    x = int(round(video_width / 2))
+    tags = (
+        f"{{\\an5\\move({x},{y_from},{x},{y_to},0,{END_CARD_FADE_IN_MS})"
+        f"\\fad({END_CARD_FADE_IN_MS},0)}}"
+    )
+    return f"Dialogue: 2,{start},{end},End,,0,0,0,,{tags}{_escape(text.upper())}"
+
+
+def write_end_card_ass(
+    dest: str | Path,
+    clip_duration: float,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    font: str = "Poppins ExtraBold",
+    font_size: int = 96,
+    text: Optional[str] = None,
+    seconds: Optional[float] = None,
+) -> Optional[Path]:
+    """Write a standalone ASS holding just the end card, or return ``None`` (V14).
+
+    Standalone rather than a line inside the caption ASS, for one reason: the card must not
+    depend on captions. It has to appear on a clip with captions turned off, and on a clip whose
+    captions are owned by the kinetic-typography engine - which writes its own ASS and would
+    never see a line added here. One file with one job covers all three cases, at the cost of a
+    second libass filter that only exists when the card is actually configured.
+    """
+    line = end_card_dialogue(
+        clip_duration,
+        video_width=video_width,
+        video_height=video_height,
+        text=text,
+        seconds=seconds,
+    )
+    if not line:
+        return None
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Alignment 5 (centred) with generous margins; the position is set per-event by \move, so
+    # this style only has to supply the look.
+    style = (
+        f"Style: End,{font},{font_size},&H00FFFFFF,&H00FFFFFF,"
+        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1"
+    )
+    dest.write_text(
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {video_width}\n"
+        f"PlayResY: {video_height}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"{style}\n"
+        "\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        f"{line}\n",
+        encoding="utf-8",
+    )
+    return dest
+
+
 def _legacy_dialogue_lines(cues: list[Cue], use_karaoke: bool) -> list[str]:
     """Render legacy (template-driven) dialogue lines (unchanged behaviour)."""
     lines: list[str] = []
@@ -690,17 +1221,37 @@ def _preset_header_styles(
     position: str | None,
     hook_font_size: int,
     notes: list[str] | None,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    safe_area: str | None = None,
+    caption_offset: int = 0,
 ) -> tuple[str, str]:
     """Return ``(default_style_line, hook_style_line)`` for a preset.
 
     Resolves the caption position (override wins over the preset default,
     Req 5.2) and substitutes an unavailable font with a fallback, recording a
     ``font_substituted:<name>`` note (Req 5.3).
+
+    ``safe_area`` selects a platform inset profile (C12) and ``caption_offset`` nudges the
+    caption further from its edge (C13). Both keyword-only with inert defaults, so every
+    existing caller - and the v0.8.0 parity gate - produces a byte-identical style line.
     """
     resolved_position = position if position is not None else preset.position
     align, margin_v = _POSITION_ALIGN.get(
         resolved_position, _POSITION_ALIGN["bottom"]
     )
+    margin_h = 80
+    if safe_area or caption_offset:
+        # C12/C13: only when asked for. Computing margins unconditionally would change the
+        # numbers on every existing render, because the safe-area figures are fractions of the
+        # frame and would not land on exactly 220/200/80 at every resolution.
+        margin_h, _margin_r, resolved_v = resolve_margins(
+            resolved_position, video_width, video_height,
+            platform=safe_area, offset=caption_offset,
+        )
+        if align not in (4, 5, 6):
+            margin_v = resolved_v
 
     resolved_font, substituted = resolve_font(preset.font)
     if substituted and notes is not None:
@@ -711,7 +1262,7 @@ def _preset_header_styles(
         notes.append(f"font_substituted:{resolved_font}")
 
     style_line = _preset_style_line(
-        preset, resolved_font, preset.font_size, align, margin_v
+        preset, resolved_font, preset.font_size, align, margin_v, margin_h
     )
     hook_style = (
         f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
@@ -730,6 +1281,7 @@ def _preset_dialogue_lines(
     permissibility: bool,
     emoji_glyph_available: Optional[Any],
     emoji_downloader: Optional[Any],
+    fit: Optional["TextFit"] = None,
 ) -> list[str]:
     """Render preset-driven dialogue lines (one event per cue).
 
@@ -760,6 +1312,7 @@ def _preset_dialogue_lines(
         end = _ass_timestamp(cue_end)
 
         parts: list[str] = []
+        plain: list[str] = []
         for w in cue.words:
             highlighted = global_index in keyword_indices
             if getattr(preset, "uppercase", False):
@@ -779,17 +1332,36 @@ def _preset_dialogue_lines(
                 if glyph:
                     span = f"{span} {glyph}"
             parts.append(span)
+            plain.append(_word_text(w))
             global_index += 1
 
-        text = " ".join(parts)
+        # C6: insert real line breaks at measured positions.
+        #
+        # The file declares `WrapStyle: 2`, which means libass wraps *only* where the text already
+        # contains `\N` - and nothing inserted one, so every cue was laid out as a single line and
+        # either ran past the frame edge or was silently shrunk, depending on the build. Neither is
+        # a decision anyone made.
+        #
+        # The break points are computed from the plain words and applied to the spans, because the
+        # spans carry override tags: measuring `{\kf34\c&H0000E5FF&}money` would count the tag as
+        # letters, and one tag is longer than the word it decorates.
+        if fit is not None and len(parts) > 1:
+            groups = text_metrics.wrap_word_groups(
+                plain, font=fit.font, font_size=fit.font_size,
+                max_width_px=fit.max_width_px, max_lines=fit.max_lines,
+                spacing=fit.spacing, scale_x=fit.scale_x,
+            )
+            text = "\\N".join(
+                " ".join(parts[index] for index in group) for group in groups if group
+            )
+        else:
+            text = " ".join(parts)
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
     return lines
 
 
-def _escape_filter_path(path: str | Path) -> str:
-    """Escape an absolute path for ffmpeg's filter-argument syntax."""
-    resolved = str(Path(path).resolve())
-    return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+#: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
+_escape_filter_path = escape_filter_path
 
 
 def subtitles_filter(ass: str | Path) -> str:
