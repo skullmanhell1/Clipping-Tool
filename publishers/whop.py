@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 
 from config import BASE_DIR, settings
@@ -19,10 +20,25 @@ class WhopPublisher(BasePublisher):
     def status(self, account_id=""):
         configured=bool(settings.whop_api_key)
         bridge=BASE_DIR/"publisher_bridge"/"whop.mjs"
-        available=configured and bridge.exists()
+        # I7: the *interpreter* is checked as well as the script. Node is an optional ~200 MB of
+        # image installed only for this publisher, so an image built without it has the bridge
+        # file - it is committed source - and nothing to run it with. Checking only the script
+        # reported the publisher ready and then failed at publish time with a `FileNotFoundError`
+        # from `subprocess`, which is the least actionable place to learn that Node is missing.
+        runtime=shutil.which(settings.whop_node_binary) is not None
+        available=configured and bridge.exists() and runtime
+        if not configured:
+            detail="Set WHOP_API_KEY and install publisher_bridge dependencies"
+        elif not bridge.exists():
+            detail="publisher_bridge/whop.mjs is missing"
+        elif not runtime:
+            detail=(f"Node ({settings.whop_node_binary}) is not installed - rebuild with "
+                    "--build-arg INSTALL_WHOP_BRIDGE=true, or set WHOP_NODE_BINARY")
+        else:
+            detail="Ready via @whop/sdk"
         return PublisherStatus(self.name,configured,available,True,
           "ready" if available else "not_configured",
-          "Ready via @whop/sdk" if available else "Set WHOP_API_KEY and install publisher_bridge dependencies",
+          detail,
           account_id or (settings.whop_company_id or ""),
           # PB4: an API key, not a token - there is nothing to expire or refresh.
           token_kind="none")

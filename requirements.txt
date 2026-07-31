@@ -25,8 +25,19 @@ yt-dlp>=2024.7.1
 faster-whisper>=1.0,<2.0
 
 # --- Face tracking / vision ---
+# `cv2` comes from mediapipe's own dependency, `opencv-contrib-python` (I7).
+#
+# Asking for `opencv-python` as well installed *both* wheels, and each ships its own ~91 MB
+# directory of near-identical native libraries - so the image carried two OpenCVs, roughly 180 MB
+# of it duplicated. `opencv-contrib-python` is a superset of `opencv-python` in the same `cv2`
+# namespace, so dropping the explicit pin changes nothing that imports.
+#
+# The dependency is deliberately left implicit rather than pinned to contrib here: pinning it
+# would mean two places to update when mediapipe changes which OpenCV build it wants, and a
+# mismatch between them is what produces two wheels again. `worker/effects/reframe.py` uses only
+# `VideoCapture`, `CascadeClassifier`, `cvtColor` and `cv2.data` - all core OpenCV, present in
+# either build.
 mediapipe>=0.10,<1.0
-opencv-python>=4.9,<5.0
 numpy>=1.26,<2.0
 Pillow>=10.3,<11.0               # emoji/image compositing
 
