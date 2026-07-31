@@ -26,6 +26,7 @@ interval (Req 11.2) — it simply consumes the already-rebased words.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -254,6 +255,120 @@ def _default_external_downloader(
     return None
 
 
+# --------------------------------------------------------------------------- #
+# A20 - cache downloaded assets with their licence metadata
+# --------------------------------------------------------------------------- #
+#: Filename of the sidecar written beside a cached asset.
+LICENSE_SIDECAR_SUFFIX = ".license.json"
+
+
+def license_sidecar_path(asset_path: "str | Path") -> Path:
+    """Where the licence record for ``asset_path`` lives."""
+    path = Path(asset_path)
+    return path.with_name(path.name + LICENSE_SIDECAR_SUFFIX)
+
+
+def record_asset_license(asset: AssetRef, keyword: str = "") -> Optional[Path]:
+    """Write ``asset``'s provenance beside the file, returning the sidecar path (A20).
+
+    **Why a sidecar and not just a cache.** A downloaded asset with an empty ``license`` is
+    dropped by :func:`resolve_asset`, so an asset whose licence is lost is not merely
+    undocumented - it becomes *unusable*. Cached files carry no metadata of their own, so a
+    second run against the cache would re-derive nothing and the asset would be discarded
+    despite already having been fetched and approved.
+
+    It is also the only durable record that a clip's b-roll was licensed. A creator asked to
+    prove it after the fact has the file and nothing else; the attribution a provider requires
+    lives only in the API response that is long gone.
+
+    Never raises: caching is an optimisation, and a read-only cache directory must cost the
+    cache and not the clip.
+    """
+    try:
+        path = Path(asset.path)
+        if not path.name:
+            return None
+        sidecar = license_sidecar_path(path)
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "provider": asset.provider or "",
+            "source_id": asset.source_id or "",
+            "license": asset.license or "",
+            "attribution": asset.attribution or "",
+            # AssetRef carries no keyword of its own, so the search term is passed in. It is
+            # what the cache is looked up by, and a provider's own filename says nothing about
+            # what was searched for.
+            "keyword": (keyword or "").strip(),
+            "kind": asset.kind or "video",
+            "asset": path.name,
+        }
+        sidecar.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return sidecar
+    except Exception:
+        return None
+
+
+def load_asset_license(asset_path: "str | Path") -> Optional[dict]:
+    """Read a cached asset's licence record, or ``None`` (A20).
+
+    A record missing the one field that matters - ``license`` - is treated as no record at all,
+    so a truncated or hand-edited sidecar cannot resurrect an asset that would otherwise be
+    dropped for having an unknown licence. That failure would be silent and would put
+    unlicensed footage in someone's published clip.
+    """
+    try:
+        data = json.loads(license_sidecar_path(asset_path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not str(data.get("license") or "").strip():
+        return None
+    return data
+
+
+def cached_asset(cache_dir: "str | Path", keyword: str) -> Optional[AssetRef]:
+    """An already-downloaded asset for ``keyword``, if one is cached with its licence (A20).
+
+    Matched on the sidecar's recorded ``keyword`` rather than on the filename, because a
+    provider's filename is its own identifier and says nothing about what was searched for.
+    """
+    if not keyword:
+        return None
+    try:
+        root = Path(cache_dir)
+        if not root.is_dir():
+            return None
+        wanted = keyword.strip().lower()
+        for sidecar in sorted(root.glob(f"*{LICENSE_SIDECAR_SUFFIX}")):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if str(data.get("keyword") or "").strip().lower() != wanted:
+                continue
+            if not str(data.get("license") or "").strip():
+                continue
+            asset_path = root / str(data.get("asset") or "")
+            if not asset_path.is_file():
+                # The sidecar outlived its asset - a retention sweep, a manual delete. Ignore
+                # it rather than returning a path that does not exist.
+                continue
+            return AssetRef(
+                path=str(asset_path),
+                kind=str(data.get("kind") or "video"),
+                provider=str(data.get("provider") or ""),
+                source_id=str(data.get("source_id") or ""),
+                license=str(data.get("license") or ""),
+                attribution=str(data.get("attribution") or ""),
+            )
+    except Exception:
+        return None
+    return None
+
+
 class ExternalProvider:
     """Provider-agnostic BYOK stock-asset adapter.
 
@@ -290,6 +405,15 @@ class ExternalProvider:
     def search(self, keyword: str) -> Optional[AssetRef]:
         if not keyword or not self.has_key:
             return None
+
+        # A20: serve an already-downloaded asset before spending a request. Checked first
+        # because the alternative is re-downloading the same file on every clip of every job -
+        # bandwidth, a provider rate limit, and on a metered API an actual bill, for a file
+        # already on disk.
+        cached = cached_asset(self.cache_dir, keyword)
+        if cached is not None:
+            return cached
+
         try:
             result = self._downloader(
                 keyword, self.api_key, self.base_url, self.cache_dir
@@ -303,6 +427,10 @@ class ExternalProvider:
         # Ensure the provider name is recorded even if the downloader omits it.
         if not result.provider:
             result = replace(result, provider=self.name)
+        # A20: persist the licence beside the file. Without this the cached asset has no
+        # provenance, and resolve_asset drops an asset with an unknown licence - so a cache hit
+        # on the next run would discard a file that was already fetched and approved.
+        record_asset_license(result, keyword)
         return result
 
 

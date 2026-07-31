@@ -565,6 +565,31 @@ class Settings(BaseSettings):
         default=30.0, description="TTL for cached storage area sizes; 0 = always recompute."
     )
 
+    # ---------------------------------------- caption details (C12, C22) ---
+    # C12: platform UI safe areas. The vertical caption margins were hard-coded at 220/200 and
+    # are not TikTok-aware, so a caption could sit under the username, the platform's own
+    # caption text or the action rail - unreadable, and invisible to the creator because the
+    # chrome is not in the rendered file. Empty means the generic profile, which reproduces the
+    # previous margins exactly.
+    caption_safe_area: str = Field(
+        default="",
+        description="Platform safe-area profile for caption margins (C12): tiktok | instagram "
+                    "| youtube | none. Empty uses the generic profile, which is identical to "
+                    "the previous hard-coded margins.",
+    )
+    caption_offset_px: int = Field(
+        default=0,
+        description="Extra pixels between the caption and its edge (C13). Positive only; a "
+                    "negative value would push text into the chrome the safe area avoids.",
+    )
+    # C22: burned captions are permanent, so masking is a publishing decision rather than a
+    # default - a creator whose voice is profane should not be censored by their own tool.
+    caption_mask_profanity: bool = Field(
+        default=False,
+        description="Mask profanity in burned captions (C22), keeping the first letter and the "
+                    "word's length so the sentence stays readable.",
+    )
+
     # ------------- speaker diarisation & multi-speaker reframe (v0.8.0) ----
     # Cap on distinct speakers produced by diarisation (least-represented
     # speakers are merged beyond this cap).
@@ -667,6 +692,91 @@ class Settings(BaseSettings):
     # Default number of regions for split-screen reframe (2-up).
     split_screen_max_regions: int = Field(
         default=2, description="Max regions for split-screen reframe (default 2-up)."
+    )
+    # V18: a user-supplied 3D LUT, applied after the colour preset. Empty disables it.
+    color_lut: str = Field(
+        default="",
+        description="Path to a .cube/.3dl 3D LUT applied after the colour preset (V18). "
+                    "Empty means no LUT. A missing or unreadable file is ignored rather "
+                    "than failing the render.",
+    )
+    # V19: ease the Ken Burns ramp instead of moving at a constant rate.
+    zoom_ease: bool = Field(
+        default=False,
+        description="Ease the Ken Burns push in and out instead of ramping linearly (V19). "
+                    "Same start and end zoom; only the curve between them changes. Off by "
+                    "default because it changes the rendered output, and every visual setting "
+                    "here defaults to the previously shipped behaviour so the v0.8.0 parity "
+                    "gate stays meaningful.",
+    )
+    # V19: bump the zoom on detected audio accents.
+    beat_sync_zoom: bool = Field(
+        default=False,
+        description="Add a short scale bump at detected audio onsets (V19). Off by default: "
+                    "it suits music-led footage and is a distraction on talking-head clips.",
+    )
+    beat_sync_rise_db: float = Field(
+        default=6.0,
+        description="Level rise between envelope readings that counts as an accent (V19).",
+    )
+    # V16: crop existing letterbox bars before reframing.
+    auto_deletterbox: bool = Field(
+        default=True,
+        description="Detect and crop existing letterbox/pillarbox bars before reframing (V16). "
+                    "Without this, reframing already-boxed footage centres the crop on the "
+                    "bars and bakes them into the output.",
+    )
+    # O7: target one platform's output profile rather than one file for every destination.
+    output_platform: str = Field(
+        default="",
+        description="Target platform output profile: tiktok | instagram | youtube | "
+                    "youtube_shorts | x | whop (O7). Empty means use the explicit output "
+                    "settings. Controls resolution, bitrate ceiling and the clip-length cap; "
+                    "the aspect is advisory so it cannot override a user's choice.",
+    )
+    # O12: burned-in captions, a selectable soft track, or both.
+    caption_mode: str = Field(
+        default="burned",
+        description="How captions are delivered: burned | soft | both (O12). 'soft' adds a "
+                    "selectable mov_text track instead of burning pixels; note mov_text is "
+                    "plain text, so preset animation and highlighting are lost in that track.",
+    )
+    # AU4: speech de-noise.
+    speech_denoise: str = Field(
+        default="off",
+        description="Speech de-noise strength: off | light | standard | strong (AU4). Uses "
+                    "afftdn, or arnndn when SPEECH_DENOISE_MODEL points at a real model file.",
+    )
+    speech_denoise_model: str = Field(
+        default="",
+        description="Path to an arnndn .rnnn model (AU4). ffmpeg ships no models, so this is "
+                    "empty by default and afftdn is used instead. A configured-but-missing "
+                    "file degrades to afftdn rather than failing the render.",
+    )
+    # AU5: sibilance reduction.
+    deesser: str = Field(
+        default="off",
+        description="De-esser strength: off | light | standard | strong (AU5). De-reverb is "
+                    "not included: ffmpeg has no de-reverb filter, and approximating one with "
+                    "a high-pass would be mislabelling it.",
+    )
+    # V14: a closing call-to-action over the tail of the clip. Empty disables it.
+    end_card_text: str = Field(
+        default="",
+        description="Call-to-action shown over the last seconds of every clip (V14). Empty "
+                    "disables it, which is the previous behaviour.",
+    )
+    end_card_seconds: float = Field(
+        default=2.0,
+        description="How long the end card is held (V14). Capped at half the clip so a short "
+                    "clip is not mostly call-to-action.",
+    )
+    # V8: how often the follow-active crop position is updated.
+    reframe_command_fps: float = Field(
+        default=24.0,
+        description="Crop-position updates per second for follow-active reframe (V8). Was 12, "
+                    "which is visible as stepping on fast movement. Costs only sendcmd script "
+                    "size, not decode time.",
     )
 
     # ---------------------------------------------------------- publishers --

@@ -165,7 +165,12 @@ def test_info_retains_existing_effects_keys(client):
 
     # Pre-existing values are unchanged.
     assert effects["caption_templates"] == ["karaoke", "boxed", "minimal"]
-    assert effects["caption_positions"] == ["bottom", "center", "top"]
+    # C13 expanded this from three positions to nine. The guard's substance is that the
+    # pre-existing values are still offered and still mean the same thing, not that the list is
+    # frozen at three - a client that only knows the original names is unaffected, which is what
+    # this now asserts. Updated deliberately.
+    assert set(["bottom", "center", "top"]) <= set(effects["caption_positions"])
+    assert effects["caption_positions"][0] == "bottom"
 
     # New top-level broll_available flag is exposed as a bool.
     assert isinstance(body["broll_available"], bool)
@@ -510,7 +515,12 @@ def test_info_advertises_kinetic_typography_domains(client, kinetic_registry):
         assert name in effects["caption_presets"]
     assert set(effects["caption_animations"]) == set(VALID_ANIMATIONS)
     assert effects["caption_templates"] == ["karaoke", "boxed", "minimal"]
-    assert effects["caption_positions"] == ["bottom", "center", "top"]
+    # C13 expanded this from three positions to nine. The guard's substance is that the
+    # pre-existing values are still offered and still mean the same thing, not that the list is
+    # frozen at three - a client that only knows the original names is unaffected, which is what
+    # this now asserts. Updated deliberately.
+    assert set(["bottom", "center", "top"]) <= set(effects["caption_positions"])
+    assert effects["caption_positions"][0] == "bottom"
     assert PREEXISTING_INFO_KEYS <= set(body)
 
 
