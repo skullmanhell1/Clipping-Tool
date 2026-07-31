@@ -66,7 +66,9 @@ class HistoryStore:
               target_type TEXT, target_id TEXT, mode TEXT, state TEXT NOT NULL,
               scheduled_at REAL, created_at REAL NOT NULL, started_at REAL,
               completed_at REAL, url TEXT, external_id TEXT, error TEXT,
-              message TEXT, request_json TEXT, result_json TEXT
+              message TEXT, request_json TEXT, result_json TEXT,
+              -- PB5: how many automatic retries this attempt has already consumed.
+              retry_count INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_attempt_due
               ON publish_attempts(state, scheduled_at);
@@ -74,7 +76,29 @@ class HistoryStore:
               id TEXT PRIMARY KEY, name TEXT NOT NULL, routes_json TEXT NOT NULL,
               created_at REAL NOT NULL
             );
+            -- PB4: cached OAuth access tokens with their expiry.
+            --
+            -- Separate from `settings`, which holds the long-lived *refresh* credential an
+            -- operator configures. This table holds the short-lived access token derived from
+            -- it, which the process must not lose on restart and must not re-mint per upload.
+            CREATE TABLE IF NOT EXISTS oauth_tokens (
+              platform TEXT NOT NULL, account_id TEXT NOT NULL DEFAULT '',
+              access_token TEXT NOT NULL, expires_at REAL, refreshed_at REAL NOT NULL,
+              PRIMARY KEY (platform, account_id)
+            );
             """)
+            # Migration for databases created before PB5 added the column. `ALTER TABLE ... ADD
+            # COLUMN` has no `IF NOT EXISTS` in SQLite, so existing columns are checked first;
+            # an unconditional ALTER would raise on every start after the first.
+            existing = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(publish_attempts)").fetchall()
+            }
+            if "retry_count" not in existing:
+                db.execute(
+                    "ALTER TABLE publish_attempts "
+                    "ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+                )
 
     def record_clip(self, job_id: str, clip: Any, path: str | Path,
                     campaign_id: str = "") -> None:
@@ -114,8 +138,9 @@ class HistoryStore:
         # amended request (specifically mode="auto"); without that, re-running a
         # review_required attempt would replay mode="review" and park it right back in
         # review forever.
+        # ``retry_count`` is writable so the scheduler can record automatic retries (PB5).
         allowed = {"state","started_at","completed_at","url","external_id","error",
-                   "message","result_json","scheduled_at","request_json"}
+                   "message","result_json","scheduled_at","request_json","retry_count"}
         data = {k: (json.dumps(v) if k in ("result_json","request_json") and not isinstance(v, str) else v)
                 for k,v in fields.items() if k in allowed}
         if not data: return
@@ -144,6 +169,49 @@ class HistoryStore:
         with self._connect() as db:
             row = db.execute("SELECT * FROM publish_attempts WHERE id=?", (attempt_id,)).fetchone()
         return self._row(row) if row else None
+
+    # ---------------------------------------------------------------- tokens --
+    def get_token(self, platform: str, account_id: str = "") -> Optional[dict[str, Any]]:
+        """The cached access token for ``platform``/``account_id``, if any (PB4)."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM oauth_tokens WHERE platform=? AND account_id=?",
+                (platform, account_id or ""),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_token(self, platform: str, access_token: str, *, account_id: str = "",
+                   expires_at: Optional[float] = None) -> None:
+        """Store (or replace) the cached access token for a platform (PB4)."""
+        with self._lock, self._connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO oauth_tokens"
+                "(platform,account_id,access_token,expires_at,refreshed_at) VALUES(?,?,?,?,?)",
+                (platform, account_id or "", access_token, expires_at, time.time()),
+            )
+
+    def clear_token(self, platform: str, account_id: str = "") -> None:
+        """Forget a cached token, so the next publish mints a fresh one (PB4)."""
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM oauth_tokens WHERE platform=? AND account_id=?",
+                (platform, account_id or ""),
+            )
+
+    def scheduled_between(self, start: float, end: float) -> list[dict[str, Any]]:
+        """Attempts scheduled within ``[start, end]``, for the calendar view (PB7).
+
+        Includes every state rather than only pending ones: a calendar that hid what had already
+        happened would show an operator an empty week they had in fact filled, and "what did I
+        post on Tuesday" is the same question as "what am I posting on Thursday".
+        """
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM publish_attempts WHERE scheduled_at BETWEEN ? AND ? "
+                "ORDER BY scheduled_at, created_at",
+                (start, end),
+            ).fetchall()
+        return [self._row(r) for r in rows]
 
     def save_campaign(self, name: str, routes: dict[str, dict[str, str]], campaign_id: str = "") -> Campaign:
         item = Campaign(campaign_id or uuid.uuid4().hex[:12], name, routes)

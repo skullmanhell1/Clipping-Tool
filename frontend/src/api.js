@@ -112,6 +112,36 @@ export const api = {
   retryPublishAttempt: (attemptId) =>
     fetch(`/api/publish-attempts/${attemptId}/retry`, { method: "POST" }).then(jsonOrThrow),
 
+  // PB7: scheduling. A scheduled post could not be seen in context, moved, or cancelled — the
+  // time was fixed when the attempt was created and the only recourse was to let it publish.
+  schedule: (start, end) => {
+    const params = new URLSearchParams();
+    if (start != null) params.set("start", String(start));
+    if (end != null) params.set("end", String(end));
+    const query = params.toString();
+    return fetch(`/api/schedule${query ? `?${query}` : ""}`).then(jsonOrThrow);
+  },
+  // Suggestions carry a `basis` string describing where they come from. Render it: they are
+  // published heuristics, not measurements of this account's audience, and presenting a guess
+  // as an analysis is the actual harm available here.
+  scheduleSuggestions: (platform = "", days = 7, perDay = 2) =>
+    fetch(
+      `/api/schedule/suggestions?platform=${encodeURIComponent(platform)}` +
+        `&days=${days}&per_day=${perDay}`,
+    ).then(jsonOrThrow),
+  reschedulePublishAttempt: (attemptId, scheduleAt) =>
+    fetch(`/api/publish-attempts/${attemptId}/schedule`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schedule_at: scheduleAt }),
+    }).then(jsonOrThrow),
+  cancelPublishAttempt: (attemptId) =>
+    fetch(`/api/publish-attempts/${attemptId}/cancel`, { method: "POST" }).then(jsonOrThrow),
+  refreshPublisherCredentials: (platform) =>
+    fetch(`/api/publishers/${encodeURIComponent(platform)}/refresh`, {
+      method: "POST",
+    }).then(jsonOrThrow),
+
   // --- Phase 5: storage, profiles, updates ---
   storage: () => fetch("/api/storage").then(jsonOrThrow),
   updateStorageSettings: (settings) =>

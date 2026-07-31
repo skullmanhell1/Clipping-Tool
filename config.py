@@ -797,6 +797,34 @@ class Settings(BaseSettings):
     # overrode all of them — so `min_interval_seconds` was dead code on every publisher,
     # and publishing ran roughly twice as slowly as intended with no way to tell why.
     publish_min_interval_floor_seconds: float = Field(default=0.0)
+    # PB5: automatic retry of *transient* publish failures, with exponential backoff. A publish
+    # attempt previously had exactly one chance, so a network blip was indistinguishable from a
+    # rejected video and both waited for a human to press Retry.
+    publish_max_retries: int = Field(
+        default=3,
+        description="Automatic retries per publish attempt for transient failures (PB5). 0 "
+                    "disables automatic retry, restoring the previous single-shot behaviour.",
+    )
+    publish_retry_base_seconds: float = Field(
+        default=30.0, description="First retry delay; doubles per retry (PB5)."
+    )
+    publish_retry_max_seconds: float = Field(
+        default=3600.0, description="Ceiling on the retry delay (PB5)."
+    )
+    # PB4: how early an expiring access token is renewed.
+    publish_token_refresh_margin_seconds: float = Field(
+        default=300.0,
+        description="Refresh an OAuth access token this long before it expires (PB4). An upload "
+                    "takes tens of seconds, so a token expiring mid-request costs the whole file.",
+    )
+    # PB6: regenerate copy per destination rather than fitting the existing text.
+    publish_tailor_with_llm: bool = Field(
+        default=False,
+        description="Regenerate the description for each destination platform on publish (PB6). "
+                    "Off by default: it costs one model call per platform per clip. When off, "
+                    "the existing copy is fitted to the platform's limits at sentence "
+                    "boundaries instead of being truncated mid-word.",
+    )
     public_base_url: Optional[str] = Field(default=None)
     # Whop (@whop/sdk Node bridge)
     whop_api_key: Optional[str] = Field(default=None)
