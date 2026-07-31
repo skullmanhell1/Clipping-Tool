@@ -127,6 +127,26 @@ COPY . .
 # Bring in the built SPA from the frontend stage so FastAPI serves it at "/".
 COPY --from=frontend /ui/dist ./frontend/dist
 
+# Run as a non-root user. The container previously ran as root, which means an ffmpeg or
+# yt-dlp parsing bug on untrusted input - and every input here is untrusted - would run
+# with full privileges inside the container.
+#
+# /app/storage is chowned because it is the volume mount point: Render mounts a persistent
+# disk there and docker-compose bind-mounts ./storage, and an unwritable storage root
+# fails at the first render rather than at boot. The application only ever writes under
+# /app/storage (uploads, temp, clips, the SQLite databases), so nothing else needs to be
+# writable - the source tree is deliberately left read-only to this user.
+RUN useradd --create-home --shell /usr/sbin/nologin clipper \
+    && mkdir -p /app/storage \
+    && chown -R clipper:clipper /app/storage
+USER clipper
+
 EXPOSE 8000
+
+# Report health from inside the image, not only from the platform. Render probes /healthz
+# externally, but docker-compose and a bare `docker run` had no health signal at all, so a
+# container that booted and then wedged looked identical to a healthy one.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

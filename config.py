@@ -68,6 +68,46 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed CORS origins.
     cors_origins: str = Field(default="*", description="Allowed CORS origins.")
 
+    # ------------------------------------------------------------ API auth --
+    # Every route was unauthenticated. On a localhost-only install that is correct and
+    # this stays unset. On a reachable host it is not: the API can queue unbounded CPU
+    # work, read back every rendered clip, fetch arbitrary URLs, and publish to the
+    # operator's real social accounts using stored tokens.
+    #
+    # Unset (the default) means "allow everything", which preserves existing behaviour
+    # exactly and keeps the test suite and local development untouched — a startup
+    # warning is emitted instead, in the same spirit as the CORS wildcard warning.
+    api_auth_token: Optional[str] = Field(
+        default=None,
+        description="Shared secret required on /api and /clips requests. Unset = no auth "
+                    "(correct for localhost, unsafe on a reachable host). Accepted as an "
+                    "X-API-Key header, an Authorization: Bearer header, or HTTP Basic "
+                    "password (any username) so a browser can prompt for it.",
+    )
+    # Paths that never require the token: the health probe (so orchestrators can check a
+    # locked-down instance) and the SPA shell itself (so the browser can load the page
+    # that then prompts for credentials).
+    api_auth_exempt_paths: str = Field(
+        default="/healthz",
+        description="Comma-separated path prefixes exempt from api_auth_token.",
+    )
+    # The one deliberate escape hatch. A public, wildcard-CORS, unauthenticated instance
+    # is refused at boot rather than warned about, because nothing downstream can make it
+    # safe. Setting this to true says "I know, and I accept it" — which is a different
+    # act from never having been told.
+    allow_insecure_public: bool = Field(
+        default=False,
+        description="Permit booting with environment=production, wildcard CORS and no "
+                    "api_auth_token. Off by default; the combination is refused.",
+    )
+    # SSRF guard for URL ingest. yt-dlp will happily fetch a cloud metadata endpoint or an
+    # internal host, and /api/jobs/url takes its target from the request body.
+    allow_private_url_ingest: bool = Field(
+        default=False,
+        description="Permit URL ingest from loopback, link-local and private ranges. Off "
+                    "by default; enable only to clip from a host on your own LAN.",
+    )
+
     # --------------------------------------------------------------- queue --
     redis_url: str = Field(
         default="redis://localhost:6379/0",
