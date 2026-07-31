@@ -204,19 +204,19 @@ running.
     - With `face_detector="haar"` and an injected detector, assert the produced `sendcmd` script and crop dimensions are identical to the current expected values.
     - _Requirements: 9.1, 9.3, 9.4_
 
-- [ ] 7. Verification and close-out
-  - [ ] 7.1 Full gate run
+- [x] 7. Verification and close-out
+  - [x] 7.1 Full gate run
     - `ruff check .` clean · `pytest` at **1880 + new tests, 0 skipped, 0 warnings** · `cd frontend && npm run lint && npm run test:run && npm run build` · `scripts/docker_smoke.sh` builds and serves.
     - _Requirements: 11.4, 11.5_
 
-  - [ ] 7.2 Eyeball the real output
+  - [x] 7.2 Eyeball the real output
     - Run `scripts/smoke_reel.py` on both backends over footage containing a profile turn and a two-shot. The suite cannot tell you the framing improved; only the pixels can. Attach both to the PR.
     - _Requirements: 2.1, 2.7_
 
-  - [ ] 7.3 Add a mutation spec under `tests/mutations/`
+  - [x] 7.3 Add a mutation spec under `tests/mutations/`
     - Per the working agreement, one spec per batch. Highest-value mutations to attempt: return the relative box unconverted; drop the clamp; swap the substitution marker's two operands; return the requested backend label instead of the resolved one; invert the coverage comparison. Each should be **CAUGHT**; an ESCAPE is a real gap.
     - _Requirements: 3.3, 6.3, 2.4, 2.6_
 
-  - [ ] 7.4 Record the measured coverage figures in the PR
+  - [x] 7.4 Record the measured coverage figures in the PR
     - Report Detection_Coverage for both backends on the same sources. This is the first quantitative statement anyone has made about this subsystem's accuracy, and it is what makes `reframe_coverage_floor` tunable rather than guessed.
     - _Requirements: 5.1, 6.1_

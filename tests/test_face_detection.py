@@ -474,3 +474,109 @@ def test_the_resolved_label_never_names_a_backend_that_did_not_run(tmp_path):
                     assert marker == f"face_detector:{label}"
             finally:
                 _released(detector)
+
+
+
+# --------------------------------------------------------------------------- #
+# Gaps found by the mutation run (task 7.3), each pinning one line that had     #
+# nothing observing it.                                                        #
+# --------------------------------------------------------------------------- #
+def test_the_cap_tolerance_is_not_a_bare_comparison():
+    """Pins the 0.05 tolerance on ``Sample_Report.capped``.
+
+    ``effective_fps`` is a division of two measured quantities, so an *uncapped* clip lands a
+    hair either side of the requested rate. A bare ``<`` would report the cap as binding on
+    roughly half of all clips, which makes the marker worthless in the direction that matters:
+    it would stop meaning "this clip was sampled less densely than you asked".
+
+    Asserted on the dataclass directly because reproducing a sub-tolerance rounding difference
+    through a real render is luck rather than a test.
+    """
+    from worker.effects.reframe import Sample_Report
+
+    def report(effective, requested):
+        return Sample_Report(
+            samples=[], resolved_backend="haar",
+            effective_fps=effective, requested_fps=requested,
+        )
+
+    # Within tolerance: measurement noise, not a bound cap.
+    assert report(4.98, 5.0).capped is False
+    assert report(5.0, 5.0).capped is False
+    assert report(5.02, 5.0).capped is False
+    # Genuinely reduced.
+    assert report(2.0, 5.0).capped is True
+    assert report(4.9, 5.0).capped is True
+
+
+def test_a_lone_detection_wins_whatever_its_score():
+    """Requirement 7.3, asserted as behaviour rather than as a code branch.
+
+    There is deliberately no ``len(items) == 1`` special case in ``pick_main_face`` -- ``max``
+    over one item returns it under either key -- so this test is what holds the requirement,
+    and it would fail if the selection ever started filtering by score.
+    """
+    for score in (0.0, 0.01, 0.5, 1.0, None):
+        lone = Detection(10, 20, 30, 40, score=score)
+        assert pick_main_face([lone]) == (25.0, 40.0), score
+
+
+def test_a_wrong_sized_model_does_not_resolve():
+    """A truncated download is a file that exists.
+
+    Asserted on ``resolve_model`` directly. Going through ``resolve_detector`` cannot see this:
+    a 32-byte ``.tflite`` also fails to *construct*, so the substitution label is identical
+    whether the size check exists or not -- the outcome is right for the wrong reason, and the
+    check could be deleted without any test noticing.
+    """
+    import tempfile
+
+    from worker.face_models import MODEL_MANIFEST, resolve_model
+
+    entry = MODEL_MANIFEST[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        (directory / entry.filename).write_bytes(b"\x00" * 32)
+        assert resolve_model("mediapipe", directory) is None
+
+        # Right size, so it resolves -- the check is on length, not content (the digest is
+        # CI's job, via scripts/fetch_models.py --check).
+        (directory / entry.filename).write_bytes(b"\x00" * entry.size_bytes)
+        assert resolve_model("mediapipe", directory) is not None
+
+
+def test_the_manifest_check_catches_a_right_sized_wrong_file():
+    """The digest check, which the truncation test cannot reach.
+
+    A truncated file fails on length first, so the ``sha256`` comparison is never exercised by
+    it -- and a manifest whose digest is never compared is a manifest that only checks file
+    sizes, which is the one thing it exists to improve on.
+    """
+    import tempfile
+
+    from worker.face_models import MODEL_MANIFEST, verify
+
+    entry = MODEL_MANIFEST[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        # Correct length, wrong bytes.
+        (directory / entry.filename).write_bytes(b"\xff" * entry.size_bytes)
+        (directory / entry.licence_file).write_text("licence", encoding="utf-8")
+        problems = verify(directory)
+        assert problems, "a right-sized wrong file must not verify"
+        assert any(entry.filename in p and "sha256" in p for p in problems), problems
+
+
+def test_the_licence_must_accompany_the_model():
+    """Requirement 12.2 — the licence is part of what makes vendoring legitimate."""
+    import shutil
+    import tempfile
+
+    from worker.face_models import MODEL_MANIFEST, verify
+
+    entry = MODEL_MANIFEST[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        shutil.copy(_ROOT / "assets" / "models" / entry.filename, directory / entry.filename)
+        problems = verify(directory)
+        assert any(entry.licence_file in p for p in problems), problems

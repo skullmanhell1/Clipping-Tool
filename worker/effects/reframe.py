@@ -183,15 +183,16 @@ def relative_box_to_pixels(
     if (fx1 - fx0) < 1.0 or (fy1 - fy0) < 1.0:
         return None
 
+    # No second degeneracy check after the int coercion: it would be unreachable. The float
+    # test above guarantees ``fx1 - fx0 >= 1``, and both are already inside ``[0, width]``, so
+    # ``ceil(fx1) > floor(fx0)`` necessarily. A dead guard here was not harmless -- it silently
+    # rescued a mutation that moved the degeneracy test to the wrong side of the clamp, which
+    # made the documented convert/clamp/test order unverifiable.
     px0 = int(math.floor(fx0))
     py0 = int(math.floor(fy0))
     px1 = min(width, int(math.ceil(fx1)))
     py1 = min(height, int(math.ceil(fy1)))
-    box_w = px1 - px0
-    box_h = py1 - py0
-    if box_w <= 0 or box_h <= 0:
-        return None
-    return (px0, py0, box_w, box_h)
+    return (px0, py0, px1 - px0, py1 - py0)
 
 
 def detection_coverage(samples: Sequence[tuple[float, Sequence[object]]]) -> float:
@@ -328,9 +329,12 @@ def pick_main_face(faces: Sequence[object]) -> Optional[tuple[float, float]]:
     items = [d for d in (_as_detection(f) for f in faces) if d is not None]
     if not items:
         return None
-    if len(items) == 1:
-        best = items[0]
-    elif any(d.score is not None for d in items):
+    # No special case for a single detection: ``max`` over one item returns it under either
+    # key, so an explicit branch would be a second statement of the same behaviour -- and one
+    # that no test could distinguish from its absence. The property is still asserted (a lone
+    # detection wins whatever its score); it is simply a consequence of the code rather than a
+    # separate clause that could drift away from it.
+    if any(d.score is not None for d in items):
         # A missing score among scored peers ranks on area alone (neutral multiplier) rather
         # than as zero, which would silently discard it.
         best = max(
