@@ -36,9 +36,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Optional, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from worker.engines.timebase import Time_Base
 
@@ -67,9 +67,9 @@ __all__ = [
     "AV_Engine",
 ]
 
-DIGEST_LENGTH = 16            # Req 11.5 — fixed-length lowercase hex
-MARKER_PREFIX = "engine"      # Req 3.3 — engine:<engine_id>:<detail>
-FLAG_SUFFIX = "_enabled"      # Req 9.1 — ProcessingOptions.<engine_id>_enabled
+DIGEST_LENGTH = 16  # Req 11.5 — fixed-length lowercase hex
+MARKER_PREFIX = "engine"  # Req 3.3 — engine:<engine_id>:<detail>
+FLAG_SUFFIX = "_enabled"  # Req 9.1 — ProcessingOptions.<engine_id>_enabled
 
 #: Guard for pathological (deeply nested or self-referencing) option values: at
 #: this nesting depth :func:`_json_safe` stops recursing and stringifies, so
@@ -84,17 +84,17 @@ _TRUE_STRINGS = ("1", "true", "yes", "on")
 _FALSE_STRINGS = ("0", "false", "no", "off", "", "none", "null")
 
 
-class Engine_Stage(str, Enum):
-    """Pipeline point at which an engine runs (mirrors JobStatus's str-Enum style)."""
+class Engine_Stage(StrEnum):
+    """Pipeline point at which an engine runs (mirrors JobStatus's StrEnum style)."""
 
-    SOURCE = "source"        # once per source, before the clip loop (Req 3.5)
-    AUDIO = "audio"          # per clip, after filler removal, before geometry
-    GEOMETRY = "geometry"    # per clip, after the geometry ladder
-    COMPOSE = "compose"      # per clip, contributes to the single compositor pass
-    POST = "post"            # per clip, after the final file + thumbnail exist
+    SOURCE = "source"  # once per source, before the clip loop (Req 3.5)
+    AUDIO = "audio"  # per clip, after filler removal, before geometry
+    GEOMETRY = "geometry"  # per clip, after the geometry ladder
+    COMPOSE = "compose"  # per clip, contributes to the single compositor pass
+    POST = "post"  # per clip, after the final file + thumbnail exist
 
 
-class Engine_Status(str, Enum):
+class Engine_Status(StrEnum):
     """Outcome of one engine invocation (Req 1.6)."""
 
     APPLIED = "applied"
@@ -245,16 +245,18 @@ def _as_str_tuple(value: Any) -> tuple[str, ...]:
     return tuple(_as_text(item) for item in _as_tuple(value))
 
 
-def _as_path(value: Any) -> Optional[Path]:
+def _as_path(value: Any) -> Path | None:
     """Return ``value`` as a :class:`~pathlib.Path`, or ``None`` when unusable."""
     if value is None:
         return None
     if isinstance(value, Path):
         return value
     if isinstance(value, (str, bytes, bytearray)):
-        text = value.decode("utf-8", errors="replace") if isinstance(
-            value, (bytes, bytearray)
-        ) else value
+        text = (
+            value.decode("utf-8", errors="replace")
+            if isinstance(value, (bytes, bytearray))
+            else value
+        )
         if not text:
             return None
         try:
@@ -273,11 +275,11 @@ def _as_path(value: Any) -> Optional[Path]:
 class Engine_Artifact:
     """A file produced by an engine (Reqs 17.7, 18.5)."""
 
-    name: str                          # workspace-relative file name
-    path: Path                         # absolute path inside the Engine_Workspace
-    media_type: str = "data"           # video | audio | image | subtitle | data
-    durable: bool = False              # persist through the Storage_Backend
-    storage_key: str = ""              # set by the host after persistence (Req 18.5)
+    name: str  # workspace-relative file name
+    path: Path  # absolute path inside the Engine_Workspace
+    media_type: str = "data"  # video | audio | image | subtitle | data
+    durable: bool = False  # persist through the Storage_Backend
+    storage_key: str = ""  # set by the host after persistence (Req 18.5)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _as_text(self.name))
@@ -297,7 +299,7 @@ class Engine_Artifact:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Engine_Artifact":
+    def from_dict(cls, data: Mapping[str, Any]) -> Engine_Artifact:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls(name="", path=Path(""))
@@ -315,8 +317,8 @@ class Compose_Input:
     """An extra ffmpeg input a compose-stage engine needs (Req 1.5)."""
 
     path: Path
-    loop: bool = False                 # still images: ``-loop 1``
-    duration: float = 0.0              # 0 => natural duration
+    loop: bool = False  # still images: ``-loop 1``
+    duration: float = 0.0  # 0 => natural duration
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", _as_path(self.path) or Path(""))
@@ -332,7 +334,7 @@ class Compose_Input:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Compose_Input":
+    def from_dict(cls, data: Mapping[str, Any]) -> Compose_Input:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls(path=Path(""))
@@ -357,8 +359,8 @@ class Compose_Contribution:
     inputs: tuple[Compose_Input, ...] = ()
     video_filters: tuple[str, ...] = ()
     audio_filters: tuple[str, ...] = ()
-    subtitle_path: Optional[Path] = None
-    z_order: int = 0                   # lower renders first; captions stay on top
+    subtitle_path: Path | None = None
+    z_order: int = 0  # lower renders first; captions stay on top
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "engine_id", _as_text(self.engine_id))
@@ -366,9 +368,15 @@ class Compose_Contribution:
             self,
             "inputs",
             tuple(
-                item if isinstance(item, Compose_Input)
-                else Compose_Input.from_dict(item) if isinstance(item, Mapping)
-                else Compose_Input(path=_as_path(item) or Path(""))
+                (
+                    item
+                    if isinstance(item, Compose_Input)
+                    else (
+                        Compose_Input.from_dict(item)
+                        if isinstance(item, Mapping)
+                        else Compose_Input(path=_as_path(item) or Path(""))
+                    )
+                )
                 for item in _as_tuple(self.inputs)
             ),
         )
@@ -389,7 +397,7 @@ class Compose_Contribution:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Compose_Contribution":
+    def from_dict(cls, data: Mapping[str, Any]) -> Compose_Contribution:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls(engine_id="")
@@ -420,20 +428,20 @@ class Engine_Context:
     clip_id: str
     engine_id: str
     stage: Engine_Stage
-    source_path: Path                     # original source media
-    clip_path: Optional[Path]             # current clip media (None at SOURCE stage)
-    time_base: "Time_Base"                # identical for every engine of this clip (13.7)
-    clip_start: float                     # source-relative provenance only
+    source_path: Path  # original source media
+    clip_path: Path | None  # current clip media (None at SOURCE stage)
+    time_base: Time_Base  # identical for every engine of this clip (13.7)
+    clip_start: float  # source-relative provenance only
     clip_end: float
-    duration: float                       # clip-relative upper bound == end - start (15.1)
-    words: tuple[Any, ...] = ()           # rebased clip-relative Word_Timeline (15.2)
-    options: Any = None                   # this engine's resolved Engine_Options
-    options_digest: str = ""              # Req 11.1
-    seed: int = 0                         # Req 12.2 — only randomness source
-    workspace: Optional["Engine_Workspace"] = None      # noqa: F821 - worker.engines.artifacts
-    capabilities: Optional["Capability_Report"] = None  # noqa: F821 - worker.engines.capabilities
-    permissibility: bool = False          # ProcessingOptions.permissibility_mode
-    deadline: float = math.inf            # time.monotonic() budget end (Req 8.6)
+    duration: float  # clip-relative upper bound == end - start (15.1)
+    words: tuple[Any, ...] = ()  # rebased clip-relative Word_Timeline (15.2)
+    options: Any = None  # this engine's resolved Engine_Options
+    options_digest: str = ""  # Req 11.1
+    seed: int = 0  # Req 12.2 — only randomness source
+    workspace: Engine_Workspace | None = None  # noqa: F821 - worker.engines.artifacts
+    capabilities: Capability_Report | None = None  # noqa: F821 - worker.engines.capabilities
+    permissibility: bool = False  # ProcessingOptions.permissibility_mode
+    deadline: float = math.inf  # time.monotonic() budget end (Req 8.6)
     time_budget_s: float = 0.0
     #: Absolute ffmpeg input index of this engine's **first** reserved input, so a
     #: COMPOSE-stage engine can write valid ``[N:v]`` / ``[N:a]`` filter labels
@@ -448,7 +456,7 @@ class Engine_Context:
     #: P21) or ``"filler_seam:<seconds>"``. Deliberately **not** narrowed to an
     #: enum: engines and sibling specs append their own note kinds here.
     notes: tuple[str, ...] = ()
-    deps: Mapping[str, Any] = field(default_factory=dict)   # injected fakes (Req 22.1)
+    deps: Mapping[str, Any] = field(default_factory=dict)  # injected fakes (Req 22.1)
     #: Read-only per-clip Clip_Metadata: values produced **upstream** of this stage
     #: run and supplied by the Pipeline at stage invocation (Req 15.8). A separate
     #: channel from :attr:`deps`, which stays the host's injected clock/logger/
@@ -487,9 +495,7 @@ class Engine_Context:
         object.__setattr__(self, "seed", coerce_int(self.seed, 0))
         # An input index is a non-negative ffmpeg ``-i`` position; index 0 is the
         # primary clip, which no engine ever owns, so 0 doubles as "not reserved".
-        object.__setattr__(
-            self, "first_input_index", coerce_int(self.first_input_index, 0, lo=0)
-        )
+        object.__setattr__(self, "first_input_index", coerce_int(self.first_input_index, 0, lo=0))
         if not isinstance(self.deps, Mapping):
             object.__setattr__(self, "deps", {})
         # Clip_Metadata is normalised exactly like ``deps``: an unusable value
@@ -498,7 +504,7 @@ class Engine_Context:
         if not isinstance(self.clip_metadata, Mapping):
             object.__setattr__(self, "clip_metadata", {})
 
-    def rng(self) -> "random.Random":
+    def rng(self) -> random.Random:
         """Return a seeded RNG; the ONLY permitted randomness source (Req 12.2).
 
         A fresh :class:`random.Random` seeded from :attr:`seed` — never the global
@@ -527,11 +533,11 @@ class Engine_Result:
 
     engine_id: str
     status: Engine_Status
-    markers: tuple[str, ...] = ()                       # namespaced by the host (3.3)
+    markers: tuple[str, ...] = ()  # namespaced by the host (3.3)
     artifacts: tuple[Engine_Artifact, ...] = ()
-    contribution: Optional[Compose_Contribution] = None
-    plan: Mapping[str, Any] = field(default_factory=dict)   # serialisable planning output
-    media: Optional[Path] = None            # replacement clip media (AUDIO/GEOMETRY only)
+    contribution: Compose_Contribution | None = None
+    plan: Mapping[str, Any] = field(default_factory=dict)  # serialisable planning output
+    media: Path | None = None  # replacement clip media (AUDIO/GEOMETRY only)
     detail: str = ""
     elapsed_s: float = 0.0
 
@@ -578,7 +584,7 @@ class Engine_Result:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Engine_Result":
+    def from_dict(cls, data: Mapping[str, Any]) -> Engine_Result:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls(engine_id="", status=Engine_Status.FAILED)
@@ -594,8 +600,7 @@ class Engine_Result:
             contribution=(
                 Compose_Contribution.from_dict(contribution)
                 if isinstance(contribution, Mapping)
-                else contribution if isinstance(contribution, Compose_Contribution)
-                else None
+                else contribution if isinstance(contribution, Compose_Contribution) else None
             ),
             plan=data.get("plan") or {},
             media=_as_path(data.get("media")),
@@ -606,13 +611,12 @@ class Engine_Result:
     # Convenience constructors used by engines and by the host's gating ladder.
 
     @classmethod
-    def skipped(cls, engine_id: str) -> "Engine_Result":
+    def skipped(cls, engine_id: str) -> Engine_Result:
         """A no-op outcome that contributes no marker at all (Reqs 3.4, 4.x)."""
         return cls(engine_id=engine_id, status=Engine_Status.SKIPPED)
 
     @classmethod
-    def degraded(cls, engine_id: str, detail: str, *,
-                 markers: Sequence[str] = ()) -> "Engine_Result":
+    def degraded(cls, engine_id: str, detail: str, *, markers: Sequence[str] = ()) -> Engine_Result:
         """A partial outcome: the engine fell back but the clip is still usable (Req 7.1)."""
         return cls(
             engine_id=engine_id,
@@ -622,7 +626,7 @@ class Engine_Result:
         )
 
     @classmethod
-    def failed(cls, engine_id: str, detail: str) -> "Engine_Result":
+    def failed(cls, engine_id: str, detail: str) -> Engine_Result:
         """A failed outcome: the engine produced nothing usable (Req 8.1)."""
         return cls(engine_id=engine_id, status=Engine_Status.FAILED, detail=detail)
 
@@ -679,7 +683,7 @@ class Engine_Options(Protocol):
     """Per-engine options record: a dataclass of JSON-serialisable values (Req 10.1)."""
 
     @classmethod
-    def parse(cls, data: Mapping[str, Any] | None) -> "Engine_Options":
+    def parse(cls, data: Mapping[str, Any] | None) -> Engine_Options:
         """Total parser: never raises, ignores unknown keys, defaults per field (10.2/10.4/10.5)."""
         ...
 
@@ -731,7 +735,7 @@ def coerce_int(value: Any, default: int, lo: int | None = None, hi: int | None =
     container or object. The clamp is applied last, so the result always sits in
     range even when ``default`` does not.
     """
-    number: Optional[int] = None
+    number: int | None = None
     if _is_number(value):
         if isinstance(value, int):
             number = int(value)
@@ -757,8 +761,9 @@ def coerce_int(value: Any, default: int, lo: int | None = None, hi: int | None =
     return int(number)
 
 
-def coerce_float(value: Any, default: float, lo: float | None = None,
-                 hi: float | None = None) -> float:
+def coerce_float(
+    value: Any, default: float, lo: float | None = None, hi: float | None = None
+) -> float:
     """Coerce to a **finite** ``float``, clamped to ``[lo, hi]`` (``music_volume`` rule).
 
     Accepted: a finite ``int``/``float``; a numeric string. Rejected — replaced by
@@ -766,7 +771,7 @@ def coerce_float(value: Any, default: float, lo: float | None = None,
     every container or object; a non-finite ``default`` collapses to ``0.0`` so the
     result is always a usable timing/gain value. The clamp is applied last.
     """
-    number: Optional[float] = None
+    number: float | None = None
     if _is_number(value):
         candidate = float(value)
         if math.isfinite(candidate):
@@ -919,15 +924,15 @@ class AV_Engine(ABC):
     ``TypeError`` — so the contract is enforced at construction time.
     """
 
-    engine_id: ClassVar[str] = ""                              # snake_case, stable
+    engine_id: ClassVar[str] = ""  # snake_case, stable
     stage: ClassVar[Engine_Stage] = Engine_Stage.POST
-    priority: ClassVar[int] = 100                              # ordering key (Req 2.5)
-    required_capabilities: ClassVar[tuple[str, ...]] = ()      # Req 7.1
-    optional_capabilities: ClassVar[tuple[str, ...]] = ()      # Req 7.2
-    requires_network: ClassVar[bool] = False                   # Req 21.1
-    requires_model_download: ClassVar[bool] = False            # Req 21.1
-    time_budget_s: ClassVar[float] = 30.0                      # Req 19.1
-    max_media_passes: ClassVar[int] = 1                        # Req 19.1
+    priority: ClassVar[int] = 100  # ordering key (Req 2.5)
+    required_capabilities: ClassVar[tuple[str, ...]] = ()  # Req 7.1
+    optional_capabilities: ClassVar[tuple[str, ...]] = ()  # Req 7.2
+    requires_network: ClassVar[bool] = False  # Req 21.1
+    requires_model_download: ClassVar[bool] = False  # Req 21.1
+    time_budget_s: ClassVar[float] = 30.0  # Req 19.1
+    max_media_passes: ClassVar[int] = 1  # Req 19.1
     #: How many ffmpeg ``-i`` inputs this engine may contribute to the ONE
     #: compositor pass (Req 1.5). Declared alongside ``max_media_passes`` because
     #: both bound the cost an engine may add to a clip: ``max_media_passes`` bounds
@@ -936,7 +941,7 @@ class AV_Engine(ABC):
     #: ``Engine_Context.first_input_index``; ``0`` (the default) means the engine
     #: contributes no input and therefore consumes no index space.
     max_inputs: ClassVar[int] = 0
-    produces_media: ClassVar[bool] = False                     # may return Result.media
+    produces_media: ClassVar[bool] = False  # may return Result.media
 
     @classmethod
     def flag_field(cls) -> str:

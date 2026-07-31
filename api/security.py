@@ -26,7 +26,6 @@ import json
 import logging
 import threading
 import time
-from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
@@ -106,7 +105,7 @@ def extract_token(headers: Headers) -> str:
     return ""
 
 
-def may_access_job(job: object, user: Optional[User]) -> bool:
+def may_access_job(job: object, user: User | None) -> bool:
     """Whether ``user`` may see ``job``. The single authorization rule.
 
     * No job - no access. A caller with a job id that resolves to nothing gets the same
@@ -129,7 +128,7 @@ def may_access_job(job: object, user: Optional[User]) -> bool:
     return str(getattr(job, "owner", "") or "") == user.id
 
 
-def current_user(request: Request) -> Optional[User]:
+def current_user(request: Request) -> User | None:
     """The authenticated user, or ``None`` when auth is disabled."""
     return getattr(request.state, "user", None)
 
@@ -258,9 +257,7 @@ class AuthMiddleware:
         # stating that twice would mean one of the two copies is never exercised.
         resolved = get_auth_store().resolve_session(extract_token(headers))
         if resolved is None:
-            await _send_json(
-                send, 401, {"detail": "Not authenticated. Sign in to continue."}
-            )
+            await _send_json(send, 401, {"detail": "Not authenticated. Sign in to continue."})
             return
 
         user, _session = resolved
@@ -285,7 +282,7 @@ class AuthMiddleware:
         and serving those to anyone with a session would leak precisely the clips of the
         users who have been using the tool longest.
         """
-        remainder = path[len(CLIPS_PREFIX):]
+        remainder = path[len(CLIPS_PREFIX) :]
         job_id = remainder.split("/", 1)[0]
         # No empty-job_id guard: an empty id finds no job, and `may_access_job(None, ...)`
         # already refuses. A separate check here would be a second statement of the same
@@ -299,7 +296,7 @@ class AuthMiddleware:
         return may_access_job(get_manager().store.get(job_id), user)
 
 
-def bootstrap_admin() -> Optional[User]:
+def bootstrap_admin() -> User | None:
     """Create the configured first admin when auth is on and there are no users.
 
     Raises ``RuntimeError`` when auth is enabled, no user exists, and no bootstrap account is

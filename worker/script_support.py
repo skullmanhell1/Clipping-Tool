@@ -53,7 +53,6 @@ import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 from worker import language
@@ -81,8 +80,16 @@ SCRIPT_PROBE_CHAR: dict[str, str] = {
 
 #: The fontconfig language tag to search for each script.
 SCRIPT_FC_LANG: dict[str, str] = {
-    "arabic": "ar", "hebrew": "he", "han": "zh", "hiragana": "ja", "katakana": "ja",
-    "hangul": "ko", "devanagari": "hi", "thai": "th", "greek": "el", "cyrillic": "ru",
+    "arabic": "ar",
+    "hebrew": "he",
+    "han": "zh",
+    "hiragana": "ja",
+    "katakana": "ja",
+    "hangul": "ko",
+    "devanagari": "hi",
+    "thai": "th",
+    "greek": "el",
+    "cyrillic": "ru",
 }
 
 #: Scripts where per-glyph advance widths do not sum to the rendered width.
@@ -169,7 +176,10 @@ def _system_families_for(script: str) -> tuple[str, ...]:
     try:
         proc = subprocess.run(
             ["fc-list", f":lang={lang}", "--format", "%{family[0]}\\t%{file}\\n"],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return ()
@@ -187,7 +197,7 @@ def _system_families_for(script: str) -> tuple[str, ...]:
     return tuple(families)
 
 
-def _which(binary: str) -> Optional[str]:
+def _which(binary: str) -> str | None:
     import shutil
 
     return shutil.which(binary)
@@ -251,21 +261,30 @@ def plan_for_text(text: str, requested_font: str) -> ScriptPlan:
     for name, path in _vendored_faces():
         if font_covers(path, script):
             return ScriptPlan(
-                script, name, needs_shaping, rtl,
+                script,
+                name,
+                needs_shaping,
+                rtl,
                 marker=f"caption_font_substituted:{script}:{name}",
             )
 
     # 3. A system family, verified.
     for family in _system_families_for(script):
         return ScriptPlan(
-            script, family, needs_shaping, rtl,
+            script,
+            family,
+            needs_shaping,
+            rtl,
             marker=f"caption_font_substituted:{script}:{family}",
         )
 
     # 4. Nothing can render it. Keep the requested font - substituting a different Latin face would
     #    change the look without fixing anything - and record it.
     return ScriptPlan(
-        script, requested, needs_shaping, rtl,
+        script,
+        requested,
+        needs_shaping,
+        rtl,
         marker=f"caption_script_unsupported:{script}",
     )
 
@@ -298,9 +317,7 @@ def coverage_report() -> dict[str, list[str]]:
     """
     report: dict[str, list[str]] = {}
     for script in SCRIPT_PROBE_CHAR:
-        report[script] = [
-            name for name, path in _vendored_faces() if font_covers(path, script)
-        ]
+        report[script] = [name for name, path in _vendored_faces() if font_covers(path, script)]
     return report
 
 

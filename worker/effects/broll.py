@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Protocol
 
 from config import settings
 from worker.effects.caption_presets import plan_keywords
@@ -51,7 +52,7 @@ class AssetRef:
     """
 
     path: str
-    kind: str                 # "image" | "video"
+    kind: str  # "image" | "video"
     provider: str
     source_id: str = ""
     license: str = ""
@@ -70,7 +71,7 @@ class BrollCue:
     start: float
     end: float
     keyword: str
-    asset: Optional[AssetRef] = None
+    asset: AssetRef | None = None
 
 
 # Intensity -> (max cue count, max total on-screen seconds) per clip (Req 7.4).
@@ -99,7 +100,7 @@ def plan_broll_cues(
     intensity: str = "off",
     hold: float = 2.5,
     min_gap: float = 3.0,
-    keyword_fn: Optional[Callable[[list], list]] = None,
+    keyword_fn: Callable[[list], list] | None = None,
 ) -> list[BrollCue]:
     """Plan b-roll cues from a (rebased) clip-relative word timeline.
 
@@ -136,7 +137,7 @@ def plan_broll_cues(
 
     cues: list[BrollCue] = []
     total_onscreen = 0.0
-    last_start: Optional[float] = None
+    last_start: float | None = None
     for i in indices:
         if i < 0 or i >= len(words):
             continue
@@ -193,7 +194,7 @@ class AssetProvider(Protocol):
 
     name: str
 
-    def search(self, keyword: str) -> Optional[AssetRef]:  # pragma: no cover
+    def search(self, keyword: str) -> AssetRef | None:  # pragma: no cover
         ...
 
 
@@ -250,7 +251,7 @@ def _synonym_groups() -> dict[str, frozenset[str]]:
     """``word -> the words that mean the same thing``, inverted from the emoji keyword map."""
     try:
         from worker.effects.emoji import KEYWORD_EMOJI
-    except Exception:      # pragma: no cover - emoji module is a hard sibling, but stay total
+    except Exception:  # pragma: no cover - emoji module is a hard sibling, but stay total
         return {}
     clusters: dict[str, set[str]] = {}
     for word, glyph in KEYWORD_EMOJI.items():
@@ -273,7 +274,7 @@ def synonyms(token: str) -> frozenset[str]:
     return frozenset(group - {token})
 
 
-def load_tag_manifest(root: "str | Path") -> dict[str, frozenset[str]]:
+def load_tag_manifest(root: str | Path) -> dict[str, frozenset[str]]:
     """``filename -> tags`` from ``root/tags.json``, or ``{}``.
 
     Accepts either ``{"file.mp4": ["money", "cash"]}`` or a space/comma-separated string per file,
@@ -308,7 +309,7 @@ def load_tag_manifest(root: "str | Path") -> dict[str, frozenset[str]]:
     return manifest
 
 
-def match_score(keyword: str, tags: "frozenset[str] | set[str]", filename_stem: str = "") -> float:
+def match_score(keyword: str, tags: frozenset[str] | set[str], filename_stem: str = "") -> float:
     """How well ``tags`` (and, weakly, ``filename_stem``) answer ``keyword`` (A19).
 
     Returns ``0.0`` for no match. Sums over the keyword's tokens rather than taking the best one,
@@ -351,10 +352,10 @@ class LocalProvider:
 
     name = "local"
 
-    def __init__(self, root: "str | Path | None" = None):
+    def __init__(self, root: str | Path | None = None):
         self.root = Path(root) if root is not None else Path(settings.broll_dir)
 
-    def search(self, keyword: str) -> Optional[AssetRef]:
+    def search(self, keyword: str) -> AssetRef | None:
         tokens = [t for t in _norm_tokens(keyword) if len(t) >= _MIN_MATCH_TOKEN]
         if not tokens:
             return None
@@ -365,7 +366,7 @@ class LocalProvider:
             return None
 
         manifest = load_tag_manifest(self.root)
-        best: Optional[tuple[float, str, Path, str]] = None
+        best: tuple[float, str, Path, str] | None = None
         for path in entries:
             ext = path.suffix.lower()
             if ext in _IMAGE_EXTS:
@@ -380,8 +381,10 @@ class LocalProvider:
             # Name is the tie-break, so two equally-tagged files resolve the same way on every
             # machine regardless of how the filesystem happens to enumerate them.
             candidate = (score, path.name, path, kind)
-            if best is None or (candidate[0], ) > (best[0], ) or (
-                candidate[0] == best[0] and candidate[1] < best[1]
+            if (
+                best is None
+                or (candidate[0],) > (best[0],)
+                or (candidate[0] == best[0] and candidate[1] < best[1])
             ):
                 best = candidate
 
@@ -399,7 +402,7 @@ class LocalProvider:
 
 def _default_external_downloader(
     keyword: str, api_key: str, base_url: str, cache_dir: Path
-) -> Optional[AssetRef]:
+) -> AssetRef | None:
     """Safe, offline default downloader.
 
     The concrete provider-specific HTTP/download logic is intentionally not
@@ -416,13 +419,13 @@ def _default_external_downloader(
 LICENSE_SIDECAR_SUFFIX = ".license.json"
 
 
-def license_sidecar_path(asset_path: "str | Path") -> Path:
+def license_sidecar_path(asset_path: str | Path) -> Path:
     """Where the licence record for ``asset_path`` lives."""
     path = Path(asset_path)
     return path.with_name(path.name + LICENSE_SIDECAR_SUFFIX)
 
 
-def record_asset_license(asset: AssetRef, keyword: str = "") -> Optional[Path]:
+def record_asset_license(asset: AssetRef, keyword: str = "") -> Path | None:
     """Write ``asset``'s provenance beside the file, returning the sidecar path (A20).
 
     **Why a sidecar and not just a cache.** A downloaded asset with an empty ``license`` is
@@ -456,15 +459,13 @@ def record_asset_license(asset: AssetRef, keyword: str = "") -> Optional[Path]:
             "kind": asset.kind or "video",
             "asset": path.name,
         }
-        sidecar.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        sidecar.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return sidecar
     except Exception:
         return None
 
 
-def load_asset_license(asset_path: "str | Path") -> Optional[dict]:
+def load_asset_license(asset_path: str | Path) -> dict | None:
     """Read a cached asset's licence record, or ``None`` (A20).
 
     A record missing the one field that matters - ``license`` - is treated as no record at all,
@@ -481,7 +482,7 @@ def load_asset_license(asset_path: "str | Path") -> Optional[dict]:
     return data
 
 
-def cached_asset(cache_dir: "str | Path", keyword: str) -> Optional[AssetRef]:
+def cached_asset(cache_dir: str | Path, keyword: str) -> AssetRef | None:
     """An already-downloaded asset for ``keyword``, if one is cached with its licence (A20).
 
     Matched on the sidecar's recorded ``keyword`` rather than on the filename, because a
@@ -537,10 +538,10 @@ class ExternalProvider:
 
     def __init__(
         self,
-        api_key: "str | None",
-        base_url: "str | None",
-        downloader: Optional[Callable[..., Optional[AssetRef]]] = None,
-        cache_dir: "str | Path | None" = None,
+        api_key: str | None,
+        base_url: str | None,
+        downloader: Callable[..., AssetRef | None] | None = None,
+        cache_dir: str | Path | None = None,
         name: str = "external",
     ):
         self.api_key = api_key or ""
@@ -556,7 +557,7 @@ class ExternalProvider:
         """True when a BYOK API key is configured (Req 8.4)."""
         return bool(self.api_key)
 
-    def search(self, keyword: str) -> Optional[AssetRef]:
+    def search(self, keyword: str) -> AssetRef | None:
         if not keyword or not self.has_key:
             return None
 
@@ -569,9 +570,7 @@ class ExternalProvider:
             return cached
 
         try:
-            result = self._downloader(
-                keyword, self.api_key, self.base_url, self.cache_dir
-            )
+            result = self._downloader(keyword, self.api_key, self.base_url, self.cache_dir)
         except Exception:
             return None
         if result is None:
@@ -588,7 +587,7 @@ class ExternalProvider:
         return result
 
 
-def _has_known_license(asset: Optional[AssetRef]) -> bool:
+def _has_known_license(asset: AssetRef | None) -> bool:
     """True when the asset carries a non-empty license string (Req 20.3)."""
     return asset is not None and bool((asset.license or "").strip())
 
@@ -596,9 +595,9 @@ def _has_known_license(asset: Optional[AssetRef]) -> bool:
 def resolve_asset(
     keyword: str,
     mode: str,
-    local: Optional[AssetProvider],
-    external: Optional[ExternalProvider],
-) -> Optional[AssetRef]:
+    local: AssetProvider | None,
+    external: ExternalProvider | None,
+) -> AssetRef | None:
     """Resolve one overlay asset honouring the asset-sourcing mode (Req 8).
 
     Semantics:
@@ -616,7 +615,7 @@ def resolve_asset(
     if mode == "off":
         return None
 
-    asset: Optional[AssetRef] = None
+    asset: AssetRef | None = None
     if local is not None:
         try:
             asset = local.search(keyword)
@@ -681,7 +680,11 @@ _KEN_BURNS_ASPECT = 16 / 9
 #: is the pan half of Ken Burns, for free. Rotating the anchor is what stops four stills in one
 #: clip all drifting the same way, which would read as a template.
 _KEN_BURNS_ANCHORS: tuple[tuple[float, float], ...] = (
-    (0.5, 0.5), (0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0),
+    (0.5, 0.5),
+    (0.0, 0.0),
+    (1.0, 1.0),
+    (0.0, 1.0),
+    (1.0, 0.0),
 )
 
 
@@ -830,8 +833,8 @@ class Broll_Engine:
         self,
         options,
         *,
-        local: Optional[AssetProvider] = None,
-        external: Optional[ExternalProvider] = None,
+        local: AssetProvider | None = None,
+        external: ExternalProvider | None = None,
     ):
         self.options = options
         self.local = local

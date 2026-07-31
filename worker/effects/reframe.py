@@ -20,9 +20,9 @@ fall back to the static reformat.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional, Sequence
 
 from config import settings
 
@@ -59,9 +59,7 @@ class Center:
 # --------------------------------------------------------------------------- #
 # Pure geometry / smoothing helpers (no ffmpeg or cv2 needed — unit-testable)
 # --------------------------------------------------------------------------- #
-def compute_crop_size(
-    src_w: int, src_h: int, aspect_w: int, aspect_h: int
-) -> tuple[int, int]:
+def compute_crop_size(src_w: int, src_h: int, aspect_w: int, aspect_h: int) -> tuple[int, int]:
     """Return the largest ``(w, h)`` of the target aspect that fits the source.
 
     Dimensions are rounded to even numbers (encoder-friendly).
@@ -83,7 +81,7 @@ def compute_crop_size(
     return max(2, cw), max(2, ch)
 
 
-def pick_main_face(faces: list[tuple[int, int, int, int]]) -> Optional[tuple[float, float]]:
+def pick_main_face(faces: list[tuple[int, int, int, int]]) -> tuple[float, float] | None:
     """Return the centre ``(cx, cy)`` of the largest face box, or ``None``.
 
     ``faces`` is a list of ``(x, y, w, h)`` rectangles.
@@ -154,12 +152,10 @@ def smooth_centers(
     breaks = cut_indices(samples, cuts)
     xs = ema_smooth([s.cx for s in samples], alpha, reset_at=breaks)
     ys = ema_smooth([s.cy for s in samples], alpha, reset_at=breaks)
-    return [Center(s.t, x, y) for s, x, y in zip(samples, xs, ys)]
+    return [Center(s.t, x, y) for s, x, y in zip(samples, xs, ys, strict=True)]
 
 
-def resample_centers(
-    samples: list[Center], fps: float, duration: float
-) -> list[Center]:
+def resample_centers(samples: list[Center], fps: float, duration: float) -> list[Center]:
     """Linearly resample ``samples`` onto a uniform ``fps`` grid over ``duration``.
 
     Produces the dense, evenly-spaced centres used to emit smooth crop
@@ -260,7 +256,7 @@ class Face_Track:
     track_id: str
     boxes: list[FaceBox] = field(default_factory=list)
 
-    def center_at(self, t: float) -> Optional[tuple[float, float]]:
+    def center_at(self, t: float) -> tuple[float, float] | None:
         """Return the centre of the box nearest in time to ``t``.
 
         Returns ``None`` when the track has no boxes. Pure.
@@ -345,7 +341,7 @@ class Association:
     ``shown_order`` ranks associated ``track_id``s by total speaking duration.
     """
 
-    by_turn: dict[int, Optional[str]] = field(default_factory=dict)
+    by_turn: dict[int, str | None] = field(default_factory=dict)
     unassociated: list[int] = field(default_factory=list)
     shown_order: list[str] = field(default_factory=list)
 
@@ -367,7 +363,7 @@ def associate_faces(
         per-label track is decided from the aggregate presence across that
         label's turns, then applied to each of its turns (6.5).
     """
-    by_turn: dict[int, Optional[str]] = {}
+    by_turn: dict[int, str | None] = {}
     unassociated: list[int] = []
 
     if not turns:
@@ -481,7 +477,7 @@ def build_face_tracks(
         assigned: set[int] = set()
         for box in frame_boxes:
             # Best IoU match among unclaimed tracks in this frame.
-            best_tr: Optional[dict] = None
+            best_tr: dict | None = None
             best_iou = 0.0
             for tr in open_tracks:
                 if id(tr) in assigned:
@@ -497,7 +493,7 @@ def build_face_tracks(
 
             # Conservative centroid fallback (within half a face width).
             best_tr = None
-            best_d: Optional[float] = None
+            best_d: float | None = None
             for tr in open_tracks:
                 if id(tr) in assigned:
                     continue
@@ -520,7 +516,7 @@ def build_face_tracks(
 # --------------------------------------------------------------------------- #
 # Frame sampling + face detection (lazy cv2) + ffmpeg application
 # --------------------------------------------------------------------------- #
-def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, int, int, int]]]]:
+def _default_haar_detector(cv2) -> Callable[[object], list[tuple[int, int, int, int]]] | None:
     """Build the default OpenCV Haar-cascade detector callable.
 
     Returns a function ``frame -> list[(x, y, w, h)]`` or ``None`` when the
@@ -535,9 +531,7 @@ def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, i
 
     def _detect(frame) -> list[tuple[int, int, int, int]]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-        )
+        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
         return [tuple(int(v) for v in f) for f in faces]
 
     return _detect
@@ -547,8 +541,8 @@ def _sample_face_boxes(
     video: str | Path,
     *,
     sample_fps: float,
-    max_samples: Optional[int] = None,
-    detector: Optional[Callable] = None,
+    max_samples: int | None = None,
+    detector: Callable | None = None,
 ) -> list[tuple[float, list[tuple[int, int, int, int]]]]:
     """Sample frames across ``video`` and run a face detector on each.
 
@@ -610,9 +604,9 @@ def _sample_face_boxes(
 def detect_faces(
     video: str | Path,
     *,
-    sample_fps: Optional[float] = None,
-    max_samples: Optional[int] = None,
-    detector: Optional[Callable] = None,
+    sample_fps: float | None = None,
+    max_samples: int | None = None,
+    detector: Callable | None = None,
 ) -> list[list[FaceBox]]:
     """Sample <= ``max_samples`` frames and return ALL face boxes per frame.
 
@@ -662,7 +656,7 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
         return []
 
     samples: list[Center] = []
-    last_center: Optional[tuple[float, float]] = None
+    last_center: tuple[float, float] | None = None
     for t, boxes in per_frame:
         center = pick_main_face([tuple(f) for f in boxes])
         if center is None:
@@ -702,7 +696,7 @@ def apply_reframe(
     dest: str | Path,
     aspect: str = "9:16",
     sample_fps: float = 5.0,
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     smoothing: float = 0.35,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
@@ -763,16 +757,19 @@ def apply_reframe(
     y0 = origin_y + int(round(_clamp(first.cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
 
     escaped = str(cmd_file.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    vf = (
-        f"sendcmd=f='{escaped}',"
-        f"crop={crop_w}:{crop_h}:{x0}:{y0},"
-        f"scale={tw}:{th},setsar=1"
-    )
+    vf = f"sendcmd=f='{escaped}'," f"crop={crop_w}:{crop_h}:{x0}:{y0}," f"scale={tw}:{th},setsar=1"
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", vf,
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        vf,
         *h264_args(),
-        "-c:a", "copy", "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     try:
@@ -788,7 +785,6 @@ def _aspect_ratio_parts(aspect: str) -> tuple[int, int]:
     """Parse ``"9:16"`` -> ``(9, 16)``."""
     a, _, b = aspect.partition(":")
     return int(a), int(b)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -810,9 +806,9 @@ def _aspect_ratio_parts(aspect: str) -> tuple[int, int]:
 # Monotonic across subtle < standard < heavy in alpha (and faster movement /
 # shorter transition as intensity increases).
 REFRAME_INTENSITY: dict[str, tuple[float, float]] = {
-    "subtle":   (0.15, 0.60),   # strongest smoothing, slowest, longest xfade
+    "subtle": (0.15, 0.60),  # strongest smoothing, slowest, longest xfade
     "standard": (0.35, 0.35),
-    "heavy":    (0.60, 0.18),   # weakest smoothing, fastest, shortest xfade
+    "heavy": (0.60, 0.18),  # weakest smoothing, fastest, shortest xfade
 }
 
 
@@ -830,7 +826,7 @@ def intensity_params(intensity: str) -> tuple[float, float]:
     return REFRAME_INTENSITY.get(intensity, REFRAME_INTENSITY["standard"])
 
 
-def _turn_index_at(turns: list[Speaker_Turn], t: float) -> Optional[int]:
+def _turn_index_at(turns: list[Speaker_Turn], t: float) -> int | None:
     """Return the index of the turn containing time ``t`` (``start <= t < end``),
     accepting ``t == end`` for the final turn so the endpoint is covered."""
     for i, tn in enumerate(turns):
@@ -853,7 +849,7 @@ def build_follow_active_path(
     crop_w: int,
     crop_h: int,
     intensity: str = "standard",
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     duration: float,
 ) -> list[Center]:
     """PURE: build the dense follow-active crop-centre path.
@@ -896,10 +892,10 @@ def build_follow_active_path(
 
     # Instantaneous target centre with hold-on-gap logic.
     base: list[tuple[float, float]] = []
-    last_valid: Optional[tuple[float, float]] = None
+    last_valid: tuple[float, float] | None = None
     for t in times:
         idx = _turn_index_at(turns, t) if turns else None
-        center: Optional[tuple[float, float]] = None
+        center: tuple[float, float] | None = None
         if idx is not None:
             tid = assoc.by_turn.get(idx)
             if tid is not None:
@@ -950,7 +946,7 @@ def build_follow_active_path(
     lo_x, hi_x = crop_w / 2.0, src_w - crop_w / 2.0
     lo_y, hi_y = crop_h / 2.0, src_h - crop_h / 2.0
     out: list[Center] = []
-    for t, x, y in zip(times, xs, ys):
+    for t, x, y in zip(times, xs, ys, strict=True):
         cx = _clamp(x, lo_x, hi_x)
         cy = _clamp(y, lo_y, hi_y)
         out.append(Center(round(float(t), 3), cx, cy))
@@ -983,7 +979,7 @@ class Region:
     centers: tuple[Center, ...] = ()
 
 
-def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, float]]:
+def _track_mean_center(track: Face_Track | None) -> tuple[float, float] | None:
     """Average centre of a track's boxes (or ``None`` when it has no boxes)."""
     if track is None or not track.boxes:
         return None
@@ -993,14 +989,14 @@ def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, flo
 
 
 def build_region_centers(
-    track: Optional[Face_Track],
+    track: Face_Track | None,
     *,
     src_w: int,
     src_h: int,
     dst_w: int,
     dst_h: int,
     duration: float,
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     intensity: str = "standard",
 ) -> tuple[Center, ...]:
     """PURE: the crop-centre path for one split-screen tile (V5).
@@ -1032,7 +1028,7 @@ def build_region_centers(
 
     xs: list[float] = []
     ys: list[float] = []
-    last: Optional[tuple[float, float]] = None
+    last: tuple[float, float] | None = None
     for t in times:
         center = track.center_at(t) or last or (src_w / 2.0, src_h / 2.0)
         last = center
@@ -1047,12 +1043,12 @@ def build_region_centers(
             _clamp(x, crop_w / 2.0, max(crop_w / 2.0, src_w - crop_w / 2.0)),
             _clamp(y, crop_h / 2.0, max(crop_h / 2.0, src_h - crop_h / 2.0)),
         )
-        for t, x, y in zip(times, xs, ys)
+        for t, x, y in zip(times, xs, ys, strict=True)
     )
 
 
 def _region_source_center(
-    track: Optional[Face_Track], src_w: int, src_h: int, dst_w: int, dst_h: int
+    track: Face_Track | None, src_w: int, src_h: int, dst_w: int, dst_h: int
 ) -> tuple[float, float]:
     """Return the (clamped) source-crop centre for a tile of aspect
     ``dst_w:dst_h``, centred on ``track``'s face and kept fully in-frame."""
@@ -1091,15 +1087,15 @@ def _grid_regions(
     y = 0
     for row in range(rows):
         h = base_h if row < rows - 1 else target_h - base_h * (rows - 1)
-        in_row = shown[row * 2:row * 2 + 2]
+        in_row = shown[row * 2 : row * 2 + 2]
         x = 0
         for col, tid in enumerate(in_row):
-            w = target_w if len(in_row) == 1 else (
-                target_w // 2 if col == 0 else target_w - target_w // 2
+            w = (
+                target_w
+                if len(in_row) == 1
+                else (target_w // 2 if col == 0 else target_w - target_w // 2)
             )
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, w, h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, w, h)
             regions.append(Region(x, y, w, h, src_cx, src_cy, tid))
             x += w
         y += h
@@ -1115,7 +1111,7 @@ def build_split_screen_layout(
     target_h: int,
     src_w: int,
     src_h: int,
-    max_regions: Optional[int] = None,
+    max_regions: int | None = None,
     duration: float = 0.0,
     intensity: str = "standard",
 ) -> list[Region]:
@@ -1154,9 +1150,12 @@ def build_split_screen_layout(
             return region
         centers = build_region_centers(
             track_by_id.get(region.track_id),
-            src_w=src_w, src_h=src_h,
-            dst_w=region.dst_w, dst_h=region.dst_h,
-            duration=duration, intensity=intensity,
+            src_w=src_w,
+            src_h=src_h,
+            dst_w=region.dst_w,
+            dst_h=region.dst_h,
+            duration=duration,
+            intensity=intensity,
         )
         return replace(region, centers=centers) if centers else region
 
@@ -1179,9 +1178,7 @@ def build_split_screen_layout(
         y = 0
         for k, tid in enumerate(shown):
             h = base_h if k < n - 1 else target_h - base_h * (n - 1)
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, target_w, h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, target_w, h)
             regions.append(with_motion(Region(0, y, target_w, h, src_cx, src_cy, tid)))
             y += h
     else:
@@ -1190,9 +1187,7 @@ def build_split_screen_layout(
         x = 0
         for k, tid in enumerate(shown):
             w = base_w if k < n - 1 else target_w - base_w * (n - 1)
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, w, target_h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, w, target_h)
             regions.append(with_motion(Region(x, 0, w, target_h, src_cx, src_cy, tid)))
             x += w
 
@@ -1205,17 +1200,17 @@ def build_split_screen_layout(
 def build_reframe_filter(
     layout: str,
     *,
-    centers: Optional[list[Center]] = None,
-    regions: Optional[list[Region]] = None,
+    centers: list[Center] | None = None,
+    regions: list[Region] | None = None,
     crop_w: int,
     crop_h: int,
     src_w: int,
     src_h: int,
     target_w: int,
     target_h: int,
-    sendcmd_path: Optional[str] = None,
+    sendcmd_path: str | None = None,
     intensity: str = "standard",
-    tile_sendcmd_paths: Optional[Sequence[str]] = None,
+    tile_sendcmd_paths: Sequence[str] | None = None,
     origin_x: int = 0,
     origin_y: int = 0,
 ) -> tuple[list[str], str, list[str]]:
@@ -1256,8 +1251,14 @@ def build_reframe_filter(
             if rg.centers and tile_sendcmd_paths and k < len(tile_sendcmd_paths):
                 crop_name = f"crop@t{k}"
                 script = build_sendcmd(
-                    list(rg.centers), rcw, rch, src_w, src_h,
-                    origin_x=origin_x, origin_y=origin_y, target=crop_name,
+                    list(rg.centers),
+                    rcw,
+                    rch,
+                    src_w,
+                    src_h,
+                    origin_x=origin_x,
+                    origin_y=origin_y,
+                    target=crop_name,
                 )
                 tile_path = Path(tile_sendcmd_paths[k])
                 tile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1296,9 +1297,7 @@ def build_reframe_filter(
             stack = "hstack" if single_row and not single_column else "vstack"
             if single_row and single_column:
                 stack = "vstack" if portrait else "hstack"
-            graph += (
-                f";{''.join(labels)}{stack}=inputs={len(labels)},setsar=1[vout]"
-            )
+            graph += f";{''.join(labels)}{stack}=inputs={len(labels)},setsar=1[vout]"
         else:
             row_labels: list[str] = []
             for r, row in enumerate(rows):
@@ -1311,9 +1310,7 @@ def build_reframe_filter(
                 else:
                     graph += f";{joined}hstack=inputs={len(row)}{row_label}"
                 row_labels.append(row_label)
-            graph += (
-                f";{''.join(row_labels)}vstack=inputs={len(row_labels)},setsar=1[vout]"
-            )
+            graph += f";{''.join(row_labels)}vstack=inputs={len(row_labels)},setsar=1[vout]"
         return ([], graph, ["speaker_reframe:split_screen"])
 
     # follow_active (default) — mirror apply_reframe's single -vf pass.
@@ -1330,11 +1327,7 @@ def build_reframe_filter(
     y0 = int(round(_clamp(first.cy - crop_h / 2.0, 0, max(0, src_h - crop_h))))
 
     escaped = _escape_filter_path(sendcmd_path) if sendcmd_path is not None else ""
-    vf = (
-        f"sendcmd=f='{escaped}',"
-        f"crop={crop_w}:{crop_h}:{x0}:{y0},"
-        f"scale={tw}:{th},setsar=1"
-    )
+    vf = f"sendcmd=f='{escaped}'," f"crop={crop_w}:{crop_h}:{x0}:{y0}," f"scale={tw}:{th},setsar=1"
     return ([], vf, ["speaker_reframe:follow_active"])
 
 
@@ -1346,8 +1339,8 @@ def apply_speaker_reframe(
     aspect: str = "9:16",
     layout: str = "follow_active",
     intensity: str = "standard",
-    detector: Optional[Callable] = None,
-    sampler: Optional[Callable] = None,
+    detector: Callable | None = None,
+    sampler: Callable | None = None,
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -1398,37 +1391,54 @@ def apply_speaker_reframe(
     if layout not in ("follow_active", "split_screen"):
         layout = "follow_active"
 
-    regions: Optional[list[Region]] = None
+    regions: list[Region] | None = None
     if layout == "split_screen":
         regions = build_split_screen_layout(
-            turns, assoc, tracks,
-            target_w=tw, target_h=th, src_w=info.width, src_h=info.height,
+            turns,
+            assoc,
+            tracks,
+            target_w=tw,
+            target_h=th,
+            src_w=info.width,
+            src_h=info.height,
             # V5: give each tile a centre path over the clip instead of one fixed crop.
-            duration=info.duration, intensity=intensity,
+            duration=info.duration,
+            intensity=intensity,
         )
         if not regions:
             # Fewer than two associated tracks -> follow_active substitution.
             layout = "follow_active"
 
     if layout == "split_screen":
-        tile_files = [
-            dest.with_suffix(f".tile{k}.cmd") for k in range(len(regions or []))
-        ]
+        tile_files = [dest.with_suffix(f".tile{k}.cmd") for k in range(len(regions or []))]
         _ia, graph, _notes = build_reframe_filter(
             "split_screen",
             regions=regions,
-            crop_w=crop_w, crop_h=crop_h,
-            src_w=info.width, src_h=info.height,
-            target_w=tw, target_h=th,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            src_w=info.width,
+            src_h=info.height,
+            target_w=tw,
+            target_h=th,
             intensity=intensity,
             tile_sendcmd_paths=[str(p) for p in tile_files],
         )
         cmd = [
-            settings.ffmpeg_binary, "-y", "-i", str(video),
-            "-filter_complex", graph,
-            "-map", "[vout]", "-map", "0:a?",
+            settings.ffmpeg_binary,
+            "-y",
+            "-i",
+            str(video),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a?",
             *h264_args(),
-            "-c:a", "copy", "-movflags", "+faststart",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
             str(dest),
         ]
         try:
@@ -1444,9 +1454,15 @@ def apply_speaker_reframe(
 
     # follow_active
     path = build_follow_active_path(
-        turns, assoc, tracks,
-        src_w=info.width, src_h=info.height, crop_w=crop_w, crop_h=crop_h,
-        intensity=intensity, duration=info.duration,
+        turns,
+        assoc,
+        tracks,
+        src_w=info.width,
+        src_h=info.height,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        intensity=intensity,
+        duration=info.duration,
     )
     if not path:
         raise ReframeUnavailable("no usable crop path")
@@ -1455,17 +1471,27 @@ def apply_speaker_reframe(
     _ia, vf, _notes = build_reframe_filter(
         "follow_active",
         centers=path,
-        crop_w=crop_w, crop_h=crop_h,
-        src_w=info.width, src_h=info.height,
-        target_w=tw, target_h=th,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        src_w=info.width,
+        src_h=info.height,
+        target_w=tw,
+        target_h=th,
         sendcmd_path=str(cmd_file),
         intensity=intensity,
     )
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", vf,
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        vf,
         *h264_args(),
-        "-c:a", "copy", "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     try:

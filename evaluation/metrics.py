@@ -21,8 +21,9 @@ improved coarse targeting while worsening precise boundaries. ``IOU_THRESHOLDS``
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol, Sequence
+from typing import Protocol
 
 #: The IoU thresholds every result is reported at.
 #:
@@ -212,8 +213,7 @@ def score_source(
         )
 
     score.best_iou_per_label = [
-        max((iou(prediction, label) for prediction in top), default=0.0)
-        for label in labels
+        max((iou(prediction, label) for prediction in top), default=0.0) for label in labels
     ]
     return score
 
@@ -260,8 +260,6 @@ class AggregateScore:
             "sources": [source.to_dict() for source in self.sources],
             "aggregate": {
                 "mean_best_iou": round(self.mean_best_iou, 4),
-                "thresholds": [
-                    self.at(threshold).to_dict() for threshold in IOU_THRESHOLDS
-                ],
+                "thresholds": [self.at(threshold).to_dict() for threshold in IOU_THRESHOLDS],
             },
         }

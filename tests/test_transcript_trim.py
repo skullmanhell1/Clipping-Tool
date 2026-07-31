@@ -223,7 +223,7 @@ def test_a_plan_that_removes_almost_nothing_is_not_worth_a_re_encode():
 
 def test_keeps_are_disjoint_and_ascending():
     plan = trim.plan_cuts([(2.0, 3.0), (5.0, 6.0), (8.0, 8.5)], 12.0)
-    for earlier, later in zip(plan.keeps, plan.keeps[1:]):
+    for earlier, later in zip(plan.keeps, plan.keeps[1:], strict=False):
         assert earlier.end <= later.start
 
 
@@ -314,7 +314,7 @@ def test_a_cut_list_and_filler_removal_both_apply(make_video, tmp_path, monkeypa
 
     words = [
         Word(0.3, 0.7, "one"),
-        Word(0.9, 1.3, "um"),      # filler, removed by filler_removal
+        Word(0.9, 1.3, "um"),  # filler, removed by filler_removal
         Word(1.5, 1.9, "two"),
         Word(2.1, 2.5, "three"),
         Word(2.7, 3.1, "four"),
@@ -426,9 +426,7 @@ def clip_job(tmp_path):
     manager = get_manager()
     job = Job(input_type="file", source=str(source), options=ProcessingOptions())
     job.source_path = str(source)
-    clip = ClipResult(
-        id="clipT", filename="clipT.mp4", start=2.0, end=8.0, duration=6.0, title="T"
-    )
+    clip = ClipResult(id="clipT", filename="clipT.mp4", start=2.0, end=8.0, duration=6.0, title="T")
     job.clips = [clip]
     job.status = JobStatus.COMPLETED
     manager.store.add(job)
@@ -634,7 +632,9 @@ def test_the_transcript_endpoint_and_transcribe_agree_on_the_cache_key(tmp_path)
     key = tr.cache_key_for(source, language="en", translate=False, vocabulary="jargon")
     transcript_cache.store(
         key,
-        Transcript(language="en", segments=[TranscriptSegment(0.0, 1.0, "hi", [Word(0.0, 1.0, "hi")])]),
+        Transcript(
+            language="en", segments=[TranscriptSegment(0.0, 1.0, "hi", [Word(0.0, 1.0, "hi")])]
+        ),
     )
     # The reader finds it with only the job's options to go on.
     recovered = ct.load_transcript(source, language="en", translate=False, vocabulary="jargon")

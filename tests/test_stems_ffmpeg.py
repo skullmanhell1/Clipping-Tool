@@ -95,7 +95,7 @@ def _expressions(filters) -> list[str]:
         lanes = found.group(1).split("|")
         first = lanes[0]
         assert first.startswith("val(0)*"), f"unexpected aeval lane: {first!r}"
-        gain = first[len("val(0)*"):]
+        gain = first[len("val(0)*") :]
         # Every channel must get the same gain, or the notch would pan the audio.
         for lane, other in enumerate(lanes):
             assert other == f"val({lane})*{gain}", other
@@ -196,12 +196,8 @@ def test_p12_repair_touches_only_planned_windows_once_without_clipping(
     duration = float(seam_case["duration"])
     tb = Time_Base(sample_rate=48000)
 
-    windows = tuple(
-        stems.repair_windows(seam_case["expected_seams"], 12, duration, tb)
-    )
-    plan = _plan(
-        windows=windows, gains=gains, repair_mode=mode, duration=duration
-    )
+    windows = tuple(stems.repair_windows(seam_case["expected_seams"], 12, duration, tb))
+    plan = _plan(windows=windows, gains=gains, repair_mode=mode, duration=duration)
     filters = stems.notch_filters(windows) if mode != "off" else ()
 
     # `off` asks for no repair at all.
@@ -318,13 +314,13 @@ def test_probe_audio_format_returns_none_without_an_audio_stream() -> None:
 @pytest.mark.parametrize(
     "stream",
     [
-        {"channels": 2},                                   # sample_rate absent
-        {"sample_rate": "48000"},                          # channels absent
-        {"sample_rate": "0", "channels": 2},               # zero rate
-        {"sample_rate": "48000", "channels": 0},           # zero channels
-        {"sample_rate": "-48000", "channels": 2},          # negative rate
-        {"sample_rate": "48000", "channels": -2},          # negative channels
-        {"sample_rate": "N/A", "channels": "N/A"},         # non-numeric
+        {"channels": 2},  # sample_rate absent
+        {"sample_rate": "48000"},  # channels absent
+        {"sample_rate": "0", "channels": 2},  # zero rate
+        {"sample_rate": "48000", "channels": 0},  # zero channels
+        {"sample_rate": "-48000", "channels": 2},  # negative rate
+        {"sample_rate": "48000", "channels": -2},  # negative channels
+        {"sample_rate": "N/A", "channels": "N/A"},  # non-numeric
     ],
 )
 def test_probe_audio_format_rejects_an_unusable_format(stream: dict) -> None:
@@ -337,8 +333,11 @@ def test_probe_audio_format_rejects_an_unusable_format(stream: dict) -> None:
 def test_probe_audio_format_tolerates_missing_codec_and_start_time() -> None:
     """``codec``/``start_time`` are best-effort: ``"N/A"`` is not a failure."""
     runner = Recording_Command_Runner(
-        probe_json={"streams": [{"sample_rate": "48000", "channels": 2,
-                                 "codec_name": "N/A", "start_time": "N/A"}]}
+        probe_json={
+            "streams": [
+                {"sample_rate": "48000", "channels": 2, "codec_name": "N/A", "start_time": "N/A"}
+            ]
+        }
     )
     fmt = stems.probe_audio_format("clip.mp4", runner, 5.0)
     assert fmt is not None and fmt.codec == "" and fmt.start_time == 0.0
@@ -357,8 +356,7 @@ class _Ctx:
 
 @settings(max_examples=100, deadline=None)
 @given(
-    remaining=st.floats(min_value=-100.0, max_value=600.0,
-                        allow_nan=False, allow_infinity=False),
+    remaining=st.floats(min_value=-100.0, max_value=600.0, allow_nan=False, allow_infinity=False),
     reserve=st.sampled_from(
         [
             stems.EXTRACT_RESERVE_S,
@@ -405,18 +403,16 @@ def test_extract_decodes_audio_only_at_the_probed_format(tmp_path) -> None:
     fmt = stems.Audio_Format(sample_rate=44100, channels=1, codec="aac")
     dest = tmp_path / "ws" / "in.wav"
 
-    out = stems.extract_clip_audio(
-        "clip.mp4", dest, fmt=fmt, runner=runner, timeout_s=7.5
-    )
+    out = stems.extract_clip_audio("clip.mp4", dest, fmt=fmt, runner=runner, timeout_s=7.5)
 
     assert out == dest
     argv = runner.calls[0].argv
-    assert "-vn" in argv                                   # no video decoded (Req 4.4)
+    assert "-vn" in argv  # no video decoded (Req 4.4)
     assert argv[argv.index("-map") + 1] == "0:a:0"
     assert argv[argv.index("-ar") + 1] == "44100"
     assert argv[argv.index("-ac") + 1] == "1"
     assert argv[argv.index("-c:a") + 1] == "pcm_s16le"
-    assert runner.calls[0].timeout_s == 7.5                # explicit timeout (Req 15.4)
+    assert runner.calls[0].timeout_s == 7.5  # explicit timeout (Req 15.4)
 
 
 # --------------------------------------------------------------------------- #
@@ -459,9 +455,7 @@ def test_a_unity_gain_with_nothing_to_repair_emits_an_empty_graph(tmp_path) -> N
     # All gains at unity and no windows — and the single-input Stem_Set of the repair-only
     # path, which is the shape a second run on already-repaired media takes.
     plan = _plan(repair_mode="off")
-    inputs, graph, out_label = stems.build_mix_graph(
-        plan, {"vocals": tmp_path / "in.wav"}
-    )
+    inputs, graph, out_label = stems.build_mix_graph(plan, {"vocals": tmp_path / "in.wav"})
 
     assert len(inputs) == 1
     assert graph == ""
@@ -538,8 +532,11 @@ def test_render_mix_writes_pcm_at_the_planned_format(tmp_path) -> None:
     plan = _plan(sample_rate=44100, channels=1)
 
     out, details = stems.render_mix(
-        plan, _stem_set(tmp_path), tmp_path / "mixed.wav",
-        runner=runner, timeout_s=9.0,
+        plan,
+        _stem_set(tmp_path),
+        tmp_path / "mixed.wav",
+        runner=runner,
+        timeout_s=9.0,
     )
 
     argv = runner.calls[0].argv
@@ -564,9 +561,7 @@ def test_spectral_notches_each_stem_before_the_mix(tmp_path) -> None:
     # Narrower for vocals than for music, per SPECTRAL_HALF_WIDTH_SCALE.
     vocals = stems.notch_filters(windows, scale=stems.SPECTRAL_HALF_WIDTH_SCALE["vocals"])
     music = stems.notch_filters(windows, scale=stems.SPECTRAL_HALF_WIDTH_SCALE["music"])
-    assert _gain_at(_expressions(vocals)[0], 1.0035) > _gain_at(
-        _expressions(music)[0], 1.0035
-    )
+    assert _gain_at(_expressions(vocals)[0], 1.0035) > _gain_at(_expressions(music)[0], 1.0035)
 
 
 def test_crossfade_notches_once_post_mix(tmp_path) -> None:
@@ -634,16 +629,18 @@ def test_bridge_graph_partitions_the_timeline_exactly(tmp_path) -> None:
     assert label == "bridged"
     # (n+1) keeps + 4n trims, all fed from one asplit -> the source is decoded once.
     assert "asplit=11" in graph
-    assert graph.count("acrossfade=") == 4              # two per window
+    assert graph.count("acrossfade=") == 4  # two per window
     # 3 keeps + 2 bridges, and each bridge contributes its own left and right half.
     assert "concat=n=7:v=0:a=1[bridged]" in graph
     assert "[k0][l0][r0][k1][l1][r1][k2]concat=" in graph
     # Each crossfade lasts exactly the half-width, which is what preserves duration.
     assert graph.count("d=0.006000") == 4
     # The keeps tile the gaps between windows.
-    for expected in ("start=0.000000:end=2.000000",
-                     "start=2.012000:end=5.000000",
-                     "start=5.012000:end=10.000000"):
+    for expected in (
+        "start=0.000000:end=2.000000",
+        "start=2.012000:end=5.000000",
+        "start=5.012000:end=10.000000",
+    ):
         assert expected in graph
 
 
@@ -655,8 +652,13 @@ def test_bridge_music_stem_spends_no_invocation_when_nothing_qualifies(tmp_path)
 
     # Flush against the clip head: the left source segment would start before 0.
     path, bridged, residual = stems.bridge_music_stem(
-        source, tmp_path / "bridged.wav", _windows(((0.0, 0.012),)),
-        fmt=fmt, duration=10.0, runner=runner, timeout_s=5.0,
+        source,
+        tmp_path / "bridged.wav",
+        _windows(((0.0, 0.012),)),
+        fmt=fmt,
+        duration=10.0,
+        runner=runner,
+        timeout_s=5.0,
     )
 
     assert path == source and bridged == ()
@@ -671,14 +673,10 @@ def test_a_bridged_window_is_not_also_notched(tmp_path) -> None:
     assert len(bridged) == 1 and len(residual) == 1
 
     plan = _plan(windows=windows, repair_mode="spectral", duration=10.0)
-    graph = stems.build_mix_graph(
-        plan, _stem_set(tmp_path), stem_windows={"music": residual}
-    )[1]
+    graph = stems.build_mix_graph(plan, _stem_set(tmp_path), stem_windows={"music": residual})[1]
 
     music_chain = graph.split("[g_music]")[0].split(";")[-1]
-    found = [e for e in _expressions(
-        [f"aeval=exprs='{m}'" for m in _EXPR_RE.findall(music_chain)]
-    )]
+    found = [e for e in _expressions([f"aeval=exprs='{m}'" for m in _EXPR_RE.findall(music_chain)])]
     assert len(found) == 1, "the music stem should carry exactly one notch chunk"
 
     # The residual window IS notched (gain 0 at its join)...
@@ -696,8 +694,12 @@ def test_remux_copies_video_and_never_shortens(tmp_path) -> None:
     fmt = stems.Audio_Format(sample_rate=48000, channels=2, codec="aac")
 
     stems.remux_replacement(
-        "clip.mp4", tmp_path / "mixed.wav", tmp_path / "out.mp4",
-        fmt=fmt, runner=runner, timeout_s=11.0,
+        "clip.mp4",
+        tmp_path / "mixed.wav",
+        tmp_path / "out.mp4",
+        fmt=fmt,
+        runner=runner,
+        timeout_s=11.0,
     )
 
     argv = runner.calls[0].argv
@@ -712,13 +714,17 @@ def test_remux_copies_video_and_never_shortens(tmp_path) -> None:
 def test_itsoffset_is_emitted_only_for_a_non_zero_start_time(tmp_path) -> None:
     """A container whose audio starts late keeps that relationship (Req 17.4)."""
     zero = stems.remux_command(
-        "clip.mp4", tmp_path / "m.wav", tmp_path / "o.mp4",
+        "clip.mp4",
+        tmp_path / "m.wav",
+        tmp_path / "o.mp4",
         fmt=stems.Audio_Format(sample_rate=48000, channels=2),
     )
     assert "-itsoffset" not in zero
 
     offset = stems.remux_command(
-        "clip.mp4", tmp_path / "m.wav", tmp_path / "o.mp4",
+        "clip.mp4",
+        tmp_path / "m.wav",
+        tmp_path / "o.mp4",
         fmt=stems.Audio_Format(sample_rate=48000, channels=2, start_time=0.021),
     )
     assert offset[offset.index("-itsoffset") + 1] == "0.021000"
@@ -729,15 +735,20 @@ def test_itsoffset_is_emitted_only_for_a_non_zero_start_time(tmp_path) -> None:
 @pytest.mark.parametrize(
     "codec,expected",
     [
-        ("aac", "aac"), ("mp3", "mp3"), ("opus", "opus"),
-        ("", "aac"), ("pcm_s16le", "aac"), ("some_exotic_codec", "aac"),
+        ("aac", "aac"),
+        ("mp3", "mp3"),
+        ("opus", "opus"),
+        ("", "aac"),
+        ("pcm_s16le", "aac"),
+        ("some_exotic_codec", "aac"),
     ],
 )
 def test_remux_codec_falls_back_to_aac_for_anything_unproven(codec, expected) -> None:
     """A remux that fails for want of an encoder is worse than one that lands as AAC."""
-    assert stems.remux_codec(
-        stems.Audio_Format(sample_rate=48000, channels=2, codec=codec)
-    ) == expected
+    assert (
+        stems.remux_codec(stems.Audio_Format(sample_rate=48000, channels=2, codec=codec))
+        == expected
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -749,13 +760,19 @@ def test_every_invocation_failure_arrives_as_one_ffmpeg_error(tmp_path) -> None:
 
     with pytest.raises(FFmpegError):
         stems.extract_clip_audio(
-            "clip.mp4", tmp_path / "in.wav", fmt=fmt,
-            runner=Recording_Command_Runner(fail_at=0), timeout_s=5.0,
+            "clip.mp4",
+            tmp_path / "in.wav",
+            fmt=fmt,
+            runner=Recording_Command_Runner(fail_at=0),
+            timeout_s=5.0,
         )
     with pytest.raises(FFmpegError):
         stems.render_mix(
-            _plan(), _stem_set(tmp_path), tmp_path / "mixed.wav",
-            runner=Recording_Command_Runner(returncode=1, stderr="boom"), timeout_s=5.0,
+            _plan(),
+            _stem_set(tmp_path),
+            tmp_path / "mixed.wav",
+            runner=Recording_Command_Runner(returncode=1, stderr="boom"),
+            timeout_s=5.0,
         )
 
 
@@ -763,16 +780,22 @@ def test_a_budget_overrun_stays_a_timeout(tmp_path) -> None:
     """``TimeoutExpired`` is re-raised unchanged so the budget rung can tell it apart."""
     with pytest.raises(subprocess.TimeoutExpired):
         stems.remux_replacement(
-            "clip.mp4", tmp_path / "m.wav", tmp_path / "o.mp4",
+            "clip.mp4",
+            tmp_path / "m.wav",
+            tmp_path / "o.mp4",
             fmt=stems.Audio_Format(sample_rate=48000, channels=2),
-            runner=Recording_Command_Runner(timeout_at=0), timeout_s=5.0,
+            runner=Recording_Command_Runner(timeout_at=0),
+            timeout_s=5.0,
         )
 
 
 @pytest.mark.parametrize(
     "call",
     [
-        "extract", "mix", "remux", "bridge",
+        "extract",
+        "mix",
+        "remux",
+        "bridge",
     ],
 )
 def test_a_probed_audio_format_is_required(tmp_path, call: str) -> None:
@@ -780,25 +803,40 @@ def test_a_probed_audio_format_is_required(tmp_path, call: str) -> None:
     with pytest.raises(stems.Invalid_Audio_Format):
         if call == "extract":
             stems.extract_clip_audio(
-                "c.mp4", tmp_path / "a.wav", fmt=None, runner=Recording_Command_Runner(),
+                "c.mp4",
+                tmp_path / "a.wav",
+                fmt=None,
+                runner=Recording_Command_Runner(),
                 timeout_s=5.0,
             )
         elif call == "mix":
             stems.assemble_stem_set(
-                {}, dest_dir=tmp_path, fmt=None, duration=1.0,
-                runner=Recording_Command_Runner(), timeout_s=5.0,
+                {},
+                dest_dir=tmp_path,
+                fmt=None,
+                duration=1.0,
+                runner=Recording_Command_Runner(),
+                timeout_s=5.0,
             )
         elif call == "remux":
             stems.remux_replacement(
-                "c.mp4", tmp_path / "m.wav", tmp_path / "o.mp4", fmt=None,
-                runner=Recording_Command_Runner(), timeout_s=5.0,
+                "c.mp4",
+                tmp_path / "m.wav",
+                tmp_path / "o.mp4",
+                fmt=None,
+                runner=Recording_Command_Runner(),
+                timeout_s=5.0,
             )
         else:
             stems.bridge_music_stem(
-                tmp_path / "m.wav", tmp_path / "b.wav", (), fmt=None, duration=1.0,
-                runner=Recording_Command_Runner(), timeout_s=5.0,
+                tmp_path / "m.wav",
+                tmp_path / "b.wav",
+                (),
+                fmt=None,
+                duration=1.0,
+                runner=Recording_Command_Runner(),
+                timeout_s=5.0,
             )
-
 
 
 # =========================================================================== #
@@ -837,7 +875,8 @@ def _verify(candidate: stems.Media_Probe, original=None, **fmt_kwargs):
     fields = {"sample_rate": 48000, "channels": 2}
     fields.update(fmt_kwargs)
     return stems.verify_replacement(
-        "candidate.mp4", "clip.mp4",
+        "candidate.mp4",
+        "clip.mp4",
         fmt=stems.Audio_Format(**fields),
         probe=_canned(candidate, original if original is not None else _probe()),
     )
@@ -865,9 +904,7 @@ def test_a_well_formed_candidate_verifies() -> None:
         ({"audio_start_time": 0.5}, "start_time drifted"),
     ],
 )
-def test_every_integrity_condition_is_enforced_and_named(
-    overrides: dict, expected: str
-) -> None:
+def test_every_integrity_condition_is_enforced_and_named(overrides: dict, expected: str) -> None:
     """Each failure raises, and says **which** condition failed (Req 17.1-17.4).
 
     A generic "integrity check failed" would be nearly useless in a log: "the audio got
@@ -882,7 +919,7 @@ def test_the_audio_duration_tolerance_is_exactly_one_audio_frame() -> None:
     """One frame passes, two fail — the check that catches a stray ``-shortest`` (Req 17.1)."""
     frame = 1.0 / 48000
 
-    _verify(_probe(audio_duration=3.0 + frame))                       # at tolerance: ok
+    _verify(_probe(audio_duration=3.0 + frame))  # at tolerance: ok
     with pytest.raises(stems.Integrity_Error, match="audio duration drifted"):
         _verify(_probe(audio_duration=3.0 + frame * 2))
 
@@ -910,7 +947,8 @@ def test_verification_does_not_delete_the_candidate(tmp_path) -> None:
 
     with pytest.raises(stems.Integrity_Error):
         stems.verify_replacement(
-            candidate, "clip.mp4",
+            candidate,
+            "clip.mp4",
             fmt=stems.Audio_Format(sample_rate=48000, channels=2),
             probe=_canned(_probe(audio_streams=0), _probe()),
         )
@@ -924,8 +962,13 @@ def test_probe_media_counts_every_stream() -> None:
         probe_json={
             "streams": [
                 {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
-                {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
-                 "duration": "3.0", "start_time": "0.0"},
+                {
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "duration": "3.0",
+                    "start_time": "0.0",
+                },
                 {"codec_type": "audio", "sample_rate": "48000", "channels": 2},
             ],
             "format": {"duration": "3.0"},
@@ -938,7 +981,7 @@ def test_probe_media_counts_every_stream() -> None:
     assert (probed.sample_rate, probed.channels) == (48000, 2)
     argv = runner.calls[0].argv
     assert "-show_streams" in argv
-    assert "-select_streams" not in argv          # would hide a second audio stream
+    assert "-select_streams" not in argv  # would hide a second audio stream
 
 
 def test_probe_media_falls_back_to_the_container_duration() -> None:
@@ -947,8 +990,7 @@ def test_probe_media_falls_back_to_the_container_duration() -> None:
         probe_json={
             "streams": [
                 {"codec_type": "video", "duration": "N/A"},
-                {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
-                 "start_time": "N/A"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2, "start_time": "N/A"},
             ],
             "format": {"duration": "4.25"},
         }
@@ -958,7 +1000,7 @@ def test_probe_media_falls_back_to_the_container_duration() -> None:
     assert probed.video_duration == pytest.approx(4.25)
     assert probed.audio_duration == pytest.approx(4.25)
     assert probed.audio_start_time == 0.0
-    assert probed.video_frames == 0                # unknown, not zero frames
+    assert probed.video_frames == 0  # unknown, not zero frames
 
 
 def test_probe_media_is_total_on_unreadable_output() -> None:
@@ -974,7 +1016,8 @@ def test_probe_media_is_total_on_unreadable_output() -> None:
 
     with pytest.raises(stems.Integrity_Error, match="audio streams"):
         stems.verify_replacement(
-            "candidate.mp4", "clip.mp4",
+            "candidate.mp4",
+            "clip.mp4",
             fmt=stems.Audio_Format(sample_rate=48000, channels=2),
             runner=Recording_Command_Runner(probe_json="garbage"),
         )
@@ -1030,22 +1073,31 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
     probed_wav = stems._wav_format(extracted)
     assert probed_wav is not None
     audio_duration = probed_wav[2] / probed_wav[0]
-    assert audio_duration != pytest.approx(2.0, abs=1e-4), (
-        "expected encoder padding to make the decoded audio longer than the container"
-    )
+    assert audio_duration != pytest.approx(
+        2.0, abs=1e-4
+    ), "expected encoder padding to make the decoded audio longer than the container"
 
     raw = stems.Ffmpeg_Separator_Backend(runner=_real_runner).separate(
         extracted, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=60.0
     )
     stem_set, _missing = stems.assemble_stem_set(
-        raw, dest_dir=tmp_path / "stems", fmt=fmt, duration=audio_duration,
-        runner=_real_runner, timeout_s=60.0,
+        raw,
+        dest_dir=tmp_path / "stems",
+        fmt=fmt,
+        duration=audio_duration,
+        runner=_real_runner,
+        timeout_s=60.0,
     )
 
     plan = _plan(
         windows=_windows(((1.0, 1.012),)) if repair_mode != "off" else (),
-        gains=gains, repair_mode=repair_mode, duration=2.0, declick=declick,
-        sample_rate=fmt.sample_rate, channels=fmt.channels, backend="ffmpeg",
+        gains=gains,
+        repair_mode=repair_mode,
+        duration=2.0,
+        declick=declick,
+        sample_rate=fmt.sample_rate,
+        channels=fmt.channels,
+        backend="ffmpeg",
     )
     mixed, _details = stems.render_mix(
         plan, stem_set, tmp_path / "mixed.wav", runner=_real_runner, timeout_s=60.0
@@ -1054,14 +1106,22 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
     # re-encode padding from lengthening the clip on every pass.
     baseline = stems.probe_media(source, _real_runner, 60.0)
     candidate = stems.remux_replacement(
-        source, mixed, tmp_path / "repaired.mp4",
-        fmt=fmt, runner=_real_runner, timeout_s=60.0,
+        source,
+        mixed,
+        tmp_path / "repaired.mp4",
+        fmt=fmt,
+        runner=_real_runner,
+        timeout_s=60.0,
         duration=baseline.audio_duration,
     )
 
     # The whole integrity gate, on real output.
     produced = stems.verify_replacement(
-        candidate, source, fmt=fmt, runner=_real_runner, timeout_s=60.0,
+        candidate,
+        source,
+        fmt=fmt,
+        runner=_real_runner,
+        timeout_s=60.0,
         baseline=baseline,
     )
     assert produced.audio_streams == 1 and produced.video_streams == 1
@@ -1070,9 +1130,23 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
     def _video_bytes(path: Path) -> bytes:
         out = tmp_path / f"{path.stem}.h264"
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
-             "-map", "0:v:0", "-c", "copy", "-f", "h264", str(out)],
-            check=True, capture_output=True,
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:v:0",
+                "-c",
+                "copy",
+                "-f",
+                "h264",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
         )
         return out.read_bytes()
 
@@ -1080,7 +1154,6 @@ def test_p13_replacement_media_preserves_duration_format_streams_and_alignment(
 
     # The incoming clip was never edited in place.
     assert source.read_bytes() == before
-
 
 
 # =========================================================================== #
@@ -1150,7 +1223,8 @@ def test_e2e_an_applied_run_produces_a_valid_replacement(tmp_path, make_video) -
         runner=_real_runner,
     )
     ctx = _e2e_ctx(
-        tmp_path, source,
+        tmp_path,
+        source,
         options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
         notes=("filler_seam:1.000",),
     )
@@ -1167,8 +1241,12 @@ def test_e2e_an_applied_run_produces_a_valid_replacement(tmp_path, make_video) -
     # The Replacement_Media passes the integrity gate on its own terms.
     baseline = stems.probe_media(source, _real_runner, 60.0)
     produced = stems.verify_replacement(
-        result.media, source, fmt=stems.probe_audio_format(source, _real_runner, 60.0),
-        runner=_real_runner, timeout_s=60.0, baseline=baseline,
+        result.media,
+        source,
+        fmt=stems.probe_audio_format(source, _real_runner, 60.0),
+        runner=_real_runner,
+        timeout_s=60.0,
+        baseline=baseline,
     )
     assert produced.audio_streams == 1 and produced.video_streams == 1
     assert produced.video_frames == baseline.video_frames
@@ -1188,9 +1266,10 @@ def test_e2e_non_unit_gains_apply_with_an_empty_seam_list(tmp_path, make_video) 
         backend=Fake_Separator_Backend(sum_to_input=True), runner=_real_runner
     )
     ctx = _e2e_ctx(
-        tmp_path, source,
+        tmp_path,
+        source,
         options=_e2e_options(mix_preset="clean_speech", repair_mode="crossfade"),
-        notes=(),                              # no filler removal -> no Seams
+        notes=(),  # no filler removal -> no Seams
     )
 
     result = engine.run(ctx)
@@ -1199,7 +1278,7 @@ def test_e2e_non_unit_gains_apply_with_an_empty_seam_list(tmp_path, make_video) 
     assert result.media is not None and Path(result.media).exists()
     details = [m.split(":", 2)[2] for m in result.markers]
     assert "mix:clean_speech" in details
-    assert not any(item.startswith("repair:") for item in details)   # nothing to repair
+    assert not any(item.startswith("repair:") for item in details)  # nothing to repair
     assert result.plan["windows"] == []
 
 
@@ -1219,7 +1298,8 @@ def test_e2e_an_unusable_probed_format_degrades_with_no_media(tmp_path, make_vid
         prober=broken_prober,
     )
     ctx = _e2e_ctx(
-        tmp_path, source,
+        tmp_path,
+        source,
         options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
         notes=("filler_seam:1.000",),
     )
@@ -1241,7 +1321,8 @@ def test_e2e_a_clip_with_no_audio_is_skipped(tmp_path, make_video) -> None:
         backend=Fake_Separator_Backend(sum_to_input=True), runner=_real_runner
     )
     ctx = _e2e_ctx(
-        tmp_path, silent,
+        tmp_path,
+        silent,
         options=_e2e_options(mix_preset="speech_focus", repair_mode="crossfade"),
         notes=("filler_seam:1.000",),
     )
@@ -1280,18 +1361,29 @@ def test_e2e_the_compositor_spends_the_same_passes_either_way(
         monkeypatch.setattr(comp, "_run", lambda cmd: (calls.append(tuple(cmd)), real_run(cmd))[1])
 
         monkeypatch.setattr(
-            pl, "transcribe",
+            pl,
+            "transcribe",
             lambda *a, **k: Transcript(
                 language="en",
-                segments=[TranscriptSegment(0.0, 4.0, "hello there my friend today", [
-                    Word(0.2, 0.6, "hello"), Word(0.7, 1.1, "there"),
-                    Word(1.2, 1.6, "my"), Word(1.7, 2.3, "friend"),
-                    Word(2.4, 3.0, "today"),
-                ])],
+                segments=[
+                    TranscriptSegment(
+                        0.0,
+                        4.0,
+                        "hello there my friend today",
+                        [
+                            Word(0.2, 0.6, "hello"),
+                            Word(0.7, 1.1, "there"),
+                            Word(1.2, 1.6, "my"),
+                            Word(1.7, 2.3, "friend"),
+                            Word(2.4, 3.0, "today"),
+                        ],
+                    )
+                ],
             ),
         )
         monkeypatch.setattr(
-            pl.sel, "select_moments",
+            pl.sel,
+            "select_moments",
             lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=50.0, text="hi")],
         )
 
@@ -1300,13 +1392,16 @@ def test_e2e_the_compositor_spends_the_same_passes_either_way(
         registry.register(Stem_Inpainting_Engine(runner=_real_runner))
         real_host = pl.Engine_Host
         monkeypatch.setattr(
-            pl, "Engine_Host",
+            pl,
+            "Engine_Host",
             lambda opts, **kw: real_host(opts, **{**kw, "registry": registry}),
         )
 
         clips = pl.run_pipeline(
-            source, options,
-            clips_dir=tmp_path / f"clips_{tag}", temp_dir=tmp_path / f"tmp_{tag}",
+            source,
+            options,
+            clips_dir=tmp_path / f"clips_{tag}",
+            temp_dir=tmp_path / f"tmp_{tag}",
         )
         return len(clips), len(calls)
 
@@ -1317,13 +1412,16 @@ def test_e2e_the_compositor_spends_the_same_passes_either_way(
     with monkeypatch.context():
         on_clips, on_passes = _counted(
             ProcessingOptions(
-                captions=True, metadata=False, aspect="9:16",
-                stem_inpainting_enabled=True, stem_mix_preset="speech_focus",
+                captions=True,
+                metadata=False,
+                aspect="9:16",
+                stem_inpainting_enabled=True,
+                stem_mix_preset="speech_focus",
             ),
             "on",
         )
 
     assert on_clips == off_clips
-    assert on_passes == off_passes, (
-        f"compositor spent {on_passes} passes enabled vs {off_passes} disabled"
-    )
+    assert (
+        on_passes == off_passes
+    ), f"compositor spent {on_passes} passes enabled vs {off_passes} disabled"

@@ -35,7 +35,6 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -105,7 +104,10 @@ def _run_startup() -> None:
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
     if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
-        "development", "dev", "local", "test",
+        "development",
+        "dev",
+        "local",
+        "test",
     ):
         # A wildcard is a sensible default for local work and a poor one on a public
         # host, where it lets any site call this API. Warning rather than refusing to
@@ -180,7 +182,7 @@ app.add_middleware(AuthMiddleware)
 class OptionsModel(BaseModel):
     """Processing options accepted from the UI (all optional, sane defaults)."""
 
-    language: Optional[str] = None
+    language: str | None = None
     translate: bool = False
     clip_length: str = "auto"
     aspect: str = "9:16"
@@ -194,14 +196,14 @@ class OptionsModel(BaseModel):
     vibe: str = ""
     platform: str = "generic"
     hashtag_count: int = 5
-    range_start: Optional[float] = None
-    range_end: Optional[float] = None
+    range_start: float | None = None
+    range_end: float | None = None
     metadata: bool = True
     # Phase 3 — publishing
     publish_to: list[str] = []
     campaign_id: str = ""
     publish_mode: str = "review"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     # Phase 4 — visual effects (all individually toggleable)
     reframe: bool = False
     zoom: bool = False
@@ -274,21 +276,21 @@ class OptionsModel(BaseModel):
 class ClipEditModel(BaseModel):
     """Editable clip metadata fields (all optional; only provided ones apply)."""
 
-    title: Optional[str] = None
-    title_alternatives: Optional[list[str]] = None
-    description: Optional[str] = None
-    hashtags: Optional[list[str]] = None
-    hook_text: Optional[str] = None
-    cta: Optional[str] = None
-    mentions: Optional[list[str]] = None
-    thumbnail_text: Optional[str] = None
+    title: str | None = None
+    title_alternatives: list[str] | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    hook_text: str | None = None
+    cta: str | None = None
+    mentions: list[str] | None = None
+    thumbnail_text: str | None = None
 
 
 class RegenerateRequest(BaseModel):
     """Request to regenerate a single metadata field for a clip."""
 
     field: str
-    platform: Optional[str] = None
+    platform: str | None = None
 
 
 class CaptionPreviewModel(BaseModel):
@@ -351,7 +353,7 @@ class PublishClipRequest(BaseModel):
     platforms: list[str] = []
     campaign_id: str = ""
     mode: str = "auto"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     routes: dict[str, dict[str, str]] = {}
 
 
@@ -370,9 +372,9 @@ class CampaignModel(BaseModel):
 class StorageSettingsModel(BaseModel):
     """User-tunable storage settings (runtime-persisted)."""
 
-    retention_days: Optional[int] = None
-    auto_delete_temp: Optional[bool] = None
-    delete_local_after_publish: Optional[bool] = None
+    retention_days: int | None = None
+    auto_delete_temp: bool | None = None
+    delete_local_after_publish: bool | None = None
 
 
 class ProfileModel(BaseModel):
@@ -458,7 +460,7 @@ def _owner_id(request: Request) -> str:
     return user.id if user is not None else ""
 
 
-def _owner_filter(request: Request) -> Optional[str]:
+def _owner_filter(request: Request) -> str | None:
     """The owner to filter listings by, or ``None`` for no filtering.
 
     ``None`` for a single-tenant install *and* for an admin, which is what makes the two
@@ -512,9 +514,7 @@ def login(request: Request, response: Response, req: LoginRequest) -> dict:
     if not settings.auth_enabled:
         # Issuing a session that nothing checks would be worse than refusing: the UI would
         # show a signed-in state that means nothing.
-        raise HTTPException(
-            status_code=404, detail="This deployment does not use authentication."
-        )
+        raise HTTPException(status_code=404, detail="This deployment does not use authentication.")
 
     username = (req.username or "").strip().lower()
     client = client_key(request)
@@ -553,9 +553,7 @@ def logout(request: Request, response: Response) -> dict:
     token = extract_token(request.headers)
     if token:
         get_auth_store().delete_session(token)
-    response.delete_cookie(
-        key=str(settings.auth_session_cookie or "clipper_session"), path="/"
-    )
+    response.delete_cookie(key=str(settings.auth_session_cookie or "clipper_session"), path="/")
     return {"ok": True}
 
 
@@ -567,9 +565,7 @@ def auth_session(request: Request) -> dict:
 
 
 @app.post("/api/auth/password", tags=["auth"])
-def change_password(
-    request: Request, response: Response, req: PasswordChangeRequest
-) -> dict:
+def change_password(request: Request, response: Response, req: PasswordChangeRequest) -> dict:
     """Change your own password, proving the current one (U12).
 
     Requiring the current password is what stops a borrowed session from becoming a
@@ -579,9 +575,7 @@ def change_password(
     """
     user = current_user(request)
     if user is None:
-        raise HTTPException(
-            status_code=404, detail="This deployment does not use authentication."
-        )
+        raise HTTPException(status_code=404, detail="This deployment does not use authentication.")
     store = get_auth_store()
     if store.authenticate(user.username, req.current_password or "") is None:
         raise HTTPException(status_code=403, detail="Current password is incorrect.")
@@ -619,9 +613,7 @@ def create_user(request: Request, req: CreateUserRequest) -> dict:
     """
     require_admin(request)
     try:
-        user = get_auth_store().create_user(
-            req.username, req.password, is_admin=bool(req.is_admin)
-        )
+        user = get_auth_store().create_user(req.username, req.password, is_admin=bool(req.is_admin))
     except PasswordError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
@@ -697,8 +689,7 @@ def info() -> dict[str, object]:
             # before spending a render finding out. Colours are added in `#RRGGBB` form
             # alongside the ASS originals, because a colour input cannot display `&H00FFFFFF`.
             "caption_preset_details": [
-                _preset_detail(preset)
-                for preset in caption_presets.BUILTIN_PRESETS.values()
+                _preset_detail(preset) for preset in caption_presets.BUILTIN_PRESETS.values()
             ],
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
@@ -710,9 +701,7 @@ def info() -> dict[str, object]:
             "reframe_layouts": list(ProcessingOptions._REFRAME_LAYOUTS),
             "reframe_intensities": list(ProcessingOptions._REFRAME_INTENSITIES),
         },
-        "broll_available": bool(
-            settings.broll_provider_api_key and settings.broll_allow_download
-        ),
+        "broll_available": bool(settings.broll_provider_api_key and settings.broll_allow_download),
         "storage_backend": settings.storage_backend.value,
         "retention_choices": list(RETENTION_CHOICES),
         # Advanced AV engines foundation (additive; Reqs 20.1, 20.2, 20.6).
@@ -901,9 +890,7 @@ def submit_url(request: Request, req: UrlJobRequest) -> dict:
     """Submit a single URL for processing."""
     if not is_url(req.url):
         raise HTTPException(status_code=400, detail="Not a valid URL")
-    job = get_manager().submit(
-        "url", req.url, req.options.to_options(), owner=_owner_id(request)
-    )
+    job = get_manager().submit("url", req.url, req.options.to_options(), owner=_owner_id(request))
     return job.to_dict()
 
 
@@ -914,9 +901,7 @@ def submit_batch(request: Request, req: BatchRequest) -> dict:
     if not urls:
         raise HTTPException(status_code=400, detail="No valid URLs provided")
     items = [{"input_type": "url", "source": u} for u in urls]
-    batch_id = get_manager().submit_batch(
-        items, req.options.to_options(), owner=_owner_id(request)
-    )
+    batch_id = get_manager().submit_batch(items, req.options.to_options(), owner=_owner_id(request))
     jobs = get_manager().store.by_batch(batch_id)
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
 
@@ -964,8 +949,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
                     raise HTTPException(
                         status_code=413,
                         detail=(
-                            f"{safe_name!r} exceeds the maximum upload size of "
-                            f"{limit} bytes"
+                            f"{safe_name!r} exceeds the maximum upload size of " f"{limit} bytes"
                         ),
                     )
                 out.write(chunk)
@@ -985,7 +969,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
 async def upload(
     request: Request,
     files: list[UploadFile] = File(...),
-    language: Optional[str] = Form(None),
+    language: str | None = Form(None),
     translate: bool = Form(False),
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
@@ -998,13 +982,13 @@ async def upload(
     vibe: str = Form(""),
     platform: str = Form("generic"),
     hashtag_count: int = Form(5),
-    range_start: Optional[float] = Form(None),
-    range_end: Optional[float] = Form(None),
+    range_start: float | None = Form(None),
+    range_end: float | None = Form(None),
     metadata: bool = Form(True),
     publish_to: str = Form(""),
     campaign_id: str = Form(""),
     publish_mode: str = Form("review"),
-    schedule_at: Optional[float] = Form(None),
+    schedule_at: float | None = Form(None),
     # Phase 4 — visual effects
     reframe: bool = Form(False),
     zoom: bool = Form(False),
@@ -1051,31 +1035,31 @@ async def upload(
     # "not supplied", so the field keeps its ``ProcessingOptions`` default;
     # anything else is normalised by ``ProcessingOptions.from_dict`` (the flag)
     # or coerced by the engine's ``resolve_options`` (every other field).
-    kinetic_typography_enabled: Optional[str] = Form(None),
-    kinetic_style: Optional[str] = Form(None),
-    kinetic_reveal: Optional[str] = Form(None),
-    kinetic_font: Optional[str] = Form(None),
-    kinetic_max_lines: Optional[str] = Form(None),
-    kinetic_max_line_width: Optional[str] = Form(None),
-    kinetic_safe_area_x_pct: Optional[str] = Form(None),
-    kinetic_safe_area_y_pct: Optional[str] = Form(None),
-    kinetic_motion_ms: Optional[str] = Form(None),
-    kinetic_confidence_floor: Optional[str] = Form(None),
+    kinetic_typography_enabled: str | None = Form(None),
+    kinetic_style: str | None = Form(None),
+    kinetic_reveal: str | None = Form(None),
+    kinetic_font: str | None = Form(None),
+    kinetic_max_lines: str | None = Form(None),
+    kinetic_max_line_width: str | None = Form(None),
+    kinetic_safe_area_x_pct: str | None = Form(None),
+    kinetic_safe_area_y_pct: str | None = Form(None),
+    kinetic_motion_ms: str | None = Form(None),
+    kinetic_confidence_floor: str | None = Form(None),
     # Stem inpainting engine (default OFF). Loose optional strings for exactly the
     # reason the kinetic fields above are: a typed Form parameter makes FastAPI reject
     # an unrecognised payload with 422, but an unrecognised value must never fail the
     # job — it must fall back to the documented default (Reqs 18.1, 18.5).
-    stem_inpainting_enabled: Optional[str] = Form(None),
-    stem_mix_preset: Optional[str] = Form(None),
-    stem_gain_vocals: Optional[str] = Form(None),
-    stem_gain_music: Optional[str] = Form(None),
-    stem_gain_other: Optional[str] = Form(None),
-    stem_repair_mode: Optional[str] = Form(None),
-    stem_repair_window_ms: Optional[str] = Form(None),
-    stem_declick: Optional[str] = Form(None),
-    stem_backend: Optional[str] = Form(None),
-    stem_model: Optional[str] = Form(None),
-    stem_retain_stems: Optional[str] = Form(None),
+    stem_inpainting_enabled: str | None = Form(None),
+    stem_mix_preset: str | None = Form(None),
+    stem_gain_vocals: str | None = Form(None),
+    stem_gain_music: str | None = Form(None),
+    stem_gain_other: str | None = Form(None),
+    stem_repair_mode: str | None = Form(None),
+    stem_repair_window_ms: str | None = Form(None),
+    stem_declick: str | None = Form(None),
+    stem_backend: str | None = Form(None),
+    stem_model: str | None = Form(None),
+    stem_retain_stems: str | None = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -1087,7 +1071,7 @@ async def upload(
 
     # Kinetic typography fields, forwarded only when actually supplied so an
     # omitted field keeps its documented ProcessingOptions default (Req 17.4).
-    kinetic_form: dict[str, Optional[str]] = {
+    kinetic_form: dict[str, str | None] = {
         "kinetic_typography_enabled": kinetic_typography_enabled,
         "kinetic_style": kinetic_style,
         "kinetic_reveal": kinetic_reveal,
@@ -1203,9 +1187,7 @@ async def upload(
 def list_jobs(request: Request) -> dict:
     # U12: filtered to the caller's own jobs. An admin, and a single-tenant install, get no
     # filter at all - so the list is exactly what it was before ownership existed.
-    return {
-        "jobs": [j.to_dict() for j in get_manager().store.all(owner=_owner_filter(request))]
-    }
+    return {"jobs": [j.to_dict() for j in get_manager().store.all(owner=_owner_filter(request))]}
 
 
 @app.get("/api/jobs/{job_id}", tags=["jobs"])
@@ -1237,7 +1219,8 @@ def cancel_job(request: Request, job_id: str) -> dict:
         "state": "cancelling" if was_running else "cancelled",
         "detail": (
             "Stopping at the next checkpoint; a pass already in progress will finish first."
-            if was_running else "Stopped before processing began."
+            if was_running
+            else "Stopped before processing began."
         ),
     }
 
@@ -1330,7 +1313,7 @@ def resume_job(request: Request, job_id: str) -> dict:
         raise HTTPException(
             status_code=409,
             detail="This job was interrupted before it chose its clips, so there is nothing to "
-                   "resume. Re-submit the source.",
+            "resume. Re-submit the source.",
         )
     if not manager.resume(job_id):
         raise HTTPException(
@@ -1417,9 +1400,7 @@ def _set_review(
         else:
             updated.append(clip.to_dict())
     if missing and not updated:
-        raise HTTPException(
-            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=404, detail=f"No such clip(s): {', '.join(missing)}")
     # A partial result is reported rather than raised: the point of a batch action is to get
     # through a list, and failing the whole call because one clip has since been deleted would
     # discard the decisions the user made about all the others.
@@ -1427,9 +1408,7 @@ def _set_review(
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/review", tags=["metadata"])
-def review_clip(
-    request: Request, job_id: str, clip_id: str, req: ClipReviewModel
-) -> dict:
+def review_clip(request: Request, job_id: str, clip_id: str, req: ClipReviewModel) -> dict:
     """Approve, reject or reset one clip (U9)."""
     updated = _set_review(request, job_id, [clip_id], req.review_state, req.review_note)
     return updated[0]
@@ -1560,12 +1539,14 @@ def rerender_clip_endpoint(
         raise HTTPException(
             status_code=422,
             detail=f"Too many cuts: {len(req.cuts)} (limit {trim.MAX_CUTS}). Each cut adds a "
-                   "pair of filters to the render graph.",
+            "pair of filters to the render graph.",
         )
 
     try:
         updated = rerender_module.rerender_clip(
-            job, clip, option_overrides=req.settings or None,
+            job,
+            clip,
+            option_overrides=req.settings or None,
             cuts=[(c.start, c.end) for c in req.cuts],
         )
     except rerender_module.RerenderError as exc:
@@ -1650,34 +1631,39 @@ def save_campaign(req: CampaignModel) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/publish", tags=["publishing"])
-def publish_clip(
-    request: Request, job_id: str, clip_id: str, req: PublishClipRequest
-) -> dict:
+def publish_clip(request: Request, job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     manager = get_manager()
     # Called for its authorization check; this handler works from the clip, not the job.
     _authorised_job(request, job_id)
     clip = manager.store.get_clip(job_id, clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
-    if req.mode not in ("auto","review"):
+    if req.mode not in ("auto", "review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
-    path=Path(settings.clips_dir)/job_id/clip.filename
-    ids=get_publish_manager().submit(job_id=job_id,clip=clip,video_path=path,
-      platforms=req.platforms,campaign_id=req.campaign_id,mode=req.mode,
-      schedule_at=req.schedule_at,route_overrides=req.routes)
+    path = Path(settings.clips_dir) / job_id / clip.filename
+    ids = get_publish_manager().submit(
+        job_id=job_id,
+        clip=clip,
+        video_path=path,
+        platforms=req.platforms,
+        campaign_id=req.campaign_id,
+        mode=req.mode,
+        schedule_at=req.schedule_at,
+        route_overrides=req.routes,
+    )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")
-    return {"attempt_ids":ids,"attempts":[get_history().get_attempt(i) for i in ids]}
+    return {"attempt_ids": ids, "attempts": [get_history().get_attempt(i) for i in ids]}
 
 
 @app.get("/api/history", tags=["publishing"])
-def history(limit: int=200, platform: str="") -> dict:
-    return get_history().history(max(1,min(limit,500)),platform)
+def history(limit: int = 200, platform: str = "") -> dict:
+    return get_history().history(max(1, min(limit, 500)), platform)
 
 
 @app.get("/api/publish-attempts/{attempt_id}", tags=["publishing"])
 def publish_attempt(attempt_id: str) -> dict:
-    item=get_history().get_attempt(attempt_id)
+    item = get_history().get_attempt(attempt_id)
     if not item:
         raise HTTPException(status_code=404, detail="Publish attempt not found")
     return item
@@ -1751,9 +1737,7 @@ def _resume_attempt(attempt_id: str, *, force_direct: bool) -> dict:
     # now is far better than a "file no longer exists" failure minutes later.
     video_path = Path(str(request.get("video_path") or ""))
     if not video_path.is_file():
-        raise HTTPException(
-            status_code=409, detail=f"Clip file no longer exists: {video_path}"
-        )
+        raise HTTPException(status_code=409, detail=f"Clip file no longer exists: {video_path}")
 
     store.update_attempt(
         attempt_id,
@@ -1786,13 +1770,11 @@ def approve_publish_attempt(attempt_id: str) -> dict:
 #:
 #: An attempt that is uploading or finished has no future to move. ``failed`` is excluded too:
 #: rescheduling a failure would look like a retry while skipping every check ``/retry`` performs.
-RESCHEDULABLE_PUBLISH_STATES = frozenset(
-    {PublishState.QUEUED.value, PublishState.SCHEDULED.value}
-)
+RESCHEDULABLE_PUBLISH_STATES = frozenset({PublishState.QUEUED.value, PublishState.SCHEDULED.value})
 
 
 @app.get("/api/schedule", tags=["publishing"])
-def schedule_window(start: Optional[float] = None, end: Optional[float] = None) -> dict:
+def schedule_window(start: float | None = None, end: float | None = None) -> dict:
     """Publish attempts scheduled within a window, for the calendar view (PB7).
 
     Defaults to the 30 days around now. Returns every state, not just pending ones: a calendar
@@ -1826,12 +1808,9 @@ def schedule_suggestions(platform: str = "", days: int = 7, per_day: int = 2) ->
     taken = [
         float(a["scheduled_at"])
         for a in get_history().scheduled_between(now, now + horizon * 86400)
-        if a.get("scheduled_at")
-        and (not platform or a.get("platform") == platform)
+        if a.get("scheduled_at") and (not platform or a.get("platform") == platform)
     ]
-    found = best_times.suggest(
-        platform, days=horizon, per_day=each, now=now, taken=taken
-    )
+    found = best_times.suggest(platform, days=horizon, per_day=each, now=now, taken=taken)
     return {
         "platform": platform,
         "basis": best_times.BASIS,
@@ -1855,15 +1834,14 @@ def reschedule_publish_attempt(attempt_id: str, req: RescheduleModel) -> dict:
         raise HTTPException(
             status_code=409,
             detail=f"Attempt is {state!r}; only "
-                   f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
+            f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
         )
     when = float(req.schedule_at)
     # A time in the past means "publish now", which is a legitimate request, but it must be
     # recorded as `queued` rather than left `scheduled` in the past - the scheduler treats both as
     # due, and a state that disagrees with the clock is what makes a queue hard to reason about.
     state_now = (
-        PublishState.SCHEDULED.value if when > time.time() + 1
-        else PublishState.QUEUED.value
+        PublishState.SCHEDULED.value if when > time.time() + 1 else PublishState.QUEUED.value
     )
     store.update_attempt(attempt_id, scheduled_at=when, state=state_now)
     return store.get_attempt(attempt_id) or {}
@@ -1974,12 +1952,14 @@ def delete_source(request: Request, job_id: str, confirm: bool = False) -> dict:
     it, and it refuses to act without explicit confirmation.
     """
     if not confirm:
-        raise HTTPException(status_code=400,
-                            detail="Deleting the original source requires confirm=true")
+        raise HTTPException(
+            status_code=400, detail="Deleting the original source requires confirm=true"
+        )
     job = _authorised_job(request, job_id)
     if job.input_type != "file":
-        raise HTTPException(status_code=400,
-                            detail="Only uploaded/downloaded source files can be deleted here")
+        raise HTTPException(
+            status_code=400, detail="Only uploaded/downloaded source files can be deleted here"
+        )
     src = Path(job.source).resolve()
     uploads_root = Path(settings.uploads_dir).resolve()
     if uploads_root not in src.parents:
@@ -2034,8 +2014,11 @@ def save_profile(req: ProfileModel) -> dict:
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Profile name is required")
     prof = get_profile_store().save(
-        req.name, req.settings, req.publishing,
-        profile_id=req.id, make_default=req.make_default,
+        req.name,
+        req.settings,
+        req.publishing,
+        profile_id=req.id,
+        make_default=req.make_default,
     )
     return prof.to_dict()
 
@@ -2089,9 +2072,11 @@ def watch_options(options: OptionsModel) -> dict:
 # Clip downloads. The primary download is a ZIP containing video + metadata TXT.
 # ---------------------------------------------------------------------------
 def _clip_metadata_text(clip) -> str:
-    return (f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
-            f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
-            f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n")
+    return (
+        f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
+        f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
+        f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n"
+    )
 
 
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
@@ -2101,16 +2086,21 @@ def download_clip(request: Request, job_id: str, filename: str) -> StreamingResp
     # U12: authorised first, so a caller who does not own the job cannot tell a real clip
     # filename from an invented one.
     job = _authorised_job(request, job_id)
-    clip=next((c for c in job.clips if c.filename==safe_name),None) if job else None
+    clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
-    buf=io.BytesIO()
-    with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as archive:
-        archive.write(path,arcname=safe_name)
-        archive.writestr(f"{Path(safe_name).stem}_metadata.txt",_clip_metadata_text(clip))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(path, arcname=safe_name)
+        archive.writestr(f"{Path(safe_name).stem}_metadata.txt", _clip_metadata_text(clip))
     buf.seek(0)
-    return StreamingResponse(buf,media_type="application/zip",headers={
-      "Content-Disposition":f'attachment; filename="{Path(safe_name).stem}_package.zip"'})
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{Path(safe_name).stem}_package.zip"'
+        },
+    )
 
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
@@ -2120,7 +2110,7 @@ def download_video_only(request: Request, job_id: str, filename: str) -> FileRes
     _authorised_job(request, job_id)
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Clip not found")
-    return FileResponse(path,filename=safe_name,media_type="video/mp4")
+    return FileResponse(path, filename=safe_name, media_type="video/mp4")
 
 
 # ---------------------------------------------------------------------------
@@ -2154,6 +2144,7 @@ def fallback_index_html() -> str:
     Every probe is individually guarded: this page must render when things are broken, since
     that is precisely when it is read.
     """
+
     def _row(label: str, value: str, ok: bool = True) -> str:
         colour = "#3fb950" if ok else "#f85149"
         return (
@@ -2170,8 +2161,9 @@ def fallback_index_html() -> str:
         # reader nothing, and a missing binary is the single most common reason a deploy of
         # this app does not work. shutil.which answers the question they actually have.
         resolved = shutil.which(str(settings.ffmpeg_binary))
-        rows.append(_row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})",
-                         bool(resolved)))
+        rows.append(
+            _row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})", bool(resolved))
+        )
     except Exception:
         rows.append(_row("ffmpeg", "could not be resolved", ok=False))
 
@@ -2202,10 +2194,12 @@ def fallback_index_html() -> str:
         # listed" on a perfectly healthy instance, the exact class of failure this page exists
         # to make visible.
         engines, _capabilities = _engines_info()
-        names = ", ".join(
-            f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}"
-            for e in engines
-        ) or "none registered"
+        names = (
+            ", ".join(
+                f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}" for e in engines
+            )
+            or "none registered"
+        )
         rows.append(_row("Engines", names))
     except Exception:
         rows.append(_row("Engines", "could not be listed", ok=False))

@@ -15,7 +15,7 @@ import json
 import threading
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 
@@ -71,9 +71,7 @@ class RuntimeConfigStore:
     def save(self) -> None:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
-                json.dumps(self._config.to_dict(), indent=2), encoding="utf-8"
-            )
+            self.path.write_text(json.dumps(self._config.to_dict(), indent=2), encoding="utf-8")
 
     def update(self, **changes: Any) -> RuntimeConfig:
         """Validate + apply ``changes``, persist, and return the new config."""
@@ -97,7 +95,7 @@ class RuntimeConfigStore:
             return self._config
 
 
-_store: Optional[RuntimeConfigStore] = None
+_store: RuntimeConfigStore | None = None
 _lock = threading.Lock()
 
 

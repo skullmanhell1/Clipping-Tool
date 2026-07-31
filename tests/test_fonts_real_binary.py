@@ -94,10 +94,20 @@ def _fontselect_lines(subtitles_filter: str, tmp_path: Path) -> list[tuple[str, 
     """
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "verbose",
-            "-f", "lavfi", "-i", "color=black:s=540x960:d=0.1",
-            "-vf", subtitles_filter,
-            "-frames:v", "1", "-y", str(tmp_path / "probe.png"),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "verbose",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=540x960:d=0.1",
+            "-vf",
+            subtitles_filter,
+            "-frames:v",
+            "1",
+            "-y",
+            str(tmp_path / "probe.png"),
         ],
         capture_output=True,
         text=True,
@@ -329,16 +339,13 @@ def test_resolve_font_prefers_earlier_rungs():
 
     # Only a middle rung installed: that rung wins, not the terminal one.
     middle = everything[3]
-    resolved, substituted = captions.resolve_font(
-        "No Such Face", available=lambda n: n == middle
-    )
+    resolved, substituted = captions.resolve_font("No Such Face", available=lambda n: n == middle)
     assert (resolved, substituted) == (middle, True)
 
 
 def test_resolve_font_keeps_an_available_request_untouched():
     resolved, substituted = captions.resolve_font("Anton", available=lambda n: True)
     assert (resolved, substituted) == ("Anton", False)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -381,10 +388,21 @@ def test_no_preset_asks_libass_to_synthesise_bold(preset_name, tmp_path):
 
     proc = subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "verbose",
-            "-f", "lavfi", "-i", "color=black:s=540x960:d=0.1",
-            "-vf", captions.subtitles_filter(ass),
-            "-frames:v", "1", "-y", str(tmp_path / "weight.png"),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "verbose",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=540x960:d=0.1",
+            "-vf",
+            captions.subtitles_filter(ass),
+            "-frames:v",
+            "1",
+            "-y",
+            str(tmp_path / "weight.png"),
         ],
         capture_output=True,
         text=True,
@@ -456,7 +474,8 @@ def test_outline_and_shadow_come_from_the_preset(tmp_path):
         clip_duration=1.0,
     )
     style = next(
-        line for line in ass.read_text(encoding="utf-8").splitlines()
+        line
+        for line in ass.read_text(encoding="utf-8").splitlines()
         if line.startswith("Style: Default")
     )
     fields = style.split("Style: ", 1)[1].split(",")
@@ -474,7 +493,8 @@ def test_outline_and_shadow_come_from_the_preset(tmp_path):
         clip_duration=1.0,
     )
     style2 = next(
-        line for line in ass2.read_text(encoding="utf-8").splitlines()
+        line
+        for line in ass2.read_text(encoding="utf-8").splitlines()
         if line.startswith("Style: Default")
     )
     fields2 = style2.split("Style: ", 1)[1].split(",")

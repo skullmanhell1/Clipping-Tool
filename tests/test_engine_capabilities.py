@@ -27,6 +27,7 @@ Everything here is pure and offline: no ffmpeg process, no font enumeration, no
 network — the probe environment used by the properties installs a socket guard that
 raises if anything so much as constructs a socket.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -34,7 +35,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
-from typing import Any, List
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -78,6 +79,7 @@ def build_exception(exc_type: type) -> BaseException:
     if exc_type is subprocess.TimeoutExpired:
         return exc_type(cmd=["ffmpeg", "-filters"], timeout=20.0)
     return exc_type("probe exploded")
+
 
 #: A canned ``<ffmpeg_binary> -hide_banner -filters`` listing in ffmpeg's real column
 #: format (``<flags> <name> <pads> <description>``), so the probe's own parser runs
@@ -126,8 +128,8 @@ class Network_Guard:
     """
 
     def __init__(self) -> None:
-        self.attempts: List[Any] = []
-        self.ffmpeg_runs: List[List[str]] = []
+        self.attempts: list[Any] = []
+        self.ffmpeg_runs: list[list[str]] = []
 
     def __call__(self, *args: Any, **kwargs: Any):
         self.attempts.append((args, kwargs))
@@ -161,11 +163,13 @@ def offline_probe_environment(*, font_available: bool = True):
             args=command, returncode=0, stdout=FFMPEG_FILTER_LISTING, stderr=""
         )
 
-    with mock.patch.object(captions, "font_available", lambda name: font_available), \
-         mock.patch("subprocess.run", _fake_run), \
-         mock.patch("socket.socket", guard), \
-         mock.patch("socket.create_connection", guard), \
-         mock.patch("socket.getaddrinfo", guard):
+    with (
+        mock.patch.object(captions, "font_available", lambda name: font_available),
+        mock.patch("subprocess.run", _fake_run),
+        mock.patch("socket.socket", guard),
+        mock.patch("socket.create_connection", guard),
+        mock.patch("socket.getaddrinfo", guard),
+    ):
         yield guard
 
 
@@ -265,9 +269,7 @@ def test_p10_probing_is_total_offline_and_shaped(capability_id, exc_type):
     availability=st_availability_map(),
     extra_ids=st.lists(st_capability_id(), max_size=4),
 )
-def test_p11_report_caches_is_deterministic_serialises_and_invalidates(
-    availability, extra_ids
-):
+def test_p11_report_caches_is_deterministic_serialises_and_invalidates(availability, extra_ids):
     """Validates: Requirements 5.7, 6.1, 6.2, 6.3, 6.4, 6.5, 20.2"""
     # Per-example isolation of the process singleton (see P10's note above).
     reset_report()
@@ -277,7 +279,7 @@ def test_p11_report_caches_is_deterministic_serialises_and_invalidates(
         expected = {cid: bool(availability.get(cid, False)) for cid in unique}
 
         counting = CountingProber(StaticProber(availability))
-        report = Capability_Report(prober=counting)          # injected prober (Req 5.7)
+        report = Capability_Report(prober=counting)  # injected prober (Req 5.7)
 
         # However often status() is called, the prober runs at most once per id
         # (Reqs 6.1, 6.2) and always answers the injected map (Req 6.3).
@@ -305,7 +307,7 @@ def test_p11_report_caches_is_deterministic_serialises_and_invalidates(
         for cid, entry in first.items():
             assert entry["available"] is expected[cid]
             assert Capability_Status.from_dict(entry) == report.status(cid)
-        assert counting.total == len(unique)          # serialising never re-probes
+        assert counting.total == len(unique)  # serialising never re-probes
 
         if ids:
             # Invalidating one id re-probes it exactly once, and only it (Req 6.5).
@@ -348,7 +350,7 @@ def test_python_pkg_kind_dispatches_to_find_spec(monkeypatch):
 
     Validates: Requirements 5.1
     """
-    asked: List[str] = []
+    asked: list[str] = []
 
     def fake_find_spec(name):
         asked.append(name)
@@ -376,7 +378,7 @@ def test_binary_kind_dispatches_to_shutil_which(monkeypatch):
 
     Validates: Requirements 5.1
     """
-    asked: List[str] = []
+    asked: list[str] = []
 
     def fake_which(name, *args, **kwargs):
         asked.append(name)
@@ -404,7 +406,7 @@ def test_ffmpeg_filter_kind_invokes_the_configured_binary(monkeypatch):
     sentinel = "/opt/sentinel/ffmpeg-build-7x"
     monkeypatch.setattr(app_settings, "ffmpeg_binary", sentinel)
 
-    commands: List[List[str]] = []
+    commands: list[list[str]] = []
 
     def fake_run(command, *args, **kwargs):
         commands.append([str(part) for part in command])
@@ -455,16 +457,16 @@ def test_ffmpeg_filter_kind_parses_rows_whose_flags_group_has_no_dot(monkeypatch
     )
 
     found = default_prober(f"ffmpeg_filter:{ALL_FLAGS_FILTER}")
-    assert found.available is True, (
-        f"{ALL_FLAGS_FILTER!r} is listed with flags {ALL_FLAGS_GROUP!r} and must be found"
-    )
+    assert (
+        found.available is True
+    ), f"{ALL_FLAGS_FILTER!r} is listed with flags {ALL_FLAGS_GROUP!r} and must be found"
     assert ALL_FLAGS_FILTER in found.detail
 
     # The flags group itself is not a filter, so it must not be probeable as one.
     flags_as_name = default_prober(f"ffmpeg_filter:{ALL_FLAGS_GROUP}")
-    assert flags_as_name.available is False, (
-        f"{ALL_FLAGS_GROUP!r} is a flags column, not a filter name"
-    )
+    assert (
+        flags_as_name.available is False
+    ), f"{ALL_FLAGS_GROUP!r} is a flags column, not a filter name"
 
 
 def test_ffmpeg_filter_parser_keeps_every_listed_name_and_only_those(monkeypatch):
@@ -503,7 +505,7 @@ def test_font_kind_dispatches_to_captions_font_available(monkeypatch):
     """
     from worker import captions
 
-    asked: List[str] = []
+    asked: list[str] = []
 
     def fake_font_available(name):
         asked.append(name)
@@ -554,7 +556,7 @@ def test_llm_kind_dispatches_to_llm_client_llm_available(monkeypatch):
     """
     from worker import llm_client
 
-    calls: List[int] = []
+    calls: list[int] = []
 
     def fake_llm_available():
         calls.append(1)
@@ -578,7 +580,7 @@ def test_model_kind_dispatches_to_the_registered_locator(tmp_path):
     """
     present = tmp_path / "htdemucs.th"
     present.write_bytes(b"weights")
-    calls: List[str] = []
+    calls: list[str] = []
 
     # Unregistered before anything is added.
     assert default_prober("model:htdemucs").available is False

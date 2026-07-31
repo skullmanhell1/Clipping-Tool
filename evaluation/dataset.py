@@ -142,14 +142,13 @@ def load_label_file(path: str | Path) -> LabelledSource:
         raise DatasetError(f"{path}: 'moments' must be a non-empty list")
 
     moments = [
-        _parse_moment(item, f"{path} moment {index}")
-        for index, item in enumerate(moments_raw)
+        _parse_moment(item, f"{path} moment {index}") for index, item in enumerate(moments_raw)
     ]
     moments.sort(key=lambda moment: (moment.start, moment.end))
 
     # Overlapping labels make precision ambiguous: one returned clip could legitimately match
     # two "different" wanted moments, so a selector would be rewarded twice for one decision.
-    for earlier, later in zip(moments, moments[1:]):
+    for earlier, later in zip(moments, moments[1:], strict=False):
         if later.start < earlier.end:
             raise DatasetError(
                 f"{path}: labelled moments overlap ({earlier.start}-{earlier.end} and "

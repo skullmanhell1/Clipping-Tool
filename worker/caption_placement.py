@@ -32,8 +32,9 @@ reviewing a still. So the bands are unioned across every sampled frame.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class Band:
     def height(self) -> float:
         return max(0.0, self.bottom - self.top)
 
-    def overlap(self, other: "Band") -> float:
+    def overlap(self, other: Band) -> float:
         """The overlapping height of two bands, in the same fractional units."""
         return max(0.0, min(self.bottom, other.bottom) - max(self.top, other.top))
 
@@ -99,8 +100,8 @@ def mouth_bands(boxes: Iterable[Any], frame_height: int) -> list[Band]:
     bands: list[Band] = []
     for box in boxes:
         try:
-            y = float(getattr(box, "y"))
-            h = float(getattr(box, "h"))
+            y = float(box.y)
+            h = float(box.h)
         except (AttributeError, TypeError, ValueError):
             continue
         if h <= 0 or y < 0 or y + h > frame_height * 1.5:
@@ -121,7 +122,7 @@ def caption_band(
     frame_height: int,
     font_size: int,
     max_lines: int = 2,
-    margin_px: Optional[int] = None,
+    margin_px: int | None = None,
 ) -> Band:
     """The vertical band a caption at ``position`` would occupy.
 
@@ -141,13 +142,13 @@ def caption_band(
     if frame_height <= 0:
         return Band(0.0, 0.0)
 
-    if align in (1, 2, 3):          # bottom-anchored
+    if align in (1, 2, 3):  # bottom-anchored
         bottom = frame_height - margin
         top = bottom - height
-    elif align in (7, 8, 9):        # top-anchored
+    elif align in (7, 8, 9):  # top-anchored
         top = margin
         bottom = top + height
-    else:                           # middle-anchored: the margin is not used
+    else:  # middle-anchored: the margin is not used
         centre = frame_height / 2.0
         top = centre - height / 2.0
         bottom = centre + height / 2.0
@@ -192,7 +193,7 @@ def choose_position(
     frame_height: int,
     font_size: int,
     max_lines: int = 2,
-    margin_px: Optional[int] = None,
+    margin_px: int | None = None,
 ) -> PlacementPlan:
     """Pick a caption position that clears the speakers' mouths (V15).
 
@@ -217,14 +218,11 @@ def choose_position(
 
     for candidate in _alternatives(position):
         if not _collides(candidate, mouths, **band_kwargs):
-            return PlacementPlan(
-                candidate, position, marker=f"caption_moved_off_face:{candidate}"
-            )
+            return PlacementPlan(candidate, position, marker=f"caption_moved_off_face:{candidate}")
 
     # A close-up filling the frame. Moving the caption from the mouth to the eyes is not an
     # improvement, so nothing changes - but the clip record says why.
     return PlacementPlan(position, position, marker="caption_face_overlap_unavoidable")
-
 
 
 def plan_for_clip(
@@ -234,7 +232,7 @@ def plan_for_clip(
     frame_height: int,
     font_size: int,
     max_lines: int = 2,
-    face_boxes: Optional[Iterable[Any]] = None,
+    face_boxes: Iterable[Any] | None = None,
 ) -> PlacementPlan:
     """Choose a caption position for ``clip``, detecting faces if needed (V15).
 
@@ -261,7 +259,7 @@ def plan_for_clip(
             # Flattened across sampled frames: the union over the whole clip is the question, and
             # `detect_faces` returns a list per frame.
             boxes = [box for frame in reframe.detect_faces(clip) for box in frame]
-        except Exception as exc:      # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # Deliberately broad: this is a placement refinement on a clip whose expensive work is
             # already done, and every failure mode of the vision stack (a missing cv2, an
             # unopenable file, a cascade that will not load) is a reason to caption where the user
@@ -270,6 +268,9 @@ def plan_for_clip(
             return PlacementPlan(position, position, marker="caption_face_detect_failed")
 
     return choose_position(
-        position, boxes,
-        frame_height=frame_height, font_size=font_size, max_lines=max_lines,
+        position,
+        boxes,
+        frame_height=frame_height,
+        font_size=font_size,
+        max_lines=max_lines,
     )

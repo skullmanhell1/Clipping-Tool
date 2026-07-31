@@ -13,9 +13,9 @@ can show a preview card (title, duration, thumbnail, source) before processing.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -32,10 +32,10 @@ class VideoMeta:
     """Lightweight metadata about a source video for preview cards."""
 
     title: str
-    duration: Optional[float] = None
-    thumbnail: Optional[str] = None
-    source: Optional[str] = None      # webpage URL or filename
-    uploader: Optional[str] = None
+    duration: float | None = None
+    thumbnail: str | None = None
+    source: str | None = None  # webpage URL or filename
+    uploader: str | None = None
 
 
 def is_url(value: str) -> bool:
@@ -94,7 +94,7 @@ def resolve_downloaded_path(prepared: Path) -> Path:
 def download_video(
     url: str,
     dest_dir: str | Path,
-    progress_cb: Optional[ProgressCallback] = None,
+    progress_cb: ProgressCallback | None = None,
     max_height: int = 1080,
 ) -> tuple[Path, VideoMeta]:
     """Download ``url`` into ``dest_dir`` and return ``(path, metadata)``.

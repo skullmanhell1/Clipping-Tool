@@ -101,7 +101,8 @@ def test_a9_every_glyph_the_map_can_emit_is_vendored():
 
     assets = Path(settings.emoji_assets_dir)
     missing = [
-        glyph for glyph in set(em.KEYWORD_EMOJI.values())
+        glyph
+        for glyph in set(em.KEYWORD_EMOJI.values())
         if not (assets / em.emoji_filename(glyph)).is_file()
     ]
     assert not missing, f"{len(missing)} glyph(s) not vendored: {missing[:10]}"
@@ -110,8 +111,12 @@ def test_a9_every_glyph_the_map_can_emit_is_vendored():
 def test_a9_inflected_speech_still_reaches_the_new_keywords():
     """A10's rules have to cover the additions, not just the original 85."""
     for spoken, expected_key in (
-        ("investing", "invest"), ("negotiated", "negotiate"), ("celebrating", "celebrate"),
-        ("collapsed", "collapse"), ("hospitals", "hospital"), ("strategies", "strategy"),
+        ("investing", "invest"),
+        ("negotiated", "negotiate"),
+        ("celebrating", "celebrate"),
+        ("collapsed", "collapse"),
+        ("hospitals", "hospital"),
+        ("strategies", "strategy"),
     ):
         assert em.lookup_emoji(spoken, em.KEYWORD_EMOJI) == em.KEYWORD_EMOJI[expected_key], spoken
 
@@ -122,8 +127,20 @@ def test_a9_homographs_are_absent_rather_than_guessed():
     Each of these has two common senses with different pictures, so including it would raise the
     keyword count and lower the hit quality - the same trade C14 refused for caption presets.
     """
-    for homograph in ("bank", "spring", "mine", "current", "wave", "rock", "bug", "beat",
-                      "marker", "notice", "ring", "second"):
+    for homograph in (
+        "bank",
+        "spring",
+        "mine",
+        "current",
+        "wave",
+        "rock",
+        "bug",
+        "beat",
+        "marker",
+        "notice",
+        "ring",
+        "second",
+    ):
         assert homograph not in em.KEYWORD_EMOJI, homograph
 
 
@@ -165,9 +182,7 @@ def test_a13_the_default_style_keeps_the_committed_assets_directory():
     from pathlib import Path
 
     assert em.style_assets_dir(em.resolve_style("noto")) == Path(settings.emoji_assets_dir)
-    others = {
-        em.style_assets_dir(em.EMOJI_STYLES[name]) for name in ("twemoji", "openmoji")
-    }
+    others = {em.style_assets_dir(em.EMOJI_STYLES[name]) for name in ("twemoji", "openmoji")}
     assert len(others) == 2
     assert Path(settings.emoji_assets_dir) not in others
 
@@ -184,7 +199,9 @@ def test_a13_a_missing_glyph_in_a_selected_style_falls_back_to_the_vendored_one(
     assert resolved.parent.name == "emoji", resolved
 
 
-def test_a13_the_default_style_falls_back_to_nothing_because_it_is_the_fallback(monkeypatch, tmp_path):
+def test_a13_the_default_style_falls_back_to_nothing_because_it_is_the_fallback(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(settings, "emoji_style", "noto", raising=False)
     monkeypatch.setattr(settings, "emoji_assets_dir", tmp_path / "empty", raising=False)
     assert em.resolve_asset("\U0001f525", downloader=lambda _u, _d: False) is None
@@ -297,7 +314,7 @@ def test_a5_an_unreadable_font_does_not_leak_a_file_descriptor(tmp_path, monkeyp
                 targets.append(target)
         return targets
 
-    cap.discovered_fonts()          # warm any lazy imports
+    cap.discovered_fonts()  # warm any lazy imports
     for _ in range(3):
         cap.discovered_fonts()
     # 48 scans of a file that cannot be parsed; a leak of one descriptor each would be unmistakable.
@@ -313,9 +330,7 @@ def test_a5_a_variable_font_is_excluded_for_the_same_reason_the_manifest_exclude
 
     directory = tmp_path / "fonts"
     directory.mkdir()
-    shutil.copy(
-        cap.FONT_MANIFEST.parent / "fonts" / "Montserrat[wght].ttf", directory / "var.ttf"
-    )
+    shutil.copy(cap.FONT_MANIFEST.parent / "fonts" / "Montserrat[wght].ttf", directory / "var.ttf")
     monkeypatch.setattr(settings, "font_assets_dir", directory, raising=False)
     assert cap.discovered_fonts() == []
 
@@ -345,10 +360,10 @@ def test_a5_weight_is_reported_on_the_same_scale_the_manifest_uses():
     what libass prints - says 200. Emitting the file's number in the same ``weight`` field would
     make a user-supplied regular face (400) look nearly twice as heavy as a vendored black one.
     """
-    assert cap._fc_weight(400) == 80        # regular
-    assert cap._fc_weight(700) == 200       # bold
-    assert cap._fc_weight(800) == 205       # extra bold
-    assert cap._fc_weight(900) == 210       # black
+    assert cap._fc_weight(400) == 80  # regular
+    assert cap._fc_weight(700) == 200  # bold
+    assert cap._fc_weight(800) == 205  # extra bold
+    assert cap._fc_weight(900) == 210  # black
     assert cap._fc_weight(0) == 0
 
     manifest = json.loads(cap.FONT_MANIFEST.read_text(encoding="utf-8"))
@@ -429,9 +444,10 @@ def test_a5_a_user_font_claims_no_licence_it_cannot_check():
     """The operator supplied the file, so its licence is theirs to know."""
     import shutil
     from pathlib import Path
+
     directory = Path(settings.font_assets_dir)
     assert directory.is_dir()
-    del shutil       # not used; the assertion below is about the shape of a user entry
+    del shutil  # not used; the assertion below is about the shape of a user entry
     for font in cap.discovered_fonts():
         assert font["license"] == ""
         assert font["use"] == "user-supplied"
@@ -476,7 +492,9 @@ def test_a17_all_three_library_layouts_are_found(tmp_path, monkeypatch):
     """Holding twenty tracks should not have to look like holding one."""
     _music_library(tmp_path, monkeypatch)
     assert [p.name for p in audio.find_user_tracks("upbeat")] == [
-        "upbeat.mp3", "upbeat-3.mp3", "upbeat_2.mp3",
+        "upbeat.mp3",
+        "upbeat-3.mp3",
+        "upbeat_2.mp3",
     ]
     assert [p.name for p in audio.find_user_tracks("chill")] == ["one.wav", "two.wav"]
 
@@ -539,7 +557,9 @@ def test_a17_selection_does_not_use_python_s_salted_hash(tmp_path, monkeypatch):
     for seed in ("0", "1", "12345"):
         proc = subprocess.run(
             [".venv/bin/python", "-c", script],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
             env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin:/usr/local/bin"},
         )
         outs.add(proc.stdout.strip())
@@ -581,8 +601,13 @@ def test_a17_the_synthesised_bed_reports_no_track_count(tmp_path, monkeypatch):
 
 
 def _broll_library(tmp_path):
-    for name in ("on.mp4", "ca.mp4", "pexels-4276282.mp4", "sunrise-timelapse.mp4",
-                 "money-stack.mp4"):
+    for name in (
+        "on.mp4",
+        "ca.mp4",
+        "pexels-4276282.mp4",
+        "sunrise-timelapse.mp4",
+        "money-stack.mp4",
+    ):
         (tmp_path / name).write_bytes(b"x")
     return broll.LocalProvider(tmp_path)
 
@@ -603,11 +628,16 @@ def test_a19_a_two_character_filename_no_longer_answers_every_keyword(tmp_path):
 def test_a19_a_tag_beats_a_filename_coincidence(tmp_path):
     """A tag is what the operator deliberately said; a filename token is a coincidence."""
     provider = _broll_library(tmp_path)
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        "pexels-4276282.mp4": ["money", "banknote"],
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "pexels-4276282.mp4": ["money", "banknote"],
+            }
+        )
+    )
     # `money-stack.mp4` matches "money" on its filename; the tagged file must win.
     from pathlib import Path
+
     assert Path(provider.search("money").path).name == "pexels-4276282.mp4"
 
 
@@ -615,19 +645,29 @@ def test_a19_a_stock_filename_becomes_findable_once_tagged(tmp_path):
     """A provider names its files ``pexels-4276282.mp4``. No filename rule can help."""
     provider = _broll_library(tmp_path)
     assert provider.search("wallet") is None
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        "pexels-4276282.mp4": ["cash", "wallet", "banknote"],
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "pexels-4276282.mp4": ["cash", "wallet", "banknote"],
+            }
+        )
+    )
     from pathlib import Path
+
     assert Path(provider.search("wallet").path).name == "pexels-4276282.mp4"
 
 
 def test_a19_a_synonym_reaches_a_tag_the_keyword_does_not_name(tmp_path):
     provider = _broll_library(tmp_path)
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        "pexels-4276282.mp4": ["wealth"],
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "pexels-4276282.mp4": ["wealth"],
+            }
+        )
+    )
     from pathlib import Path
+
     # "money" and "wealth" share a glyph in the emoji map, so they are one synonym group.
     assert Path(provider.search("money").path).name == "pexels-4276282.mp4"
 
@@ -638,9 +678,7 @@ def test_a19_a_synonym_scores_below_an_explicit_tag():
     Inference must never override a statement, which is what the ordering guarantees.
     """
     assert broll.match_score("money", {"wealth"}) < broll.match_score("money", {"money"})
-    assert broll.match_score("money", set(), "money-stack") < broll.match_score(
-        "money", {"wealth"}
-    )
+    assert broll.match_score("money", set(), "money-stack") < broll.match_score("money", {"wealth"})
 
 
 def test_a19_synonym_expansion_is_conservative_rather_than_wrong():
@@ -651,30 +689,40 @@ def test_a19_synonym_expansion_is_conservative_rather_than_wrong():
     on screen.
     """
     assert "wealth" in broll.synonyms("money")
-    assert "money" not in broll.synonyms("money")      # never itself
+    assert "money" not in broll.synonyms("money")  # never itself
     assert broll.synonyms("qwertyuiop") == frozenset()
 
 
 def test_a19_the_best_match_wins_not_the_first_one_found(tmp_path):
     """Directory order used to decide, so renaming an unrelated file changed the b-roll."""
     provider = _broll_library(tmp_path)
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        # "money stack" hits both tokens; the other hits one.
-        "sunrise-timelapse.mp4": ["money", "stack"],
-        "ca.mp4": ["money"],
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                # "money stack" hits both tokens; the other hits one.
+                "sunrise-timelapse.mp4": ["money", "stack"],
+                "ca.mp4": ["money"],
+            }
+        )
+    )
     from pathlib import Path
+
     assert Path(provider.search("money stack").path).name == "sunrise-timelapse.mp4"
 
 
 def test_a19_a_tie_is_broken_by_name_so_two_machines_agree(tmp_path):
     provider = _broll_library(tmp_path)
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        "sunrise-timelapse.mp4": ["money"],
-        "money-stack.mp4": ["money"],
-        "ca.mp4": ["money"],
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "sunrise-timelapse.mp4": ["money"],
+                "money-stack.mp4": ["money"],
+                "ca.mp4": ["money"],
+            }
+        )
+    )
     from pathlib import Path
+
     names = {Path(provider.search("money").path).name for _ in range(5)}
     assert names == {"ca.mp4"}
 
@@ -685,6 +733,7 @@ def test_a19_a_malformed_manifest_degrades_to_filename_matching(tmp_path):
     (tmp_path / broll.TAG_MANIFEST_NAME).write_text("{ this is not json")
     assert broll.load_tag_manifest(tmp_path) == {}
     from pathlib import Path
+
     assert Path(provider.search("money").path).name == "money-stack.mp4"
 
 
@@ -693,11 +742,15 @@ def test_a19_tags_may_be_written_as_a_string_or_a_list(tmp_path):
 
     Rejecting one would only produce a library that silently has no tags for those entries.
     """
-    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(json.dumps({
-        "a.mp4": ["money", "cash"],
-        "b.mp4": "money, cash",
-        "c.mp4": 42,
-    }))
+    (tmp_path / broll.TAG_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "a.mp4": ["money", "cash"],
+                "b.mp4": "money, cash",
+                "c.mp4": 42,
+            }
+        )
+    )
     manifest = broll.load_tag_manifest(tmp_path)
     assert manifest["a.mp4"] == manifest["b.mp4"] == frozenset({"money", "cash"})
     assert "c.mp4" not in manifest
@@ -710,9 +763,12 @@ def test_a19_tags_may_be_written_as_a_string_or_a_list(tmp_path):
 
 def _still_cue(start=1.0, end=3.0, path="/tmp/still.png"):
     return broll.BrollCue(
-        keyword="money", start=start, end=end,
-        asset=broll.AssetRef(path=path, kind="image", provider="local", source_id="",
-                             license="local", attribution=""),
+        keyword="money",
+        start=start,
+        end=end,
+        asset=broll.AssetRef(
+            path=path, kind="image", provider="local", source_id="", license="local", attribution=""
+        ),
     )
 
 
@@ -741,8 +797,15 @@ def test_a22_the_overlay_box_is_always_even_sided():
 
     for width in (1000, 1080, 720, 886, 1234):
         _args, graph, _notes = broll.build_broll_overlay(
-            [_still_cue()], "v0", "vout", width=width, height=1920, fps=30,
-            input_offset=1, ken_burns=True, zoom=0.12,
+            [_still_cue()],
+            "v0",
+            "vout",
+            width=width,
+            height=1920,
+            fps=30,
+            input_offset=1,
+            ken_burns=True,
+            zoom=0.12,
         )
         box = re.search(r"s=(\d+)x(\d+)", graph)
         assert box, graph
@@ -772,8 +835,15 @@ def test_a22_the_zoom_is_a_function_of_time_not_an_accumulation():
     """
     at_30 = _graph(ken_burns=True, zoom=0.12)
     _a, at_60, _n = broll.build_broll_overlay(
-        [_still_cue()], "v0", "vout", width=1080, height=1920, fps=60,
-        input_offset=1, ken_burns=True, zoom=0.12,
+        [_still_cue()],
+        "v0",
+        "vout",
+        width=1080,
+        height=1920,
+        fps=60,
+        input_offset=1,
+        ken_burns=True,
+        zoom=0.12,
     )
     assert "zoom+" not in at_30 and "pzoom" not in at_30
     # 2 seconds at 30fps is 60 frames; at 60fps it is 120. Same total zoom, different divisor.
@@ -789,10 +859,18 @@ def test_a22_consecutive_stills_do_not_all_drift_the_same_way():
     """
     cues = [_still_cue(start=float(i), end=float(i) + 1.5) for i in range(4)]
     _a, graph, _n = broll.build_broll_overlay(
-        cues, "v0", "vout", width=1080, height=1920, fps=30,
-        input_offset=1, ken_burns=True, zoom=0.12,
+        cues,
+        "v0",
+        "vout",
+        width=1080,
+        height=1920,
+        fps=30,
+        input_offset=1,
+        ken_burns=True,
+        zoom=0.12,
     )
     import re
+
     anchors = set(re.findall(r"x='\(iw-iw/zoom\)\*([\d.]+)'", graph))
     assert len(anchors) > 1, anchors
 
@@ -800,13 +878,28 @@ def test_a22_consecutive_stills_do_not_all_drift_the_same_way():
 def test_a22_a_video_asset_is_never_given_ken_burns():
     """It already moves. Adding a zoom on top would be a second, competing motion."""
     cue = broll.BrollCue(
-        keyword="money", start=1.0, end=3.0,
-        asset=broll.AssetRef(path="/tmp/v.mp4", kind="video", provider="local", source_id="",
-                             license="local", attribution=""),
+        keyword="money",
+        start=1.0,
+        end=3.0,
+        asset=broll.AssetRef(
+            path="/tmp/v.mp4",
+            kind="video",
+            provider="local",
+            source_id="",
+            license="local",
+            attribution="",
+        ),
     )
     _a, graph, _n = broll.build_broll_overlay(
-        [cue], "v0", "vout", width=1080, height=1920, fps=30,
-        input_offset=1, ken_burns=True, zoom=0.12,
+        [cue],
+        "v0",
+        "vout",
+        width=1080,
+        height=1920,
+        fps=30,
+        input_offset=1,
+        ken_burns=True,
+        zoom=0.12,
     )
     assert "zoompan" not in graph
     assert "trim=" in graph
@@ -851,18 +944,34 @@ def test_a22_the_duck_expression_is_accepted_by_ffmpeg_and_actually_dips(tmp_pat
             f"astats=metadata=1:reset=0[out]"
         )
         proc = subprocess.run(
-            [FFMPEG, "-hide_banner", "-nostats", "-f", "lavfi",
-             "-i", "sine=frequency=440:duration=3",
-             "-filter_complex", graph, "-map", "[out]", "-f", "null", "-"],
-            capture_output=True, text=True, check=True,
+            [
+                FFMPEG,
+                "-hide_banner",
+                "-nostats",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=3",
+                "-filter_complex",
+                graph,
+                "-map",
+                "[out]",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         import re
+
         values = re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf)", proc.stderr)
         assert values, proc.stderr[-2000:]
         return float(values[-1]) if values[-1] != "-inf" else -120.0
 
-    quiet = rms(1.3)      # inside the b-roll window
-    loud = rms(2.4)       # after it
+    quiet = rms(1.3)  # inside the b-roll window
+    loud = rms(2.4)  # after it
     assert quiet < loud - 3.0, (quiet, loud)
 
 
@@ -874,26 +983,64 @@ def test_a22_the_ken_burns_graph_renders_and_the_frame_changes(tmp_path, make_vi
     still = png_asset("shot.png", color="red")
     cue = _still_cue(start=0.5, end=3.5, path=str(still))
     inputs, graph, _notes = broll.build_broll_overlay(
-        [cue], "0:v", "vout", width=640, height=360, fps=25,
-        input_offset=1, ken_burns=True, zoom=0.3,
+        [cue],
+        "0:v",
+        "vout",
+        width=640,
+        height=360,
+        fps=25,
+        input_offset=1,
+        ken_burns=True,
+        zoom=0.3,
     )
     out = tmp_path / "kb.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-i", str(base), *inputs,
-         "-filter_complex", graph, "-map", "[vout]", "-t", "4", str(out)],
-        check=True, capture_output=True, text=True,
+        [
+            FFMPEG,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(base),
+            *inputs,
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-t",
+            "4",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     assert out.exists() and out.stat().st_size > 0
 
     def frame_md5(index: int) -> str:
         return subprocess.run(
-            [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(out),
-             "-vf", f"select=eq(n\\,{index})", "-frames:v", "1", "-f", "md5", "-"],
-            check=True, capture_output=True, text=True,
+            [
+                FFMPEG,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(out),
+                "-vf",
+                f"select=eq(n\\,{index})",
+                "-frames:v",
+                "1",
+                "-f",
+                "md5",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
 
     assert frame_md5(20) != frame_md5(75), "the overlay did not move"
-
 
 
 def test_a22_the_compositor_ducks_only_the_windows_that_reached_the_screen(monkeypatch, tmp_path):
@@ -913,12 +1060,21 @@ def test_a22_the_compositor_ducks_only_the_windows_that_reached_the_screen(monke
     music.write_bytes(b"stub")
 
     cue = broll.BrollCue(
-        keyword="money", start=1.0, end=3.0,
-        asset=broll.AssetRef(path=str(asset), kind="image", provider="local",
-                             source_id="", license="local", attribution=""),
+        keyword="money",
+        start=1.0,
+        end=3.0,
+        asset=broll.AssetRef(
+            path=str(asset),
+            kind="image",
+            provider="local",
+            source_id="",
+            license="local",
+            attribution="",
+        ),
     )
     monkeypatch.setattr(
-        compositor.audio, "resolve_music_bed",
+        compositor.audio,
+        "resolve_music_bed",
         lambda mood, duration, temp_dir, **_kw: compositor.audio.MusicBed(
             path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
         ),
@@ -931,10 +1087,12 @@ def test_a22_the_compositor_ducks_only_the_windows_that_reached_the_screen(monke
     def fake_run(cmd):
         calls.append([str(part) for part in cmd])
         from pathlib import Path as _P
+
         _P(str(cmd[-1])).write_bytes(b"stub-render")
 
     monkeypatch.setattr(
-        compositor, "probe",
+        compositor,
+        "probe",
         lambda _path: MediaInfo(duration=4.0, width=1080, height=1920, fps=30.0, has_audio=True),
     )
     monkeypatch.setattr(compositor, "_run", fake_run)
@@ -943,15 +1101,18 @@ def test_a22_the_compositor_ducks_only_the_windows_that_reached_the_screen(monke
     src.write_bytes(b"stub")
 
     from tests.conftest import options_all_off
+
     opts = options_all_off(captions=False, metadata=False, aspect="9:16", music="chill")
     result = compositor.render_clip(
-        src, tmp_path / "out.mp4", opts, [], tmp_path / "tmp",
+        src,
+        tmp_path / "out.mp4",
+        opts,
+        [],
+        tmp_path / "tmp",
         broll_resolver=lambda: [cue],
     )
     assert result is not None
-    graph = next(
-        cmd[cmd.index("-filter_complex") + 1] for cmd in calls if "-filter_complex" in cmd
-    )
+    graph = next(cmd[cmd.index("-filter_complex") + 1] for cmd in calls if "-filter_complex" in cmd)
     # The dip is present, and it covers the cue's own window rather than some default.
     assert "1-(max(" in graph or "1-(between(t,1.000,3.000)" in graph, graph
     assert "1.000" in graph and "3.000" in graph

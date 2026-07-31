@@ -1,4 +1,5 @@
 """Tests for disk usage, sidecar metadata, and the retention sweep."""
+
 from __future__ import annotations
 
 import os
@@ -9,8 +10,15 @@ from storage_backends import retention
 
 def test_disk_usage_keys():
     usage = retention.disk_usage()
-    for key in ("total_bytes", "used_bytes", "free_bytes", "used_percent",
-                "free_gb", "areas", "low_space"):
+    for key in (
+        "total_bytes",
+        "used_bytes",
+        "free_bytes",
+        "used_percent",
+        "free_gb",
+        "areas",
+        "low_space",
+    ):
         assert key in usage
     assert set(usage["areas"]) == {"clips", "uploads", "temp"}
 
@@ -32,6 +40,7 @@ def test_sidecar_write_and_path(tmp_path):
     assert dest == tmp_path / "clip_01.json"
     assert dest.exists()
     import json
+
     data = json.loads(dest.read_text())
     assert data["title"] == "Hello"
     assert "saved_at" in data
@@ -98,7 +107,6 @@ def test_cleanup_temp(tmp_path, monkeypatch):
 
     assert retention.cleanup_temp("job1") == 1
     assert not (temp / "job1").exists()
-
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +202,8 @@ def test_refresh_forces_a_recompute(tmp_path, monkeypatch):
     walks = []
     real_dir_size = retention._dir_size
     monkeypatch.setattr(
-        retention, "_dir_size",
+        retention,
+        "_dir_size",
         lambda path: (walks.append(str(path)), real_dir_size(path))[1],
     )
 
@@ -215,7 +224,8 @@ def test_a_zero_ttl_disables_caching(monkeypatch):
     walks = []
     real_dir_size = retention._dir_size
     monkeypatch.setattr(
-        retention, "_dir_size",
+        retention,
+        "_dir_size",
         lambda path: (walks.append(str(path)), real_dir_size(path))[1],
     )
 
@@ -238,7 +248,8 @@ def test_the_volume_figures_are_never_cached(monkeypatch):
     calls = []
     real_usage = retention.shutil.disk_usage
     monkeypatch.setattr(
-        retention.shutil, "disk_usage",
+        retention.shutil,
+        "disk_usage",
         lambda p: (calls.append(str(p)), real_usage(p))[1],
     )
 

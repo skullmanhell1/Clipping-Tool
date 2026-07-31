@@ -14,9 +14,10 @@ simply keep the input clip. This keeps frame-by-frame work strictly optional.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from config import settings
 from worker import branding, caption_contrast
@@ -49,8 +50,8 @@ KINETIC_ENGINE_ID = "kinetic_typography"
 
 
 def _kinetic_subtitle_path(
-    contributions: Sequence["Compose_Contribution"],
-) -> Optional[Path]:
+    contributions: Sequence[Compose_Contribution],
+) -> Path | None:
     """The ``kinetic_typography`` ASS path when that engine owns the captions.
 
     ``None`` — the value that keeps the whole v0.8.0 caption ladder on its normal
@@ -72,8 +73,8 @@ def _kinetic_subtitle_path(
 
 
 def _ordered_contributions(
-    contributions: Optional[Sequence["Compose_Contribution"]],
-) -> list["Compose_Contribution"]:
+    contributions: Sequence[Compose_Contribution] | None,
+) -> list[Compose_Contribution]:
     """Compose_Contributions in deterministic ``(z_order, engine_id)`` order.
 
     ``None``/empty yields ``[]``, which is what keeps the whole engine layer of
@@ -87,8 +88,8 @@ def _ordered_contributions(
 
 
 def _input_order_contributions(
-    contributions: Optional[Sequence["Compose_Contribution"]],
-) -> list["Compose_Contribution"]:
+    contributions: Sequence[Compose_Contribution] | None,
+) -> list[Compose_Contribution]:
     """Compose_Contributions in **registry** order — the order they arrived in.
 
     ``Engine_Host.run_stage`` builds ``Stage_Outcome.contributions`` by walking the
@@ -111,7 +112,7 @@ def _input_order_contributions(
 
 
 def _engine_input_args(
-    contributions: Sequence["Compose_Contribution"],
+    contributions: Sequence[Compose_Contribution],
 ) -> list[str]:
     """The ``-i`` argv fragment for the reserved engine input block.
 
@@ -168,10 +169,10 @@ def render_clip(
     hook_text: str = "",
     llm_client=None,
     emoji_resolver=None,
-    broll_resolver: Optional[Callable[[], list]] = None,
-    engine_contributions: Optional[Sequence["Compose_Contribution"]] = None,
+    broll_resolver: Callable[[], list] | None = None,
+    engine_contributions: Sequence[Compose_Contribution] | None = None,
     music_select_key: str = "",
-) -> Optional[RenderResult]:
+) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
     Returns a :class:`RenderResult`, or ``None`` when no effect (and no caption)
@@ -205,9 +206,7 @@ def render_clip(
     contributions = _ordered_contributions(engine_contributions)
     # Inputs follow registry order, filters follow (z_order, engine_id): the two
     # orderings decouple deliberately (see :func:`_input_order_contributions`).
-    engine_input_args = _engine_input_args(
-        _input_order_contributions(engine_contributions)
-    )
+    engine_input_args = _engine_input_args(_input_order_contributions(engine_contributions))
     engine_input_count = engine_input_args.count("-i")
     base_clip = Path(base_clip)
     dest = Path(dest)
@@ -221,11 +220,11 @@ def render_clip(
     applied: list[str] = []
 
     # --- captions + hook title (single combined ASS) ---------------------
-    subtitles_filter: Optional[str] = None
+    subtitles_filter: str | None = None
     # C19: the highlighted word indices, hoisted out of the preset branch below so the emoji
     # planner can read them. `None` means "no highlighting ran", which is distinct from an empty
     # set ("highlighting ran and chose nothing") - the planner treats only the latter as a decision.
-    keyword_indices: Optional[set[int]] = None
+    keyword_indices: set[int] | None = None
     # O12: in `soft` mode the captions are delivered as a selectable track by the pipeline
     # instead of being burned in here. The hook title is unaffected - it is a title card, not a
     # caption, and there is no soft equivalent of one.
@@ -263,9 +262,7 @@ def render_clip(
         # ``effects_applied`` against an identical v0.8.0 run differs in no
         # position either.
         if need_caps:
-            preset, _substituted = caption_presets.resolve_preset(
-                options.caption_preset
-            )
+            preset, _substituted = caption_presets.resolve_preset(options.caption_preset)
             applied.append(f"caption_preset:{preset.name}")
             if options.caption_keyword_highlight and preset.highlight_keywords:
                 applied.append("keyword_highlight")
@@ -295,9 +292,7 @@ def render_clip(
         )
 
         if use_preset:
-            preset, substituted = caption_presets.resolve_preset(
-                options.caption_preset
-            )
+            preset, substituted = caption_presets.resolve_preset(options.caption_preset)
             # An explicit animation override wins over the preset default.
             if options.caption_animation:
                 preset = replace(preset, animation=options.caption_animation)
@@ -317,8 +312,11 @@ def render_clip(
             # brand kit deliberately - the kit sets the *fill*, and this reacts to whatever fill is
             # in force by adjusting only the legibility layer around it. Inert unless enabled.
             preset, contrast_markers = caption_contrast.choose_for_clip(
-                base_clip, preset,
-                duration=duration, video_width=width, video_height=height,
+                base_clip,
+                preset,
+                duration=duration,
+                video_width=width,
+                video_height=height,
                 position=options.caption_position or None,
             )
             applied.extend(contrast_markers)
@@ -335,8 +333,10 @@ def render_clip(
 
             notes: list[str] = []
             cap.build_ass(
-                cues, ass_path,
-                video_width=width, video_height=height,
+                cues,
+                ass_path,
+                video_width=width,
+                video_height=height,
                 preset=preset,
                 keyword_indices=keyword_indices,
                 position=options.caption_position or None,
@@ -357,8 +357,10 @@ def render_clip(
                     applied.append(note)
         else:
             cap.build_ass(
-                cues, ass_path,
-                video_width=width, video_height=height,
+                cues,
+                ass_path,
+                video_width=width,
+                video_height=height,
                 template=options.caption_template,
                 position=options.caption_position,
                 hook_text=hook_text if need_hook else "",
@@ -377,9 +379,16 @@ def render_clip(
     # is present the two are re-joined into the single chain the compositor has
     # always built, preserving byte-for-byte behaviour.
     look_chain = overlays.build_video_chain(
-        duration=duration, fps=fps, width=width, height=height,
-        color=options.color, zoom=options.zoom, transitions=options.transitions,
-        fades=options.fades, progress_bar=False, subtitles=None,
+        duration=duration,
+        fps=fps,
+        width=width,
+        height=height,
+        color=options.color,
+        zoom=options.zoom,
+        transitions=options.transitions,
+        fades=options.fades,
+        progress_bar=False,
+        subtitles=None,
         # V9: which opening treatment `transitions` means. Default `punch_in` is what shipped.
         transition_style=str(getattr(settings, "transition_style", "punch_in")),
         # V18: an optional 3D LUT after the preset. Empty (the default) changes nothing.
@@ -417,14 +426,14 @@ def render_clip(
         caption_chain.append(cap.subtitles_filter(end_card_path))
         applied.append("end_card")
 
-
-
     if options.progress_bar:
         # V13: position/style/colour/thickness come from settings; the defaults are exactly the
         # hard-coded values this replaces, so an unconfigured install renders the same bar.
         caption_chain.append(
             overlays.progress_bar_filter(
-                duration, width, height,
+                duration,
+                width,
+                height,
                 thickness=int(getattr(settings, "progress_bar_thickness", 12)),
                 color=str(getattr(settings, "progress_bar_color", "0x22D3EE")),
                 position=str(getattr(settings, "progress_bar_position", "bottom")),
@@ -447,7 +456,10 @@ def render_clip(
     emoji_cues = []
     if options.emoji and options.emoji != "off":
         emoji_cues = emoji.plan_emoji(
-            words, duration, intensity=options.emoji, mode=options.emoji_mode,
+            words,
+            duration,
+            intensity=options.emoji,
+            mode=options.emoji_mode,
             client=llm_client,
             # C19: the words the captions actually highlight, so the emoji lands on the word the
             # viewer is already being pointed at. `None` when keyword highlighting is off, which
@@ -460,7 +472,7 @@ def render_clip(
     # is playing" are different claims. The synthesised fallback is a two-tone drone, and
     # reporting it as music:<mood> - indistinguishable from a real track - is what made the
     # limitation invisible.
-    music_bed: Optional[audio.MusicBed] = None
+    music_bed: audio.MusicBed | None = None
     if options.music:
         # A17: `music_select_key` picks among several tracks for the mood. Supplied by the caller
         # rather than derived here, because the only keys that work are ones this function cannot
@@ -472,7 +484,7 @@ def render_clip(
     if not info.has_audio:
         # No audio track to work with; ignore music/fade on audio.
         music_bed = None
-    music_path: Optional[Path] = None if music_bed is None else music_bed.path
+    music_path: Path | None = None if music_bed is None else music_bed.path
 
     # --- b-roll cues (already resolved via the injected resolver) ---------
     # A22: filled in once the overlay graph is built, so only windows that are actually on screen
@@ -483,8 +495,7 @@ def render_clip(
     if broll_resolver is not None:
         try:
             broll_cues = [
-                c for c in (broll_resolver() or [])
-                if getattr(c, "asset", None) is not None
+                c for c in (broll_resolver() or []) if getattr(c, "asset", None) is not None
             ]
         except Exception:
             broll_cues = []
@@ -517,8 +528,13 @@ def render_clip(
         broll_base = "vlook" if look_chain else "0:v"
         try:
             broll_input_args, broll_graph, broll_notes = broll.build_broll_overlay(
-                broll_cues, base_label=broll_base, out_label="vbroll",
-                width=width, height=height, fps=fps, input_offset=broll_offset,
+                broll_cues,
+                base_label=broll_base,
+                out_label="vbroll",
+                width=width,
+                height=height,
+                fps=fps,
+                input_offset=broll_offset,
                 # A22: motion on stills. Off by default - it cover-crops them into a fixed box,
                 # which is a visible change to the shipped look.
                 ken_burns=bool(getattr(settings, "broll_ken_burns", False)),
@@ -534,7 +550,8 @@ def render_clip(
             # produced a graph, so a failed overlay does not leave an unexplained dip in the bed.
             broll_duck_windows = [
                 (max(0.0, float(c.start)), max(0.0, float(c.end)))
-                for c in broll_cues if float(c.end) > float(c.start)
+                for c in broll_cues
+                if float(c.end) > float(c.start)
             ]
 
     num_broll_inputs = broll_input_args.count("-i")
@@ -572,12 +589,16 @@ def render_clip(
     emoji_graph = ""
     if emoji_cues:
         emoji_inputs, emoji_graph = emoji.build_overlay(
-            emoji_cues, base_label=video_label, out_label="vout",
-            duration=duration, animate=options.emoji_animate,
+            emoji_cues,
+            base_label=video_label,
+            out_label="vout",
+            duration=duration,
+            animate=options.emoji_animate,
             # A8: the real target width. build_overlay assumed 1080, so the emoji was
             # sized for a frame the output might not have.
             frame_width=width,
-            resolver=emoji_resolver, input_offset=emoji_offset,
+            resolver=emoji_resolver,
+            input_offset=emoji_offset,
             # C19: `caption` sits the glyph just clear of the caption block, which only makes
             # sense now that the emoji lands on the word the caption highlights.
             placement=str(getattr(settings, "emoji_placement", "spread") or "spread"),
@@ -652,16 +673,21 @@ def render_clip(
         # label is byte-identically ``1:a`` for every v0.8.0 caller).
         inputs += ["-i", str(music_path)]
         graph_parts.append(
-            audio.music_mix_filter(speech_label, f"{music_index}:a", "aout",
-                                   options.music_volume, duration,
-                                   fade=options.fades,
-                                   duck=options.music_duck,
-                                   # A22: dip the bed under each b-roll window, so a visual
-                                   # accent has an audible one. Only the windows that actually
-                                   # composited - a cue whose asset failed to resolve is not on
-                                   # screen, and ducking under nothing is a hole in the bed.
-                                   broll_windows=broll_duck_windows,
-                                   broll_duck=broll_duck_amount)
+            audio.music_mix_filter(
+                speech_label,
+                f"{music_index}:a",
+                "aout",
+                options.music_volume,
+                duration,
+                fade=options.fades,
+                duck=options.music_duck,
+                # A22: dip the bed under each b-roll window, so a visual
+                # accent has an audible one. Only the windows that actually
+                # composited - a cue whose asset failed to resolve is not on
+                # screen, and ducking under nothing is a hole in the bed.
+                broll_windows=broll_duck_windows,
+                broll_duck=broll_duck_amount,
+            )
         )
         audio_out = "aout"
         audio_changed = True
@@ -716,9 +742,7 @@ def render_clip(
             applied.append("loudness_degraded:unmeasurable")
         else:
             target = audio.platform_loudness_target(options.platform)
-            graph_parts.append(
-                f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]"
-            )
+            graph_parts.append(f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]")
             audio_out = "aloud"
             applied.append(f"loudness:{target:g}lufs")
 
@@ -739,8 +763,11 @@ def render_clip(
     inputs += emoji_inputs
 
     video_changed = (
-        bool(look_chain) or bool(caption_chain) or bool(broll_graph)
-        or bool(emoji_graph) or bool(logo_graph)
+        bool(look_chain)
+        or bool(caption_chain)
+        or bool(broll_graph)
+        or bool(emoji_graph)
+        or bool(logo_graph)
     )
     if not video_changed and not audio_changed:
         return None  # nothing to do

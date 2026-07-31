@@ -10,6 +10,7 @@ the ``FakeWord`` helper from ``tests/conftest.py`` and the
 ``FakeDiarizationBackend`` / ``RaisingDiarizationBackend`` doubles from
 ``tests/fakes.py``.
 """
+
 from __future__ import annotations
 
 from hypothesis import given, settings
@@ -133,7 +134,7 @@ def test_p3_adjacent_same_label_contiguous_turns_merged(data):
     words, duration = data
     turns = segment_by_words(words, duration)
 
-    for a, b in zip(turns, turns[1:]):
+    for a, b in zip(turns, turns[1:], strict=False):
         if a.speaker_label == b.speaker_label:
             # Same label => must be separated by a real gap (not contiguous).
             assert b.start > a.end + _EPS
@@ -202,8 +203,8 @@ def _mixed_records(draw):
     """
     _GARBAGE = [
         {},
-        {"speaker_label": "S1"},                       # missing start/end
-        {"start": 1.0, "end": 2.0},                    # missing label
+        {"speaker_label": "S1"},  # missing start/end
+        {"start": 1.0, "end": 2.0},  # missing label
         {"speaker_label": "S", "start": "abc", "end": "xyz"},  # unparseable
         "not-a-dict",
         None,
@@ -335,16 +336,19 @@ def test_marker_selection_transcript_model_degraded():
     # Permissibility on (even with a backend present) -> transcript only.
     notes = []
     diarize_source(
-        words, duration,
+        words,
+        duration,
         backend=FakeDiarizationBackend(spans=[("A", 0.0, 1.0), ("B", 2.0, 3.0)]),
-        permissibility=True, notes=notes,
+        permissibility=True,
+        notes=notes,
     )
     assert notes == ["diarization:transcript"]
 
     # Working backend -> model.
     notes = []
     diarize_source(
-        words, duration,
+        words,
+        duration,
         backend=FakeDiarizationBackend(spans=[("A", 0.0, 1.0), ("B", 2.0, 3.0)]),
         notes=notes,
     )
@@ -354,7 +358,6 @@ def test_marker_selection_transcript_model_degraded():
     notes = []
     diarize_source(words, duration, backend=RaisingDiarizationBackend(), notes=notes)
     assert notes == ["diarization_degraded"]
-
 
 
 # --------------------------------------------------------------------------- #

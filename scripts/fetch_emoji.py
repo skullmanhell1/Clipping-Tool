@@ -98,7 +98,9 @@ def main() -> int:
     if args.check:
         missing = [g for g in glyphs if not (assets / emoji_filename(g)).exists()]
         if missing:
-            print(f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}")
+            print(
+                f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}"
+            )
             print(f"run: python scripts/fetch_emoji.py --style {style.name}")
             return 1
         print(f"all {len(glyphs)} {style.name} emoji vendored")

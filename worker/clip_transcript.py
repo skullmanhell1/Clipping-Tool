@@ -29,7 +29,6 @@ the offsets a cut list must be expressed in.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from worker import captions as cap
 from worker import transcript_cache
@@ -43,7 +42,7 @@ class TranscriptUnavailable(RuntimeError):
 def load_transcript(
     source: str | Path,
     *,
-    language: Optional[str] = None,
+    language: str | None = None,
     translate: bool = False,
     vocabulary: str = "",
 ) -> Transcript:
@@ -59,9 +58,7 @@ def load_transcript(
             "be recovered."
         )
 
-    key = cache_key_for(
-        path, language=language, translate=translate, vocabulary=vocabulary or ""
-    )
+    key = cache_key_for(path, language=language, translate=translate, vocabulary=vocabulary or "")
     if key is None:
         raise TranscriptUnavailable("The source file for this job could not be read.")
 
@@ -80,7 +77,7 @@ def words_for_clip(
     start: float,
     end: float,
     *,
-    language: Optional[str] = None,
+    language: str | None = None,
     translate: bool = False,
     vocabulary: str = "",
 ) -> list:

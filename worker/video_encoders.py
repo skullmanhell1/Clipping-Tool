@@ -53,7 +53,6 @@ from __future__ import annotations
 import logging
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional
 
 from config import settings
 
@@ -71,16 +70,30 @@ PROBE_TIMEOUT_S = 20.0
 #: x264 preset -> NVENC preset. NVENC's p1..p7 run fastest to slowest, the opposite direction to
 #: reading x264's names left to right, so this is written out rather than computed.
 _NVENC_PRESETS: dict[str, str] = {
-    "ultrafast": "p1", "superfast": "p1", "veryfast": "p2", "faster": "p3",
-    "fast": "p4", "medium": "p4", "slow": "p5", "slower": "p6",
-    "veryslow": "p7", "placebo": "p7",
+    "ultrafast": "p1",
+    "superfast": "p1",
+    "veryfast": "p2",
+    "faster": "p3",
+    "fast": "p4",
+    "medium": "p4",
+    "slow": "p5",
+    "slower": "p6",
+    "veryslow": "p7",
+    "placebo": "p7",
 }
 
 #: x264 preset -> QSV preset. QSV accepts the x264 names, but only seven of the ten.
 _QSV_PRESETS: dict[str, str] = {
-    "ultrafast": "veryfast", "superfast": "veryfast", "veryfast": "veryfast",
-    "faster": "faster", "fast": "fast", "medium": "medium", "slow": "slow",
-    "slower": "slower", "veryslow": "veryslow", "placebo": "veryslow",
+    "ultrafast": "veryfast",
+    "superfast": "veryfast",
+    "veryfast": "veryfast",
+    "faster": "faster",
+    "fast": "fast",
+    "medium": "medium",
+    "slow": "slow",
+    "slower": "slower",
+    "veryslow": "veryslow",
+    "placebo": "veryslow",
 }
 
 
@@ -146,23 +159,32 @@ class VideoEncoder:
 KNOWN_ENCODERS: dict[str, VideoEncoder] = {
     SOFTWARE_ENCODER: VideoEncoder(name=SOFTWARE_ENCODER, kind="software"),
     "h264_nvenc": VideoEncoder(
-        name="h264_nvenc", kind="nvenc", _preset_map=_NVENC_PRESETS,
+        name="h264_nvenc",
+        kind="nvenc",
+        _preset_map=_NVENC_PRESETS,
     ),
     "h264_qsv": VideoEncoder(
-        name="h264_qsv", kind="qsv", _preset_map=_QSV_PRESETS,
+        name="h264_qsv",
+        kind="qsv",
+        _preset_map=_QSV_PRESETS,
     ),
     "h264_videotoolbox": VideoEncoder(
-        name="h264_videotoolbox", kind="videotoolbox",
+        name="h264_videotoolbox",
+        kind="videotoolbox",
     ),
     "h264_vaapi": VideoEncoder(
-        name="h264_vaapi", kind="vaapi",
+        name="h264_vaapi",
+        kind="vaapi",
         # VAAPI needs frames uploaded to the device and `-level` is rejected by several drivers.
         # Left selectable, but it is the one that most often needs `-vaapi_device` on the command
         # line, which is outside what this project builds.
-        pix_fmt="nv12", accepts_level=False,
+        pix_fmt="nv12",
+        accepts_level=False,
     ),
     "h264_v4l2m2m": VideoEncoder(
-        name="h264_v4l2m2m", kind="v4l2", supported=False,
+        name="h264_v4l2m2m",
+        kind="v4l2",
+        supported=False,
         unsupported_reason=(
             "no constant-quality mode - only -b:v - so using it would silently switch the "
             "pipeline from a quality target to a bitrate target"
@@ -196,7 +218,10 @@ def compiled_encoders() -> frozenset[str]:
     try:
         proc = subprocess.run(
             [settings.ffmpeg_binary, "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=PROBE_TIMEOUT_S, check=False,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_S,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
@@ -229,9 +254,18 @@ def encoder_available(name: str) -> bool:
         return False
 
     args = [
-        settings.ffmpeg_binary, "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=0.04",
-        "-frames:v", "1", "-c:v", key,
+        settings.ffmpeg_binary,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=25:duration=0.04",
+        "-frames:v",
+        "1",
+        "-c:v",
+        key,
     ]
     if encoder is not None and encoder.pix_fmt:
         args += ["-pix_fmt", encoder.pix_fmt]
@@ -242,8 +276,11 @@ def encoder_available(name: str) -> bool:
         )
         ok = proc.returncode == 0
         if not ok:
-            logger.debug("O8: %s is compiled in but failed to encode: %s",
-                         key, (proc.stderr or "").strip()[:300])
+            logger.debug(
+                "O8: %s is compiled in but failed to encode: %s",
+                key,
+                (proc.stderr or "").strip()[:300],
+            )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("O8: probing %s failed: %s", key, exc)
         ok = False
@@ -265,7 +302,7 @@ class EncoderChoice:
         return bool(self.marker)
 
 
-def resolve_encoder(requested: Optional[str] = None) -> EncoderChoice:
+def resolve_encoder(requested: str | None = None) -> EncoderChoice:
     """The encoder to use for ``requested`` (default: :data:`config.settings.video_encoder`).
 
     ``auto`` tries the hardware encoders in :data:`AUTO_ORDER` and falls back to ``libx264``. A
@@ -275,8 +312,11 @@ def resolve_encoder(requested: Optional[str] = None) -> EncoderChoice:
     An unknown name falls back too rather than raising - a typo in a setting should not fail a job
     after the transcription has been paid for.
     """
-    name = str(requested if requested is not None else
-               getattr(settings, "video_encoder", SOFTWARE_ENCODER) or SOFTWARE_ENCODER).strip()
+    name = str(
+        requested
+        if requested is not None
+        else getattr(settings, "video_encoder", SOFTWARE_ENCODER) or SOFTWARE_ENCODER
+    ).strip()
     software = KNOWN_ENCODERS[SOFTWARE_ENCODER]
 
     if name.lower() == "auto":
@@ -290,16 +330,22 @@ def resolve_encoder(requested: Optional[str] = None) -> EncoderChoice:
     encoder = KNOWN_ENCODERS.get(name)
     if encoder is None:
         return EncoderChoice(
-            software, requested=name, marker=f"encoder_unknown:{name}",
+            software,
+            requested=name,
+            marker=f"encoder_unknown:{name}",
         )
     if not encoder.supported:
         return EncoderChoice(
-            software, requested=name, marker=f"encoder_unsupported:{name}",
+            software,
+            requested=name,
+            marker=f"encoder_unsupported:{name}",
         )
     if encoder.name == SOFTWARE_ENCODER:
         return EncoderChoice(software, requested=name)
     if not encoder_available(encoder.name):
         return EncoderChoice(
-            software, requested=name, marker=f"encoder_unavailable:{name}",
+            software,
+            requested=name,
+            marker=f"encoder_unavailable:{name}",
         )
     return EncoderChoice(encoder, requested=name)

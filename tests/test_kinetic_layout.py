@@ -33,6 +33,7 @@ same assertions over ``emit_ass(plan)``'s real ``Default`` events (adding the
 Property 17 (the font ladder) also belongs to this file per the design's file
 mapping; it lands with the engine class in task 9.7.
 """
+
 from __future__ import annotations
 
 from hypothesis import given, settings
@@ -80,7 +81,7 @@ def _line_width(texts):
     if not texts:
         return 0
     total = display_width(texts[0])
-    for previous, following in zip(texts, texts[1:]):
+    for previous, following in zip(texts, texts[1:], strict=False):
         total += join_width(previous, following) + display_width(following)
     return total
 
@@ -90,7 +91,7 @@ def _render_line(texts):
     if not texts:
         return ""
     out = texts[0]
-    for previous, following in zip(texts, texts[1:]):
+    for previous, following in zip(texts, texts[1:], strict=False):
         out += join_separator(previous, following) + following
     return out
 
@@ -109,9 +110,7 @@ def _render_line(texts):
     timeline=st.one_of(st_word_timeline(), st_i18n_word_timeline()),
     option_data=st_kinetic_options(),
 )
-def test_p14_layout_respects_line_count_line_width_and_word_integrity(
-    timeline, option_data
-):
+def test_p14_layout_respects_line_count_line_width_and_word_integrity(timeline, option_data):
     """Validates: Requirements 7.5, 7.6, 7.8, 7.9, 8.1, 8.2, 8.4, 8.5, 8.10
 
     Asserted on ``pack_lines`` output rather than on emitted ``Default`` events
@@ -133,7 +132,7 @@ def test_p14_layout_respects_line_count_line_width_and_word_integrity(
     # --- word conservation: every index exactly once, in timeline order -------
     flat = [index for line in lines for index in line] + list(overflow)
     assert flat == list(range(len(texts)))
-    assert all(line for line in lines)   # no empty Text_Line is ever emitted
+    assert all(line for line in lines)  # no empty Text_Line is ever emitted
     for line in lines:
         assert list(line) == sorted(line)
 
@@ -163,7 +162,7 @@ def test_p14_layout_respects_line_count_line_width_and_word_integrity(
             cursor = found + len(text)
 
         # --- the join rule (Reqs 8.2, 8.4) -----------------------------------
-        for previous, following in zip(line_texts, line_texts[1:]):
+        for previous, following in zip(line_texts, line_texts[1:], strict=False):
             separator = join_separator(previous, following)
             if is_space_free(previous) and is_space_free(following):
                 assert separator == ""
@@ -199,7 +198,7 @@ def _assert_safe_area(*, position, preset_position, width, height, pct_x, pct_y)
     # --- margins are at least the Safe_Area insets (Reqs 7.2, 7.10) ----------
     assert margin_l >= inset_x
     assert margin_r >= inset_x
-    assert margin_l == margin_r          # one horizontal inset, applied both sides
+    assert margin_l == margin_r  # one horizontal inset, applied both sides
     assert margin_v >= inset_y
 
     # --- the caption box still fits inside the frame (Req 7.10) -------------
@@ -236,9 +235,7 @@ def _assert_safe_area(*, position, preset_position, width, height, pct_x, pct_y)
     width=_ST_DIMENSION,
     height=_ST_DIMENSION,
 )
-def test_p16_style_margins_keep_the_caption_box_inside_the_safe_area(
-    option_data, width, height
-):
+def test_p16_style_margins_keep_the_caption_box_inside_the_safe_area(option_data, width, height):
     """Validates: Requirements 7.2, 7.3, 7.4, 7.10
 
     Asserted on ``safe_area_margins`` / ``position_align`` — the helpers that
