@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — deployment and ingest, both previously unexercised (I7, I10, I12, I13)
+
+- **`I12` — the Docker image had never been built.** A Dockerfile nobody has run is a deployment
+  story rather than a deployment. It builds, and `scripts/docker_smoke.sh` now boots the image and
+  probes it in CI, gating the deploy job. Three things can be wrong here that nothing else catches,
+  because each is invisible from a working checkout: the build failing; the build succeeding and
+  the app not starting; and both succeeding while an **asset is missing** because `.dockerignore`
+  excluded it. The last is why the check queries the fonts *through the API* rather than running
+  `fc-match` — `fc-match Anton` succeeding only proves the Dockerfile registered the faces with
+  fontconfig, not that the app's own manifest and files both arrived under `/app`. The font chain
+  has already broken exactly that way once (C1), and the only symptom was captions in a substituted
+  face in rendered output. Verified: `/healthz`, the SPA from the frontend build stage, 8 fonts,
+  14 caption presets, 326 vendored emoji.
+- **`I13` — URL ingest had never been run either.** It downloads. `download_video` is the *first*
+  thing a "paste a link" user touches and every failure inside it raises `DownloadError` carrying a
+  yt-dlp message, so four things could have been silently wrong: the format selector (a malformed
+  one falls through to `best` rather than erroring, so an ignored height cap looks exactly like one
+  that worked); `outtmpl`; the returned path; and the progress hook, where a wrong key name means
+  the UI shows nothing for the whole download — indistinguishable from a hung job.
+
+  Verified against the real network (Wikimedia Commons: metadata, a 5.6 MB download, 14 progress
+  events, the height cap honoured at both 240p and 480p) and then pinned by tests that serve the
+  media from a **local HTTP server**. yt-dlp's `generic` extractor treats a plain media URL like
+  any other input, so the local server exercises the whole path with none of the flakiness that
+  would make this test the reason CI is red.
+
+  One branch could not be reached that way and is now reachable: `prepare_filename` reports the
+  pre-post-processing name, and `merge_output_format` rewrites the container **only when a merge
+  actually happened**, so the prepared name is right for a progressive source and wrong for a
+  merged one — with both returning a plausible path and only one existing. Extracted as
+  `resolve_downloaded_path` so both halves can be tested rather than only the half a single-file
+  source happens to take.
+- **`I7` — image size: 1.83 GB → 1.48 GB.** Two findings, one of them a plain dependency bug:
+  - **Two OpenCVs were installed.** `requirements.txt` pinned `opencv-python` while mediapipe
+    depends on `opencv-contrib-python`, so pip installed both — and each ships its own ~91 MB
+    directory of near-identical native libraries. contrib is a superset in the same `cv2`
+    namespace, so dropping the explicit pin changes nothing that imports. Left implicit rather
+    than re-pinned to contrib: two places to state it is how the tree ends up with two wheels
+    again.
+  - **Node is now opt-in** (`--build-arg INSTALL_WHOP_BRIDGE=true`). Debian's `nodejs`+`npm` is
+    around 200 MB of image for one optional publisher. That exposed a real gap: the Whop
+    publisher's availability check looked for the *bridge script*, which is committed source and
+    therefore present in every image, so it reported the publisher **ready** on an image with no
+    Node and then failed at publish time with a `FileNotFoundError` from `subprocess` — the least
+    actionable place to learn that Node is missing. It now checks for the interpreter too, and the
+    message names the build arg.
+- **`I10` — the npm advisories.** 11 → 0 reported by `npm audit`, via `vite` 5→8, `vitest` 2→3 and
+  `@vitejs/plugin-react` 4→5. The chain that mattered was `esbuild`: it let any website send
+  requests to a running dev server and read the responses.
+
+  The upgrade broke all 81 component tests while `npm run build` stayed perfectly green — vitest
+  transformed `.jsx` files with the *classic* JSX runtime, so every one failed with
+  "ReferenceError: React is not defined". Fixed by stating `esbuild: { jsx: "automatic" }` in the
+  vite config, which makes both pipelines agree rather than depending on which transform sees a
+  file first. Node is pinned to 22 in CI and in the Dockerfile's frontend stage, because vite 8
+  requires `^20.19.0 || >=22.12.0` and `node:20-slim` satisfies that only on its newest patch
+  releases.
+
+  **A residual 9 advisories are deliberately not "fixed":** one `brace-expansion` DoS reachable
+  through eslint's own `minimatch` chain. Both available fixes are worse than the finding, and both
+  were tried — `npm audit fix --force` *downgrades* `eslint-plugin-react` to 7.22.0, and overriding
+  `brace-expansion` to a patched 5.x breaks `minimatch@3` so eslint crashes outright. CI therefore
+  blocks on `--audit-level=critical`, because a gate that cannot be satisfied without breaking the
+  build is a gate people learn to ignore.
+
 ### Added — the asset libraries (A5, A9, A13, A17, A19, A22)
 
 - **`A9` — the emoji keyword map, 85 keywords to 1190.** On real speech the old map produced no
