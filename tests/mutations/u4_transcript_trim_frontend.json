@@ -1,0 +1,107 @@
+{
+  "_comment": [
+    "U4's frontend half. A separate spec from u4_transcript_trim.json only because the spec",
+    "format carries one `command` and this one is vitest rather than pytest.",
+    "",
+    "The frontend is where this feature can go wrong most quietly. Every mutation below leaves a",
+    "UI that renders, responds to clicks and reports success - the cut list just describes",
+    "something other than what the user struck out. Nothing throws, and the resulting clip looks",
+    "like a plausible edit, so only an assertion on the exact request body can tell."
+  ],
+
+  "command": ["npm", "--prefix", "frontend", "run", "test:run"],
+
+  "mutations": [
+    {
+      "name": "cuts_never_merge",
+      "file": "frontend/src/transcriptCuts.js",
+      "old": "    if (index === runEnd + 1) {",
+      "new": "    if (false) {",
+      "why": "striking 'um uh' as two separate cuts removes the words and keeps the pause between them, which is the opposite of the intent - and doubles the filters in the render graph"
+    },
+    {
+      "name": "cuts_merge_everything",
+      "file": "frontend/src/transcriptCuts.js",
+      "old": "    if (index === runEnd + 1) {",
+      "new": "    if (true) {",
+      "why": "merging non-adjacent selections cuts every word between them; the user loses speech they never struck"
+    },
+    {
+      "name": "cut_uses_the_wrong_edge",
+      "file": "frontend/src/transcriptCuts.js",
+      "old": "  cuts.push({ start: words[runStart].start, end: words[runEnd].end });\n  return cuts;",
+      "new": "  cuts.push({ start: words[runStart].start, end: words[runEnd].start });\n  return cuts;",
+      "why": "ending the cut at the last word's START leaves that word in, so the final struck word of every run survives"
+    },
+    {
+      "name": "out_of_range_indices_accepted",
+      "file": "frontend/src/transcriptCuts.js",
+      "old": "    .filter((i) => Number.isInteger(i) && i >= 0 && i < (words?.length ?? 0))",
+      "new": "    .filter((i) => Number.isInteger(i))",
+      "why": "a selection held across a re-fetched, shorter transcript would index past the end and throw inside a click handler"
+    },
+    {
+      "name": "cut_seconds_always_zero",
+      "file": "frontend/src/transcriptCuts.js",
+      "old": "  return (cuts ?? []).reduce((total, cut) => total + Math.max(0, cut.end - cut.start), 0);",
+      "new": "  return 0;",
+      "why": "the previewed new length is the only feedback before a minute of CPU is spent; a wrong one is worse than none"
+    },
+    {
+      "name": "api_drops_the_cuts",
+      "file": "frontend/src/api.js",
+      "old": "      body: JSON.stringify({ settings, cuts }),",
+      "new": "      body: JSON.stringify({ settings }),",
+      "why": "the request succeeds, the clip re-renders unchanged, and the user believes the edit was applied"
+    },
+    {
+      "name": "api_hides_the_cuts_in_settings",
+      "file": "frontend/src/api.js",
+      "old": "      body: JSON.stringify({ settings, cuts }),",
+      "new": "      body: JSON.stringify({ settings: { ...settings, cuts } }),",
+      "why": "the backend filters `settings` against known option fields and drops the rest silently - the exact failure the separate key exists to prevent"
+    },
+    {
+      "name": "plain_rerender_leaks_the_click_event",
+      "file": "frontend/src/components/ClipCard.jsx",
+      "old": "          onClick={() => rerender()}",
+      "new": "          onClick={rerender}",
+      "why": "React hands the handler its event, which would arrive where the cut list belongs; the request still validates as far as the client is concerned"
+    },
+    {
+      "name": "selection_survives_a_clip_change",
+      "file": "frontend/src/components/TranscriptEditor.jsx",
+      "old": "  useEffect(() => {\n    setStruck(new Set());\n  }, [jobId, clipId]);",
+      "new": "  useEffect(() => {}, [jobId, clipId]);",
+      "why": "struck indices mean nothing against another clip's words, so a carried-over selection cuts arbitrary speech from the wrong clip"
+    },
+    {
+      "name": "over_limit_submits_anyway",
+      "file": "frontend/src/components/TranscriptEditor.jsx",
+      "old": "  const overLimit = cuts.length > maxCuts;",
+      "new": "  const overLimit = false;",
+      "why": "the backend answers 422 and the user gets a raw error instead of being stopped with the limit named"
+    },
+    {
+      "name": "clear_does_not_clear",
+      "file": "frontend/src/components/TranscriptEditor.jsx",
+      "old": "            onClick={() => setStruck(new Set())}",
+      "new": "            onClick={() => {}}",
+      "why": "an edit that cannot be abandoned means the only way out of a mis-click is a page reload"
+    },
+    {
+      "name": "editor_stays_open_after_applying",
+      "file": "frontend/src/components/ClipCard.jsx",
+      "old": "        if (cuts.length > 0) setEditingTranscript(false);",
+      "new": "",
+      "why": "the clip record has been replaced, so the still-open editor shows a selection against word times that no longer describe the media - pressing apply again would cut the wrong thing"
+    },
+    {
+      "name": "load_failure_reads_as_an_empty_transcript",
+      "file": "frontend/src/components/TranscriptEditor.jsx",
+      "old": "            error: error.message || \"Could not load the transcript.\",",
+      "new": "            error: \"\",",
+      "why": "'no transcript available' and 'this clip has no speech' want opposite things from the user, and the API's own wording is what separates them"
+    }
+  ]
+}

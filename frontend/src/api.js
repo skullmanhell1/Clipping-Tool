@@ -147,12 +147,23 @@ export const api = {
   // Resubmitting re-downloads, re-transcribes, re-selects and re-renders every other clip — and
   // because selection is not deterministic with an LLM in it, you get a *different set* of clips
   // rather than the same one restyled.
-  rerenderClip: (jobId, clipId, settings = {}) =>
+  //
+  // U4: `cuts` are clip-relative ranges to remove, from the transcript editor. Sent as its own
+  // key rather than folded into `settings`, because the backend filters `settings` against the
+  // options it knows and drops the rest silently — a cut list sent that way would vanish without
+  // an error, on a destructive edit the user is watching for.
+  rerenderClip: (jobId, clipId, settings = {}, cuts = []) =>
     fetch(`/api/jobs/${jobId}/clips/${clipId}/rerender`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings }),
+      body: JSON.stringify({ settings, cuts }),
     }).then(jsonOrThrow),
+
+  // U4: word-level timings for one clip, for the transcript editor. Answers 409 when the
+  // transcript is not in the cache the render used — the editor cannot be opened in that case,
+  // and jsonOrThrow surfaces the API's own explanation of why.
+  clipTranscript: (jobId, clipId) =>
+    fetch(`/api/jobs/${jobId}/clips/${clipId}/transcript`).then(jsonOrThrow),
 
   // U9: record a verdict on a clip, one at a time or many at once. Without this a review pass
   // over twenty clips left no trace and had to be redone from the top after any interruption.

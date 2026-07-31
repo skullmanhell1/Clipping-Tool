@@ -112,6 +112,7 @@ def rerender_clip(
     clip: ClipResult,
     *,
     option_overrides: Optional[dict[str, Any]] = None,
+    cuts: Optional[list] = None,
     clips_dir: Optional[Path] = None,
     temp_dir: Optional[Path] = None,
     progress_cb=None,
@@ -121,6 +122,12 @@ def rerender_clip(
     The new media replaces the old file **only after** the render succeeds, so a failed
     re-render leaves the existing clip intact. That matters more than it sounds: the clip may
     already have been published, and the file is what a viewer's platform links to.
+
+    ``cuts`` is U4's transcript-based trim: clip-relative ranges to remove, as
+    ``(start, end)`` pairs. They are offsets into **this clip**, not into the source, which
+    is what the transcript editor displays and therefore what it can produce without knowing
+    where in the source the clip was found. Omitted or empty, the render is exactly what it
+    was before the parameter existed.
     """
     source = resolve_source(job)
     options = merge_options(job.options, option_overrides)
@@ -134,7 +141,12 @@ def rerender_clip(
     staging = clips_dir / f".rerender_{uuid.uuid4().hex[:8]}"
     staging.mkdir(parents=True, exist_ok=True)
 
-    window = ClipCandidate(start=float(clip.start), end=float(clip.end), reason=clip.reason)
+    window = ClipCandidate(
+        start=float(clip.start),
+        end=float(clip.end),
+        reason=clip.reason,
+        cuts=list(cuts or []),
+    )
     try:
         produced = run_pipeline(
             source,

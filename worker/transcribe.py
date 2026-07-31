@@ -212,6 +212,40 @@ def transcribe_uncached(
     return Transcript(language=info.language, segments=segments)
 
 
+def cache_key_for(
+    audio_or_video: str | Path,
+    *,
+    language: Optional[str] = None,
+    translate: bool = False,
+    beam_size: int = 5,
+    vocabulary: str = "",
+) -> Optional[str]:
+    """The T8 cache key for these ASR parameters, or ``None`` if the source is unreadable.
+
+    Named and exported rather than inlined into :func:`transcribe` because a second caller
+    now needs the same key: U4's transcript endpoint reads the cached transcript for a clip
+    it is not re-transcribing (:mod:`worker.clip_transcript`). Deriving the key in two places
+    is the exact defect the mutation harness has caught twice - one fact stated twice, so
+    changing either copy has no observable effect and the two quietly disagree about which
+    entry is "the" transcript for a source.
+    """
+    from worker import transcript_cache
+
+    try:
+        return transcript_cache.cache_key(
+            transcript_cache.hash_source(audio_or_video),
+            model=settings.whisper_model,
+            language=language,
+            translate=translate,
+            beam_size=beam_size,
+            # T4/T5: the vocabulary prompt and VAD settings shape the output, so they key it.
+            asr_config=transcript_cache.asr_fingerprint(vocabulary),
+        )
+    except OSError:
+        # Unreadable or vanished source: let the ASR call produce the real error, rather than
+        # reporting it as a cache problem.
+        return None
+
 
 def transcribe(
     audio_or_video: str | Path,
@@ -251,21 +285,10 @@ def transcribe(
                                 beam_size=beam_size, vocabulary=vocabulary)
         )
 
-    key: Optional[str] = None
-    try:
-        key = transcript_cache.cache_key(
-            transcript_cache.hash_source(audio_or_video),
-            model=settings.whisper_model,
-            language=language,
-            translate=translate,
-            beam_size=beam_size,
-            # T4/T5: the vocabulary prompt and VAD settings shape the output, so they key it.
-            asr_config=transcript_cache.asr_fingerprint(vocabulary),
-        )
-    except OSError:
-        # Unreadable or vanished source: let the ASR call produce the real error, rather than
-        # reporting it as a cache problem.
-        key = None
+    key = cache_key_for(
+        audio_or_video, language=language, translate=translate,
+        beam_size=beam_size, vocabulary=vocabulary,
+    )
 
     if key is not None:
         cached = transcript_cache.load(key)
