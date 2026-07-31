@@ -69,6 +69,32 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
 )
 
 
+def _compat_args(encoder) -> list[str]:
+    """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
+
+    Built *from* the tuple rather than respelling it, and that is the whole point of this function
+    existing. O8 first wrote these three flags out inline here, which left ``H264_COMPAT_ARGS``
+    read by nothing but its own test - a second statement of the same contract, free to drift from
+    what is actually emitted. Mutation testing found it: deleting ``-pix_fmt`` from the tuple
+    changed no output at all, so the constant had quietly stopped being load-bearing while the test
+    that iterates it still passed.
+
+    Two encoders need an adaptation rather than the literal value:
+
+    * VAAPI uploads frames to the device, so it needs ``nv12`` instead of the project default;
+    * several VAAPI drivers reject ``-level`` outright, so it is dropped rather than passed.
+    """
+    pairs = zip(H264_COMPAT_ARGS[::2], H264_COMPAT_ARGS[1::2])
+    args: list[str] = []
+    for flag, value in pairs:
+        if flag == "-pix_fmt" and getattr(encoder, "pix_fmt", ""):
+            value = encoder.pix_fmt
+        elif flag == "-level" and not getattr(encoder, "accepts_level", True):
+            continue
+        args += [flag, value]
+    return args
+
+
 def escape_filter_path(path: str | Path) -> str:
     """Escape a filesystem path for use inside an ffmpeg filter argument.
 
@@ -132,9 +158,7 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
     # different scale. See worker/video_encoders.py for the table.
     args += encoder.quality_args(int(settings.x264_crf))
-    args += ["-pix_fmt", encoder.pix_fmt or OUTPUT_PIX_FMT, "-profile:v", OUTPUT_PROFILE]
-    if encoder.accepts_level:
-        args += ["-level", OUTPUT_LEVEL]
+    args += _compat_args(encoder)
     if normalise_fps:
         args += ["-r", str(int(settings.output_fps))]
     if vbv_cap:
