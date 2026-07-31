@@ -62,7 +62,7 @@ LICENCE_URLS: dict[str, tuple[str, str]] = {
 
 
 def _get(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "clipping-tool-build"})
+    request = urllib.request.Request(url, headers={"User-Agent": "clipping-tool-build"})  # noqa: S310 - build-time fetch from a fixed https CDN base; not caller-supplied
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
         if response.status != 200:
             raise RuntimeError(f"{url} -> HTTP {response.status}")

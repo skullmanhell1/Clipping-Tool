@@ -164,3 +164,90 @@ describe("upload", () => {
     expect(captured.getAll("files")).toHaveLength(1);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// The shared secret (Phase 1 security)
+//
+// The server accepts the token as a header everywhere, and as `?token=` only for GET
+// requests to read-only media paths. The frontend has to get that split right in both
+// directions: a missing header means every call 401s, and a token appended to the wrong
+// URL puts a credential somewhere it should never be.
+//
+// These matter because the failure is silent in the UI. A 401 on a poll loop surfaces as
+// "no jobs", and a video that 401s surfaces as a blank player.
+// ---------------------------------------------------------------------------
+describe("auth token", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no auth header when no token is set", async () => {
+    // The default. An unconfigured server ignores the header, so sending nothing must work
+    // rather than being an error state.
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", spy);
+    await api.listJobs();
+    const headers = spy.mock.calls[0][1]?.headers || {};
+    expect(headers["X-API-Token"]).toBeUndefined();
+  });
+
+  it("sends the token from localStorage on API calls", async () => {
+    window.localStorage.setItem("clipper_token", "s3cret");
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", spy);
+    await api.listJobs();
+    expect(spy.mock.calls[0][1].headers["X-API-Token"]).toBe("s3cret");
+  });
+
+  it("keeps the caller's own headers alongside the token", async () => {
+    // Every POST sets Content-Type; dropping it would make the body unparseable and the
+    // request fail as a validation error rather than as an auth one.
+    window.localStorage.setItem("clipper_token", "s3cret");
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", spy);
+    await api.submitUrl("https://example.com/a.mp4", {});
+    const headers = spy.mock.calls[0][1].headers;
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-API-Token"]).toBe("s3cret");
+  });
+
+  it("appends the token to browser-navigated media URLs", () => {
+    // <video src>, poster and the two <a href> download links cannot carry a header.
+    window.localStorage.setItem("clipper_token", "s3cret");
+    expect(api.clipUrl("clips/j/c.mp4")).toBe("/clips/j/c.mp4?token=s3cret");
+    expect(api.downloadUrl("j", "c.mp4")).toBe(
+      "/api/clips/j/c.mp4/download?token=s3cret"
+    );
+    expect(api.videoDownloadUrl("j", "c.mp4")).toBe(
+      "/api/clips/j/c.mp4/video?token=s3cret"
+    );
+  });
+
+  it("uses & when the media URL already has a query string", () => {
+    window.localStorage.setItem("clipper_token", "s3cret");
+    expect(api.clipUrl("/clips/j/c.mp4?v=2")).toBe("/clips/j/c.mp4?v=2&token=s3cret");
+  });
+
+  it("url-encodes the token", () => {
+    // A token with a + or & in it would otherwise be silently truncated or mangled.
+    window.localStorage.setItem("clipper_token", "a+b&c=d");
+    expect(api.clipUrl("/clips/j/c.mp4")).toBe(
+      "/clips/j/c.mp4?token=a%2Bb%26c%3Dd"
+    );
+  });
+
+  it("still passes absolute URLs through untouched", () => {
+    // A presigned S3 URL carries its own signature; appending our token would both break
+    // the signature and leak the secret to the storage provider.
+    window.localStorage.setItem("clipper_token", "s3cret");
+    const presigned = "https://bucket.s3.amazonaws.com/clip.mp4?X-Amz-Signature=abc";
+    expect(api.clipUrl(presigned)).toBe(presigned);
+  });
+
+  it("adds no token to media URLs when none is configured", () => {
+    expect(api.clipUrl("clips/j/c.mp4")).toBe("/clips/j/c.mp4");
+    expect(api.downloadUrl("j", "c.mp4")).toBe("/api/clips/j/c.mp4/download");
+  });
+});

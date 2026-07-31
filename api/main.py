@@ -37,12 +37,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from api.security import ClipsAuthMiddleware, rate_limit, require_api_token
 from config import settings
 from profiles import get_profile_store
 from publishers import best_times
@@ -53,7 +54,13 @@ from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker import captions as cap
-from worker.download import DownloadError, fetch_metadata, is_url
+from worker.download import (
+    DownloadError,
+    UnsafeURLError,
+    fetch_metadata,
+    is_url,
+    validate_public_url,
+)
 from worker.effects import broll, caption_presets
 
 # Side-effect import: populates the default engine registry so `/api/info`
@@ -80,6 +87,74 @@ APP_VERSION = _read_version()
 logger = logging.getLogger(__name__)
 
 
+#: Environments where an insecure configuration is a convenience rather than a mistake.
+#: ``settings.is_local_environment`` owns the list; it used to be inlined here, and the auth and
+#: CORS checks below both need the same answer.
+class InsecureDeploymentError(RuntimeError):
+    """Raised at startup when a production deployment is configured to be wide open.
+
+    A distinct type so a test can assert on the reason rather than on log text, and so the
+    traceback names the problem in a container's crash log.
+    """
+
+
+def _check_deployment_security() -> None:
+    """Warn about, or refuse, an unsafe configuration.
+
+    Two rules with deliberately different severity:
+
+    * **No shared secret** warns locally and **refuses to boot in production**. Every route was
+      open, and ``render.yaml`` publishes this with ``autoDeploy: true`` — so the failure mode was
+      not "an operator forgot", it was "the default deployment is public". A warning would scroll
+      past in a platform log; refusing cannot be missed. Unset remains fine for local work, so
+      running the app on a laptop needs no configuration.
+    * **Wildcard CORS** refuses in production too, which is the change item 3 of the security phase
+      asked for. It previously only warned, on the grounds that an operator might terminate CORS at
+      a proxy — a real scenario, so the escape hatch is to set ``CORS_ORIGINS`` explicitly rather
+      than to leave the wildcard and hope.
+
+    Both are gated on ``ENVIRONMENT``, which is how the repository already distinguishes a
+    developer machine from a deployment.
+    """
+    production = not settings.is_local_environment
+    problems: list[str] = []
+
+    if not settings.auth_enabled:
+        if production:
+            problems.append(
+                "API_AUTH_TOKEN is unset, which leaves every /api and /clips route open to "
+                "anyone who can reach this host"
+            )
+        else:
+            logger.warning(
+                "API_AUTH_TOKEN is unset with environment=%r, so every /api and /clips route "
+                "is open. Fine for local work; set a token before exposing this host. A "
+                "production environment refuses to boot without one.",
+                settings.environment,
+            )
+
+    if settings.cors_allow_wildcard:
+        if production:
+            problems.append(
+                "CORS_ORIGINS is '*', which lets any website call this API from a visitor's "
+                "browser; set an explicit origin list"
+            )
+        else:
+            logger.warning(
+                "CORS_ORIGINS is '*' with environment=%r. Set an explicit origin list for "
+                "a public deployment; credentialed cross-origin requests are also disabled "
+                "while the wildcard is in use.",
+                settings.environment,
+            )
+
+    if problems:
+        joined = "; ".join(problems)
+        raise InsecureDeploymentError(
+            f"Refusing to start with environment={settings.environment!r}: {joined}. "
+            "Set the variables, or set ENVIRONMENT=development if this really is a local run."
+        )
+
+
 def _run_startup() -> None:
     """Ensure storage dirs exist and start the background retention sweeper."""
     # I6: attach the job-attribution filter before anything can log. Installed here rather than
@@ -93,18 +168,7 @@ def _run_startup() -> None:
         logger.exception("could not install job-scoped log context")
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
-    if settings.cors_allow_wildcard and settings.environment.strip().lower() not in (
-        "development", "dev", "local", "test",
-    ):
-        # A wildcard is a sensible default for local work and a poor one on a public
-        # host, where it lets any site call this API. Warning rather than refusing to
-        # boot: an operator may be fronting the app with a proxy that handles CORS.
-        logger.warning(
-            "CORS_ORIGINS is '*' with environment=%r. Set an explicit origin list for "
-            "a public deployment; credentialed cross-origin requests are also disabled "
-            "while the wildcard is in use.",
-            settings.environment,
-        )
+    _check_deployment_security()
     try:
         from storage_backends.retention import get_sweeper
 
@@ -130,6 +194,14 @@ app = FastAPI(
     title=settings.app_name,
     version=APP_VERSION,
     description="AI-powered video clipping & auto-publishing tool — Phase 5 (storage, profiles & updates).",
+    # Registered once here rather than on 47 decorators, so a route added later is protected by
+    # default instead of by remembering. The dependency exempts /healthz and the docs itself
+    # (see api.security._EXEMPT_PATHS), and returns immediately when no token is configured.
+    #
+    # This does NOT cover the /clips static mount: `dependencies=` injects into routes, and a
+    # StaticFiles mount is an ASGI sub-app with no route to inject into. ClipsAuthMiddleware
+    # below is what closes that, and it is the reason there are two mechanisms.
+    dependencies=[Depends(require_api_token)],
 )
 
 # allow_credentials is derived rather than hard-coded: a wildcard origin and
@@ -144,6 +216,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added after CORSMiddleware and therefore *inside* it: Starlette applies middleware in reverse
+# registration order, so CORS headers are still attached to the 401 this can return. Without that
+# a browser reports a cross-origin failure instead of the actual authentication error.
+app.add_middleware(ClipsAuthMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -588,13 +665,18 @@ def _llm_available_safe() -> bool:
 # ---------------------------------------------------------------------------
 # Preview
 # ---------------------------------------------------------------------------
-@app.post("/api/preview", tags=["input"])
+@app.post("/api/preview", tags=["input"], dependencies=[Depends(rate_limit)])
 def preview(req: PreviewRequest) -> dict:
     """Return preview metadata for a URL (title, duration, thumbnail)."""
     if not is_url(req.url):
         raise HTTPException(status_code=400, detail="Not a valid URL")
     try:
         meta = fetch_metadata(req.url)
+    except UnsafeURLError as exc:
+        # 400, not 422: the URL is well-formed and we simply will not fetch it, which is a
+        # problem with the request rather than with the resource. Caught before DownloadError
+        # because UnsafeURLError is a subclass of it and except clauses match in order.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DownloadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
@@ -609,21 +691,38 @@ def preview(req: PreviewRequest) -> dict:
 # ---------------------------------------------------------------------------
 # Job submission
 # ---------------------------------------------------------------------------
-@app.post("/api/jobs/url", tags=["jobs"])
+@app.post("/api/jobs/url", tags=["jobs"], dependencies=[Depends(rate_limit)])
 def submit_url(req: UrlJobRequest) -> dict:
     """Submit a single URL for processing."""
     if not is_url(req.url):
         raise HTTPException(status_code=400, detail="Not a valid URL")
+    # Rejected at submission as well as at download. `download_video` validates too, so nothing
+    # unsafe is fetched either way - but a job that is going to be refused should not first be
+    # accepted, queued and reported as running, only to fail minutes later with a security error
+    # the submitter cannot act on.
+    try:
+        validate_public_url(req.url)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = get_manager().submit("url", req.url, req.options.to_options())
     return job.to_dict()
 
 
-@app.post("/api/jobs/batch", tags=["jobs"])
+@app.post("/api/jobs/batch", tags=["jobs"], dependencies=[Depends(rate_limit)])
 def submit_batch(req: BatchRequest) -> dict:
     """Submit a batch of URLs; they are processed in line (sequentially)."""
     urls = [u for u in req.urls if is_url(u)]
     if not urls:
         raise HTTPException(status_code=400, detail="No valid URLs provided")
+    # Unsafe URLs fail the whole batch rather than being filtered out like malformed ones. The
+    # existing filter silently drops anything `is_url` rejects, which is defensible for a typo in
+    # a pasted list; silently dropping an attempt to reach 169.254.169.254 would hide it instead,
+    # and a submitter who included one deserves to be told which.
+    for candidate in urls:
+        try:
+            validate_public_url(candidate)
+        except UnsafeURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     items = [{"input_type": "url", "source": u} for u in urls]
     batch_id = get_manager().submit_batch(items, req.options.to_options())
     jobs = get_manager().store.by_batch(batch_id)
@@ -690,7 +789,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
     return {"input_type": "file", "source": str(dest), "title": safe_name}
 
 
-@app.post("/api/upload", tags=["jobs"])
+@app.post("/api/upload", tags=["jobs"], dependencies=[Depends(rate_limit)])
 async def upload(
     files: list[UploadFile] = File(...),
     language: Optional[str] = Form(None),
@@ -1014,7 +1113,7 @@ def _preset_detail(preset) -> dict:
     return data
 
 
-@app.post("/api/jobs/{job_id}/resume", tags=["jobs"])
+@app.post("/api/jobs/{job_id}/resume", tags=["jobs"], dependencies=[Depends(rate_limit)])
 def resume_job(job_id: str) -> dict:
     """Render a failed job's unfinished clips, keeping the ones it already produced (I5).
 
@@ -1048,7 +1147,7 @@ def resume_job(job_id: str) -> dict:
     return manager.store.get(job_id).to_dict()
 
 
-@app.post("/api/captions/preview", tags=["metadata"])
+@app.post("/api/captions/preview", tags=["metadata"], dependencies=[Depends(rate_limit)])
 def caption_preview(req: CaptionPreviewModel) -> FileResponse:
     """Render a two-second caption sample for a preset (C18).
 
@@ -1153,7 +1252,7 @@ def review_clips(job_id: str, req: BatchReviewModel) -> dict:
     return {"updated": updated, "count": len(updated)}
 
 
-@app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender", tags=["metadata"])
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender", tags=["metadata"], dependencies=[Depends(rate_limit)])
 def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> dict:
     """Re-render one clip, optionally with changed settings (U7).
 
@@ -1194,7 +1293,7 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     return (stored or updated).to_dict()
 
 
-@app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"])
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"], dependencies=[Depends(rate_limit)])
 def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> dict:
     """Regenerate a single metadata field for a clip via the LLM.
 
