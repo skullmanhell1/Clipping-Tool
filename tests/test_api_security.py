@@ -19,12 +19,16 @@ Three things are asserted here, and the third is the one most likely to be quiet
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
 from api import security
 from api.main import InsecureDeploymentError, _check_deployment_security, app
+from api.security import _EXEMPT_PATHS
 from config import settings
+from tests.test_api_route_table import iter_api_routes
 
 TOKEN = "test-shared-secret"
 
@@ -141,24 +145,37 @@ def test_whitespace_only_token_counts_as_unset(monkeypatch):
 
 
 def test_every_api_route_is_covered_by_the_dependency(authed):
-    """Spot-check across tag groups, so the app-level registration is not assumed.
+    """**Every** route, enumerated from the app itself — not a hand-written sample.
 
-    Registered once on ``FastAPI(...)`` rather than on 47 decorators, which is also what makes the
-    Phase 4 router split safe: an app-level dependency survives moving routes between modules,
-    whereas 47 copies would have to be re-applied correctly every time.
+    Registered once on ``FastAPI(...)`` rather than on 46 decorators, which is what makes the
+    router split safe: an app-level dependency survives moving routes between modules, whereas 46
+    copies would have to be re-applied correctly every time.
+
+    This used to be a nine-path spot-check, on the grounds that the app-level registration either
+    works or it doesn't. The router split is precisely the change that breaks that reasoning — a
+    router that was never included, or included after the SPA catch-all mount, produces routes
+    that answer without ever reaching the dependency. So the list is now derived from the app.
+
+    It also cannot be checked by introspection. Since the split, FastAPI attaches the app-level
+    dependency at the ``_IncludedRouter`` level rather than copying it onto each route's
+    ``dependant``, so ``route.dependant.dependencies`` no longer mentions it. Asserting on the
+    response is the only statement that means anything.
+
+    Calling every route with its real method is safe *because* of what is being asserted: a 401 is
+    returned before the handler runs, so nothing is uploaded, deleted or published. A route that
+    does not 401 is a security hole, which is the finding.
     """
-    for path in (
-        "/api/info",
-        "/api/jobs",
-        "/api/publishers",
-        "/api/history",
-        "/api/storage",
-        "/api/profiles",
-        "/api/watch",
-        "/api/updates",
-        "/api/schedule",
-    ):
-        assert authed.get(path).status_code == 401, f"{path} was reachable without a token"
+    for route in iter_api_routes():
+        for method in sorted(route.methods - {"HEAD"}):
+            if route.path in _EXEMPT_PATHS:
+                continue
+            # A concrete path for the pattern; the values never reach a handler.
+            path = re.sub(r"\{[^}]+\}", "x", route.path)
+            response = authed.request(method, path)
+            assert response.status_code == 401, (
+                f"{method} {path} answered {response.status_code} without a token "
+                f"(handler {route.name!r}) — it is not covered by require_api_token"
+            )
 
 
 # --------------------------------------------------------------------------- #

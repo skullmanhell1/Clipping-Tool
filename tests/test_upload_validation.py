@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from api.routers import jobs as jobs_router
 from config import settings as app_settings
 
 
@@ -203,6 +204,6 @@ def test_the_upload_path_uses_async_reads_not_a_blocking_copy():
     """
     import inspect
 
-    source = inspect.getsource(api_main._save_upload)
+    source = inspect.getsource(jobs_router._save_upload)
     assert "await upload_file.read(" in source
-    assert "copyfileobj" not in inspect.getsource(api_main.upload)
+    assert "copyfileobj" not in inspect.getsource(jobs_router.upload)

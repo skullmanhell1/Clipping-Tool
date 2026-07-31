@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         if current != serialised:
             print("the frozen route table is out of date", file=sys.stderr)
             return 1
-        print(f"frozen route table matches ({len(table)} entries)")
+        print(f"frozen route table matches ({len(table['routes'])} endpoints)")
         return 0
 
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)

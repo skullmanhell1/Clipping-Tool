@@ -171,7 +171,7 @@ def test_p21_every_option_field_survives_the_api_surface(option_map: dict) -> No
     ``Stem_Options``. Its result must equal resolving the same values directly, so no layer
     silently drops, renames or re-defaults a field (Reqs 18.1, 18.2, 18.5).
     """
-    from api.main import OptionsModel
+    from api.models import OptionsModel
 
     payload = {f"stem_{key}": value for key, value in option_map.items()}
     through_api = OptionsModel(**payload).to_options()

@@ -26,10 +26,31 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, _IncludedRouter
 from starlette.routing import Mount, Route
 
 from api.main import app
+
+
+def iter_api_routes(routes=None) -> list[APIRoute]:
+    """Every `APIRoute` the app will match, in resolution order.
+
+    `app.include_router` does **not** flatten routes into `app.routes` on this FastAPI version
+    (0.141): it appends one `_IncludedRouter` per call, which holds the real routes and delegates
+    matching to them. So walking `app.routes` and filtering for `APIRoute` — which was correct
+    when every route was declared with `@app.get` — now finds nothing at all.
+
+    That is worth stating explicitly, because it is a silent failure: a test that enumerates
+    "every route" and gets an empty list passes. Anything asserting a property of all routes has to
+    come through here.
+    """
+    out: list[APIRoute] = []
+    for route in (app.routes if routes is None else routes):
+        if isinstance(route, APIRoute):
+            out.append(route)
+        elif isinstance(route, _IncludedRouter):
+            out.extend(iter_api_routes(route.original_router.routes))
+    return out
 
 #: Committed alongside this module. Regenerated deliberately, by running
 #: ``python scripts/freeze_route_table.py`` — never from inside the test run.
@@ -39,12 +60,18 @@ GOLDEN = Path(__file__).parent / "golden" / "route_table.json"
 
 
 def _dependency_names(route: APIRoute) -> list[str]:
-    """The names of the route's own declared dependencies, in order.
+    """The names of the route's **own** declared dependencies, in order.
 
-    This is how `Depends(rate_limit)` is checked. It reads the flattened dependant tree rather than
-    the decorator's `dependencies=` list, because that is what actually runs — and because the
-    app-level `require_api_token` reaches every route through a different mechanism and so would
-    otherwise be invisible here.
+    This is how `Depends(rate_limit)` is checked, and it is the reason the frozen table is worth
+    having: a route that silently loses its rate limit still answers requests normally.
+
+    It does **not** show `require_api_token`. That is registered once on `FastAPI(...)` and, since
+    the router split, FastAPI attaches it at the `_IncludedRouter` level rather than copying it
+    onto each route's dependant — so it is enforced but invisible here.
+
+    Introspection is the wrong tool for that property anyway. Auth is asserted behaviourally
+    instead, over every route, by
+    `tests/test_api_security.py::test_every_api_route_is_covered_by_the_dependency`.
     """
     return [
         dep.call.__name__
@@ -73,24 +100,25 @@ def capture() -> dict:
     mounts: list[dict] = []
     builtin: list[dict] = []
 
+    for route in iter_api_routes():
+        # HEAD is added implicitly alongside GET and carries no information of its own.
+        for method in sorted(route.methods - {"HEAD"}):
+            api[f"{method} {route.path}"] = {
+                "name": route.name,
+                "tags": list(route.tags),
+                "dependencies": _dependency_names(route),
+                "response_class": type(route.response_class).__name__
+                if not isinstance(route.response_class, type)
+                else route.response_class.__name__,
+                "status_code": route.status_code,
+                # The declared return annotation is what FastAPI builds the response model
+                # from; a lost `-> FileResponse` changes the schema and the response headers.
+                "response_model": getattr(route.response_model, "__name__", None)
+                if route.response_model is not None else None,
+            }
+
     for route in app.routes:
-        if isinstance(route, APIRoute):
-            # HEAD is added implicitly alongside GET and carries no information of its own.
-            for method in sorted(route.methods - {"HEAD"}):
-                api[f"{method} {route.path}"] = {
-                    "name": route.name,
-                    "tags": list(route.tags),
-                    "dependencies": _dependency_names(route),
-                    "response_class": type(route.response_class).__name__
-                    if not isinstance(route.response_class, type)
-                    else route.response_class.__name__,
-                    "status_code": route.status_code,
-                    # The declared return annotation is what FastAPI builds the response model
-                    # from; a lost `-> FileResponse` changes the schema and the response headers.
-                    "response_model": getattr(route.response_model, "__name__", None)
-                    if route.response_model is not None else None,
-                }
-        elif isinstance(route, Mount):
+        if isinstance(route, Mount):
             mounts.append({
                 # `""` is the SPA catch-all. It must stay last.
                 "path": route.path,
@@ -166,7 +194,7 @@ def test_no_route_is_shadowed_by_an_earlier_one():
     Checked by resolving a concrete example of each route's path against the real compiled
     `path_regex` of every route before it, which is exactly how Starlette will do it at runtime.
     """
-    api_routes = [route for route in app.routes if isinstance(route, APIRoute)]
+    api_routes = iter_api_routes()
 
     for index, route in enumerate(api_routes):
         # A concrete path for this pattern. The value has to be something no other route uses as
@@ -207,8 +235,7 @@ def test_every_api_route_has_exactly_one_tag():
     Pinned so a route added later cannot land in `main.py` by default and stay there.
     """
     untagged = [
-        route.path for route in app.routes
-        if isinstance(route, APIRoute) and len(route.tags) != 1
+        route.path for route in iter_api_routes() if len(route.tags) != 1
     ]
     assert not untagged, f"routes without exactly one tag: {untagged}"
 
@@ -216,9 +243,7 @@ def test_every_api_route_has_exactly_one_tag():
 def test_no_two_routes_share_a_path_and_method():
     """A duplicate registration is shadowed silently — the second one simply never runs."""
     seen: dict[tuple[str, str], str] = {}
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in iter_api_routes():
         for method in route.methods - {"HEAD"}:
             key = (route.path, method)
             assert key not in seen, (

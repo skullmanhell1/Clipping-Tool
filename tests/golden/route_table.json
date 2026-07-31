@@ -43,9 +43,7 @@
   ],
   "routes": {
     "DELETE /api/jobs/{job_id}/source": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "delete_source",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -55,9 +53,7 @@
       ]
     },
     "DELETE /api/profiles/{profile_id}": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "delete_profile",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -67,9 +63,7 @@
       ]
     },
     "GET /api/batches/{batch_id}": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "get_batch",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -79,9 +73,7 @@
       ]
     },
     "GET /api/campaigns": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "list_campaigns",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -91,9 +83,7 @@
       ]
     },
     "GET /api/clips/{job_id}/{filename}/download": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "download_clip",
       "response_class": "DefaultPlaceholder",
       "response_model": null,
@@ -103,9 +93,7 @@
       ]
     },
     "GET /api/clips/{job_id}/{filename}/video": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "download_video_only",
       "response_class": "DefaultPlaceholder",
       "response_model": null,
@@ -115,9 +103,7 @@
       ]
     },
     "GET /api/history": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "history",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -127,9 +113,7 @@
       ]
     },
     "GET /api/info": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "info",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -139,9 +123,7 @@
       ]
     },
     "GET /api/jobs": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "list_jobs",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -151,9 +133,7 @@
       ]
     },
     "GET /api/jobs/{job_id}": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "get_job",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -163,9 +143,7 @@
       ]
     },
     "GET /api/jobs/{job_id}/timings": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "get_job_timings",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -175,9 +153,7 @@
       ]
     },
     "GET /api/profiles": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "list_profiles",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -187,9 +163,7 @@
       ]
     },
     "GET /api/profiles/builtin": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "list_builtin_profiles",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -199,9 +173,7 @@
       ]
     },
     "GET /api/publish-attempts/{attempt_id}": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "publish_attempt",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -211,9 +183,7 @@
       ]
     },
     "GET /api/publishers": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "publisher_statuses",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -223,9 +193,7 @@
       ]
     },
     "GET /api/schedule": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "schedule_window",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -235,9 +203,7 @@
       ]
     },
     "GET /api/schedule/suggestions": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "schedule_suggestions",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -247,9 +213,7 @@
       ]
     },
     "GET /api/storage": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "storage_status",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -259,9 +223,7 @@
       ]
     },
     "GET /api/updates": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "check_updates",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -271,9 +233,7 @@
       ]
     },
     "GET /api/watch": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "watch_status",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -283,9 +243,7 @@
       ]
     },
     "GET /healthz": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "healthz",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -295,9 +253,7 @@
       ]
     },
     "PATCH /api/jobs/{job_id}/clips/{clip_id}": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "edit_clip",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -307,9 +263,7 @@
       ]
     },
     "PATCH /api/publish-attempts/{attempt_id}/schedule": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "reschedule_publish_attempt",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -319,9 +273,7 @@
       ]
     },
     "POST /api/campaigns": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "save_campaign",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -332,7 +284,6 @@
     },
     "POST /api/captions/preview": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "caption_preview",
@@ -345,7 +296,6 @@
     },
     "POST /api/jobs/batch": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "submit_batch",
@@ -358,7 +308,6 @@
     },
     "POST /api/jobs/url": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "submit_url",
@@ -370,9 +319,7 @@
       ]
     },
     "POST /api/jobs/{job_id}/cancel": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "cancel_job",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -382,9 +329,7 @@
       ]
     },
     "POST /api/jobs/{job_id}/clips/review": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "review_clips",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -394,9 +339,7 @@
       ]
     },
     "POST /api/jobs/{job_id}/clips/{clip_id}/publish": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "publish_clip",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -407,7 +350,6 @@
     },
     "POST /api/jobs/{job_id}/clips/{clip_id}/regenerate": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "regenerate_clip_field",
@@ -420,7 +362,6 @@
     },
     "POST /api/jobs/{job_id}/clips/{clip_id}/rerender": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "rerender_clip_endpoint",
@@ -432,9 +373,7 @@
       ]
     },
     "POST /api/jobs/{job_id}/clips/{clip_id}/review": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "review_clip",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -445,7 +384,6 @@
     },
     "POST /api/jobs/{job_id}/resume": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "resume_job",
@@ -458,7 +396,6 @@
     },
     "POST /api/preview": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "preview",
@@ -470,9 +407,7 @@
       ]
     },
     "POST /api/profiles": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "save_profile",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -482,9 +417,7 @@
       ]
     },
     "POST /api/profiles/{profile_id}/default": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "set_default_profile",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -494,9 +427,7 @@
       ]
     },
     "POST /api/publish-attempts/{attempt_id}/approve": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "approve_publish_attempt",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -506,9 +437,7 @@
       ]
     },
     "POST /api/publish-attempts/{attempt_id}/cancel": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "cancel_publish_attempt",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -518,9 +447,7 @@
       ]
     },
     "POST /api/publish-attempts/{attempt_id}/retry": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "retry_publish_attempt",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -530,9 +457,7 @@
       ]
     },
     "POST /api/publishers/{platform}/refresh": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "refresh_publisher_credentials",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -542,9 +467,7 @@
       ]
     },
     "POST /api/storage/cleanup": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "storage_cleanup",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -554,9 +477,7 @@
       ]
     },
     "POST /api/storage/settings": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "update_storage_settings",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -567,7 +488,6 @@
     },
     "POST /api/upload": {
       "dependencies": [
-        "require_api_token",
         "rate_limit"
       ],
       "name": "upload",
@@ -579,9 +499,7 @@
       ]
     },
     "POST /api/watch/options": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "watch_options",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
@@ -591,9 +509,7 @@
       ]
     },
     "POST /api/watch/toggle": {
-      "dependencies": [
-        "require_api_token"
-      ],
+      "dependencies": [],
       "name": "watch_toggle",
       "response_class": "DefaultPlaceholder",
       "response_model": "dict",
