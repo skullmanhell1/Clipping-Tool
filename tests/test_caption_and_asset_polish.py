@@ -276,7 +276,11 @@ def test_every_exposed_font_exists_on_disk():
     """The manifest is a declaration; a CI step exists because the two once disagreed."""
     manifest = json.loads(cap.FONT_MANIFEST.read_text())
     by_name = {e["name"]: e for e in manifest["fonts"]}
+    # Bundled only: an operator-supplied face (A5) is discovered from disk and has no manifest
+    # entry to look up by design.
     for font in cap.available_fonts():
+        if font["source"] != "bundled":
+            continue
         path = cap.FONT_MANIFEST.parent / "fonts" / by_name[font["name"]]["file"]
         assert path.is_file(), path
 
@@ -287,8 +291,24 @@ def test_heavy_faces_are_listed_first():
     assert heavy == sorted(heavy, reverse=True)
 
 
-def test_a_missing_manifest_yields_no_fonts_rather_than_raising(monkeypatch):
+def test_a_missing_manifest_falls_back_to_the_files_on_disk(monkeypatch, tmp_path):
+    """A missing manifest must not raise, and since A5 it need not empty the picker either.
+
+    Before A5 a corrupt or missing ``fonts.json`` removed every face from the picker while all
+    twelve files sat present and readable in ``assets/fonts`` - the declaration failing took the
+    assets down with it. Discovery reads the files themselves, so the manifest is now an
+    *enrichment* (licence, ``use`` note, hand-marked display weights) rather than the only route.
+    """
     monkeypatch.setattr(cap, "FONT_MANIFEST", Path("/nonexistent/fonts.json"))
+    fonts = cap.available_fonts()
+    assert fonts, "the vendored files are still on disk and readable"
+    assert all(font["source"] == "user" for font in fonts)
+    # Read from each file's own `name` table, so these are names libass can actually resolve.
+    assert "Anton" in {font["name"] for font in fonts}
+
+    # And with no font directory at all, empty rather than an exception.
+    monkeypatch.setattr(cap.settings, "font_assets_dir", tmp_path / "gone", raising=False)
+    cap._FONT_DIR_STATE.clear()
     assert cap.available_fonts() == []
 
 

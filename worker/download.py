@@ -67,6 +67,30 @@ def fetch_metadata(url: str) -> VideoMeta:
     )
 
 
+def resolve_downloaded_path(prepared: Path) -> Path:
+    """The file yt-dlp actually wrote, given the name it prepared.
+
+    ``prepare_filename`` reports the name derived from the *selected format*, before any
+    post-processing. ``merge_output_format="mp4"`` then remuxes - but **only when a merge actually
+    happened**, i.e. when separate video and audio renditions were selected. A progressive
+    single-file source is downloaded as-is and keeps its own container.
+
+    So the prepared name is correct in one case and wrong in the other, and the caller cannot tell
+    which from the outside: both return a plausible path, and only one of them exists. Checking for
+    the ``.mp4`` sibling covers the merged case without assuming it.
+
+    Extracted from :func:`download_video` because it is the one branch a real download exercises
+    only half of - a test would need a source offering separate audio and video renditions to reach
+    the other half.
+    """
+    if prepared.exists():
+        return prepared
+    merged = prepared.with_suffix(".mp4")
+    if merged.exists():
+        return merged
+    return prepared
+
+
 def download_video(
     url: str,
     dest_dir: str | Path,
@@ -113,16 +137,15 @@ def download_video(
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            path = Path(ydl.prepare_filename(info))
-            # merge_output_format may have changed the extension to .mp4
-            if not path.exists():
-                mp4 = path.with_suffix(".mp4")
-                if mp4.exists():
-                    path = mp4
+            path = resolve_downloaded_path(Path(ydl.prepare_filename(info)))
     except Exception as exc:
         raise DownloadError(f"Download failed: {exc}") from exc
 
     if not path.exists():
+        # yt-dlp reporting success and leaving no file is rare but real - a post-processor that
+        # failed after the download, or a template that expanded to a path it could not write.
+        # Without this the caller gets a non-existent path and the failure surfaces much later,
+        # as an ffprobe error on a file nobody can explain the absence of.
         raise DownloadError(f"Downloaded file not found for {url}")
 
     meta = VideoMeta(

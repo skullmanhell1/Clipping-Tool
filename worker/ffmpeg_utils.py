@@ -110,13 +110,31 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     scene - can balloon well past a platform's file-size limit and be rejected on upload.
     Also off for intermediates: capping a file that is about to be re-encoded throws away
     quality the final pass could have used.
+
+    The encoder itself is chosen by :func:`worker.video_encoders.resolve_encoder` (O8), which
+    falls back to ``libx264`` whenever a configured hardware encoder is not usable on this
+    machine - so the return value is always a working argv, and the quality flag always matches
+    the encoder rather than being ``-crf`` regardless.
     """
-    args = [
-        "-c:v", "libx264",
-        "-preset", str(settings.x264_preset),
-        "-crf", str(settings.x264_crf),
-        *H264_COMPAT_ARGS,
-    ]
+    # O8: hardware encoding, when one is configured *and* proven to work on this machine.
+    #
+    # Routed through here rather than at the eight call sites for the same reason the flags were
+    # centralised in the first place: an encoder swap that reached seven of the eight would produce
+    # clips whose quality depended on which stage wrote them. `resolve_encoder` falls back to
+    # libx264 whenever the request cannot be honoured, so this returns a working argv either way.
+    from worker import video_encoders
+
+    choice = video_encoders.resolve_encoder()
+    encoder = choice.encoder
+
+    args = ["-c:v", encoder.name]
+    args += encoder.preset_args(str(settings.x264_preset))
+    # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
+    # different scale. See worker/video_encoders.py for the table.
+    args += encoder.quality_args(int(settings.x264_crf))
+    args += ["-pix_fmt", encoder.pix_fmt or OUTPUT_PIX_FMT, "-profile:v", OUTPUT_PROFILE]
+    if encoder.accepts_level:
+        args += ["-level", OUTPUT_LEVEL]
     if normalise_fps:
         args += ["-r", str(int(settings.output_fps))]
     if vbv_cap:

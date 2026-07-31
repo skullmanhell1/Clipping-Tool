@@ -130,10 +130,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22: vite 8 requires ^20.19.0 || >=22.12.0 (I10). "20" here resolves to the latest
+      # 20.x, which satisfies that today, but pinning the major we actually target means CI
+      # cannot start testing on a runtime the Dockerfile does not use.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -155,9 +158,37 @@ jobs:
       - name: Build
         run: npm run build
 
+      # I10: the dev-server advisory chain (esbuild via vite) let any website read responses
+      # from a running dev server, and it went unnoticed because nothing ever checked. This
+      # blocks on *critical* only, deliberately: the remaining `brace-expansion` DoS sits in
+      # eslint's own minimatch chain, and both available "fixes" are worse than the finding --
+      # `npm audit fix --force` downgrades eslint-plugin-react to 7.22.0, and overriding
+      # brace-expansion to a fixed 5.x breaks minimatch@3 so eslint crashes outright (both
+      # verified). A gate that cannot be satisfied without breaking the build gets ignored.
+      - name: Audit (block on critical)
+        run: npm audit --audit-level=critical
+
+  docker:
+    name: Docker (build + boot)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # I12: the plan recorded the Dockerfile as never having been built. Three things can be
+      # wrong here that nothing else catches, because each is invisible from a working checkout:
+      # the build failing, the build succeeding and the app not starting, and both succeeding
+      # while an *asset* is missing because `.dockerignore` excluded it. The font chain has
+      # already broken once that way (C1) and the only symptom was substituted captions in
+      # rendered output.
+      #
+      # The script boots the image and probes it rather than leaving a container running, so
+      # this is a check that finishes.
+      - name: Build and boot the image
+        run: scripts/docker_smoke.sh
+
   deploy:
     name: Deploy (main)
-    needs: [backend, frontend]
+    needs: [backend, frontend, docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     # The `secrets` context cannot be used inside an `if:` expression — the expression

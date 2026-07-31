@@ -1756,7 +1756,18 @@ def test_caption_preset_values_are_unchanged():
         "low_confidence_threshold", "max_lines", "name", "outline", "outline2", "outline2_color",
         "position", "punch_ms", "punch_scale", "scale_x", "scale_y", "shadow", "spacing",
         "uppercase", "word_pill", "word_pill_color",
-    ]
+    ], (
+        "A CaptionPreset field was added or removed. That is allowed, but this pin needs THREE "
+        "updates and missing any one of them leaves the guard half-working:\n"
+        "  1. this field list;\n"
+        "  2. the six frozen `to_dict` goldens in _EXPECTED_BUILTIN_PRESETS, which gain the new "
+        "key - a new field silently widens every preset's dict;\n"
+        "  3. the sorted(BUILTIN_PRESETS) name list above, if you also added a preset.\n"
+        "Before updating: confirm the new field DEFAULTS to the previous behaviour. Every field "
+        "added since v0.8.0 does, which is what lets the goldens stay frozen instead of being "
+        "re-blessed each release - and a golden that gets re-blessed every release cannot detect "
+        "an accidental change, which is the only thing it is for."
+    )
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
         "box", "highlight", "outline", "primary",
     ]
