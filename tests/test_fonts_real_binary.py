@@ -281,6 +281,130 @@ def test_arial_still_does_not_resolve_to_arial(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# A bundled face needs no system font install                                   #
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def host_fonts(monkeypatch):
+    """Pin what ``fc-list`` reports, so the tests below do not depend on the machine.
+
+    The tests above ask "what does libass do here?" and are therefore allowed to depend
+    on the host. These ask the opposite question — "what does our resolver decide when
+    the host has *none* of the bundled faces?" — and that state cannot be observed
+    reliably on a developer box that happens to have run the Dockerfile's ``fc-cache``.
+    Injecting it is what makes the assertion mean the same thing everywhere.
+
+    Note the probe must report *something*: ``font_available`` is deliberately
+    optimistic when enumeration fails entirely, so an empty set exercises a different
+    branch than a host that simply lacks these families.
+    """
+
+    def install(*families: str) -> None:
+        captions._FONT_CACHE.clear()
+        monkeypatch.setattr(
+            captions,
+            "_enumerate_system_fonts",
+            lambda: frozenset(family.lower() for family in families),
+        )
+
+    yield install
+    # The cache is module-level and would otherwise leak the injected answer into every
+    # later test in the session.
+    captions._FONT_CACHE.clear()
+
+
+def test_bundled_static_faces_are_available_without_a_system_install(host_fonts):
+    """A face we ship is available because we ship it, not because the host installed it.
+
+    ``subtitles_filter`` hands ``assets/fonts`` to libass as ``fontsdir``, so these
+    faces render on a bare checkout. ``fc-list`` cannot see that directory, so probing
+    fontconfig alone reports them missing and the resolver substitutes them away — 
+    replacing a font that would have worked, which is the C1 defect in a new costume.
+    """
+    host_fonts("Noto Sans", "DejaVu Sans", "Liberation Sans")
+    for entry in _manifest()["fonts"]:
+        if entry["variable"]:
+            continue
+        assert captions.font_available(entry["family"]), (
+            f"{entry['family']!r} is bundled at assets/fonts/{entry['file']} and reachable "
+            "through fontsdir, but the resolver reports it unavailable"
+        )
+
+
+def test_variable_faces_are_not_claimed_from_the_bundled_dir_alone(host_fonts):
+    """The exclusion that keeps the fix honest.
+
+    libass' directory provider does not select named instances of a variable font, so a
+    request for one through ``fontsdir`` alone resolves to something else entirely —
+    ``assets/fonts.json`` records ``Montserrat`` silently becoming ``NotoSans-Bold``, and
+    that is why no variable family appears on the fallback ladder. Counting these as
+    available would mean substituting *towards* a face that cannot be rendered, which is
+    worse than substituting away from one that could.
+    """
+    host_fonts("DejaVu Sans")  # no overlap with any bundled family
+    variable = [e for e in _manifest()["fonts"] if e["variable"]]
+    assert variable, "manifest has no variable faces; this test would pass vacuously"
+    for entry in variable:
+        assert not captions.font_available(entry["family"]), (
+            f"{entry['family']!r} is a variable face; libass cannot select its named "
+            "instance from fontsdir, so it must not count as available on that basis"
+        )
+
+
+def test_no_preset_substitutes_on_a_host_without_the_bundled_faces(host_fonts):
+    """The regression this pins: every preset kept the font it declares.
+
+    Asserts the *resolved* value rather than the requested one, which is the distinction
+    that let the original font chain stay broken through five specs.
+    """
+    host_fonts("Noto Sans", "DejaVu Sans", "Liberation Sans")
+    for name, preset in sorted(caption_presets.BUILTIN_PRESETS.items()):
+        resolved, substituted = captions.resolve_font(preset.font)
+        assert (resolved, substituted) == (preset.font, False), (
+            f"preset {name!r} declares {preset.font!r} but resolved to {resolved!r} "
+            f"(substituted={substituted}) on a host without the bundled faces installed"
+        )
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+@pytest.mark.parametrize("preset_name", sorted(caption_presets.BUILTIN_PRESETS))
+def test_preset_renders_in_its_own_face_without_a_system_install(
+    preset_name, host_fonts, tmp_path
+):
+    """The same end-to-end check as above, with the host pinned rather than trusted.
+
+    ``test_every_builtin_preset_renders_in_the_font_it_asks_for`` passes on a machine
+    that has run the Dockerfile's ``fc-cache`` and fails on one that has not, so on its
+    own it cannot distinguish "the code is right" from "this box is convenient". Pinning
+    the probe to a host with none of the bundled faces makes the outcome depend only on
+    our own resolution logic and on libass.
+    """
+    host_fonts("Noto Sans", "DejaVu Sans", "Liberation Sans")
+    preset = caption_presets.BUILTIN_PRESETS[preset_name]
+    ass = tmp_path / f"{preset_name}.ass"
+    captions.build_ass(
+        [Cue(0.0, 1.0, [Word(0.0, 0.5, "HELLO"), Word(0.5, 1.0, "WORLD")])],
+        ass,
+        preset=preset,
+        clip_duration=1.0,
+    )
+
+    decisions = _fontselect_lines(captions.subtitles_filter(ass), tmp_path)
+    assert preset.font in {requested for requested, _ in decisions}, (
+        f"preset {preset_name!r} declares {preset.font!r} but libass was asked for "
+        f"{sorted({r for r, _ in decisions})} — the resolver substituted a bundled face"
+    )
+
+    expected = Path({e["family"]: e["file"] for e in _manifest()["fonts"]}[preset.font]).stem
+    for requested, resolved in decisions:
+        if requested == preset.font:
+            assert expected in resolved, (
+                f"preset {preset_name!r} asked for {preset.font!r} and libass rendered "
+                f"{resolved!r}; expected the bundled {expected!r}"
+            )
+
+
+# --------------------------------------------------------------------------- #
 # The substitution marker names the font that was used                           #
 # --------------------------------------------------------------------------- #
 def test_substitution_marker_records_the_font_actually_used(monkeypatch):

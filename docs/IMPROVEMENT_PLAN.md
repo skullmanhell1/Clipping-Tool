@@ -8,7 +8,15 @@ Every claim about our own code below was verified by reading it, and the current
 quoted exactly. Nothing here is aspirational description — where something does not exist,
 it says so.
 
-**Status: 0 of 154 items done.** Written 2026-07-29 against `VERSION` 0.10.0.
+**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 140 of the 154
+items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 14 that remain and why each was
+left; `CHANGELOG.md` is the record of what landed.
+
+Do not recount by grepping for item IDs without reading the traps `SESSION_HANDOFF.md` §"Start
+here" documents — `P0`–`P3` are phase rows rather than items, excluding everything starting with
+`P` also drops `PB1`–`PB9`, and an item can be satisfied without carrying its own ID (`PB3` is
+`publishers/preflight.py`, labelled `O10`). **The "current values" quoted throughout this
+document are as of 0.10.0 and most are now stale** — verify against the code before acting on one.
 
 ---
 
