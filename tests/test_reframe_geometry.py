@@ -388,23 +388,17 @@ def test_p16_split_screen_tiles_target_exactly(data, portrait, src):
     total = sum(r.dst_w * r.dst_h for r in regions)
     assert total == target_w * target_h
 
-    # Exact partition (contiguous tiling covering the frame, no gaps).
-    if target_h >= target_w:
-        # Stacked vertically, full width.
-        y = 0
-        for r in regions:
-            assert r.dst_x == 0 and r.dst_w == target_w
-            assert r.dst_y == y
-            y += r.dst_h
-        assert y == target_h
-    else:
-        # Side-by-side, full height.
-        x = 0
-        for r in regions:
-            assert r.dst_y == 0 and r.dst_h == target_h
-            assert r.dst_x == x
-            x += r.dst_w
-        assert x == target_w
+    # Exact partition. Checked layout-agnostically: non-overlapping rectangles that all lie
+    # inside the frame and whose areas sum to the frame's area can only be an exact cover, and
+    # both facts are already asserted above. Asserting a *specific* arrangement here would pin
+    # the tiling pattern rather than the property, which is what V6 had to change - three or
+    # four speakers in a portrait frame now go into a 2-column grid instead of a stack of
+    # letterbox slivers.
+    for r in regions:
+        assert r.dst_x >= 0 and r.dst_y >= 0
+        assert r.dst_x + r.dst_w <= target_w
+        assert r.dst_y + r.dst_h <= target_h
+        assert r.dst_w > 0 and r.dst_h > 0
 
     # Each region's source crop is centred on its track (clamped in-frame).
     track_by_id = {tr.track_id: tr for tr in tracks}

@@ -35,6 +35,11 @@ storage/profiles.json
 # at build time", and no build step did that - so assets/emoji was empty and the overlay
 # had nothing to composite. scripts/fetch_emoji.py is that build step, and its output is
 # tracked so a render never depends on a CDN.
+#
+# The *alternative* artwork sets (A13) are not committed: three sets over 326 glyphs would
+# triple the ~7 MB the assets cost, to ship two looks most installs never select. They are
+# per-machine caches, populated by `scripts/fetch_emoji.py --style <name>`.
+assets/emoji-*/
 
 # Node / frontend
 frontend/node_modules/
@@ -54,3 +59,8 @@ eval/cache/
 eval/media/
 eval/*.json
 !eval/labels/*.json
+
+
+# Cached static ffmpeg build fetched by scripts/setup_dev_env.sh, so a re-run after a
+# recycled environment is a copy rather than a 42 MB download.
+.devtools/

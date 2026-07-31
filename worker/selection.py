@@ -18,7 +18,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from config import settings
-from worker import audio_features, candidate_ranking, hook_score, scene_detect, selection_features
+from worker import (
+    audio_features,
+    candidate_ranking,
+    discourse,
+    hook_score,
+    intermediate_cache,
+    scene_detect,
+    selection_features,
+)
 from worker import segmentation as seg
 from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
 from worker.models import ProcessingOptions
@@ -99,6 +107,13 @@ def _segment_annotation(
                 tags.append("quiet")
             if energy.quiet_fraction >= 0.5:
                 tags.append("mostly silent")
+
+    # S7/S8/S12: what the segment *says*, alongside how it was said. Same rule as the delivery
+    # tags above - only departures are described, so an unremarkable segment still renders exactly
+    # as it did before S10 and the annotated ones stand out.
+    note = discourse.prompt_note(segment.text or "")
+    if note:
+        tags.append(note)
 
     return f" ({', '.join(tags)})" if tags else ""
 
@@ -287,6 +302,9 @@ def _fallback(
     selection_features.annotate_candidates(candidates, words, total_duration)
     audio_features.annotate_candidates(candidates, envelope)
     hook_score.annotate_candidates(candidates, words, envelope=envelope)
+    # S7/S8/S12: text-structure signals. Pure and offline - no media, no model call - so this runs
+    # on every path rather than being gated like the acoustic measurements.
+    discourse.annotate_candidates(candidates)
     candidates = candidate_ranking.rank_candidates(
         candidates, target=target, min_len=min_len, max_len=max_len
     )
@@ -322,9 +340,24 @@ def select_moments(
     # prompt annotation (S10) and the fallback's ranking (S11) read this, so measuring it once
     # here rather than inside each is what keeps it to a single decode. Returns [] on a source
     # with no audio or any ffmpeg trouble, and every consumer treats that as "no information".
-    envelope = audio_features.energy_envelope(
-        source_path, window=float(getattr(settings, "energy_envelope_window_s", 1.0))
-    )
+    # I3: cached by source content and window. One `astats` pass over a whole file is the same
+    # answer on every run of that file, and re-measuring it to try different effect settings was
+    # paying for a full decode to learn nothing new.
+    envelope_window = float(getattr(settings, "energy_envelope_window_s", 1.0))
+    envelope = [
+        (float(t), float(db))
+        for t, db in intermediate_cache.memoise(
+            "envelope",
+            source_path,
+            lambda: [
+                list(reading)
+                for reading in audio_features.energy_envelope(
+                    source_path, window=envelope_window
+                )
+            ],
+            {"window": envelope_window},
+        )
+    ]
 
     def _measured(found: list[ClipCandidate]) -> list[ClipCandidate]:
         """Attach the measured features to a result on its way out (S2, S4, S6).
@@ -338,6 +371,7 @@ def select_moments(
         selection_features.annotate_candidates(found, transcript.words, total_duration)
         audio_features.annotate_candidates(found, envelope)
         hook_score.annotate_candidates(found, transcript.words, envelope=envelope)
+        discourse.annotate_candidates(found)
         return found
 
     def _fallback_result() -> list[ClipCandidate]:

@@ -496,8 +496,39 @@ def test_zeroing_the_hook_weight_changes_the_outcome(monkeypatch):
     assert without_hook[0] is dull_fit, "selection_weight_hook is not wired to anything"
 
 
+#: Every weight the fallback scorer reads.
+#:
+#: Enumerated rather than discovered so that adding a weight without adding it here fails the
+#: zero-division test below - which is what happened when S7/S8/S12 added three, and is the point of
+#: listing them.
+SELECTION_WEIGHT_NAMES = (
+    "hook", "pace", "energy", "length", "structure", "standalone", "intensity",
+)
+
+
+def test_the_weight_list_covers_every_selection_weight():
+    """Guards the list above against a weight being added and silently untested."""
+    declared = {
+        name[len("selection_weight_"):]
+        for name in type(settings).model_fields
+        if name.startswith("selection_weight_")
+    }
+    missing = declared - set(SELECTION_WEIGHT_NAMES)
+    stale = set(SELECTION_WEIGHT_NAMES) - declared
+    assert declared == set(SELECTION_WEIGHT_NAMES), (
+        f"SELECTION_WEIGHT_NAMES is out of step with the settings.\n"
+        f"  add to the tuple:      {sorted(missing) or '-'}\n"
+        f"  remove from the tuple: {sorted(stale) or '-'}\n"
+        "The tuple drives the normalisation and zero-weight tests in this file, so a weight "
+        "missing from it is a weight whose contribution to the ranking is never checked - and a "
+        "ranking bug does not raise, it produces a plausible ordering that nothing downstream can "
+        "contradict. Also add a matching entry to .env.example, which "
+        "tests/test_config_documentation.py requires."
+    )
+
+
 def test_all_weights_zero_does_not_divide_by_zero(monkeypatch):
-    for name in ("hook", "pace", "energy", "length"):
+    for name in SELECTION_WEIGHT_NAMES:
         monkeypatch.setattr(settings, f"selection_weight_{name}", 0.0)
     assert candidate_ranking.score_candidate(
         _measured(0.0, 45.0, hook=1.0), target=45.0, min_len=30.0, max_len=60.0
