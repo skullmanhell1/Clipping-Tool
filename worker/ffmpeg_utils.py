@@ -15,7 +15,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from config import settings
 
@@ -130,6 +130,40 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     return args
 
 
+def mux_subtitle_tracks(
+    video: str | Path,
+    tracks: Sequence[tuple[str | Path, str]],
+    dest: str | Path,
+) -> Path:
+    """Copy ``video`` to ``dest`` with each ``(subtitle_file, language)`` added as a track.
+
+    The multi-track form exists for T10: a translated subtitle track is only *useful* alongside
+    the original-language one, and adding them in two separate remuxes cannot label them
+    correctly. ``-metadata:s:s:N`` addresses subtitle streams by their index in the **output**,
+    so a second pass over a file that already has a subtitle stream would either re-label the
+    first track or need to know how many the input already had. Supplying every track in one
+    call makes the indices a property of this argument list instead of of the input file.
+
+    ``tracks`` order is the output order, so the track a player selects by default is the first
+    one given. Raises nothing when ``tracks`` is empty: it still produces ``dest`` as a plain
+    remux, because a caller that asked for a copy should get one.
+    """
+    video, dest = Path(video), Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    args = [settings.ffmpeg_binary, "-y", "-i", str(video)]
+    for path, _lang in tracks:
+        args += ["-i", str(Path(path))]
+    args += ["-map", "0"]
+    for index in range(len(tracks)):
+        args += ["-map", str(index + 1)]
+    args += ["-c", "copy", "-c:s", "mov_text"]
+    for index, (_path, lang) in enumerate(tracks):
+        args += [f"-metadata:s:s:{index}", f"language={lang or 'und'}"]
+    args += ["-movflags", "+faststart", str(dest)]
+    _run(args)
+    return dest
+
+
 def mux_soft_subtitles(
     video: str | Path,
     subtitles: str | Path,
@@ -153,20 +187,11 @@ def mux_soft_subtitles(
 
     Streams are copied, so this costs a remux rather than a re-encode: no generation loss, and
     a second or two on a clip-length file.
+
+    A single-track shorthand for :func:`mux_subtitle_tracks`, kept because one track is the
+    common case and because it is the published entry point for O12.
     """
-    video, subtitles, dest = Path(video), Path(subtitles), Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _run([
-        settings.ffmpeg_binary, "-y",
-        "-i", str(video),
-        "-i", str(subtitles),
-        "-map", "0", "-map", "1",
-        "-c", "copy", "-c:s", "mov_text",
-        "-metadata:s:s:0", f"language={language}",
-        "-movflags", "+faststart",
-        str(dest),
-    ])
-    return dest
+    return mux_subtitle_tracks(video, [(subtitles, language)], dest)
 
 
 def aac_args() -> list[str]:

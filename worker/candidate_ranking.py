@@ -258,13 +258,25 @@ def score_candidate(
         max_len=max_len,
     )
 
+    # S7/S8/S12: what the passage *says*, alongside how it was delivered.
+    #
+    # Each defaults to 0.5 when unmeasured, matching every other component here: a candidate on a
+    # source with no usable text must not rank below one that was measurable and bad.
+    structure = max(0.0, min(1.0, _get("structure_score", 0.5)))
+    standalone = max(0.0, min(1.0, _get("standalone_score", 0.5)))
+    intensity = max(0.0, min(1.0, _get("intensity_score", 0.5)))
+
     weights = (
         float(settings.selection_weight_hook),
         float(settings.selection_weight_pace),
         float(settings.selection_weight_energy),
         float(settings.selection_weight_length),
+        float(settings.selection_weight_structure),
+        float(settings.selection_weight_standalone),
+        float(settings.selection_weight_intensity),
     )
-    total = weights[0] * hook + weights[1] * pace + weights[2] * energy + weights[3] * fit
+    components = (hook, pace, energy, fit, structure, standalone, intensity)
+    total = sum(weight * value for weight, value in zip(weights, components))
     weight_sum = sum(weights)
     if weight_sum <= 0:
         return 0.0
