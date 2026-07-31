@@ -43,22 +43,22 @@ describe("ReviewBar", () => {
 
   it("disables every batch verdict while nothing is selected", () => {
     setup({ selectedCount: 0 });
-    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /reject/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /reset/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve selected/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /reject selected/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /reset selected/i })).toBeDisabled();
   });
 
   it("enables the verdicts once clips are selected, and reports the count", async () => {
     const props = setup({ selectedCount: 4 });
     expect(screen.getByText("4 selected")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await userEvent.click(screen.getByRole("button", { name: /approve selected/i }));
     expect(props.onApprove).toHaveBeenCalledTimes(1);
     expect(props.onReject).not.toHaveBeenCalled();
   });
 
   it("each verdict calls only its own handler", async () => {
     const props = setup({ selectedCount: 2 });
-    await userEvent.click(screen.getByRole("button", { name: /reject/i }));
+    await userEvent.click(screen.getByRole("button", { name: /reject selected/i }));
     expect(props.onReject).toHaveBeenCalledTimes(1);
     expect(props.onApprove).not.toHaveBeenCalled();
     expect(props.onReset).not.toHaveBeenCalled();
@@ -75,8 +75,8 @@ describe("ReviewBar", () => {
     // Otherwise a second click sends a second request for the same clips, and whichever lands
     // last silently wins.
     setup({ selectedCount: 3, busy: true });
-    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /reject/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve selected/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /reject selected/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /select pending/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^all$/i })).toBeDisabled();
   });
