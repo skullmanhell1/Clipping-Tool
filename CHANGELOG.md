@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — multi-user authentication and per-user ownership (U12)
+
+- **`U12` — accounts, sessions and per-user job ownership.** Off by default:
+  `AUTH_ENABLED=false` is the shipped single-tenant behaviour and stays the default, so an
+  existing install is unaffected. With it on, every endpoint requires a session and every job
+  belongs to the user who submitted it.
+
+  **One choke point, and it is a middleware rather than 45 dependencies.** Not a style
+  preference — `app.mount("/clips", StaticFiles(...))` is not a route, so route dependencies
+  do not apply to it. The clip media, which is the actual product, would have stayed
+  world-readable while every JSON endpoint looked protected. A global middleware also fails
+  closed: a handler added next year is protected until someone adds it to the exempt list,
+  rather than public until someone remembers. It is *pure* ASGI so that an authorised
+  `/clips` request passes through untouched — `StaticFiles` implements HTTP Range, which is
+  what lets the review player seek, and wrapping its response would break scrubbing without
+  breaking a test.
+
+  **Standard library only.** No `passlib`, `bcrypt`, `python-jose`, `PyJWT` or `itsdangerous`
+  is declared in any requirements file, and `filterwarnings = ["error"]` means a new
+  dependency's first `DeprecationWarning` fails CI. Passwords use `hashlib.scrypt` — memory
+  hard, and one of the three KDFs OWASP names — with **the cost parameters recorded in each
+  hash**, so raising the cost later does not invalidate every existing password; it is
+  upgraded on next successful login, the only moment the plaintext is available.
+
+  **Sessions are opaque and server-side, not JWTs.** A JWT cannot be revoked without a
+  server-side denylist, at which point it is a session with extra steps plus hand-rolled
+  signature verification. Logging out has to actually work. The token is stored **hashed**,
+  so a copy of `users.db` is not a set of live sessions, and expiry is enforced when a session
+  is *read* rather than only by a sweeper — shortening the TTL therefore takes effect
+  immediately. The cookie is `httponly` and `samesite=lax` (which is the CSRF defence);
+  `secure` follows `AUTH_COOKIE_SECURE` rather than being forced on, because a browser
+  silently discards a Secure cookie over plain http and a localhost install would be unable to
+  sign in with nothing on screen to explain why.
+
+  **Not-found rather than forbidden.** A caller who does not own a job is told it does not
+  exist. A 403 confirms that a guessed id is real, and job ids are 12 hex characters that
+  appear in URLs — distinguishing "yours", "someone else's" and "no such thing" turns them
+  into an enumerable namespace. Login answers identically for a wrong password, an unknown
+  username and a disabled account, and spends the same CPU on each: a missing user is still
+  verified against a dummy hash, because otherwise the response time is a username oracle
+  that no amount of identical wording hides.
+
+  **Jobs that predate ownership are admin-only.** They read back with no owner, and the
+  alternative — treating unowned as public — would hand the existing library to the first
+  account created after enabling auth.
+
+  **Startup fails loudly when auth is on with no way in.** With an empty user table every
+  login fails, so a server that boots and answers 401 to everything is the harder problem to
+  diagnose. `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` create the first admin;
+  without them, and without an existing user, the process refuses to start and says which two
+  settings to set.
+
+  Failed logins are rate limited per username **and** client address, so one user under attack
+  cannot lock out everyone while an attacker rotating usernames from one address still
+  accumulates a count. `X-Forwarded-For` is deliberately not consulted: it is caller-supplied
+  and trivially rotated, so honouring it would let an attacker reset their own budget with a
+  header.
+
+  There is **no self-service registration**. An open sign-up endpoint on a tool that spends
+  GPU minutes per request is an invitation, and who may have an account is a decision for
+  whoever runs the instance.
+
+- **Per-user storage is enforced by ownership, not by a directory per user.** Worth being
+  explicit, because the plan entry says "per-user storage" and this is a deliberate reading of
+  it. A `clips/<user>/<job>/…` layout would have to change `ClipResult.video_url` (built from
+  `final.parent.name`, a single path component), the `/clips` mount, both download endpoints,
+  and every URL already recorded in job records and publish history — invalidating live links
+  for clips that may already be published. It would add no isolation that the ownership check
+  does not already provide, since the check is what refuses the request either way. So the
+  layout is unchanged and every path to media — the mount, both download endpoints, the
+  transcript endpoint — goes through one authorization rule.
+
+- **Removed: the `owner` column considered for `jobs`.** It was written, then taken out. The
+  schema's rule is that a field leaves the JSON blob when it is *queried*, and nothing queries
+  owner: `JobStore` holds every job in memory (pruned to `MAX_PERSISTED_JOBS`) and filters
+  there. The column and its index earned nothing and put the same fact in two places, where
+  the copy nothing reads is free to be wrong. Found by asking what would fail if it were
+  mutated; the answer was "nothing".
+
 ### Added — transcript-based trimming (U4)
 
 - **`U4` — click words out of a clip.** The Descript-class feature: a clip's transcript is shown

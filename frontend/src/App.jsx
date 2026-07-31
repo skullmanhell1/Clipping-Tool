@@ -211,7 +211,7 @@ function toOptions(settings, publishing) {
   };
 }
 
-export default function App() {
+export default function App({ auth = null }) {
   const [activeView, setActiveView] = useState("create");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [publishing, setPublishing] = useState(DEFAULT_PUBLISHING);
@@ -464,6 +464,23 @@ export default function App() {
               )}
             </p>
           </div>
+          {/* U12: who you are and a way out. Rendered only when the deployment uses
+              accounts, so a single-tenant install's header is unchanged. */}
+          {auth?.enabled && auth?.user ? (
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span>
+                Signed in as <strong className="text-slate-200">{auth.user.username}</strong>
+                {auth.user.is_admin ? " (admin)" : ""}
+              </span>
+              <button
+                type="button"
+                onClick={auth.signOut}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-slate-300 hover:border-brand-accent"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : null}
           <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
             {[
               ["create", "Create"],

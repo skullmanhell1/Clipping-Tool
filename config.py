@@ -68,6 +68,60 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed CORS origins.
     cors_origins: str = Field(default="*", description="Allowed CORS origins.")
 
+    # ---------------------------------------------------------------- auth --
+    # U12. Off by default, which is the shipped single-tenant behaviour: with this false
+    # nothing below is consulted, no middleware decision is taken, and every request is
+    # served exactly as it was before authentication existed. Defaulting it *on* would
+    # make an upgrade a migration for every existing install.
+    auth_enabled: bool = Field(
+        default=False,
+        description="Require a login for the API and clip media, and scope jobs to their "
+                    "owner (U12). Off means single-tenant: every request is served "
+                    "unauthenticated, as it was before this existed.",
+    )
+    users_db: Path = Field(
+        default=BASE_DIR / "storage" / "users.db",
+        description="Users and sessions. Separate from jobs.db because job records are "
+                    "pruned to MAX_PERSISTED_JOBS and accounts must not be.",
+    )
+    auth_session_ttl_hours: float = Field(
+        default=336.0,
+        description="How long a session stays valid (default 14 days). Enforced on read, "
+                    "so shortening it takes effect immediately for existing sessions.",
+    )
+    auth_session_cookie: str = Field(
+        default="clipper_session",
+        description="Name of the session cookie.",
+    )
+    auth_cookie_secure: bool = Field(
+        default=False,
+        description="Set the Secure flag on the session cookie. Defaults off so a plain "
+                    "http://localhost install works; turn it on for any deployment "
+                    "reachable over HTTPS, which is all of them that matter.",
+    )
+    auth_bootstrap_username: str = Field(
+        default="",
+        description="With AUTH_ENABLED and an empty user table, create this admin at "
+                    "startup. Startup fails if auth is on and there is neither a user nor "
+                    "a bootstrap account - a server that authenticates against nothing "
+                    "can only refuse every request.",
+    )
+    auth_bootstrap_password: str = Field(
+        default="",
+        description="Password for AUTH_BOOTSTRAP_USERNAME. Used only when that account is "
+                    "created; change it after first login.",
+    )
+    auth_login_max_attempts: int = Field(
+        default=10,
+        description="Failed logins allowed per username+client within "
+                    "AUTH_LOGIN_WINDOW_SECONDS before further attempts are refused. 0 "
+                    "disables the limit.",
+    )
+    auth_login_window_seconds: float = Field(
+        default=900.0,
+        description="Window for AUTH_LOGIN_MAX_ATTEMPTS, in seconds.",
+    )
+
     # --------------------------------------------------------------- queue --
     redis_url: str = Field(
         default="redis://localhost:6379/0",

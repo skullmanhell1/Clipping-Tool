@@ -1,0 +1,275 @@
+{
+  "_comment": [
+    "U12, multi-user authentication and per-user ownership.",
+    "",
+    "Access control is the worst possible fit for a passing test suite as evidence, because",
+    "every one of these mutations leaves a working application. Log in, see your clips, render",
+    "one, download it - all fine. The only difference is that somebody else can see them too,",
+    "and nothing in the product ever says so. There is no exception, no log line and no",
+    "degraded output; the failure is invisible from the inside, which is exactly the shape the",
+    "mutation harness exists for.",
+    "",
+    "Groups: the authorization rule itself, the middleware choke point (including the /clips",
+    "mount, which route dependencies would not have covered), session lifetime and revocation,",
+    "password storage, the login brute-force and enumeration guards, and the ownership stamp",
+    "that has to survive a restart."
+  ],
+
+  "command": [".venv/bin/python", "-m", "pytest", "tests/test_auth.py", "-q", "-x"],
+
+  "mutations": [
+    {
+      "name": "everyone_may_access_every_job",
+      "file": "api/security.py",
+      "old": "    return str(getattr(job, \"owner\", \"\") or \"\") == user.id",
+      "new": "    return True",
+      "why": "the whole authorization rule removed; the app works perfectly and every user sees every other user's clips"
+    },
+    {
+      "name": "unowned_jobs_are_public",
+      "file": "api/security.py",
+      "old": "    return str(getattr(job, \"owner\", \"\") or \"\") == user.id",
+      "new": "    return str(getattr(job, \"owner\", \"\") or \"\") in (user.id, \"\")",
+      "why": "every job that predates U12 has no owner, so treating unowned as public hands the existing library to the first account created after enabling auth"
+    },
+    {
+      "name": "a_missing_job_is_accessible",
+      "file": "api/security.py",
+      "old": "    if job is None:\n        return False",
+      "new": "    if job is None:\n        return True",
+      "why": "an id that resolves to nothing must answer like an id that is not yours, or the difference makes job ids enumerable"
+    },
+    {
+      "name": "admin_check_dropped",
+      "file": "api/security.py",
+      "old": "    if not user.is_admin:\n        raise HTTPException(status_code=403, detail=\"This action requires an administrator.\")",
+      "new": "",
+      "why": "any signed-in user could then create accounts and disable others - privilege escalation with no error anywhere"
+    },
+    {
+      "name": "middleware_lets_anonymous_through",
+      "file": "api/security.py",
+      "old": "        if resolved is None:\n            await _send_json(\n                send, 401, {\"detail\": \"Not authenticated. Sign in to continue.\"}\n            )\n            return",
+      "new": "        if resolved is None:\n            await self.app(scope, receive, send)\n            return",
+      "why": "authentication becomes decoration: the UI still shows a login form and the API answers everyone"
+    },
+    {
+      "name": "everything_is_exempt",
+      "file": "api/security.py",
+      "old": "        if is_exempt(path):",
+      "new": "        if True:",
+      "why": "the exempt list is the one place a mistake opens every endpoint at once"
+    },
+    {
+      "name": "clips_mount_ungated",
+      "file": "api/security.py",
+      "old": "        if path.startswith(CLIPS_PREFIX) and not self._may_read_media(path, user):",
+      "new": "        if False:",
+      "why": "the media IS the product, and StaticFiles is a mount rather than a route - this is precisely what route dependencies would have missed while every JSON endpoint looked protected"
+    },
+    {
+      "name": "media_without_a_job_record_is_served",
+      "file": "api/security.py",
+      "old": "        return may_access_job(get_manager().store.get(job_id), user)",
+      "new": "        return True",
+      "why": "clips outlive their records - the job table is pruned to MAX_PERSISTED_JOBS while the files stay - so failing open leaks precisely the longest-standing users' clips"
+    },
+    {
+      "name": "authorised_job_skips_the_check",
+      "file": "api/main.py",
+      "old": "    if job is None or not may_access_job(job, current_user(request)):",
+      "new": "    if job is None:",
+      "why": "the single funnel every job-scoped endpoint goes through; without the second clause each one authenticates and none authorises"
+    },
+    {
+      "name": "job_list_is_not_filtered",
+      "file": "api/main.py",
+      "old": "    if user is None or user.is_admin:\n        return None\n    return user.id",
+      "new": "    return None",
+      "why": "every user's dashboard would list every job in the instance, titles and all, before any per-job check is reached"
+    },
+    {
+      "name": "new_jobs_are_unowned",
+      "file": "api/main.py",
+      "old": "    user = current_user(request)\n    return user.id if user is not None else \"\"",
+      "new": "    return \"\"",
+      "why": "jobs created with auth on would belong to nobody, so a user could not see the work they just submitted while every admin could"
+    },
+    {
+      "name": "logout_leaves_the_session_alive",
+      "file": "api/main.py",
+      "old": "    if token:\n        get_auth_store().delete_session(token)",
+      "new": "    if token:\n        pass",
+      "why": "the cookie is cleared so the UI looks signed out, while a captured token keeps working for a fortnight"
+    },
+    {
+      "name": "password_change_skips_the_current_password",
+      "file": "api/main.py",
+      "old": "    if store.authenticate(user.username, req.current_password or \"\") is None:\n        raise HTTPException(status_code=403, detail=\"Current password is incorrect.\")",
+      "new": "",
+      "why": "a borrowed session becomes a permanent account takeover"
+    },
+    {
+      "name": "password_change_keeps_other_sessions",
+      "file": "api/main.py",
+      "old": "    store.delete_sessions_for_user(user.id)",
+      "new": "    pass",
+      "why": "changing a password is what you do when you think a session is stolen; leaving the others alive defeats the only reason to do it"
+    },
+    {
+      "name": "cookie_is_readable_by_javascript",
+      "file": "api/main.py",
+      "old": "        httponly=True,",
+      "new": "        httponly=False,",
+      "why": "one XSS bug anywhere in the SPA then yields session tokens; this flag is the reason the token is not in localStorage either"
+    },
+    {
+      "name": "cookie_sent_cross_site",
+      "file": "api/main.py",
+      "old": "        samesite=\"lax\",",
+      "new": "        samesite=\"none\",",
+      "why": "SameSite=Lax is the CSRF defence here; without it any site can make state-changing requests with the user's cookie"
+    },
+    {
+      "name": "session_expiry_not_enforced_on_read",
+      "file": "auth/store.py",
+      "old": "            if float(row[\"expires_at\"]) <= now:",
+      "new": "            if False:",
+      "why": "sessions would live until something swept, so shortening the TTL - or an expiry passing - would have no effect on anyone already signed in"
+    },
+    {
+      "name": "disabled_users_keep_their_sessions",
+      "file": "auth/store.py",
+      "old": "            if user_row is None or bool(user_row[\"disabled\"]):",
+      "new": "            if user_row is None:",
+      "why": "the account check has to be against current state; otherwise disabling somebody does nothing until their cookie expires"
+    },
+    {
+      "name": "disabling_does_not_revoke",
+      "file": "auth/store.py",
+      "old": "            if disabled:\n                conn.execute(\"DELETE FROM sessions WHERE user_id = ?\", (user_id,))",
+      "new": "            if disabled:\n                pass",
+      "why": "same failure from the other side: the row says disabled and the live session says otherwise"
+    },
+    {
+      "name": "session_tokens_stored_in_plaintext",
+      "file": "auth/store.py",
+      "old": "    return hashlib.sha256(token.encode(\"utf-8\")).hexdigest()",
+      "new": "    return token",
+      "why": "a copy of users.db would then be a set of live sessions, which is the same class of mistake as storing plaintext passwords"
+    },
+    {
+      "name": "disabled_accounts_can_authenticate",
+      "file": "auth/store.py",
+      "old": "        if user.disabled:\n            return None",
+      "new": "        if user.disabled:\n            pass",
+      "why": "a disabled account could sign in again and get a fresh session, making the whole control cosmetic"
+    },
+    {
+      "name": "usernames_become_case_sensitive",
+      "file": "auth/store.py",
+      "old": "    cleaned = (username or \"\").strip().lower()",
+      "new": "    cleaned = (username or \"\").strip()",
+      "why": "'Alice' and 'alice' as separate accounts is a phishing surface inside your own tool, and every user who capitalises their name appears to have no account"
+    },
+    {
+      "name": "password_salt_is_constant",
+      "file": "auth/passwords.py",
+      "old": "    salt = secrets.token_bytes(SALT_BYTES)",
+      "new": "    salt = b\"\\x00\" * SALT_BYTES",
+      "why": "identical passwords become identical rows, so one cracked hash cracks every account that shares it and a rainbow table becomes worthwhile"
+    },
+    {
+      "name": "password_floor_removed",
+      "file": "auth/passwords.py",
+      "old": "    if len(password) < MIN_PASSWORD_LENGTH:",
+      "new": "    if False:",
+      "why": "length is the property that actually matters, and this is the only place it is enforced"
+    },
+    {
+      "name": "rehash_never_needed",
+      "file": "auth/passwords.py",
+      "old": "    return (have_n, have_r, have_p, len(key)) != (n, r, p, KEY_BYTES)",
+      "new": "    return False",
+      "why": "raising the cost would then apply only to new accounts, and a successful login is the only moment an old hash can be upgraded"
+    },
+    {
+      "name": "corrupt_hash_reported_as_current",
+      "file": "auth/passwords.py",
+      "old": "    except PasswordError:\n        return True",
+      "new": "    except PasswordError:\n        return False",
+      "why": "an unreadable hash can never be verified against, so it must be replaced at the next opportunity rather than kept for ever"
+    },
+    {
+      "name": "verify_uses_plain_equality",
+      "file": "auth/passwords.py",
+      "old": "    return hmac.compare_digest(candidate, expected)",
+      "new": "    return candidate == expected",
+      "equivalent": true,
+      "why": "declared equivalent: `==` and compare_digest agree on every input, so no functional test can tell them apart - the difference is wall-clock timing on a mismatch, which this suite deliberately does not assert on because a timing test on a shared CI runner measures the runner. Included to record *why* the code uses compare_digest, and to be explicit that the guarantee is unproven by tests rather than quietly assumed to be covered."
+    },
+    {
+      "name": "rate_limit_never_triggers",
+      "file": "api/security.py",
+      "old": "            return len(recent) < limit",
+      "new": "            return True",
+      "why": "an offline-speed password guessing loop against a live endpoint, with nothing in the logs that looks different from normal use"
+    },
+    {
+      "name": "rate_limit_forgets_failures",
+      "file": "api/security.py",
+      "old": "            recent.append(time.time())",
+      "new": "            pass",
+      "why": "the same hole from the other side: the check runs and the counter never rises"
+    },
+    {
+      "name": "rate_limit_window_ignored",
+      "file": "api/security.py",
+      "old": "        cutoff = time.time() - self._window()\n        key = (username, client)\n        with self._lock:\n            recent = [t for t in self._attempts.get(key, []) if t > cutoff]\n            self._attempts[key] = recent\n            return len(recent) < limit",
+      "new": "        key = (username, client)\n        with self._lock:\n            recent = list(self._attempts.get(key, []))\n            return len(recent) < limit",
+      "why": "without the window a user who once mistyped their password accumulates towards a permanent lockout"
+    },
+    {
+      "name": "bootstrap_starts_with_no_way_in",
+      "file": "api/security.py",
+      "old": "    if not username or not password:\n        raise RuntimeError(",
+      "new": "    if not username or not password:\n        return None\n    if False:\n        raise RuntimeError(",
+      "why": "auth enabled with an empty user table means every login fails; a server that boots and can only answer 401 is far harder to diagnose than one that refuses to boot and says why"
+    },
+    {
+      "name": "bootstrap_admin_is_not_an_admin",
+      "file": "api/security.py",
+      "old": "    user = store.create_user(username, password, is_admin=True)",
+      "new": "    user = store.create_user(username, password, is_admin=False)",
+      "why": "the first account could not then create the second, and there would be no way to administer the instance at all"
+    },
+    {
+      "name": "owner_dropped_from_the_persisted_record",
+      "file": "worker/models.py",
+      "old": "            \"owner\": self.owner,",
+      "new": "            \"owner\": \"\",",
+      "why": "ownership would hold until the process restarted and then every job would read back unowned - visible to admins, invisible to the person who made it"
+    },
+    {
+      "name": "owner_not_restored_from_the_record",
+      "file": "worker/models.py",
+      "old": "            owner=str(data.get(\"owner\") or \"\"),",
+      "new": "            owner=\"\",",
+      "why": "the same loss on the read side, which is the half a to_dict test alone would not notice"
+    },
+    {
+      "name": "job_store_ignores_the_owner_filter",
+      "file": "worker/jobs.py",
+      "old": "        if owner is not None:\n            jobs = [j for j in jobs if getattr(j, \"owner\", \"\") == owner]\n        return sorted(jobs, key=lambda j: j.created_at, reverse=True)",
+      "new": "        return sorted(jobs, key=lambda j: j.created_at, reverse=True)",
+      "why": "the filter the API relies on for every listing; without it the per-request owner argument is accepted and discarded"
+    },
+    {
+      "name": "submit_discards_the_owner",
+      "file": "worker/jobs.py",
+      "old": "            owner=owner or \"\",",
+      "new": "            owner=\"\",",
+      "why": "the one line that attaches a new job to the person who asked for it"
+    }
+  ]
+}

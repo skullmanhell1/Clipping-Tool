@@ -288,6 +288,45 @@ The Docker image builds the React UI and serves it together with the API, so
 dropping a video into `./storage/watch` (a fixed path, not configurable) triggers watch-folder processing when
 that mode is enabled.
 
+## Multi-user mode (U12)
+
+**Off by default, and off means genuinely unchanged** — no login, no ownership, every request
+served as it was before this existed. That is the right default for the single-machine install
+most people run, and the wrong one for anything more than one person can reach.
+
+```bash
+AUTH_ENABLED=true
+AUTH_BOOTSTRAP_USERNAME=admin
+AUTH_BOOTSTRAP_PASSWORD=change-this-long-password   # then change it after signing in
+AUTH_COOKIE_SECURE=true                             # any deployment served over HTTPS
+```
+
+The first admin is created at startup only while the user table is empty. With `AUTH_ENABLED`
+on and neither an existing user nor these two settings, **the process refuses to start** and
+names them: an empty user table means every login fails, and a server that boots and answers
+401 to everything is much harder to diagnose than one that will not boot and says why.
+
+Then `POST /api/users` (admin only) creates further accounts — there is no self-service
+registration, because an open sign-up on a tool that spends GPU minutes per request is an
+invitation.
+
+Things worth knowing before turning it on:
+
+- **Jobs created before this, or while auth was off, belong to nobody and are visible to
+  admins only.** The alternative — treating unowned jobs as public — would show the existing
+  library to the first account created. If you want them assigned, set `owner` on the records
+  in `storage/jobs.db` (it lives in the JSON `data` blob, not a column).
+- **Requests for another user's job answer `404`, not `403`.** Deliberate: a 403 confirms a
+  guessed job id is real.
+- **Per-user isolation is by ownership, not by directory.** Clips stay at
+  `storage/clips/<job_id>/…` and every route to them — the `/clips` mount included — is
+  checked against the owning job. See the CHANGELOG for why a directory-per-user layout was
+  rejected.
+- **Sessions are server-side and revocable.** Logging out deletes the session row, so a
+  captured token dies with it; disabling an account ends its sessions immediately.
+- Passwords are `hashlib.scrypt` with the cost parameters recorded per hash, so raising the
+  cost later does not invalidate anyone's password — it is upgraded on their next login.
+
 ## Testing
 
 ```bash
