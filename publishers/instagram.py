@@ -21,7 +21,9 @@ class InstagramPublisher(BasePublisher):
         ok=bool(settings.instagram_access_token and (account_id or settings.instagram_account_id)); approved=settings.instagram_content_publish_approved
         msg=("Content publishing approved" if approved else "Professional account/app approval required; review mode only") if ok else "Set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID"
         return PublisherStatus(self.name,ok,ok,approved,"ready" if ok else "not_configured",msg,
-          account_id or (settings.instagram_account_id or ""),not approved)
+          account_id or (settings.instagram_account_id or ""),not approved,
+          # PB4: static long-lived token; renewal is a manual step outside this tool.
+          token_kind="static")
     def publish(self,request):
         st=self.status(request.account_id)
         if not st.configured:return PublishResult(False,PublishState.FAILED,self.name,error=st.message)
