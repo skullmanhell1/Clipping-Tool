@@ -682,6 +682,14 @@ class Settings(BaseSettings):
         default="punch_in",
         description="Opening transition: punch_in | zoom_cut | whip_pan | dissolve (V9).",
     )
+    # C20: pick the caption's outline/box colour from the video behind it.
+    caption_auto_contrast: bool = Field(
+        default=False,
+        description="Sample the region a caption will occupy and choose a dark or light outline "
+                    "for legibility (C20). Off by default: it costs three seeks per clip and "
+                    "changes rendered output. Never alters the fill colour, which is a brand "
+                    "decision.",
+    )
     # V17: score a few candidate frames for the thumbnail instead of taking a fixed position,
     # which on a clip opening on a cut or a blink chose exactly the wrong still.
     smart_thumbnail: bool = Field(

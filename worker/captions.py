@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config import settings
+from worker import text_metrics
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -59,6 +60,55 @@ def slice_words(transcript: Transcript, start: float, end: float) -> list[Word]:
     return out
 
 
+@dataclass(frozen=True)
+class TextFit:
+    """How wide a caption line may be, and in which font (C6, C16).
+
+    Bundled as one object rather than five parameters because every caller needs all of them
+    together and they must agree: measuring in one font and rendering in another produces
+    confident wrong numbers, which is worse than not measuring.
+    """
+
+    font: str
+    font_size: float
+    max_width_px: float
+    max_lines: int = 2
+    spacing: float = 0.0
+    scale_x: float = 100.0
+
+    def fits(self, text: str) -> bool:
+        return text_metrics.fits_in_lines(
+            text, font=self.font, font_size=self.font_size,
+            max_width_px=self.max_width_px, max_lines=self.max_lines,
+            spacing=self.spacing, scale_x=self.scale_x,
+        )
+
+    def wrap(self, text: str) -> list[str]:
+        return text_metrics.wrap_text(
+            text, font=self.font, font_size=self.font_size,
+            max_width_px=self.max_width_px, max_lines=self.max_lines,
+            spacing=self.spacing, scale_x=self.scale_x,
+        )
+
+    @classmethod
+    def for_preset(
+        cls,
+        preset: Any,
+        *,
+        video_width: int,
+        fraction: float = text_metrics.DEFAULT_LINE_WIDTH_FRACTION,
+    ) -> "TextFit":
+        """Build a fit from a :class:`CaptionPreset` and the output width."""
+        return cls(
+            font=str(getattr(preset, "font", "") or ""),
+            font_size=float(getattr(preset, "font_size", 96) or 96),
+            max_width_px=text_metrics.line_budget_px(video_width, fraction),
+            max_lines=max(1, int(getattr(preset, "max_lines", 2) or 2)),
+            spacing=float(getattr(preset, "spacing", 0) or 0),
+            scale_x=float(getattr(preset, "scale_x", 100) or 100),
+        )
+
+
 def words_to_cues(
     words: Iterable[Word],
     # C5: three words, not five. Five words at a readable size gives long thin lines that
@@ -67,12 +117,21 @@ def words_to_cues(
     max_words: int = 3,
     max_gap: float = 0.6,
     max_duration: float = 3.0,
+    *,
+    fit: Optional["TextFit"] = None,
 ) -> list[Cue]:
     """Group ``words`` into readable cues.
 
     A new cue is started when the current cue reaches ``max_words``, spans more
     than ``max_duration`` seconds, or when the silent gap before a word exceeds
     ``max_gap`` seconds.
+
+    ``fit`` (C6/C16) additionally breaks a cue when its text would no longer fit the frame in the
+    preset's line budget, *measured* in the font that will draw it. A word count alone cannot
+    decide this: three words in Anton at 96 px occupy a different width from three words in
+    Archivo Black, and the same three words are a comfortable line or an overflowing one depending
+    on which letters they contain. Without it the wrap below has to drop words to stay inside the
+    frame, which is a caption missing its ending.
     """
     cues: list[Cue] = []
     current: list[Word] = []
@@ -83,7 +142,11 @@ def words_to_cues(
         if current:
             gap = w.start - current[-1].end
             span = w.end - current[0].start
-            if len(current) >= max_words or gap > max_gap or span > max_duration:
+            too_wide = False
+            if fit is not None:
+                candidate = " ".join([_word_text(word) for word in [*current, w]])
+                too_wide = not fit.fits(candidate)
+            if len(current) >= max_words or gap > max_gap or span > max_duration or too_wide:
                 cues.append(Cue(current[0].start, current[-1].end, current))
                 current = []
         current.append(w)
@@ -505,6 +568,19 @@ def build_word_span(
         if punch:
             span = f"{punch}{span}{{\\fscx100\\fscy100}}"
 
+    # C9: the pill goes on *before* the highlight wrap, so an emphasised word ends up as
+    # highlight(pill(animation)) rather than pill(highlight(animation)).
+    #
+    # Both orders render acceptably - the pill sets `\3c` (border colour) and the highlight sets
+    # `\c` (fill), so they do not contest the same attribute. The order matters for a different
+    # reason: the documented contract is that a highlight only *wraps* the span a plain word would
+    # produce, which the property test checks by substring. With the pill outermost that stops being
+    # literally true, and a contract enforced by substring is a contract that has to stay
+    # syntactically true, not merely true in spirit.
+    pill = _word_pill_span(preset)
+    if pill:
+        span = f"{pill[0]}{span}{pill[1]}"
+
     if highlighted:
         colors = getattr(preset, "colors", None)
         highlight = getattr(colors, "highlight", "&H0000E5FF")
@@ -521,6 +597,38 @@ def build_word_span(
         # a word that earned emphasis has already been judged worth stating.
         span = f"{{{_dim_alpha_tag(preset)}}}{span}{{\\alpha&H00&}}"
     return span
+
+
+def _word_pill_span(preset: CaptionPreset) -> Optional[tuple[str, str]]:
+    """The ``(open, close)`` override pair drawing a pill behind one word (C9), or ``None``.
+
+    A thick border in a solid colour, not a drawn rectangle. ASS has no per-word background, and a
+    real box would need the rendered text width, which is not known where these tags are emitted.
+    A heavy border hugs the glyphs instead - which is closer to the reference look than a rectangle
+    would be, and is why the parameter is a *scale* of the font size rather than a pixel padding.
+    """
+    try:
+        strength = float(getattr(preset, "word_pill", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if strength <= 0:
+        return None
+
+    colors = getattr(preset, "colors", None)
+    fill = str(getattr(preset, "word_pill_color", "") or "") or str(
+        getattr(colors, "highlight", "&H0000E5FF")
+    )
+    # Scaled from the font size so one preset works at every output resolution (O9 renders 720 to
+    # 2160), and capped: past a certain thickness adjacent words' pills merge into a bar.
+    size = float(getattr(preset, "font_size", 96) or 96)
+    width = max(1, min(40, int(round(size * min(0.35, strength) * 0.25))))
+
+    restore_border = max(0, int(getattr(preset, "outline", 0) or 0))
+    restore_colour = str(getattr(colors, "outline", "&H00000000"))
+    return (
+        f"{{\\bord{width}\\3c{fill}&}}",
+        f"{{\\bord{restore_border}\\3c{restore_colour}&}}",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -830,6 +938,17 @@ def _preset_style_line(
     # heavier treatment and a 2-unit outline at PlayRes 1920 was effectively invisible.
     outline_w = max(0, int(preset.outline))
     shadow = max(0, int(preset.shadow))
+    # C17: a second, wider stroke in its own colour - the "3D"/sticker edge.
+    #
+    # ASS carries one border width and one border colour, so a genuine dual stroke needs the text
+    # drawn twice. The shadow slot is repurposed instead: at offset 0 with its own colour it renders
+    # as an outer stroke around the inner one, giving the two-tone edge in a single event. It
+    # replaces the shadow when set, which is the honest trade and why it is opt-in - a preset cannot
+    # have both a drop shadow and an outer stroke this way.
+    outline2 = max(0, int(getattr(preset, "outline2", 0) or 0))
+    if outline2:
+        shadow = outline2
+        back_col = str(getattr(preset, "outline2_color", "&H00000000") or "&H00000000")
     # C15: previously the literals 100,100,0 - identical metrics for every preset whatever face
     # it named. Clamped rather than trusted: ScaleX of 0 makes text invisible and a huge value
     # pushes glyphs off frame, and both would look like a rendering bug rather than a bad value.
@@ -903,6 +1022,7 @@ def build_ass(
             safe_area=(getattr(settings, "caption_safe_area", "") or "") or None,
             caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
         )
+        # C6/C16: measure in the font that will draw the text, at the frame's real width.
         body = _preset_dialogue_lines(
             cues,
             preset,
@@ -911,6 +1031,7 @@ def build_ass(
             permissibility=permissibility,
             emoji_glyph_available=emoji_glyph_available,
             emoji_downloader=emoji_downloader,
+            fit=TextFit.for_preset(preset, video_width=video_width),
         )
     else:
         legacy_position = position if position is not None else "bottom"
@@ -1160,6 +1281,7 @@ def _preset_dialogue_lines(
     permissibility: bool,
     emoji_glyph_available: Optional[Any],
     emoji_downloader: Optional[Any],
+    fit: Optional["TextFit"] = None,
 ) -> list[str]:
     """Render preset-driven dialogue lines (one event per cue).
 
@@ -1190,6 +1312,7 @@ def _preset_dialogue_lines(
         end = _ass_timestamp(cue_end)
 
         parts: list[str] = []
+        plain: list[str] = []
         for w in cue.words:
             highlighted = global_index in keyword_indices
             if getattr(preset, "uppercase", False):
@@ -1209,9 +1332,30 @@ def _preset_dialogue_lines(
                 if glyph:
                     span = f"{span} {glyph}"
             parts.append(span)
+            plain.append(_word_text(w))
             global_index += 1
 
-        text = " ".join(parts)
+        # C6: insert real line breaks at measured positions.
+        #
+        # The file declares `WrapStyle: 2`, which means libass wraps *only* where the text already
+        # contains `\N` - and nothing inserted one, so every cue was laid out as a single line and
+        # either ran past the frame edge or was silently shrunk, depending on the build. Neither is
+        # a decision anyone made.
+        #
+        # The break points are computed from the plain words and applied to the spans, because the
+        # spans carry override tags: measuring `{\kf34\c&H0000E5FF&}money` would count the tag as
+        # letters, and one tag is longer than the word it decorates.
+        if fit is not None and len(parts) > 1:
+            groups = text_metrics.wrap_word_groups(
+                plain, font=fit.font, font_size=fit.font_size,
+                max_width_px=fit.max_width_px, max_lines=fit.max_lines,
+                spacing=fit.spacing, scale_x=fit.scale_x,
+            )
+            text = "\\N".join(
+                " ".join(parts[index] for index in group) for group in groups if group
+            )
+        else:
+            text = " ".join(parts)
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
     return lines
 
