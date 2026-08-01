@@ -6,3 +6,11 @@ black>=24.4,<25.0     # formatter
 mypy>=1.10,<2.0       # static typing
 pytest>=8.2,<9.0      # test runner
 hypothesis>=6.100,<7.0 # property-based testing
+
+# Resolves requirements*.txt into requirements*.lock (scripts/lock_requirements.sh). Needed in CI
+# because the lock-drift check re-resolves and compares.
+#
+# `uv` rather than `pip-tools`: pip-tools 7.6 is incompatible with pip >= 26, which it reaches into
+# for `pip._internal.utils.compat.stdlib_pkgs` — a private symbol that has since been removed. A
+# lock tool that breaks when pip is upgraded is a lock tool that stops being run.
+uv>=0.5,<1.0
