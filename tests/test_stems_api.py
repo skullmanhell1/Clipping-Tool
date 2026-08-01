@@ -27,10 +27,20 @@ from worker.engines import stems
 from worker.models import ProcessingOptions
 
 _ROOT = Path(__file__).resolve().parents[1]
-_APP_JSX = (_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
-_PANEL_JSX = (_ROOT / "frontend" / "src" / "components" / "SettingsPanel.jsx").read_text(
-    encoding="utf-8"
-)
+#: The frontend's settings schema. Phase 5 moved this out of ``App.jsx``: the schema had been
+#: spelled three times there (defaults, engine defaults, and a per-field forwarding list), and the
+#: forwarding list was the one that could silently omit a field. It is now one declaration plus its
+#: documented exceptions, and this is the file that decides what reaches the backend.
+_SCHEMA_JS = (_ROOT / "frontend" / "src" / "settingsSchema.js").read_text(encoding="utf-8")
+#: The settings panel's source. **Two files**: Phase 5 split the 260 lines of static option lists
+#: and their two pure helpers out of the 1040-line component into ``settingsOptions.js``. The three
+#: Stem_Gain field *names* live in that module (as ``STEM_GAIN_FIELDS``, which the panel maps over
+#: to build the sliders), so a grep of the component alone would now report them missing and this
+#: test would fail for a reason that has nothing to do with what it checks.
+_PANEL_DIR = _ROOT / "frontend" / "src" / "components"
+_PANEL_JSX = (_PANEL_DIR / "SettingsPanel.jsx").read_text(encoding="utf-8") + (
+    _PANEL_DIR / "settingsOptions.js"
+).read_text(encoding="utf-8")
 
 #: The eleven Processing_Options fields this spec adds: the Feature_Flag plus one per
 #: ``Stem_Options`` field. Spelled out rather than derived, because the point is to pin the
@@ -369,12 +379,14 @@ def test_info_leaves_the_pre_existing_payload_untouched(client) -> None:
 def test_the_frontend_defaults_list_every_field_with_the_api_spelling() -> None:
     """A camelCase key or a typo here would silently never reach the backend.
 
-    ``App.jsx``'s ``engineOptions`` forwards ``DEFAULT_ENGINE_SETTINGS`` keys **verbatim** as
-    FormData field names, so the JS spelling has to equal the Python one exactly. That makes
-    this a real integration assertion rather than a style check.
+    ``settingsSchema.js`` forwards ``DEFAULT_SETTINGS`` keys **verbatim** as FormData field names,
+    so the JS spelling has to equal the Python one exactly. That makes this a real cross-language
+    integration assertion rather than a style check, and it is one neither side can make alone:
+    the JS suite checks that every schema field is forwarded, and this checks that the field
+    *names* match ``ProcessingOptions``.
     """
-    block = re.search(r"DEFAULT_ENGINE_SETTINGS\s*=\s*\{(.*?)\n\};", _APP_JSX, re.DOTALL)
-    assert block is not None, "DEFAULT_ENGINE_SETTINGS not found in App.jsx"
+    block = re.search(r"DEFAULT_ENGINE_SETTINGS\s*=\s*\{(.*?)\n\};", _SCHEMA_JS, re.DOTALL)
+    assert block is not None, "DEFAULT_ENGINE_SETTINGS not found in settingsSchema.js"
     body = block.group(1)
 
     for name in STEM_FIELDS:
@@ -383,8 +395,8 @@ def test_the_frontend_defaults_list_every_field_with_the_api_spelling() -> None:
         ), f"{name} missing from DEFAULT_ENGINE_SETTINGS"
 
     # No camelCase sibling snuck in alongside the snake_case key.
-    assert "stemInpainting" not in _APP_JSX
-    assert "stemGain" not in _APP_JSX
+    assert "stemInpainting" not in _SCHEMA_JS
+    assert "stemGain" not in _SCHEMA_JS
 
 
 #: The fields the "Stem repair" panel group exposes as controls.
@@ -412,7 +424,8 @@ def test_the_field_the_panel_omits_is_still_reachable() -> None:
     it unsettable by any means, which is a different and worse thing.
     """
     assert "stem_model" not in _PANEL_JSX
-    assert re.search(r"^\s*stem_model:", _APP_JSX, re.MULTILINE)  # forwarded generically
+    # Forwarded generically: every DEFAULT_SETTINGS key is sent, so declaring it is enough.
+    assert re.search(r"^\s*stem_model:", _SCHEMA_JS, re.MULTILINE)
     assert "stem_model" in {f.name for f in __import__("dataclasses").fields(ProcessingOptions)}
 
 
