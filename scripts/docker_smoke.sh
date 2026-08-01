@@ -36,7 +36,7 @@ echo "==> booting $IMAGE and probing it"
 docker run --rm --entrypoint sh "$IMAGE" -c '
 uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/uv.log 2>&1 &
 SERVER=$!
-python - <<PY
+python - <<\PY
 import json, time, urllib.request
 
 def get(path, tries=60):
@@ -87,9 +87,14 @@ print("emoji vendored:", count)
 # settings actually point at, which is the thing that decides whether a render uses BlazeFace
 # or silently substitutes Haar on every clip.
 #
-# NOTE: this heredoc is inside a single-quoted shell string, so the Python below must use
+# NOTE: this heredoc is inside a single-quoted `sh -c` string, so the Python below must use
 # double quotes only. A single quote here terminates the shell string and the failure surfaces
 # as a SyntaxError about an unterminated literal, several lines away from the cause.
+#
+# The delimiter is written <<\PY, not <<'PY', for the same reason: the backslash disables
+# expansion inside the heredoc without spending a single quote, which would close the sh -c
+# string. Unquoted, backticks in these comments were command substitutions - the prose above
+# ran fc-match Anton in the container, and the line below printed "available: not found".
 detectors = {}
 for entry in (effects.get("face_detectors") or []):
     detectors[entry["name"]] = entry
