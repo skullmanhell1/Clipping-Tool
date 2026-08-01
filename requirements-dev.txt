@@ -6,3 +6,9 @@ black>=24.4,<25.0     # formatter
 mypy>=1.10,<2.0       # static typing
 pytest>=8.2,<9.0      # test runner
 hypothesis>=6.100,<7.0 # property-based testing
+# The CI Tests step runs `pytest --cov=. --cov-report=xml --cov-report=term`, and the
+# "Fail if any test was skipped" step parses `--junitxml`. Without this plugin pytest rejects
+# those arguments outright -- "unrecognized arguments: --cov=." -- so the Backend job died
+# about a minute in, before running a single test, and the skip gate never got a report to
+# read. The workflow asked for coverage; nothing installed the thing that measures it.
+pytest-cov>=5.0,<8.0  # --cov for the CI coverage report
