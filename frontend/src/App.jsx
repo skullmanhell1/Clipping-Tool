@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { useApiInfo } from "./hooks/useApiInfo.js";
+import { useProfiles } from "./hooks/useProfiles.js";
 import { POLL_INTERVALS_MS, usePolling } from "./hooks/usePolling.js";
 import { DEFAULT_PUBLISHING, DEFAULT_SETTINGS, toApiOptions } from "./settingsSchema.js";
 import HistoryView from "./components/HistoryView.jsx";
@@ -27,19 +29,21 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
-  const [llmAvailable, setLlmAvailable] = useState(false);
-  const [version, setVersion] = useState("");
-  const [effects, setEffects] = useState(null);
-  const [engines, setEngines] = useState([]);
-  // /api/info's `capabilities` block: probe results keyed by `<kind>:<name>`
-  // plus engine-specific option domains keyed by Engine_Id (e.g.
-  // capabilities.kinetic_typography.styles / .reveal_modes).
-  const [capabilities, setCapabilities] = useState(null);
+  // One object, not five setters off one response. `capabilities` carries probe results keyed
+  // by `<kind>:<name>` plus engine option domains keyed by Engine_Id, e.g.
+  // capabilities.kinetic_typography.styles / .reveal_modes.
+  const { version, llmAvailable, effects, engines, capabilities } = useApiInfo();
+
+  // A profile *is* a settings blob, so applying one writes both halves of the form. Spread over
+  // the defaults rather than replacing them: a profile saved before a field existed has no value
+  // for it, and the field must fall back to its default rather than become undefined.
+  const applyProfileToForm = useCallback((profile) => {
+    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
+    setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
+  }, []);
+
+  const profileState = useProfiles({ settings, publishing, onApply: applyProfileToForm });
   const [updateInfo, setUpdateInfo] = useState(null);
-  const [profiles, setProfiles] = useState([]);
-  const [defaultProfileId, setDefaultProfileId] = useState(null);
-  const [activeProfileId, setActiveProfileId] = useState("");
-  const defaultAppliedRef = useRef(false);
 
   const loadPublishingData = useCallback(async () => {
     const [statusResult, campaignResult, historyResult] = await Promise.allSettled([
@@ -58,88 +62,17 @@ export default function App() {
     }
   }, []);
 
-  const applyProfile = useCallback(
-    (id) => {
-      setActiveProfileId(id);
-      if (!id) return;
-      const profile = profiles.find((p) => p.id === id);
-      if (!profile) return;
-      setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
-      setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
-    },
-    [profiles],
-  );
-
-  const loadProfiles = useCallback(async () => {
-    try {
-      const data = await api.profiles();
-      setProfiles(data.profiles || []);
-      setDefaultProfileId(data.default_id || null);
-      return data;
-    } catch {
-      return null;
-    }
-  }, []);
-
   useEffect(() => {
     api
       .watchStatus()
       .then(setWatch)
       .catch(() => {});
     api
-      .info()
-      .then((info) => {
-        setLlmAvailable(!!info.llm_available);
-        setVersion(info.version || "");
-        setEffects(info.effects || null);
-        setEngines(Array.isArray(info.engines) ? info.engines : []);
-        setCapabilities(info.capabilities || null);
-      })
-      .catch(() => {});
-    api
       .updates()
       .then(setUpdateInfo)
       .catch(() => {});
     loadPublishingData();
-    // Load profiles and pre-fill from the default profile once on startup.
-    loadProfiles().then((data) => {
-      if (data && data.default_id && !defaultAppliedRef.current) {
-        defaultAppliedRef.current = true;
-        const profile = (data.profiles || []).find((p) => p.id === data.default_id);
-        if (profile) {
-          setActiveProfileId(profile.id);
-          setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
-          setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
-        }
-      }
-    });
-  }, [loadPublishingData, loadProfiles]);
-
-  const handleSaveProfile = useCallback(
-    async (name, id) => {
-      const saved = await api.saveProfile({ name, id, settings, publishing });
-      await loadProfiles();
-      setActiveProfileId(saved.id);
-    },
-    [settings, publishing, loadProfiles],
-  );
-
-  const handleSetDefaultProfile = useCallback(
-    async (id) => {
-      await api.setDefaultProfile(id);
-      await loadProfiles();
-    },
-    [loadProfiles],
-  );
-
-  const handleDeleteProfile = useCallback(
-    async (id) => {
-      await api.deleteProfile(id);
-      if (id === activeProfileId) setActiveProfileId("");
-      await loadProfiles();
-    },
-    [activeProfileId, loadProfiles],
-  );
+  }, [loadPublishingData]);
 
   const handleClipUpdated = useCallback((jobId, updatedClip) => {
     setJobs((previous) =>
@@ -351,13 +284,13 @@ export default function App() {
           <>
             <div className="space-y-4">
               <ProfilesBar
-                profiles={profiles}
-                defaultId={defaultProfileId}
-                activeId={activeProfileId}
-                onApply={applyProfile}
-                onSave={handleSaveProfile}
-                onSetDefault={handleSetDefaultProfile}
-                onDelete={handleDeleteProfile}
+                profiles={profileState.profiles}
+                defaultId={profileState.defaultId}
+                activeId={profileState.activeId}
+                onApply={profileState.apply}
+                onSave={profileState.save}
+                onSetDefault={profileState.setDefault}
+                onDelete={profileState.remove}
               />
               <InputBar onChange={setInput} onPreview={handlePreview} />
               {input.files.length === 0 && (

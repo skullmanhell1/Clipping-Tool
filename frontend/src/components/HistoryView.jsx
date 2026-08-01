@@ -85,11 +85,26 @@ export default function HistoryView() {
   // whichever `load` existed when the filter last changed. That happened to work — the closure
   // captured the right filter — but it is the pattern that breaks silently as soon as `load`
   // depends on anything else, and the lint was pointing at exactly that.
+  // Normalised rather than handed straight to `setData`. The initial state is shaped correctly,
+  // but a bare `.then(setData)` *replaces* it with whatever arrived — so a response missing either
+  // list overwrote the safe default with an unsafe one, and the next render threw on
+  // `data.clips.length`. A component throwing during render unmounts the whole tree, so a partial
+  // payload from one endpoint white-screened the entire app rather than showing an empty table.
+  //
+  // `App.jsx` already defends the same response this way (`history.publish_attempts || []`); this
+  // is the same treatment on the path that renders it.
   const load = useCallback(
     () =>
       api
         .history(filter)
-        .then(setData)
+        .then((payload) =>
+          setData({
+            clips: Array.isArray(payload?.clips) ? payload.clips : [],
+            publish_attempts: Array.isArray(payload?.publish_attempts)
+              ? payload.publish_attempts
+              : [],
+          }),
+        )
         .catch(() => {}),
     [filter],
   );
