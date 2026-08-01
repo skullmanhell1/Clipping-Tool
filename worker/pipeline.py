@@ -46,6 +46,7 @@ from worker import metadata as meta_mod
 # chosen, so the alias is the seam that makes the pipeline testable. Removing it breaks
 # 23 tests with "module 'worker.pipeline' has no attribute 'sel'".
 from worker import selection as sel  # noqa: F401
+from worker import transcript_trim as trim
 from worker.effects import broll, compositor, filler, reframe
 from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
@@ -417,26 +418,46 @@ def run_pipeline(
             cap.slice_words(translated, c.start, c.end) if translated is not None else []
         )
 
-        # 3. filler-word / long-pause removal (adjusts the timeline + words).
+        # 3. filler-word / long-pause removal and U4 transcript trimming. Both remove
+        #    regions from the clip, so they resolve to ONE keep list and ONE re-encode:
+        #    applying them in sequence would concatenate twice, and the second pass's
+        #    keeps would be expressed against the first pass's output timeline rather
+        #    than the one the caller's cut offsets refer to.
+        pending: list[filler.Interval] | None = None
+        pending_markers: list[str] = []
         if options.filler_removal and words:
             plan = filler.plan_keep_intervals(words, c.duration)
             if plan.changed:
-                trimmed = temp_dir / f"trim_{clip_id}.mp4"
-                try:
-                    filler.apply_keep_intervals(raw, plan.keeps, trimmed)
-                    raw.unlink(missing_ok=True)
-                    raw = trimmed
-                    words = filler.rebase_words(words, plan.keeps)
-                    # T10: the translated track is timed against the same media, so it has to
-                    # follow every cut made to it. Left un-rebased it would drift by the total
-                    # removed duration and read as a sync bug in the player.
-                    if translated_words:
-                        translated_words = filler.rebase_words(translated_words, plan.keeps)
-                    keep_plan = plan.keeps
-                    clip_duration = sum(k.duration for k in plan.keeps)
-                    applied.append("filler_removal")
-                except fu.FFmpegError:
-                    pass  # keep the untrimmed clip on failure
+                pending = plan.keeps
+                pending_markers.append("filler_removal")
+        # U4: the user's struck-out words, intersected with whatever filler removal
+        # already claimed. Refusals (a cut list that empties the clip, or one long
+        # enough to be the problem itself) land on the clip record as a marker and
+        # leave the render exactly as it would have been.
+        if getattr(c, "cuts", None):
+            trim_plan = trim.plan_cuts(c.cuts, c.duration, base_keeps=pending)
+            if trim_plan.changed:
+                pending = trim_plan.keeps
+                pending_markers.append(trim_plan.marker)
+            elif trim_plan.refusal:
+                applied.append(trim_plan.marker)
+        if pending is not None:
+            trimmed = temp_dir / f"trim_{clip_id}.mp4"
+            try:
+                filler.apply_keep_intervals(raw, pending, trimmed)
+                raw.unlink(missing_ok=True)
+                raw = trimmed
+                words = filler.rebase_words(words, pending)
+                # T10: the translated track is timed against the same media, so it has to
+                # follow every cut made to it. Left un-rebased it would drift by the total
+                # removed duration and read as a sync bug in the player.
+                if translated_words:
+                    translated_words = filler.rebase_words(translated_words, pending)
+                keep_plan = pending
+                clip_duration = sum(k.duration for k in pending)
+                applied.extend(pending_markers)
+            except fu.FFmpegError:
+                pass  # keep the untrimmed clip on failure
 
         # 3b. AUDIO-stage engines. They see the REBASED clip-relative words and
         #     the post-filler duration (Reqs 15.1, 15.2) and may hand back
@@ -668,7 +689,13 @@ def run_pipeline(
                 filename=final.name,
                 start=round(c.start, 2),
                 end=round(c.end, 2),
-                duration=round(c.end - c.start, 2),
+                # The *rendered* length, not the source window's. These differ whenever
+                # something removed a region from the middle of the clip - filler removal
+                # before, a U4 cut list now - and the difference is the whole point of the
+                # feature, so reporting the window would tell the caller the edit did
+                # nothing. `start`/`end` still describe where in the source this came from,
+                # which is what a resume matches windows on; only the length is affected.
+                duration=round(clip_duration, 2),
                 title=md.title or c.title or f"Clip {idx + 1}",
                 video_url=f"clips/{final.parent.name}/{final.name}",
                 thumbnail_url=(f"clips/{final.parent.name}/{thumb.name}" if thumb else ""),

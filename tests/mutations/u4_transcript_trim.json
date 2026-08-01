@@ -1,0 +1,176 @@
+{
+  "_comment": [
+    "U4, transcript-based trimming. This feature is a good mutation target for the reason the",
+    "technique exists in this project: almost nothing here fails loudly. A cut list applied to",
+    "the wrong timeline still encodes. Cuts that silently replace the filler-removal plan still",
+    "produce a shorter clip that looks plausible. A dropped cut list produces the clip the user",
+    "already had, which is exactly what they will assume they are looking at until they check.",
+    "",
+    "The mutations below fall into four groups: the geometry (does the plan describe the right",
+    "regions), the refusals (does a request that cannot be honoured get declined rather than",
+    "approximated), the wiring (does the cut list actually reach ffmpeg), and the reporting (does",
+    "the clip record tell the truth about what happened)."
+  ],
+
+  "command": [
+    ".venv/bin/python", "-m", "pytest",
+    "tests/test_transcript_trim.py", "-q", "-x"
+  ],
+
+  "mutations": [
+    {
+      "name": "no_minimum_segment",
+      "file": "worker/transcript_trim.py",
+      "old": "MIN_SEGMENT_S = 0.2",
+      "new": "MIN_SEGMENT_S = 0.0",
+      "why": "two adjacent cuts leave a 50 ms sliver; rendered it is a frame of video and an audible click, and it still encodes without complaint"
+    },
+    {
+      "name": "accept_non_finite_cuts",
+      "file": "worker/transcript_trim.py",
+      "old": "    if not (math.isfinite(lo) and math.isfinite(hi)):\n        return None\n",
+      "new": "",
+      "why": "NaN survives float() and then makes sorting undefined and every duration meaningless, all the way into an ffmpeg argument"
+    },
+    {
+      "name": "cuts_replace_the_filler_plan",
+      "file": "worker/transcript_trim.py",
+      "old": "    keeps = _complement(ordered, span)\n    if base_keeps:\n        keeps = _intersect(keeps, list(base_keeps))",
+      "new": "    keeps = _complement(ordered, span)",
+      "why": "filler removal and a cut list both want regions gone; dropping the intersection makes the cut list win, silently restoring the ums"
+    },
+    {
+      "name": "render_an_empty_clip",
+      "file": "worker/transcript_trim.py",
+      "old": "    if not keeps:\n        return TrimPlan(keeps=fallback, cut_count=len(ordered), refusal=\"empty_result\")",
+      "new": "    if not keeps:\n        return TrimPlan(keeps=[], cut_count=len(ordered), removed_seconds=span)",
+      "why": "striking every word must be refused, not rendered: an empty keep list is a concat with no inputs"
+    },
+    {
+      "name": "drop_the_cut_limit",
+      "file": "worker/transcript_trim.py",
+      "old": "    if len(ordered) > MAX_CUTS:\n        return TrimPlan(keeps=fallback, cut_count=len(ordered), refusal=\"too_many_cuts\")",
+      "new": "",
+      "why": "the filter graph grows linearly with the cut count, so an unbounded list makes the graph the failure rather than the edit"
+    },
+    {
+      "name": "refusal_reports_success",
+      "file": "worker/transcript_trim.py",
+      "old": "        if self.refusal:\n            return f\"{REFUSED_MARKER}:{self.refusal}\"\n        return MARKER",
+      "new": "        return MARKER",
+      "why": "a declined trim reported as an applied one is the mislabelling the degradation-marker convention exists to prevent"
+    },
+    {
+      "name": "refused_plan_is_still_changed",
+      "file": "worker/transcript_trim.py",
+      "old": "        return not self.refusal and self.removed_seconds > 0.01",
+      "new": "        return self.removed_seconds > 0.01",
+      "why": "a refused plan must not trigger a re-encode; `keeps` then describes the clip as it already was"
+    },
+    {
+      "name": "removed_measured_against_the_window",
+      "file": "worker/transcript_trim.py",
+      "old": "    base_total = sum(k.duration for k in fallback) if fallback else span",
+      "new": "    base_total = span",
+      "why": "measured against the full window rather than the post-filler timeline, a cut inside an already-removed region looks like progress and costs a second re-encode"
+    },
+    {
+      "name": "no_coalescing",
+      "file": "worker/transcript_trim.py",
+      "old": "        if cur.start <= last.end + MERGE_GAP_S:",
+      "new": "        if cur.start <= last.end:",
+      "why": "ASR word boundaries are rarely exactly adjacent, so without a gap tolerance two struck neighbours leave a rounding-width sliver between them"
+    },
+    {
+      "name": "reversed_pair_dropped",
+      "file": "worker/transcript_trim.py",
+      "old": "        if hi < lo:\n            lo, hi = hi, lo\n",
+      "new": "",
+      "why": "a selection dragged right-to-left arrives reversed; dropping it loses the edit with no error"
+    },
+    {
+      "name": "pipeline_ignores_the_cut_list",
+      "file": "worker/pipeline.py",
+      "old": "        if getattr(c, \"cuts\", None):",
+      "new": "        if False:",
+      "why": "the whole feature unwired: every clip renders exactly as before and the API still returns 200"
+    },
+    {
+      "name": "pipeline_loses_the_filler_plan",
+      "file": "worker/pipeline.py",
+      "old": "            trim_plan = trim.plan_cuts(c.cuts, c.duration, base_keeps=pending)",
+      "new": "            trim_plan = trim.plan_cuts(c.cuts, c.duration)",
+      "why": "the seam between the two features: without the base plan, a cut list quietly discards filler removal's work"
+    },
+    {
+      "name": "markers_not_recorded",
+      "file": "worker/pipeline.py",
+      "old": "                applied.extend(pending_markers)",
+      "new": "                pass",
+      "why": "an applied trim with no marker is indistinguishable from one that never ran, which is the only thing the caller can see"
+    },
+    {
+      "name": "duration_reports_the_window",
+      "file": "worker/pipeline.py",
+      "old": "                duration=round(clip_duration, 2),",
+      "new": "                duration=round(c.end - c.start, 2),",
+      "why": "reporting the source window means a successful trim is reported as having changed nothing - the pre-U4 defect this fixed"
+    },
+    {
+      "name": "refusal_marker_not_recorded",
+      "file": "worker/pipeline.py",
+      "old": "            elif trim_plan.refusal:\n                applied.append(trim_plan.marker)",
+      "new": "            elif trim_plan.refusal:\n                pass",
+      "why": "a refused edit with no explanation on the clip record is indistinguishable from a broken feature"
+    },
+    {
+      "name": "api_drops_the_cuts",
+      "file": "api/main.py",
+      "old": "            cuts=[(c.start, c.end) for c in req.cuts],",
+      "new": "            cuts=[],",
+      "why": "the request validates, the render succeeds, the response is 200, and the user's edit is gone"
+    },
+    {
+      "name": "api_skips_the_cut_limit",
+      "file": "api/main.py",
+      "old": "    if len(req.cuts) > trim.MAX_CUTS:",
+      "new": "    if False:",
+      "why": "an oversized list should be a 422 naming the limit, not a marker the caller has to go hunting for"
+    },
+    {
+      "name": "trimmed_flag_by_prefix",
+      "file": "api/main.py",
+      "old": "    trimmed = any(marker in (\"filler_removal\", trim_mod.MARKER) for marker in effects)",
+      "new": "    trimmed = any(marker.startswith((\"filler_removal\", trim_mod.MARKER)) for marker in effects)",
+      "why": "`transcript_trim_refused:*` shares the applied marker's prefix, so a prefix test reports the clip as trimmed in exactly the case where the trim did not happen"
+    },
+    {
+      "name": "rerender_drops_the_cuts",
+      "file": "worker/rerender.py",
+      "old": "        cuts=list(cuts or []),",
+      "new": "        cuts=[],",
+      "why": "the one line that carries the cut list from the HTTP layer onto the candidate the pipeline reads"
+    },
+    {
+      "name": "transcript_endpoint_transcribes_on_a_miss",
+      "file": "worker/clip_transcript.py",
+      "old": "    cached = transcript_cache.load(key)\n    if cached is None:\n        raise TranscriptUnavailable(",
+      "new": "    cached = transcript_cache.load(key) or Transcript(language=\"none\", segments=[])\n    if False:\n        raise TranscriptUnavailable(",
+      "why": "a miss returned as an empty transcript tells the UI 'this clip has no words' when the truth is 'I cannot tell you this clip's words' - two things that call for opposite behaviour"
+    },
+    {
+      "name": "cache_key_ignores_the_vocabulary",
+      "file": "worker/transcribe.py",
+      "old": "            asr_config=transcript_cache.asr_fingerprint(vocabulary),",
+      "new": "            asr_config=transcript_cache.asr_fingerprint(\"\"),",
+      "why": "the vocabulary prompt shapes the transcript, so ignoring it in the key serves the editor words the render never produced"
+    },
+    {
+      "name": "clip_relative_words_left_source_relative",
+      "file": "worker/clip_transcript.py",
+      "old": "    return cap.slice_words(transcript, float(start), float(end))",
+      "new": "    return list(transcript.words)",
+      "why": "cut offsets are clip-relative; source-relative words would have the user striking a word and losing a different one"
+    }
+  ]
+}

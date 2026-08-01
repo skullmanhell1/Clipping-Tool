@@ -22,7 +22,7 @@ class TikTokPublisher(BasePublisher):
           account_id or (settings.tiktok_open_id or ""),not approved,
           # PB4: a long-lived token the operator pasted in. Nothing here can renew it, and
           # its expiry is not visible to us - which is different from "it does not expire".
-          token_kind="static")
+          token_kind="static")  # noqa: S106 - a credential *kind*, not a credential
     def publish(self,request):
         st=self.status(request.account_id)
         if not st.configured:return PublishResult(False,PublishState.FAILED,self.name,error=st.message)

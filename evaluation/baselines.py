@@ -94,7 +94,7 @@ def random_baseline(
     if duration <= length or k <= 0:
         return uniform_baseline(duration, labels, k)
 
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311 - a reproducible baseline sampler; the fixed seed is the requirement
     starts = sorted(rng.uniform(0.0, duration - length) for _ in range(k))
     return [
         Prediction(start=round(start, 3), end=round(start + length, 3),

@@ -45,7 +45,13 @@ DEFAULT_MODELS_DIR = REPO_ROOT / "assets" / "models"
 
 
 def _get(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "clipping-tool-build"})
+    # The URLs are constants in worker/face_models.py, so the scheme is not attacker-controlled
+    # today. Asserted rather than assumed anyway, because `urlopen` honours `file:` and custom
+    # schemes: if a manifest entry ever gained a relative or `file:` URL, a model fetch would
+    # quietly become an arbitrary local read. The noqa records that the check exists.
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing to fetch a model over a non-HTTPS URL: {url!r}")
+    request = urllib.request.Request(url, headers={"User-Agent": "clipping-tool-build"})  # noqa: S310
     with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
         if response.status != 200:
             raise RuntimeError(f"{url} -> HTTP {response.status}")

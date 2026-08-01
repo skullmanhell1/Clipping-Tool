@@ -145,7 +145,7 @@ class HistoryStore:
                 for k,v in fields.items() if k in allowed}
         if not data: return
         with self._lock, self._connect() as db:
-            db.execute(f"UPDATE publish_attempts SET {','.join(f'{k}=?' for k in data)} WHERE id=?",
+            db.execute(f"UPDATE publish_attempts SET {','.join(f'{k}=?' for k in data)} WHERE id=?",  # noqa: S608 - column names come from the `allowed` set above; values are parameterised
                        (*data.values(), attempt_id))
 
     def due_attempts(self, now: Optional[float] = None) -> list[dict[str, Any]]:
