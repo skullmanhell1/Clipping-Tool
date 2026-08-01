@@ -4,6 +4,15 @@
 
 /* App-wide base styles. The dark palette is driven by Tailwind utility
    classes; these rules just set sensible page defaults. */
+
+/* Declared here as well as in the `color-scheme` meta tag in index.html, because the meta tag
+   only applies to the top-level document. This reaches anything rendered into it, and is what
+   tells the browser to draw its *own* widgets dark — select popups, the datetime-local calendar,
+   number spinners, scrollbars — none of which a Tailwind class can touch. */
+:root {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {

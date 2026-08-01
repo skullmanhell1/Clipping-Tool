@@ -1,8 +1,31 @@
 <!doctype html>
+<!--
+  `class="dark"` pairs with `darkMode: "class"` in tailwind.config.js.
+
+  Be aware that it is currently **inert**: there is not one `dark:` variant anywhere in src/, so
+  the palette is unconditional — every surface is a literal `bg-slate-950` / `text-slate-100`
+  rather than a light default with a dark override. The class is kept because it is the hook
+  `darkMode: "class"` needs, so the first `dark:` variant anyone writes works; it is not a switch,
+  and toggling it today changes nothing.
+-->
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      This is the line that actually makes the app dark, and it was missing.
+
+      Tailwind classes only reach elements this document renders. They do not reach the parts the
+      browser draws itself: the popup list of a `<select>`, the calendar panel of
+      `<input type="datetime-local">`, number spinners, range thumbs, checkbox glyphs, form-control
+      focus rings, and scrollbars. Without `color-scheme` the user agent draws all of those from its
+      *light* defaults, so a page of slate-950 sprouted white dropdown panels and light scrollbars.
+
+      There are 31 native controls across the UI (11 selects, 2 datetime pickers, 3 number inputs,
+      6 ranges, 9 checkboxes), and none of them looked right. jsdom does not render any of this, so
+      no component test could have caught it.
+    -->
+    <meta name="color-scheme" content="dark" />
     <title>AI Video Clipper</title>
   </head>
   <body class="bg-slate-950 text-slate-100">
