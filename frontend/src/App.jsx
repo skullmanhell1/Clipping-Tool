@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, resolveLanguage } from "./api.js";
+import { api } from "./api.js";
+import { POLL_INTERVALS_MS, usePolling } from "./hooks/usePolling.js";
+import { DEFAULT_PUBLISHING, DEFAULT_SETTINGS, toApiOptions } from "./settingsSchema.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import JobCard from "./components/JobCard.jsx";
@@ -9,207 +11,6 @@ import PublishingPanel from "./components/PublishingPanel.jsx";
 import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
-
-// Advanced AV engines (Req 20.4): a sibling engine spec adds its
-// `<engine_id>_enabled` flag and option defaults *here only* — `toOptions`
-// forwards every key generically, and profiles persist them automatically
-// because they round-trip through the opaque settings blob.
-//
-// Keys use the snake_case API spellings, because `engineOptions` forwards them
-// verbatim to the `/api/upload` Form fields and `OptionsModel` — a camelCase key
-// here would silently never reach the backend.
-const DEFAULT_ENGINE_SETTINGS = {
-  // Kinetic typography engine (kinetic-typography spec, Req 17.5). Defaults
-  // mirror `ProcessingOptions` / `Kinetic_Options` exactly; the flag is off, so
-  // a stock install still renders exactly as v0.8.0.
-  kinetic_typography_enabled: false,
-  kinetic_style: "karaoke_fill",
-  kinetic_reveal: "cumulative",
-  kinetic_font: "",
-  kinetic_max_lines: 2,
-  kinetic_max_line_width: 22,
-  kinetic_safe_area_x_pct: 6.0,
-  kinetic_safe_area_y_pct: 10.0,
-  kinetic_motion_ms: 120,
-  kinetic_confidence_floor: 0.0,
-
-  // Stem inpainting engine (audio-stem-inpainting spec). Defaults mirror
-  // `ProcessingOptions` / `Stem_Options` exactly; the flag is off, so a stock install
-  // still renders exactly as v0.8.0. Listing every field here is what makes them reach
-  // the backend and round-trip through saved profiles without a dedicated panel.
-  stem_inpainting_enabled: false,
-  stem_mix_preset: "custom",
-  stem_gain_vocals: 1.0,
-  stem_gain_music: 1.0,
-  stem_gain_other: 1.0,
-  stem_repair_mode: "crossfade",
-  stem_repair_window_ms: 12,
-  stem_declick: false,
-  stem_backend: "auto",
-  stem_model: "htdemucs",
-  stem_retain_stems: false,
-};
-
-const engineOptions = (settings) =>
-  Object.fromEntries(
-    Object.keys(DEFAULT_ENGINE_SETTINGS).map((key) => [
-      key,
-      settings[key] === undefined ? DEFAULT_ENGINE_SETTINGS[key] : settings[key],
-    ]),
-  );
-
-const DEFAULT_SETTINGS = {
-  language: "auto",
-  clip_length: "auto",
-  aspect: "9:16",
-  num_clips: "auto",
-  strategy: "ai",
-  captions: true,
-  subtitle_sidecar: false,
-  topic: "",
-  vocabulary: "",
-  vibe: "",
-  platform: "generic",
-  hashtag_count: 5,
-  range_start: "",
-  range_end: "",
-  metadata: true,
-  // Phase 4 — visual effects (all individually toggleable)
-  caption_template: "karaoke",
-  caption_position: "bottom",
-  reframe: false,
-  zoom: false,
-  transitions: false,
-  hook_title: false,
-  fades: false,
-  progress_bar: false,
-  color: "",
-  music: "",
-  music_volume: 0.12,
-  emoji: "off",
-  emoji_mode: "keyword",
-  emoji_animate: true,
-  filler_removal: false,
-  // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
-  caption_preset: "karaoke",
-  // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
-  // blob, so a kit is saved, applied and set as default by machinery that already exists.
-  brand_font: "",
-  brand_primary_color: "",
-  brand_highlight_color: "",
-  brand_cta: "",
-  brand_logo: "",
-  brand_logo_position: "top_right",
-  brand_logo_scale: 0.16,
-  brand_logo_opacity: 0.85,
-  caption_animation: "",
-  caption_keyword_highlight: false,
-  caption_keyword_ai: false,
-  caption_emoji: false,
-  broll: false,
-  broll_intensity: "standard",
-  asset_sourcing_mode: "off",
-  broll_provider: "",
-  selection_prompt: "",
-  visual_selection: false,
-  permissibility_mode: false,
-  // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
-  diarization: false,
-  speaker_reframe: false,
-  reframe_layout: "follow_active",
-  reframe_intensity: "standard",
-  // Advanced AV engines — every flag/option default, forwarded generically
-  ...DEFAULT_ENGINE_SETTINGS,
-};
-
-const DEFAULT_PUBLISHING = {
-  platforms: [],
-  campaign_id: "",
-  mode: "review",
-  schedule: "",
-  account_id: "",
-  target_type: "",
-  target_id: "",
-};
-
-const numOrNull = (value) =>
-  value === "" || value === null || value === undefined ? null : Number(value);
-
-const scheduleToEpoch = (value) => {
-  if (!value) return null;
-  const milliseconds = new Date(value).getTime();
-  return Number.isNaN(milliseconds) ? null : milliseconds / 1000;
-};
-
-function toOptions(settings, publishing) {
-  const { language, translate } = resolveLanguage(settings.language);
-  return {
-    language,
-    translate,
-    clip_length: settings.clip_length,
-    aspect: settings.aspect,
-    num_clips: settings.num_clips,
-    strategy: settings.strategy,
-    captions: settings.captions,
-    subtitle_sidecar: settings.subtitle_sidecar,
-    topic: settings.topic,
-    vocabulary: settings.vocabulary,
-    vibe: settings.vibe,
-    platform: settings.platform,
-    hashtag_count: Number(settings.hashtag_count) || 0,
-    range_start: numOrNull(settings.range_start),
-    range_end: numOrNull(settings.range_end),
-    metadata: settings.metadata,
-    publish_to: publishing.mode === "auto" ? publishing.platforms : [],
-    campaign_id: publishing.campaign_id,
-    publish_mode: publishing.mode,
-    schedule_at: scheduleToEpoch(publishing.schedule),
-    // Phase 4 — visual effects
-    caption_template: settings.caption_template,
-    caption_position: settings.caption_position,
-    reframe: settings.reframe,
-    zoom: settings.zoom,
-    transitions: settings.transitions,
-    hook_title: settings.hook_title,
-    fades: settings.fades,
-    progress_bar: settings.progress_bar,
-    color: settings.color,
-    music: settings.music,
-    music_volume: Number(settings.music_volume) || 0,
-    emoji: settings.emoji,
-    emoji_mode: settings.emoji_mode,
-    emoji_animate: settings.emoji_animate,
-    filler_removal: settings.filler_removal,
-    // Tier 1 — animated captions / b-roll / visual selection
-    caption_preset: settings.caption_preset,
-    brand_font: settings.brand_font,
-    brand_primary_color: settings.brand_primary_color,
-    brand_highlight_color: settings.brand_highlight_color,
-    brand_cta: settings.brand_cta,
-    brand_logo: settings.brand_logo,
-    brand_logo_position: settings.brand_logo_position,
-    brand_logo_scale: settings.brand_logo_scale,
-    brand_logo_opacity: settings.brand_logo_opacity,
-    caption_animation: settings.caption_animation,
-    caption_keyword_highlight: settings.caption_keyword_highlight,
-    caption_keyword_ai: settings.caption_keyword_ai,
-    caption_emoji: settings.caption_emoji,
-    broll: settings.broll,
-    broll_intensity: settings.broll_intensity,
-    asset_sourcing_mode: settings.asset_sourcing_mode,
-    broll_provider: settings.broll_provider,
-    selection_prompt: settings.selection_prompt,
-    visual_selection: settings.visual_selection,
-    permissibility_mode: settings.permissibility_mode,
-    // Speaker diarisation & multi-speaker reframe
-    diarization: settings.diarization,
-    speaker_reframe: settings.speaker_reframe,
-    reframe_layout: settings.reframe_layout,
-    reframe_intensity: settings.reframe_intensity,
-    // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
-    ...engineOptions(settings),
-  };
-}
 
 export default function App() {
   const [activeView, setActiveView] = useState("create");
@@ -238,7 +39,6 @@ export default function App() {
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
   const [activeProfileId, setActiveProfileId] = useState("");
-  const pollRef = useRef(null);
   const defaultAppliedRef = useRef(false);
 
   const loadPublishingData = useCallback(async () => {
@@ -375,15 +175,16 @@ export default function App() {
     [jobs],
   );
 
-  useEffect(() => {
-    const active = watch.enabled || hasActiveJobs;
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (trackedIds.size > 0 || watch.enabled) {
-      poll();
-      pollRef.current = setInterval(poll, active ? 1200 : 4000);
-    }
-    return () => pollRef.current && clearInterval(pollRef.current);
-  }, [trackedIds, watch.enabled, poll, hasActiveJobs]);
+  // Nothing to ask about means no requests at all, not one: `usePolling` skips the initial
+  // call too when the interval is null.
+  const pollInterval = useMemo(() => {
+    if (trackedIds.size === 0 && !watch.enabled) return null;
+    return watch.enabled || hasActiveJobs
+      ? POLL_INTERVALS_MS.jobsActive
+      : POLL_INTERVALS_MS.jobsIdle;
+  }, [trackedIds, watch.enabled, hasActiveJobs]);
+
+  usePolling(poll, pollInterval);
 
   const handlePreview = useCallback(async (url) => {
     setPreview(null);
@@ -406,7 +207,7 @@ export default function App() {
 
   const handleGetClips = async () => {
     setError("");
-    const options = toOptions(settings, publishing);
+    const options = toApiOptions(settings, publishing);
     const { urls, files } = input;
 
     if (files.length === 0 && urls.length === 0) {
@@ -441,7 +242,7 @@ export default function App() {
 
   const handleToggleWatch = async (enabled) => {
     try {
-      setWatch(await api.watchToggle(enabled, toOptions(settings, publishing)));
+      setWatch(await api.watchToggle(enabled, toApiOptions(settings, publishing)));
     } catch (toggleError) {
       setError(toggleError.message || "Watch toggle failed.");
     }
@@ -611,7 +412,7 @@ export default function App() {
                     onPublished={handlePublished}
                     // U7: a re-render applies whatever is selected in the panel right now, which
                     // is what makes "change one setting and see it" a single click.
-                    settings={toOptions(settings, publishing)}
+                    settings={toApiOptions(settings, publishing)}
                   />
                 ))}
               </section>

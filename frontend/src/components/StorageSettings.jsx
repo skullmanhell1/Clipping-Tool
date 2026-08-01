@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { POLL_INTERVALS_MS, usePolling } from "../hooks/usePolling.js";
 import { api, formatBytes } from "../api.js";
 
 const RETENTION_LABELS = {
@@ -27,11 +28,7 @@ export default function StorageSettings() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, 15000);
-    return () => clearInterval(id);
-  }, [load]);
+  usePolling(load, POLL_INTERVALS_MS.storage);
 
   if (!state) {
     return (

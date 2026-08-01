@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { POLL_INTERVALS_MS, usePolling } from "../hooks/usePolling.js";
 import { api } from "../api.js";
 const fmt = (t) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const colors = {
@@ -92,11 +93,7 @@ export default function HistoryView() {
         .catch(() => {}),
     [filter],
   );
-  useEffect(() => {
-    load();
-    const i = setInterval(load, 3000);
-    return () => clearInterval(i);
-  }, [load]);
+  usePolling(load, POLL_INTERVALS_MS.history);
 
   return (
     <section className="space-y-6">
