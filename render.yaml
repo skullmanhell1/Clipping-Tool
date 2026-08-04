@@ -37,8 +37,17 @@ services:
         sync: false
       - key: STORAGE_BACKEND
         value: local        # set to "s3" and fill the S3_* vars for durable storage
+      # Must match `config.py`'s default. This blueprint pinned `base` while the application
+      # default was raised to `small` by plan item T1 — so the one deployment anybody actually
+      # visits was silently running the *worse* transcription, and only a fresh local install got
+      # the improvement. T1 is a P0 for a concrete reason: a mis-transcribed word is burned into
+      # the video, and captions are the most visible artefact the tool produces.
+      #
+      # Set explicitly rather than omitted, because an operator reading this file should be able
+      # to see which model their deployment uses without cross-referencing the code. If you change
+      # it, change it here *and* know that `config.py` disagrees.
       - key: WHISPER_MODEL
-        value: base
+        value: small
       - key: RETENTION_DAYS
         value: "30"
       - key: LLM_PROVIDER
