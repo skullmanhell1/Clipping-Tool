@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from worker import ass_spans
 from worker.effects import caption_presets
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -168,7 +169,12 @@ SYNTHESISED_RATIO_LIMIT = 0.40
 CUE_FADE_MS: tuple[int, int] = (120, 120)
 
 #: Req 4.4 — ``bounce`` overshoot scale in percent, before settling at 100.
-BOUNCE_OVERSHOOT = 118
+#:
+#: Re-exported from :mod:`worker.ass_spans`, which owns the span shapes and therefore has to own
+#: this number too: it appears inside the ``bounce`` tag string. Kept bound here under its original
+#: name because it is part of this module's declared public surface
+#: (``__all__``, pinned by ``tests/test_kinetic_determinism.py``).
+BOUNCE_OVERSHOOT = ass_spans.BOUNCE_OVERSHOOT
 
 #: Req 4.5 — ``slide_up`` entry offset in pixels below the resolved position.
 SLIDE_UP_PX = 40
@@ -1919,49 +1925,32 @@ def _style_span(
 ) -> str:
     """The per-word animation span for one Kinetic_Style (Reqs 4.2-4.6).
 
-    The four shared styles reproduce ``captions.build_word_span`` **byte for
-    byte** for the same word — including its hard-coded ``+120`` (``pop``) and
-    ``+30`` (``typewriter``) ramps, which are deliberately *not* ``motion_ms`` —
-    so a Kinetic_Plan at ``reveal="cumulative"`` renders the v0.8.0 look exactly
-    (Req 4.3). The three new styles use ``d = motion_ms`` as the design's span
-    table specifies. ``rel`` is the word's onset relative to its **cue** start in
-    milliseconds, which is the offset libass ``\\t`` expects (Req 5.3).
+    Adapts this engine's ``Kinetic_Word`` onto :func:`worker.ass_spans.animation_span`, which is
+    now the single place the tags are spelled. ``captions.build_word_span`` calls the same
+    function, so the requirement that the four shared styles (``none``, ``pop``, ``typewriter``,
+    ``karaoke_fill``) reproduce the v0.8.0 caption look **byte for byte** at
+    ``reveal="cumulative"`` (Req 4.3) is now met by construction rather than by two independently
+    written f-strings that a property test compared afterwards.
 
-    Well-formed by construction (Req 4.10): every ``{`` opened below is closed in
-    the same f-string, and ``word.text`` was already ``_escape``-d by the planner,
-    so no transcript text can unbalance the braces.
+    The hard-coded ``+120`` (``pop``) and ``+30`` (``typewriter``) ramps that are deliberately
+    *not* ``motion_ms`` are ``ass_spans.POP_RAMP_MS`` and ``ass_spans.TYPEWRITER_RAMP_MS``, and the
+    reason they are fixed is recorded there. The three kinetic-only styles use ``motion_ms`` as the
+    design's span table specifies.
+
+    ``word.text`` was already ``_escape``-d by the planner and ``word.rel_ms`` is already relative
+    to the **cue** start, which is the offset libass ``\\t`` expects (Req 5.3) — ``ass_spans`` does
+    no escaping and no timing arithmetic of its own, precisely so that this asymmetry with the
+    caption path stays visible at the call site.
     """
-    escaped = word.text
-    rel = int(word.rel_ms)
-    duration_ms = int(motion_ms)
-    half = duration_ms // 2
-
-    if style == "karaoke_fill":
-        dur_cs = max(1, int(round((word.end - word.start) * 100)))
-        return f"{{\\kf{dur_cs}}}{escaped}"
-    if style == "pop":
-        return (
-            f"{{\\fscx60\\fscy60\\t({rel},{rel + 120},"
-            f"\\fscx100\\fscy100)}}{escaped}"
-        )
-    if style in ("typewriter", "slide_up"):
-        # ``slide_up`` carries the event-level ``\move`` (added in
-        # :func:`_cue_event`) plus this per-word alpha gate, so its words still
-        # appear on beat rather than all at once (Req 4.5).
-        return f"{{\\alpha&HFF&\\t({rel},{rel + 30},\\alpha&H00&)}}{escaped}"
-    if style == "bounce":
-        return (
-            f"{{\\fscx55\\fscy55"
-            f"\\t({rel},{rel + half},"
-            f"\\fscx{BOUNCE_OVERSHOOT}\\fscy{BOUNCE_OVERSHOOT})"
-            f"\\t({rel + half},{rel + duration_ms},\\fscx100\\fscy100)}}{escaped}"
-        )
-    if style == "highlight_sweep":
-        return (
-            f"{{\\c{highlight}&\\t({rel},{rel + duration_ms},"
-            f"\\c{primary}&)}}{escaped}"
-        )
-    return escaped  # "none" — the plain escaped word (Req 4.3)
+    return ass_spans.animation_span(
+        style,
+        word.text,
+        rel_ms=int(word.rel_ms),
+        duration_s=word.end - word.start,
+        motion_ms=int(motion_ms),
+        primary=primary,
+        highlight=highlight,
+    )
 
 
 def _word_span(
