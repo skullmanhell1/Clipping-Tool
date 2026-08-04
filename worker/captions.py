@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config import settings
-from worker import ass_spans, script_support, text_metrics
+from worker import ass_spans, ass_style, script_support, text_metrics
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -322,25 +322,42 @@ def _caption_style(
     black = "&H00000000"
     box = "&H80000000"  # semi-transparent black background/shadow
 
+    # The three templates differ in exactly six fields — Secondary, Outline/Back colours,
+    # BorderStyle, Outline and Shadow — and agree on the other seventeen. That is only visible now
+    # that the fields have names; previously each was an f-string of 23 positional values and the
+    # differences had to be found by counting commas across three lines.
+    def _template_style(
+        secondary: str,
+        outline_colour: str,
+        back_colour: str,
+        border_style: int,
+        outline: int,
+        shadow: int,
+    ) -> str:
+        return ass_style.AssStyle(
+            name="Default",
+            fontname=font,
+            fontsize=font_size,
+            primary_colour=white,
+            secondary_colour=secondary,
+            outline_colour=outline_colour,
+            back_colour=back_colour,
+            border_style=border_style,
+            outline=outline,
+            shadow=shadow,
+            alignment=align,
+            margin_v=margin_v,
+        ).render()
+
     if template == "boxed":
-        # BorderStyle 3 draws an opaque box behind the text (uses OutlineColour).
-        style = (
-            f"Style: Default,{font},{font_size},{white},{white},{box},{box},"
-            f"-1,0,0,0,100,100,0,0,3,0,0,{align},80,80,{margin_v},1"
-        )
-        return style, align, False
+        # BorderStyle 3 draws an opaque box behind the text (uses OutlineColour), so Outline and
+        # Shadow are both 0: with a box there is no glyph stroke to size.
+        return _template_style(white, box, box, 3, 0, 0), align, False
     if template == "minimal":
-        style = (
-            f"Style: Default,{font},{font_size},{white},{white},{black},&H64000000,"
-            f"-1,0,0,0,100,100,0,0,1,2,1,{align},80,80,{margin_v},1"
-        )
-        return style, align, False
-    # Default: karaoke.
-    style = (
-        f"Style: Default,{font},{font_size},{white},{highlight},{black},&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
-    )
-    return style, align, True
+        return _template_style(white, black, "&H64000000", 1, 2, 1), align, False
+    # Default: karaoke. Secondary is the highlight colour because `\kf` sweeps Secondary into
+    # Primary, and the heavier 4/2 outline is what keeps a swept word legible over footage.
+    return _template_style(highlight, black, "&H64000000", 1, 4, 2), align, True
 
 
 # --- Preset-driven ASS spans (Feature A) ------------------------------------
@@ -1197,6 +1214,53 @@ def _glyph_scale(value: Any) -> int:
     return max(MIN_GLYPH_SCALE, min(MAX_GLYPH_SCALE, abs(scale)))
 
 
+#: Alignment 8 — top-centre. The hook title sits above the caption band.
+_HOOK_ALIGNMENT = 8
+
+#: The hook title's margins: L, R, V.
+_HOOK_MARGINS = (60, 60, 160)
+
+
+def hook_style(font: str, hook_font_size: int, bold: int = -1) -> "ass_style.AssStyle":
+    """The ``Style: Hook`` row for the hook title (A14).
+
+    **One definition, previously three.** This style was spelled out as a 23-field f-string in
+    ``build_ass`` (with ``Bold`` hard-coded to ``-1``), again in :func:`_preset_header_styles`
+    (with ``ass_bold_flag(preset)``), and a third time in ``engines.kinetic._hook_style_line`` —
+    whose docstring explained the duplication by noting that ``_preset_header_styles`` cannot be
+    called from a pure planner because it probes the host font list with ``fc-list``. That is true
+    of ``_preset_header_styles`` and *not* of the style itself, which needs only a font name, a
+    size and a bold flag. Hoisting it out means the kinetic planner can reuse it, and the property
+    test that asserted the spellings stayed identical is now checking something that cannot differ.
+
+    Amber (:data:`HIGHLIGHT_COLOUR`) for both Primary and Secondary: the hook does not sweep, so
+    the two are the same, and it is the same amber an emphasised caption word uses — the hook and
+    the highlight are the same visual idea.
+
+    ``bold`` defaults to ``-1`` for the legacy path, which never consulted the face's weight. The
+    preset path passes :func:`ass_bold_flag`, which answers ``0`` for a face already at weight
+    >= 700 so libass does not synthesise bold on top of a heavy face.
+    """
+    margin_l, margin_r, margin_v = _HOOK_MARGINS
+    return ass_style.AssStyle(
+        name="Hook",
+        fontname=font,
+        fontsize=int(hook_font_size),
+        primary_colour=HIGHLIGHT_COLOUR,
+        secondary_colour=HIGHLIGHT_COLOUR,
+        outline_colour="&H00000000",
+        back_colour="&H64000000",
+        bold=int(bold),
+        border_style=1,
+        outline=5,
+        shadow=2,
+        alignment=_HOOK_ALIGNMENT,
+        margin_l=margin_l,
+        margin_r=margin_r,
+        margin_v=margin_v,
+    )
+
+
 def _preset_style_line(
     preset: CaptionPreset,
     font: str,
@@ -1209,6 +1273,34 @@ def _preset_style_line(
 
     Colours, border style, font and size all come from the preset (Req 5.1).
     ``font`` is the already-resolved (post-substitution) family name.
+
+    A thin wrapper over :func:`_preset_style`, which returns the style as an object. Both exist
+    because ``engines.kinetic`` needs the object in order to replace three margins by name, while
+    every other caller — and several tests — want the rendered line.
+    """
+    return _preset_style(
+        preset, font, font_size, align, margin_v, margin_h
+    ).render()
+
+
+def _preset_style(
+    preset: CaptionPreset,
+    font: str,
+    font_size: int,
+    align: int,
+    margin_v: int,
+    margin_h: int = 80,
+) -> "ass_style.AssStyle":
+    """The :class:`~worker.ass_style.AssStyle` behind :func:`_preset_style_line`.
+
+    Split out so ``engines.kinetic._style_line`` can take the style *object* and replace three
+    margins with ``dataclasses.replace``. It used to ``split(",")`` the rendered line and assign
+    to indices 19, 20 and 21, guarded by ``if len(fields) == 23`` with a silent ``return base``
+    otherwise — so adding a column here would have made the kinetic engine quietly stop applying
+    its safe-area margins rather than fail.
+
+    :func:`_preset_style_line` remains the string-returning entry point, because that is what
+    every other caller and several tests use.
     """
     colors = preset.colors
     primary = colors.primary
@@ -1244,11 +1336,25 @@ def _preset_style_line(
         spacing = int(getattr(preset, "spacing", 0) or 0)
     except (TypeError, ValueError):
         spacing = 0
-    return (
-        f"Style: Default,{font},{font_size},{primary},{secondary},{outline_col},"
-        f"{back_col},{ass_bold_flag(preset)},0,0,0,{scale_x},{scale_y},{spacing},0,"
-        f"{preset.border_style},"
-        f"{outline_w},{shadow},{align},{margin_h},{margin_h},{margin_v},1"
+    return ass_style.AssStyle(
+        name="Default",
+        fontname=font,
+        fontsize=font_size,
+        primary_colour=primary,
+        secondary_colour=secondary,
+        outline_colour=outline_col,
+        back_colour=back_col,
+        bold=ass_bold_flag(preset),
+        scale_x=scale_x,
+        scale_y=scale_y,
+        spacing=spacing,
+        border_style=preset.border_style,
+        outline=outline_w,
+        shadow=shadow,
+        alignment=align,
+        margin_l=margin_h,
+        margin_r=margin_h,
+        margin_v=margin_v,
     )
 
 
@@ -1324,7 +1430,7 @@ def build_ass(
         font = script_plan.font
 
     if preset is not None:
-        style_line, hook_style = _preset_header_styles(
+        style_line, hook_style_line = _preset_header_styles(
             preset, position, hook_font_size, notes,
             video_width=video_width, video_height=video_height,
             # C12/C13: both inert unless configured, so an unconfigured render is byte-identical.
@@ -1349,10 +1455,7 @@ def build_ass(
         )
         use_karaoke = template_karaoke if karaoke is None else karaoke
         # A dedicated top-anchored style for the hook title (alignment 8 = top).
-        hook_style = (
-            f"Style: Hook,{font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-            f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
-        )
+        hook_style_line = hook_style(font, hook_font_size).render()
         body = _legacy_dialogue_lines(cues, use_karaoke)
 
     # C21: 2 means "no automatic wrapping", which C6's measured `\N` breaks depend on. A shaping
@@ -1367,12 +1470,12 @@ WrapStyle: {wrap_style}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+{ass_style.STYLE_FORMAT_LINE}
 {style_line}
-{hook_style}
+{hook_style_line}
 
 [Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+{ass_style.DIALOGUE_FORMAT_LINE}
 """
 
     lines = [header]
@@ -1485,10 +1588,24 @@ def write_end_card_ass(
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Alignment 5 (centred) with generous margins; the position is set per-event by \move, so
     # this style only has to supply the look.
-    style = (
-        f"Style: End,{font},{font_size},&H00FFFFFF,&H00FFFFFF,"
-        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1"
-    )
+    # `&H96000000` BackColour appears only here: a ~59%-transparent black, heavier than the
+    # captions' `&H64000000`, because the end card sits over a held frame rather than over motion.
+    style = ass_style.AssStyle(
+        name="End",
+        fontname=font,
+        fontsize=font_size,
+        primary_colour="&H00FFFFFF",
+        secondary_colour="&H00FFFFFF",
+        outline_colour="&H00000000",
+        back_colour="&H96000000",
+        border_style=1,
+        outline=4,
+        shadow=2,
+        alignment=5,
+        margin_l=60,
+        margin_r=60,
+        margin_v=60,
+    ).render()
     dest.write_text(
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -1497,12 +1614,10 @@ def write_end_card_ass(
         "WrapStyle: 2\n"
         "ScaledBorderAndShadow: yes\n"
         "\n[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
-        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
-        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"{ass_style.STYLE_FORMAT_LINE}\n"
         f"{style}\n"
         "\n[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        f"{ass_style.DIALOGUE_FORMAT_LINE}\n"
         f"{line}\n",
         encoding="utf-8",
     )
@@ -1577,12 +1692,10 @@ def _preset_header_styles(
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v, margin_h
     )
-    hook_style = (
-        f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-        f"&H00000000,&H64000000,{ass_bold_flag(preset)},0,0,0,100,100,0,0,1,5,2,8,"
-        f"60,60,160,1"
-    )
-    return style_line, hook_style
+    hook_style_line = hook_style(
+        resolved_font, hook_font_size, ass_bold_flag(preset)
+    ).render()
+    return style_line, hook_style_line
 
 
 def _preset_dialogue_lines(
