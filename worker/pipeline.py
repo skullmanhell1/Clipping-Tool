@@ -466,6 +466,16 @@ def run_pipeline(
             raw = out.media or raw
             applied.extend(out.markers)
 
+        # M5 correction: the geometry ladder gets its own stage report. Without this, the
+        # last report before it was step 2's "Writing copy for clip N" and the next was step
+        # 5's "Adding effects", so everything between them - word slicing, filler removal,
+        # the AUDIO engines, the face-detection sampling below and its re-encode - was
+        # attributed to metadata generation. Measured on a 40s source that was 67% of the
+        # whole render filed against a stage that takes microseconds when no LLM is
+        # configured. 0.45 sits between step 2's 0.3 and step 5's 0.6, so progress stays
+        # monotonically non-decreasing.
+        report(base + clip_span / n * 0.45, f"Reframing clip {idx + 1}")
+
         # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
         #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.
         #    When ``speaker_reframe`` is OFF this collapses to the exact v0.7.0
