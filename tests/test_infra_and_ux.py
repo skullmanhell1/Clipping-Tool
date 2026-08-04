@@ -391,7 +391,21 @@ def test_metrics_are_safe_under_concurrent_recording():
     ("Starting", 1),
     ("Analyzing video", 2),
     ("Transcribing audio", 3),
-    ("Finding the best moments", 4),
+    # 4 is "Translating subtitles", added when three reported-but-unlisted stages were
+    # found by reading a real render's timings: it, "Rendered clip N of M" and "Done" all
+    # resolved to 0, which hides the UI's step counter and fragments the M5 timings into one
+    # row per clip. Positions 5 and up therefore shifted by one, which is what this pin is
+    # for - updating it is part of the change.
+    ("Translating subtitles", 4),
+    ("Finding the best moments", 5),
+    ("Rendering clip 2 of 5", 7),
+    # "Writing copy" before "Adding effects", matching the order the pipeline reports them.
+    # Reversed, as they were, a single clip's stage_index counted 7 -> 10 -> 9.
+    ("Writing copy for clip 1", 8),
+    ("Reframing clip 1", 9),
+    ("Adding effects to clip 1", 10),
+    # Not a prefix of "Rendering clip", which is why it used to resolve to 0.
+    ("Rendered clip 1 of 2", 11),
     ("Completed - 3 clip(s)", len(jobs.JOB_STAGES)),
 ])
 def test_known_stages_map_to_their_position(stage, expected):

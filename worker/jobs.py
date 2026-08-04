@@ -36,15 +36,38 @@ _DOWNLOAD_BUDGET = 0.10
 #: Derived from the strings ``run_pipeline`` already reports rather than invented, so the count
 #: cannot drift from what the pipeline actually does. Matching is on a prefix because the later
 #: reports carry per-clip detail ("Rendering clip 2 of 5").
+#: Ordered as ``run_pipeline`` reports them, which "Adding effects" and "Writing copy" were
+#: not: the pipeline reports "Writing copy" at step 2 of the per-clip loop and "Adding
+#: effects" at step 5, so with the previous ordering a job's ``stage_index`` counted
+#: 6 -> 8 -> 7 and the UI's "step N of M" went backwards mid-clip. Swapped rather than
+#: worked around, because the docstring above already claims this tuple is in order.
 JOB_STAGES: tuple[str, ...] = (
     "Starting",
     "Analyzing video",
     "Transcribing audio",
+    # Only reported when SUBTITLE_TRANSLATION is on, and it is a whole second ASR pass -
+    # comfortably the most expensive optional stage there is. It was not listed, so it
+    # reported step 0 and, worse, appeared in the timings under its raw label.
+    "Translating subtitles",
     "Finding the best moments",
     "Creating",
     "Rendering clip",
-    "Adding effects",
     "Writing copy",
+    # The geometry ladder - Haar face detection over up to 120 sampled frames plus a full
+    # ``reformat_aspect`` re-encode. Two thirds of a render happened between the "Writing
+    # copy" report and the next one, so all of it was filed under "Writing copy" and M5's
+    # stage timings named metadata generation as the bottleneck when metadata generation
+    # returns a fallback in microseconds. A stage that costs minutes needs its own label or
+    # the timings cannot find it.
+    "Reframing",
+    "Adding effects",
+    # Both were also missing, and both were found the same way the misattribution was - by
+    # reading a real render's timings instead of the tests. "Rendered clip 1 of 2" and
+    # "Rendered clip 2 of 2" do not prefix-match "Rendering clip", so they resolved to 0 and
+    # ``_stage_label`` fell through to the raw string: a five-clip job produced five one-off
+    # timing rows, which is precisely the fragmentation ``_stage_label`` exists to prevent.
+    "Rendered clip",
+    "Done",
     "Completed",
 )
 
