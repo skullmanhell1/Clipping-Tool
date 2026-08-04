@@ -226,8 +226,24 @@ def cleanup_expired(retention_days: Optional[int] = None,
                     path.unlink()
                     removed += 1
                     freed += size
-                elif path.is_dir() and not any(path.iterdir()):
+                elif (path.is_dir() and not any(path.iterdir())
+                        and path.stat().st_mtime < cutoff):
+                    # The age check is not cosmetic symmetry with the file branch, it is
+                    # the only safe discriminator available here. ``JobManager._execute``
+                    # creates ``clips/<job_id>/`` and ``temp/<job_id>/`` empty and they
+                    # stay empty until the first clip lands, so an empty directory
+                    # belonging to a *running* job is indistinguishable by contents alone
+                    # from one abandoned by a job that died months ago. Only its age
+                    # separates them. Without this, the sweep that fires five seconds
+                    # after startup deleted the destination directory of every in-flight
+                    # render, and the failure surfaced from ``os.replace`` as a
+                    # ``FileNotFoundError`` naming both paths — which reads as a missing
+                    # *source* and sent the diagnosis in the wrong direction.
                     path.rmdir()
+                    # Counted, for the same reason the file branch counts: a sweep that
+                    # deletes and reports ``removed: 0`` is invisible, and that is how the
+                    # deletion above went unnoticed in the first place.
+                    removed += 1
             except OSError:
                 continue
 
@@ -287,6 +303,19 @@ class RetentionSweeper:
 
     def _loop(self) -> None:
         # Run one sweep shortly after startup, then on the configured interval.
+        #
+        # Note how early that first sweep is: **five seconds** after the thread starts,
+        # which is five seconds after app startup, not ``retention_sweep_hours`` later.
+        # That timing is what made the young-directory deletion in ``cleanup_expired``
+        # reachable at all — a job submitted immediately after startup had its (still
+        # empty) clips and temp directories swept out from under it before the first clip
+        # was written. It is also why the whole test suite missed the defect: every API
+        # test finishes well inside five seconds, and every pipeline test calls
+        # ``run_pipeline`` directly with no sweeper thread running.
+        #
+        # The prompt sweep is deliberate and correct — an instance restarted daily would
+        # otherwise never sweep — so the fix belongs in ``cleanup_expired``'s age check,
+        # not here. Do not "fix" this by delaying or skipping the initial sweep.
         while not self._stop.wait(5):
             try:
                 self.last_result = cleanup_expired()

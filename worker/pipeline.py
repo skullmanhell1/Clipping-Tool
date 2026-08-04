@@ -353,6 +353,15 @@ def run_pipeline(
         base = _P_SELECT_END + clip_span * (idx / n)
         report(base, f"Rendering clip {idx + 1} of {n}")
 
+        # Belt and braces against a retention sweep that removed these directories while
+        # this job was running. ``cleanup_expired`` no longer deletes young directories,
+        # but a long render legitimately outlives the retention window's granularity, and
+        # a `mkdir` per clip costs one syscall against the risk of losing a twenty-minute
+        # render to a missing *destination* — which is how this surfaced: `geo.replace(final)`
+        # raised ``FileNotFoundError`` naming both paths, reading as a missing source.
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
         clip_id = f"{idx + 1:02d}_{uuid.uuid4().hex[:6]}"
         raw = temp_dir / f"raw_{clip_id}.mp4"
         geo = temp_dir / f"geo_{clip_id}.mp4"

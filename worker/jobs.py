@@ -511,6 +511,11 @@ class JobManager:
             from storage_backends.retention import write_sidecar
             history = get_history()
             storage = get_storage()
+            # Belt and braces, matching the per-clip guard in ``run_pipeline``: the
+            # retention sweeper runs concurrently with this job and this loop writes a
+            # sidecar into ``clips_dir`` for every clip. One `mkdir` is cheaper than
+            # losing the metadata of a render that already cost minutes of CPU.
+            clips_dir.mkdir(parents=True, exist_ok=True)
             for clip in clips:
                 path = clips_dir / clip.filename
                 history.record_clip(job_id, clip, path, job.options.campaign_id)
