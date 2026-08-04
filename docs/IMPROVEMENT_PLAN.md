@@ -8,15 +8,44 @@ Every claim about our own code below was verified by reading it, and the current
 quoted exactly. Nothing here is aspirational description — where something does not exist,
 it says so.
 
-**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 140 of the 154
-items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 14 that remain and why each was
-left; `CHANGELOG.md` is the record of what landed.
+> ## ⚠ This document is an audit of v0.10.0, not a description of the current build
+>
+> It was written on 2026-07-29 against `VERSION` **0.10.0**, when none of it was done. The
+> current version is **0.11.0** and **141 of the 154 items are implemented**.
+>
+> **Every "Current:" line and every "current value" table below therefore describes 0.10.0 and
+> most are now wrong.** They are kept because the audit's value is its evidence — each one
+> records what was actually measured at the time, and a fixed record of the starting point is
+> what makes the changes since reviewable. They are not a description of `main`. Each affected
+> section carries its own marker; §1, §4, §5, §6 and §7 are the ones most likely to mislead.
+>
+> **Read the item tables as the backlog, and treat the prose around them as history.** Verify
+> against the code before acting on any quoted value.
+
+`SESSION_HANDOFF.md` §3 lists the **13** items that remain and why each was left; `CHANGELOG.md`
+is the record of what landed.
+
+**On the count.** This header previously said "140 of the 154 items" and "the 14 that remain",
+while `SESSION_HANDOFF.md` §3 said "13 items". Both were describing the same state: `U4`
+(transcript-based trimming) shipped — `worker/transcript_trim.py` and `worker/clip_transcript.py`
+are the seams, and the CHANGELOG records it — and the handoff had counted it as done while this
+header had not. 141/13 is the reconciled figure.
+
+**The list in `SESSION_HANDOFF.md` §3 is authoritative, not the number.** The total depends on a
+judgement the documents do not share: `M4`/`S1` are one gating item under two IDs, and `S16`/`S18`
+are consequences of it rather than independent work. Anyone who needs to know what is left should
+read the list.
 
 Do not recount by grepping for item IDs without reading the traps `SESSION_HANDOFF.md` §"Start
 here" documents — `P0`–`P3` are phase rows rather than items, excluding everything starting with
 `P` also drops `PB1`–`PB9`, and an item can be satisfied without carrying its own ID (`PB3` is
-`publishers/preflight.py`, labelled `O10`). **The "current values" quoted throughout this
-document are as of 0.10.0 and most are now stale** — verify against the code before acting on one.
+`publishers/preflight.py`, labelled `O10`).
+
+**Four items in the tables below assert something that is no longer true.** They are corrected in
+place where they appear, so a reader meeting one does not act on it: `PB2` (§8 — the approve/retry
+controls exist, `frontend/src/components/HistoryView.jsx`), `C21` (§1 — per-language selection
+exists, `worker/language.py`), `V1` (§5 — reframe defaults **on**) and `U1` (§9 — the default set
+has changed).
 
 ---
 
@@ -56,9 +85,16 @@ the thing the commercial tools actually sell.
 
 The most visible layer, and where the cheapest wins are.
 
-**What we emit today** (`worker/captions.py`, `worker/effects/caption_presets.py`):
+> **Historical — v0.10.0.** The table below is what the renderer emitted in 0.10.0 and is the
+> starting point the caption work was measured against. It is **not** current: the `Arial`
+> default, the synthesised bold, the green karaoke secondary, the absent line wrapping and the
+> six-preset list were all the subject of `C1`–`C22`, and all of those landed. There are
+> fourteen presets now, wrapping is measured, and the fallback ladder prefers faces whose heavy
+> weight is its own family. See `worker/effects/caption_presets.py` for what is actually shipped.
 
-| Parameter | Current value |
+**What we emitted in 0.10.0** (`worker/captions.py`, `worker/effects/caption_presets.py`):
+
+| Parameter | Value in 0.10.0 |
 | --- | --- |
 | Font | `Arial` (every preset's default) |
 | Size | `84` (`minimal` 76, `hormozi` 96) |
@@ -115,7 +151,7 @@ the "plain" impression.
 | **C18** | Caption preview endpoint: render a 2-second sample of a preset over a still, so a user can pick a style without a full render. | **P1** | M |
 | **C19** | Emoji inline *and* caption-adjacent placement, driven by the highlighted keyword rather than a time budget (see §3). | **P1** | M |
 | **C20** | Auto-contrast: sample the frame behind the caption and pick outline/box colour for legibility. | **P2** | M |
-| **C21** | RTL and CJK handling — `WrapStyle: 2` plus a Latin font will fail on Arabic/Hebrew/Chinese. Noto covers CJK; nothing selects it per language. | **P2** | M |
+| **C21** | ~~RTL and CJK handling — `WrapStyle: 2` plus a Latin font will fail on Arabic/Hebrew/Chinese. Noto covers CJK; nothing selects it per language.~~ **DONE.** `worker/language.py` selects per language and `worker/script_support.py` reports `caption_script_unsupported` rather than substituting a font that cannot help. **The "Noto covers CJK" premise was wrong** and is worth keeping visible: it is true of the Noto *project*, not of the vendored `NotoSans`, which covers no CJK, Arabic, Hebrew or Thai. Refusing is therefore the correct outcome, not a shortfall — see `SESSION_HANDOFF.md` §5. | **P2** | M |
 | **C22** | Profanity masking option for captions. | **P3** | S |
 
 **Context on why this matters:** analysis published by OpusClip reports captions appear in
@@ -271,7 +307,11 @@ no speech rate, no laughter.
 
 ## 4. Transcription
 
-Current: `faster-whisper`, model **`base`**, `beam_size=5`, `word_timestamps=True`,
+> **Historical — v0.10.0.** The default model is now **`small`**, not `base` (`T1`, see
+> `config.py`). `T4` added a decode prompt for names and jargon, `T5` tuned the VAD parameters
+> and `T3` added hallucination filtering, so "default parameters" no longer holds either.
+
+In 0.10.0: `faster-whisper`, model **`base`**, `beam_size=5`, `word_timestamps=True`,
 `vad_filter=True` with default parameters, device auto (cuda/float16 else cpu/int8).
 
 | # | Item | Pri | Effort |
@@ -291,7 +331,12 @@ Current: `faster-whisper`, model **`base`**, `beam_size=5`, `word_timestamps=Tru
 
 ## 5. Reframe and visual
 
-Current: **Haar cascade** `haarcascade_frontalface_default.xml` (the docstring's MediaPipe
+> **Historical — v0.10.0.** Two things here have since changed outright: reframe now defaults
+> **on** (`V1`), and the face detector is no longer only the Haar cascade — the
+> `spec/face-detection-upgrade` work made the backend injectable. Read `worker/effects/reframe.py`
+> for the current chain rather than the sentence below.
+
+In 0.10.0: **Haar cascade** `haarcascade_frontalface_default.xml` (the docstring's MediaPipe
 claim is not what runs), sampled at `reframe_sample_fps=5.0` capped at
 `reframe_sample_cap=120` frames, smoothed with `EMA alpha=0.35`, applied via `sendcmd` at
 `command_fps=12.0`. Split-screen is limited to `split_screen_max_regions=2` and crops each
@@ -299,7 +344,7 @@ tile on that speaker's **mean** centre — static, with `intensity` ignored.
 
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
-| **V1** | **Reframe is off by default**, so the default output is a centre crop that decapitates any off-centre speaker. Turn it on. | **P0** | S |
+| **V1** | ~~**Reframe is off by default**, so the default output is a centre crop that decapitates any off-centre speaker. Turn it on.~~ **DONE.** `ProcessingOptions.reframe` now defaults to `True` (`worker/models.py`). Note `speaker_reframe` is a *different* setting and is still `False`, deliberately — the multi-speaker layouts are a stylistic choice, not a correctness fix. | **P0** | S |
 | **V2** | Replace Haar with a modern detector (MediaPipe Face Detection / BlazeFace, or YOLO-face). Haar is from 2001, misses profiles and non-frontal faces, and false-positives on texture. | **P1** | M |
 | **V3** | Active-speaker detection so multi-person footage follows whoever is talking, rather than the largest face. This is the single biggest reframe quality gap; open models exist (TalkNet, Light-ASD). | **P1** | L |
 | **V4** | Reset tracking on shot changes — currently the EMA smooths *across* a cut, so the crop drifts through the new shot. Pair with **S9**. | **P1** | M |
@@ -323,8 +368,13 @@ tile on that speaker's **mean** centre — static, with `intensity` ignored.
 
 ## 6. Audio
 
-Verified absent across the whole repo: **no `loudnorm`, no `dynaudnorm`, no
-`sidechaincompress`, no LUFS target, no de-noise, no de-esser.** Music is mixed at
+> **Historical — v0.10.0.** This paragraph is now the opposite of the truth and is the single most
+> misleading line in the document. Two-pass `loudnorm` to a configured LUFS target shipped
+> (`AU1`), as did ducking (`AU2`) and the rest of the audio batch — the smoke reel prints a
+> measured before/after figure on every run. See `worker/effects/audio.py`.
+
+Verified absent in 0.10.0: **no `loudnorm`, no `dynaudnorm`, no
+`sidechaincompress`, no LUFS target, no de-noise, no de-esser.** Music was mixed at
 `volume=0.12` then `amix=inputs=2:duration=first:normalize=0`.
 
 | # | Item | Pri | Effort |
@@ -343,10 +393,19 @@ Verified absent across the whole repo: **no `loudnorm`, no `dynaudnorm`, no
 
 ## 7. Output encoding and platform compliance
 
-Every pass uses the same ladder: `-c:v libx264 -preset veryfast -crf 20`, `-c:a aac -b:a 128k`,
-`-movflags +faststart`. **Not set anywhere:** `-pix_fmt yuv420p`, `-profile:v`/`-level`,
+> **Historical — v0.10.0.** The "not set anywhere" list has been closed. `-pix_fmt yuv420p`,
+> `-profile:v` and `-level` now live in `H264_COMPAT_ARGS` in `worker/ffmpeg_utils.py` (which is
+> also the *only* place `libx264`/`-crf` may be named — `tests/test_output_compat.py` fails the
+> build otherwise), frame-rate normalisation and VBV capping are options on `h264_args`,
+> per-platform profiles are `worker/output_profiles.py`, and hardware encoder selection is
+> `worker/video_encoders.py`.
+
+In 0.10.0 every pass used the same ladder: `-c:v libx264 -preset veryfast -crf 20`,
+`-c:a aac -b:a 128k`,
+`-movflags +faststart`. **Not set anywhere at that point:** `-pix_fmt yuv420p`,
+`-profile:v`/`-level`,
 frame-rate normalisation, `maxrate`/`bufsize`, `-ar`/`-ac`, any hardware encoder, any
-per-platform profile. Resolution comes only from
+per-platform profile. Resolution came only from
 `ASPECT_PRESETS = {9:16:(1080,1920), 1:1:(1080,1080), 16:9:(1920,1080), 4:5:(1080,1350)}`.
 
 Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
@@ -375,7 +434,7 @@ Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
 | **PB1** | **Verify all five publishers against live accounts.** None has ever run against a real platform, including the approve/retry path. This is the largest untested surface in the repo. | **P0** | M |
-| **PB2** | Wire `/api/publish-attempts/{id}/approve` and `/retry` into the UI. Verified: **zero references** in `frontend/src/`. The endpoints exist but are unreachable from the dashboard. | **P0** | S |
+| **PB2** | ~~Wire `/api/publish-attempts/{id}/approve` and `/retry` into the UI. Verified: **zero references** in `frontend/src/`. The endpoints exist but are unreachable from the dashboard.~~ **DONE.** `frontend/src/components/HistoryView.jsx` renders both controls, gated on the attempt's state (`CAN_APPROVE`, `CAN_RETRY`). They are deliberately two buttons rather than one "resume": approve escalates a review-mode attempt into a live post, retry re-runs it unchanged, and guessing wrong publishes something that was held back on purpose. | **P0** | S |
 | **PB3** | Pre-flight media validation per platform (see **O10**). | **P0** | M |
 | **PB4** | Token refresh and expiry handling; nothing refreshes OAuth tokens. | **P1** | M |
 | **PB5** | Retry with exponential backoff for transient failures, separate from human review. | **P1** | M |
@@ -390,7 +449,7 @@ Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
 
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
-| **U1** | **Change the defaults.** A default run enables only captions, 9:16, `ai` strategy and metadata. Off: reframe, zoom, transitions, fades, hook title, progress bar, music, filler removal, b-roll, kinetic typography, speaker reframe, visual selection, emoji. The tool ships looking worse than it is capable of. | **P0** | S |
+| **U1** | ~~**Change the defaults.** A default run enables only captions, 9:16, `ai` strategy and metadata. Off: reframe, zoom, transitions, fades, hook title, progress bar, music, filler removal, b-roll, kinetic typography, speaker reframe, visual selection, emoji.~~ **DONE, and partly superseded.** `reframe` now defaults on, and the caption defaults changed substantially (fourteen presets, measured wrapping, a real font ladder). The rest of that list is still off **on purpose**, which is the convention this repository follows rather than an oversight: every new visual or output setting defaults to previously-shipped behaviour, because the alternative is re-freezing the parity goldens every release, and a golden that is re-frozen every release cannot detect an *accidental* change. See `SESSION_HANDOFF.md` §5. | **P0** | S |
 | **U2** | Ship 3–4 opinionated **profiles** ("Podcast", "Gaming", "Talking head", "Educational") that set a whole coherent bundle. | **P0** | M |
 | **U3** | Preview player with scrubbing before publishing. | **P1** | M |
 | **U4** | Transcript-based trimming — click words to cut. This is the feature Descript-class tools are chosen for. | **P1** | L |
@@ -410,7 +469,7 @@ Consensus target for short-form is 1080×1920 / 9:16, H.264 + AAC, ~30 fps
 
 | # | Item | Pri | Effort |
 | --- | --- | --- | --- |
-| **I1** | **Concurrency.** One worker thread; renders take minutes; a backlog serialises. `redis`/`rq` are declared dependencies that nothing imports and `worker/tasks.py` is imported by nothing — either wire it up or drop it. | **P1** | L |
+| **I1** | **Concurrency.** One worker thread; renders take minutes; a backlog serialises. `redis`/`rq` remain declared dependencies that nothing imports. **The `worker/tasks.py` half is resolved: it was dropped** (a 24-line re-export shim at 0% coverage with no importers). The RQ seam is `get_manager()` in `worker/jobs.py`. **Still open, and larger than it looks:** `max_workers=1` is what currently makes three things safe that are not individually thread-safe — `JobStore._persist()` is called outside the store lock, `worker/pipeline.py` holds module-level DI globals (`DIAR_BACKEND`, `FACE_DETECTOR`, `FRAME_SAMPLER`), and the whisper cache is process-wide. Raising the pool without fixing those first is a data race, not a speed-up. The `sel` alias at `worker/pipeline.py:44` is load-bearing for 23 tests. | **P1** | L |
 | **I2** | GPU support for Whisper and any ML path. | **P1** | M |
 | **I3** | Cache intermediates (transcript, keyframes, stems) keyed by source hash — pairs with **T8**. | **P1** | M |
 | **I4** | Job cancellation; there is no way to stop a running render. | **P1** | M |

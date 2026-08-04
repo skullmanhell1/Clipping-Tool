@@ -3,7 +3,7 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.8.0 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
+> **Status:** v0.11.0 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
@@ -192,8 +192,10 @@ work is opt-in and adds render time).
   settings panel (Language incl. translate, Clip Length, Aspect Ratio, Number
   of Clips), a full-width green **Get Clips** button, live per-video progress,
   and a clip gallery grid with inline preview + download.
-- **Runs CPU-only by default** (whisper `base`; set `WHISPER_MODEL=small` for
-  better quality, or `tiny` for speed).
+- **Runs CPU-only by default** (whisper `small`; set `WHISPER_MODEL=medium` or
+  `large-v3` for better quality, or `tiny`/`base` for speed). The default was
+  raised from `base` deliberately (`T1`): a mis-transcribed word is burned into
+  the video, and captions are the most visible thing the tool produces.
 
 ---
 
@@ -224,42 +226,117 @@ Instagram / X.
 
 ## Project layout
 
+Selected files, grouped by what they do. `worker/` holds 41 top-level modules and this lists
+about half; the omissions are small helpers, not whole subsystems.
+
 ```
 .
-├── api/main.py                     # FastAPI app (health, info, placeholder page)
+├── api/
+│   ├── main.py                     # FastAPI app — 48 routes across 10 tag groups
+│   └── security.py                 # shared-secret auth, /clips mount guard, rate limiter
 ├── worker/
-│   ├── tasks.py                    # re-export shim; currently unused (jobs.py is imported directly)
-│   ├── ffmpeg_utils.py             # FFmpeg/FFprobe helpers
-│   ├── transcribe.py               # faster-whisper transcription
-│   ├── selection.py                # AI "best moment" selection
+│   │  # --- orchestration -------------------------------------------------
+│   ├── pipeline.py                 # the render pipeline, stage by stage
+│   ├── jobs.py                     # in-process job store + manager (get_manager is the RQ seam)
+│   ├── job_persistence.py          # SQLite mirror so jobs survive a restart
+│   ├── models.py                   # ProcessingOptions, Job, ClipResult — the data model
+│   ├── cancellation.py             # cooperative cancel checkpoints
+│   ├── observability.py            # per-job log attribution + per-stage timings
+│   ├── watch_folder.py             # drop-a-file-in ingest (polling, size-debounced)
+│   ├── rerender.py                 # re-render one clip with changed settings
+│   │  # --- input ---------------------------------------------------------
+│   ├── download.py                 # yt-dlp ingest + the SSRF guard (validate_public_url)
+│   ├── ffmpeg_utils.py             # FFmpeg/FFprobe helpers; H264_COMPAT_ARGS lives here
+│   ├── video_encoders.py           # hardware encoder probe + fallback (the other -crf site)
+│   ├── output_profiles.py          # per-platform encode targets
+│   │  # --- transcription -------------------------------------------------
+│   ├── transcribe.py               # faster-whisper; Transcript / TranscriptSegment / Word
+│   ├── transcript_cache.py         # keyed on file *content*, not path
+│   ├── transcript_filter.py        # hallucination filtering
+│   ├── transcript_trim.py          # cut-list geometry (cuts in, keeps out); no I/O
+│   ├── clip_transcript.py          # a clip's words from cache; never runs ASR
+│   ├── language.py                 # language detection (returns nothing for Han script)
+│   ├── diarization.py              # speaker turns
+│   │  # --- selection -----------------------------------------------------
+│   ├── selection.py                # LLM "best moment" selection; ClipCandidate lives here
+│   ├── candidate_ranking.py        # scoring, dedup, ordering
+│   ├── selection_features.py       # speech rate (S4)
+│   ├── audio_features.py           # energy envelope (S2)
+│   ├── hook_score.py               # opening-seconds hook strength (S6)
+│   ├── discourse.py                # structure / standalone / intensity signals
+│   ├── scene_detect.py             # shot boundaries
+│   ├── segmentation.py             # silence detection + fallback segmenting
+│   ├── visual_selection.py         # frame-level signals
+│   │  # --- captions ------------------------------------------------------
+│   ├── captions.py                 # cue grouping, ASS build, burn-in
+│   ├── caption_placement.py        # position choice, face avoidance
+│   ├── caption_contrast.py         # legibility colours measured off the footage (C20)
+│   ├── caption_preview.py          # two-second preset sample (C18)
+│   ├── script_support.py           # reports caption_script_unsupported rather than substituting
+│   ├── text_metrics.py             # measured text fit, for real wrapping
+│   ├── subtitle_export.py          # SRT/VTT sidecars
+│   ├── branding.py                 # brand kit; ASS &HAABBGGRR colour helpers
 │   ├── metadata.py                 # titles / descriptions / hashtags
-│   ├── captions.py                 # subtitle build + burn-in
-│   ├── llm_client.py               # pluggable OpenAI/Anthropic client
-│   └── effects/                    # Phase 4 visual effects
-│       ├── overlays.py             # zoom/color/fade/progress filter builders
-│       ├── audio.py                # mood music beds + mixing
-│       ├── reframe.py              # face-tracking auto-reframe
-│       ├── emoji.py                # word-synced Twemoji overlays
-│       ├── filler.py               # filler-word / pause removal
-│       └── compositor.py           # single-pass effect composition
+│   ├── llm_client.py               # pluggable OpenAI/Anthropic/Gemini client
+│   ├── thumbnail.py                # scored thumbnail frame choice (V17)
+│   ├── intermediate_cache.py       # memoised measurements keyed by source hash
+│   ├── effects/
+│   │   ├── compositor.py           # single-pass effect composition (the filter graph)
+│   │   ├── overlays.py             # zoom/colour/fade/progress filter builders
+│   │   ├── audio.py                # music beds, ducking, loudnorm, measure_loudness
+│   │   ├── reframe.py              # face-tracking auto-reframe (on by default)
+│   │   ├── emoji.py                # word-synced Noto emoji overlays
+│   │   ├── broll.py                # b-roll overlays + licensing provenance
+│   │   ├── caption_presets.py      # the preset table (drift-pinned)
+│   │   ├── sfx.py                  # pop/click only — refuses "whoosh", deliberately
+│   │   └── filler.py               # filler-word / pause removal
+│   └── engines/                    # the AV engine plugin architecture (~10.8k lines)
+│       ├── base.py                 # AV_Engine, Engine_Context/Result — the plugin contract
+│       ├── host.py                 # gating ladder, budgets, failure isolation
+│       ├── registry.py             # engine registration
+│       ├── loader.py               # side-effect import that populates the registry
+│       ├── capabilities.py         # ffmpeg capability probes (real-binary tested)
+│       ├── artifacts.py            # per-clip workspaces + durable artifacts
+│       ├── timebase.py             # one time base per clip
+│       ├── kinetic.py              # kinetic typography engine (import-safe by design)
+│       └── stems.py                # stem inpainting engine (degrades without demucs)
 ├── publishers/
-│   ├── base.py                     # common publisher interface + status
-│   ├── history.py                  # SQLite clip/publish/campaign history
+│   ├── base.py                     # common publisher interface + PublishState
+│   ├── preflight.py                # per-platform pre-upload checks (PB3, labelled O10)
 │   ├── manager.py                  # routing + throttled scheduler
+│   ├── history.py                  # SQLite clip/publish/campaign history (has a migration)
+│   ├── retry.py                    # backoff policy
+│   ├── tailoring.py                # per-platform metadata shaping
+│   ├── best_times.py               # scheduling suggestions
 │   └── {whop,youtube,tiktok,instagram,x}.py
 ├── publisher_bridge/               # Node @whop/sdk upload bridge
-├── storage_backends/               # local + S3 + retention/cleanup
-├── assets/emoji/                   # Twemoji PNGs
-├── frontend/                       # React + Tailwind dashboard
+├── storage_backends/               # base + local + s3 + retention/cleanup
+├── evaluation/                     # scoring harness (1.6k lines; no labelled data yet — S1/M4)
+├── scripts/
+│   ├── setup_dev_env.sh            # ffmpeg, Liberation fonts, opencv runtime libs
+│   ├── smoke_reel.py               # render one clip with every effect on (M2)
+│   ├── mutate.py                   # mutation testing: does a test notice a break?
+│   ├── fetch_emoji.py              # --check asserts all 326 emoji are vendored
+│   ├── docker_smoke.sh             # build the image and prove it serves
+│   └── eval_{selection,transcription}.py
+├── assets/
+│   ├── fonts/                      # bundled caption faces — font files ONLY (libass reads all)
+│   ├── fonts.json                  # the manifest; weight is on fontconfig's scale
+│   ├── font-licenses/              # siblings, not children, of fonts/
+│   └── emoji/                      # 326 vendored Noto PNGs
+├── frontend/                       # React + Tailwind dashboard (Vite, vitest)
+├── tests/                          # 2,076 tests; no skips, warnings are errors
 ├── storage/{uploads,temp,clips}/   # local storage (bind-mounted in Docker)
-├── .github/workflows/ci.yml
-├── config.py                       # pydantic settings
-├── VERSION
-├── CHANGELOG.md
-├── requirements.txt
-├── .env.example
-├── docker-compose.yml
-└── Dockerfile
+├── .github/workflows/
+│   ├── ci.yml                      # lint, mypy, tests, coverage, smoke reel, docker, deploy
+│   └── mutation.yml                # weekly + on-demand mutation run
+├── config.py                       # pydantic settings — every field documented in .env.example
+├── profiles.py                     # saved settings profiles
+├── runtime_config.py               # settings changeable at runtime
+├── updates.py                      # in-app update check
+├── VERSION · CHANGELOG.md · requirements{,-dev,-ml}.txt · .env.example
+├── docker-compose.yml · Dockerfile · render.yaml
+└── docs/IMPROVEMENT_PLAN.md        # the backlog (an audit of v0.10.0 — read its banner)
 ```
 
 ---
@@ -378,8 +455,8 @@ uvicorn api.main:app --reload          # http://localhost:8000
 
 > FFmpeg must be installed and on your `PATH` for video features (installed
 > automatically inside the Docker image). The first run downloads the whisper
-> model; set `WHISPER_MODEL=tiny` for a fast first start or `small` for higher
-> transcription quality.
+> model, which defaults to `small`; set `WHISPER_MODEL=tiny` or `base` for a
+> faster first start, or `medium`/`large-v3` for higher transcription quality.
 
 **Optional: real stem separation (`stem_inpainting`).** `torch` and `demucs` are
 deliberately *not* in `requirements.txt` — torch alone is several hundred megabytes, and
