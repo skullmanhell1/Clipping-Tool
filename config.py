@@ -157,6 +157,29 @@ class Settings(BaseSettings):
     whisper_compute_type: str = Field(
         default="int8", description="faster-whisper compute type (e.g. int8, float16)."
     )
+    # CTranslate2's two parallelism knobs, neither of which was ever passed to
+    # ``WhisperModel``. ``0`` means "library default" and is passed through as *absence*
+    # rather than as a value, so an unconfigured install passes no thread count at all.
+    #
+    # Measured before documenting, because the obvious assumption is wrong: CTranslate2's
+    # own default already picks the physical core count, so on a 4-core/8-thread host
+    # `small`/int8 over a 44s source took 13.7-14.0s at 0, 13.8-14.8s at 4 (identical
+    # within noise) and 33.1-34.3s at 8 - two and a half times *slower*, because 8 is the
+    # SMT sibling count rather than a real core count. This is a lever for a host where the
+    # library guesses wrong, not a speedup.
+    whisper_cpu_threads: int = Field(
+        default=0,
+        description="Threads CTranslate2 uses per transcription (0 = library default, "
+                    "which is what every release up to 0.11.0 used and is usually right). "
+                    "Only meaningful on CPU. Use the PHYSICAL core count, never the SMT "
+                    "count - oversubscribing SMT siblings measured 2.4x slower.",
+    )
+    whisper_num_workers: int = Field(
+        default=1,
+        description="Concurrent CTranslate2 workers (1 = library default). Raising this "
+                    "helps only when several transcriptions run at once, which with "
+                    "max_workers=1 they do not - it costs memory for no gain.",
+    )
     # T4: a prompt prepended to the decode, which is how Whisper is told about words it has
     # no reason to expect - people's names, product names, jargon, brands. Without it a
     # recurring proper noun is mis-transcribed the same way every time it is said, and that
