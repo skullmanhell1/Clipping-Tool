@@ -121,3 +121,90 @@ ignore = [
     "S603",  # subprocess — running the real ffmpeg is the point
     "S607",  # partial executable path — ffmpeg/ffprobe resolved via PATH
 ]
+
+
+
+[tool.mypy]
+# mypy was in `requirements-dev.txt` from the beginning and had **never been run**, so this
+# section is written against a real first run: 69 errors in 17 files across 100 source files.
+# That number is small enough to fix rather than suppress, and every one of them was fixed or
+# given a narrowly-scoped override below — there is no blanket `ignore_errors`.
+#
+# Non-strict to start, deliberately. The single highest-value finding came from *precision*, not
+# strictness: `JobStore.get_clip`/`update_clip` were annotated `-> Optional[object]` while their
+# docstrings promised a `ClipResult`, and that one imprecision produced 14 of the 18 findings in
+# `api/main.py` because every caller then reached for attributes mypy could not see. Turning on
+# `disallow_untyped_defs` everywhere would have buried that behind hundreds of missing-annotation
+# reports. The ratchet at the bottom is how strictness arrives — per module, once its types are
+# actually right.
+python_version = "3.11"
+
+# The third-party surface here is large (mediapipe, faster-whisper, ffmpeg-python, yt-dlp,
+# onnxruntime, cv2) and most of it ships no type information. Without this, the run is dominated
+# by `import-untyped` noise about other people's packages, which says nothing about this codebase.
+ignore_missing_imports = true
+
+# Report the things that make a run trustworthy rather than merely quiet.
+warn_unused_configs = true
+warn_redundant_casts = true
+# `warn_unused_ignores` is on so a `# type: ignore` that has stopped being necessary is reported
+# instead of silently outliving the problem it was added for — the same reasoning as the drift
+# pins in the test suite.
+warn_unused_ignores = true
+no_implicit_optional = true
+
+# Excluded from checking rather than from the repo:
+#   tests/*  — 91 modules whose job is to poke at internals, monkeypatch attributes onto settings
+#              and construct deliberately-wrong values. Type-checking them would report the fixtures
+#              as errors and pressure the suite towards testing what mypy finds easy rather than
+#              what has broken before.
+#   .venv, storage, frontend — not source.
+exclude = '(^|/)(\.venv|storage|frontend|tests)/'
+
+
+# --- Per-module overrides -------------------------------------------------------------------
+#
+# Each of these is a *narrow* waiver with a reason, not a blanket exemption. Two of the three are
+# about a third-party union type that cannot be narrowed from here; the third is a genuine
+# refactor that does not belong in a verification-infrastructure change.
+
+[[tool.mypy.overrides]]
+# `anthropic`'s content blocks are a 12-member union (TextBlock | ThinkingBlock | ToolUseBlock |
+# ...), and only `TextBlock` carries `.text`. The code already guards with `getattr(block, "text",
+# "")`, which is the correct runtime behaviour, but mypy still reports the other 11 members — 10 of
+# the 12 findings in this module were that single expression. Narrowing properly would mean
+# importing and isinstance-checking `TextBlock` from a vendor SDK whose class layout changes
+# between minor releases, which trades a type error for a brittle runtime import.
+#
+# The openai `messages` argument is the same shape of problem: it wants a union of six TypedDicts
+# and the code builds a plain `list[dict[str, Any]]`.
+module = "worker.llm_client"
+disable_error_code = ["union-attr", "arg-type"]
+
+[[tool.mypy.overrides]]
+# `worker/engines/stems.py` threads a path through several `str | None` locals that are known
+# non-None by the time they are used, but only because of an earlier `if` in a different function.
+# Fixing it means restructuring the silence/sum command builders to carry the narrowed type, which
+# is a real change to a 4,120-line engine and needs its own PR with the stem parity tests in view.
+# Recorded here rather than silently ignored.
+module = "worker.engines.stems"
+disable_error_code = ["assignment", "arg-type"]
+
+
+# --- The ratchet ---------------------------------------------------------------------------
+#
+# `disallow_untyped_defs` on the modules whose types other modules depend on. These are the
+# interfaces — the data model, the two selection paths, and the two abstract base classes that
+# plugins implement — so an unannotated function here degrades inference everywhere downstream.
+# The list grows one module at a time; that is the point of it being a list rather than a global.
+
+[[tool.mypy.overrides]]
+module = [
+    "worker.models",
+    "worker.selection",
+    "worker.candidate_ranking",
+    "publishers.base",
+    "storage_backends.base",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

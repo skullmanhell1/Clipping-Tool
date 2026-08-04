@@ -418,10 +418,13 @@ def associate_faces(
 
     # Apply the per-label track to each turn; a turn whose assigned track has no
     # presence over its window (or whose label got no track) is unassociated.
+    # `turn_track` rather than reusing `tid` from the loop above: that one is a definite `str`
+    # taken from the candidate tuples, whereas these two are lookups that can miss. Sharing the
+    # name made the optional case invisible to a reader and to the type checker alike.
     for i, t in enumerate(turns):
-        tid = label_track.get(t.speaker_label)
-        if tid is not None and track_by_id[tid].presence(t.start, t.end) > 0.0:
-            by_turn[i] = tid
+        turn_track = label_track.get(t.speaker_label)
+        if turn_track is not None and track_by_id[turn_track].presence(t.start, t.end) > 0.0:
+            by_turn[i] = turn_track
         else:
             by_turn[i] = None
             unassociated.append(i)
@@ -429,9 +432,11 @@ def associate_faces(
     # Rank shown tracks by total speaking duration of their associated turns.
     duration_by_track: dict[str, float] = {}
     for i, t in enumerate(turns):
-        tid = by_turn[i]
-        if tid is not None:
-            duration_by_track[tid] = duration_by_track.get(tid, 0.0) + max(0.0, t.end - t.start)
+        turn_track = by_turn[i]
+        if turn_track is not None:
+            duration_by_track[turn_track] = (
+                duration_by_track.get(turn_track, 0.0) + max(0.0, t.end - t.start)
+            )
     shown_order = sorted(
         duration_by_track,
         key=lambda tid: (-duration_by_track[tid], track_order.index(tid)),
@@ -538,7 +543,11 @@ def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, i
         faces = detector.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
         )
-        return [tuple(int(v) for v in f) for f in faces]
+        # Spelled out as a fixed 4-tuple rather than `tuple(int(v) for v in f)`, which produces
+        # `tuple[int, ...]` — a type that does not match the declared return and would let a
+        # detector returning 3- or 5-element rects through unnoticed. Haar rects are always
+        # (x, y, w, h), so indexing is also the shape check.
+        return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
 
     return _detect
 
@@ -563,7 +572,7 @@ def _sample_face_boxes(
     ``None`` the default lazy-cv2 Haar cascade is used.
     """
     try:
-        import cv2  # type: ignore
+        import cv2
     except Exception:
         return []
 
@@ -664,7 +673,7 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     samples: list[Center] = []
     last_center: Optional[tuple[float, float]] = None
     for t, boxes in per_frame:
-        center = pick_main_face([tuple(f) for f in boxes])
+        center = pick_main_face([(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in boxes])
         if center is None:
             center = last_center
         if center is not None:

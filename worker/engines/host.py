@@ -41,6 +41,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _Future_Timeout
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -687,25 +688,31 @@ class Engine_Host:
         # A ``FillerPlan`` or, equivalently, its bare ``keeps`` sequence — the Pipeline
         # keeps the latter in scope for the whole clip, so both spellings are accepted.
         seams = filler_seam_notes(getattr(filler_plan, "keeps", filler_plan))
-        for engine in self._registered_for(coerced):
-            result = self._invoke(
-                engine,
-                lambda bound=engine: self._build_context(
-                    bound,
-                    coerced,
-                    clip_id=key,
-                    source=source,
-                    clip_path=clip_path,
-                    clip_start=clip_start,
-                    clip_end=clip_end,
-                    duration=duration,
-                    words=words,
-                    first_input_index=offsets.get(_engine_id_of(bound), 0),
-                    clip_metadata=metadata,
-                    seam_notes=seams,
-                    caller_notes=caller_notes,
-                ),
+        # Bound through a named function rather than a `lambda bound=engine:` default argument.
+        # Both capture the engine per iteration, but a lambda that takes an optional parameter is
+        # not a `Callable[[], Engine_Context]`, so `_invoke`'s signature could not be checked
+        # against the thing being passed to it — the one argument whose contract matters here,
+        # since `_invoke` calls it inside its own try/except and turns any failure into a
+        # `failed` result rather than propagating it.
+        def _context_for(bound: AV_Engine) -> Engine_Context:
+            return self._build_context(
+                bound,
+                coerced,
+                clip_id=key,
+                source=source,
+                clip_path=clip_path,
+                clip_start=clip_start,
+                clip_end=clip_end,
+                duration=duration,
+                words=words,
+                first_input_index=offsets.get(_engine_id_of(bound), 0),
+                clip_metadata=metadata,
+                seam_notes=seams,
+                caller_notes=caller_notes,
             )
+
+        for engine in self._registered_for(coerced):
+            result = self._invoke(engine, partial(_context_for, engine))
             outcome.results.append(result)
             if result.status is Engine_Status.SKIPPED:
                 continue
@@ -997,7 +1004,11 @@ class Engine_Host:
         self._workspaces.setdefault(clip_id, []).append(workspace)
 
         base = self.time_base()
-        notes = (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
+        # Annotated because the conditional expression below infers `tuple[str] | tuple[()]` from
+        # its two branches, and the two `notes + tuple(...)` lines that follow then widen it.
+        notes: tuple[str, ...] = (
+            (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
+        )
         notes = notes + tuple(_as_text(note) for note in (seam_notes or ()))
         notes = notes + tuple(_as_text(note) for note in (caller_notes or ()))
         budget = coerce_float(getattr(engine, "time_budget_s", 0.0), 0.0, lo=0.0)

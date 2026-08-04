@@ -35,7 +35,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -528,7 +528,7 @@ def info() -> dict[str, object]:
     }
 
 
-def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
+def _engines_info() -> tuple[list[dict[str, object]], dict[str, Any]]:
     """Return the ``(engines, capabilities)`` pair advertised by ``/api/info``.
 
     Reqs 20.1/20.2/20.6 — additive only: one row per registered AV engine in the
@@ -584,7 +584,7 @@ def _engines_info() -> tuple[list[dict[str, object]], dict[str, object]]:
 
 
 def _add_engine_option_domains(
-    rows: list[dict[str, object]], capabilities: dict[str, object]
+    rows: list[dict[str, object]], capabilities: dict[str, Any]
 ) -> None:
     """Advertise engine-specific option domains inside the ``capabilities`` block.
 
@@ -1159,7 +1159,11 @@ def resume_job(job_id: str) -> dict:
             status_code=409,
             detail="Every planned clip for this job has already been rendered.",
         )
-    return manager.store.get(job_id).to_dict()
+    # Re-read rather than reusing `job`: `resume` mutates the stored record and the caller needs
+    # the post-resume status. Nothing removes a job from the store, so `or job` is a total
+    # expression covering a case that cannot arise, not a fallback masking a lookup failure.
+    resumed = manager.store.get(job_id)
+    return (resumed or job).to_dict()
 
 
 @app.post("/api/captions/preview", tags=["metadata"], dependencies=[Depends(rate_limit)])
@@ -1449,7 +1453,10 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
     except Exception as exc:  # LLMError or parsing issue
         raise HTTPException(status_code=502, detail=f"Regeneration failed: {exc}") from exc
 
-    updated = manager.store.update_clip(job_id, clip_id, {req.field: value})
+    # `clip` was already resolved non-None above and nothing removes a clip from a job, so the
+    # update cannot miss. Falling back to it keeps the expression total without inventing an
+    # error path for a state the store cannot reach.
+    updated = manager.store.update_clip(job_id, clip_id, {req.field: value}) or clip
     get_history().sync_clip(job_id, updated)
     return {"field": req.field, "value": value, "clip": updated.to_dict()}
 

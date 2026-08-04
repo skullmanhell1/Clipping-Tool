@@ -14,8 +14,10 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from config import settings
 from worker import (
@@ -76,8 +78,8 @@ _SYSTEM = (
 
 def _segment_annotation(
     segment: TranscriptSegment,
-    words,
-    envelope,
+    words: Sequence[Any],
+    envelope: Sequence[tuple[float, float]],
     *,
     pace_baseline: Optional[float],
     energy_baseline: Optional[float],
@@ -127,8 +129,8 @@ def _segment_annotation(
 def _format_transcript(
     segments: list[TranscriptSegment],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
 ) -> str:
     """Render segments as ``[index] start-end{delivery}: text`` lines for the prompt.
 
@@ -167,8 +169,8 @@ def _build_prompt(
     max_len: float,
     max_clips: Optional[int],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
 ) -> str:
     """Construct the selection prompt from the transcript + user options.
 
@@ -256,13 +258,13 @@ def _text_between(segments: list[TranscriptSegment], start: float, end: float) -
 
 
 def _fallback(
-    path,
+    path: str | Path,
     total_duration: float,
     options: ProcessingOptions,
     max_clips: Optional[int],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
     segments: Optional[list[TranscriptSegment]] = None,
 ) -> list[ClipCandidate]:
     """Deterministic fallback, now with real scoring rather than "keep the longest" (S11).
@@ -322,7 +324,7 @@ def _fallback(
 def select_moments(
     transcript: Transcript,
     options: ProcessingOptions,
-    source_path,
+    source_path: str | Path,
     total_duration: float,
     client: Optional[BaseLLMClient] = None,
 ) -> list[ClipCandidate]:
@@ -410,9 +412,17 @@ def select_moments(
     for item in data:
         if not isinstance(item, dict):
             continue
+        # Absent keys are rejected before the conversion rather than through the `except
+        # TypeError` that `float(None)` used to raise. Same outcome for the same inputs - a
+        # hallucinated item without a range is skipped - but the intent is stated rather than
+        # inferred from which exception a builtin happens to throw.
+        raw_start = item.get("start")
+        raw_end = item.get("end")
+        if raw_start is None or raw_end is None:
+            continue
         try:
-            start = float(item.get("start"))
-            end = float(item.get("end"))
+            start = float(raw_start)
+            end = float(raw_end)
         except (TypeError, ValueError):
             continue
         if end <= start:

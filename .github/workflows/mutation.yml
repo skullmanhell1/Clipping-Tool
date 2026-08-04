@@ -1,0 +1,75 @@
+name: Mutation testing
+
+# `scripts/mutate.py` checks that the suite actually *detects* a change, rather than merely
+# passing. It found the finding recorded in worker/ffmpeg_utils.py: deleting `-pix_fmt` from
+# `H264_COMPAT_ARGS` changed no output at all, so the constant had quietly stopped being
+# load-bearing while the test that iterates it still passed.
+#
+# Deliberately **not** per-PR. Each mutation requires a full suite run to decide whether it was
+# caught, and the suite takes about six minutes, so a per-PR job would add hours for a signal that
+# does not change between commits. Weekly plus on-demand is the shape that matches how the result
+# is used: it answers "are these tests still worth having", which is a question about the suite,
+# not about a diff.
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "Mutation spec to run (a path under tests/mutations/)"
+        required: false
+        default: "tests/mutations/example.json"
+  schedule:
+    # 04:00 UTC on Mondays. Off-peak, and a week apart because the answer moves at roughly the
+    # rate the suite's design does.
+    - cron: "0 4 * * 1"
+
+# A scheduled run and a manual one must not race over the same runner budget.
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    name: Mutation harness
+    runs-on: ubuntu-latest
+    # Generous: this is N full suite runs, one per mutation, and the default 360-minute ceiling is
+    # the only thing that would otherwise stop it.
+    timeout-minutes: 240
+    steps:
+      # Full history for the same reason the main workflow needs it: two parity guards in
+      # tests/test_stems_parity.py diff against `origin/main`, and a shallow checkout makes them
+      # skip rather than run.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # The same system dependencies the backend job installs. Without ffmpeg the suite skips ~90
+      # tests, and a mutation harness measuring a suite that is not running is worse than no
+      # measurement: every mutation would be reported as "not caught".
+      - name: Install system dependencies (FFmpeg + fonts + opencv runtime libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run the mutation harness
+        run: |
+          python scripts/mutate.py --spec "${{ github.event.inputs.spec || 'tests/mutations/example.json' }}" \
+            | tee mutation-report.txt
+
+      - name: Upload the mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: mutation-report.txt
+          if-no-files-found: warn
