@@ -153,14 +153,14 @@ def derive_visual_cues(frames: list[Keyframe]) -> list[Keyframe]:
         return []
 
     try:  # lazy, optional
-        from PIL import Image  # type: ignore
+        from PIL import Image
     except Exception:
-        Image = None  # type: ignore
+        Image = None  # type: ignore[assignment]
 
     try:  # lazy, optional
-        import numpy as np  # type: ignore
+        import numpy as np
     except Exception:
-        np = None  # type: ignore
+        np = None  # type: ignore[assignment]
 
     def _brightness(path: str) -> float:
         if Image is None:

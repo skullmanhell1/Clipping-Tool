@@ -644,9 +644,23 @@ def broll_asset_record(cue: BrollCue) -> dict:
     """Shape a resolved cue's provenance for ``ClipResult.broll_assets``.
 
     Returns ``{provider, source_id, license, attribution, keyword, path}``
-    (Reqs 12.1, 12.2, 20.1). Assumes ``cue.asset`` is set.
+    (Reqs 12.1, 12.2, 20.1). ``cue.asset`` must be set.
+
+    The precondition is now stated rather than assumed. It holds on every real path —
+    :meth:`BrollOverlayEngine.resolve` drops any cue it could not attach an asset to, and
+    :func:`broll_filter_graph` filters again before emitting a graph — so this cannot fire from
+    the render. It replaces an ``AttributeError`` on ``None.provider`` with a message that names
+    the actual problem, and both are equally caught by the ``except Exception`` the compositor
+    wraps b-roll in, so nothing downstream changes.
+
+    The alternative — emitting a record with five null fields — is the one outcome worth
+    preventing: this dict is written to ``ClipResult.broll_assets`` and read later as the clip's
+    licensing provenance, where "an asset with no licence" is indistinguishable from an
+    unlicensed asset.
     """
     asset = cue.asset
+    if asset is None:
+        raise ValueError("broll_asset_record requires a cue with a resolved asset")
     return {
         "provider": asset.provider,
         "source_id": asset.source_id,
@@ -754,6 +768,8 @@ def build_broll_overlay(
     n = len(resolved)
     for i, cue in enumerate(resolved):
         asset = cue.asset
+        if asset is None:  # pragma: no cover - `resolved` is filtered on exactly this above
+            continue
         idx = input_offset + i
         start = max(0.0, float(cue.start))
         end = max(start, float(cue.end))

@@ -30,5 +30,23 @@ export default defineConfig({
     // Only our own tests; without this vitest would also try to collect from
     // node_modules and from the build output.
     include: ["src/**/*.test.{js,jsx}"],
+    // `@vitest/coverage-v8` was already a dependency and had never been configured, so the
+    // number it exists to produce was not available. Reported, not gated: a threshold picked
+    // before anyone has seen the figure is either met by accident or blocks the first honest
+    // measurement, and the untested files here are known (App.jsx and six components).
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "json-summary", "html"],
+      reportsDirectory: "coverage",
+      // The measured surface is our source. Config, the entry point and the test setup are
+      // excluded because covering them says nothing: main.jsx is three lines of mount code and
+      // a config file executes on import whether or not anything asserts on it.
+      include: ["src/**/*.{js,jsx}"],
+      exclude: [
+        "src/**/*.test.{js,jsx}",
+        "src/test/**",
+        "src/main.jsx",
+      ],
+    },
   },
 });

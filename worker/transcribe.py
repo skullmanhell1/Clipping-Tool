@@ -84,7 +84,7 @@ def _resolve_device() -> tuple[str, str]:
 
     if device == "auto":
         try:  # pragma: no cover - depends on host hardware
-            import torch  # type: ignore
+            import torch
 
             if torch.cuda.is_available():
                 return "cuda", "float16"

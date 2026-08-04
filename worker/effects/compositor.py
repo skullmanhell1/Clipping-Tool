@@ -63,11 +63,15 @@ def _kinetic_subtitle_path(
     existing preset/legacy caption path (Reqs 3.5, 3.6, 13.2, 14.2).
     """
     for contribution in contributions:
+        # Bound to a local so the `is not None` check narrows the value that is actually used.
+        # Testing `getattr(...) is not None` and then reading the attribute again is two separate
+        # lookups of a possibly-None value, which is why it did not type-check.
+        subtitle_path = getattr(contribution, "subtitle_path", None)
         if (
             getattr(contribution, "engine_id", "") == KINETIC_ENGINE_ID
-            and getattr(contribution, "subtitle_path", None) is not None
+            and subtitle_path is not None
         ):
-            return Path(contribution.subtitle_path)
+            return Path(subtitle_path)
     return None
 
 

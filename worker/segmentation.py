@@ -125,14 +125,17 @@ def detect_silences(
         "-f", "null", "-",
     ]
     # silencedetect writes to stderr; this command is expected to "succeed".
+    # The stderr text is bound in each branch rather than rebinding `proc` to the exception. A
+    # `CalledProcessError` is not a `CompletedProcess`, so the old form assigned an unrelated type
+    # to the same name and forced the read below through `getattr` - which would have quietly
+    # yielded "" if the attribute were ever renamed, i.e. reported "no silences" rather than
+    # failing. Both branches carry `.stderr`, so this parses exactly what it did before.
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        log = subprocess.run(cmd, capture_output=True, text=True, check=True).stderr or ""
     except FileNotFoundError as exc:
         raise FFmpegError(f"Binary not found: {cmd[0]}") from exc
     except subprocess.CalledProcessError as exc:
-        proc = exc  # still parse whatever was emitted
-
-    log = (getattr(proc, "stderr", "") or "")
+        log = exc.stderr or ""  # still parse whatever was emitted
     starts = [float(m) for m in re.findall(r"silence_start:\s*([0-9.]+)", log)]
     ends = [float(m) for m in re.findall(r"silence_end:\s*([0-9.]+)", log)]
     return list(zip(starts, ends))

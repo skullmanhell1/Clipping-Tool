@@ -71,6 +71,17 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      # mypy was in requirements-dev.txt from the start and had never been run. The first run
+      # found 69 errors in 17 files; all 69 are fixed or covered by a narrow, commented
+      # per-module override in pyproject.toml, so this step starts clean and blocks.
+      #
+      # Blocking rather than advisory for the same reason `ruff check .` is: the previous
+      # `ruff check . || true` proved that a step which cannot fail reports nothing. The
+      # `[tool.mypy]` section also ratchets `disallow_untyped_defs` on the five interface modules
+      # other modules depend on, so the strictness grows without a flag day.
+      - name: Type check (mypy)
+        run: mypy .
+
       - name: Import & boot smoke test
         run: |
           python -c "import config; print('config OK', config.settings.app_name)"
@@ -111,32 +122,138 @@ jobs:
       # silently went missing and the ~90 tests it gates have quietly stopped running —
       # exactly how the earlier ffmpeg gap went unnoticed. `set -o pipefail` keeps pytest's
       # own exit status meaningful through the pipe.
+      # The no-skip gate now reads a machine-readable report instead of grepping pytest's summary
+      # prose. The semantics are deliberately identical - **any skip fails the build** - but the
+      # old `grep -qE '[0-9]+ skipped'` was matching English that pytest is free to reword, and it
+      # would equally have matched the phrase appearing in a test name or in captured output. The
+      # JUnit XML carries `<skipped>` elements as structure, so the check no longer depends on
+      # formatting. It also catches xfail/xpass, which the prose gate did not: both are tests that
+      # are not asserting what they claim to.
       - name: Tests
         run: |
           set -o pipefail
-          pytest 2>&1 | tee /tmp/pytest.log
-          if grep -qE '[0-9]+ skipped' /tmp/pytest.log; then
-            echo "::error::Tests were skipped; a required dependency is probably missing."
-            grep -E 'SKIPPED' /tmp/pytest.log || true
-            exit 1
-          fi
+          pytest --junit-xml=pytest-report.xml
+
+      - name: No test was skipped
+        # `always()` so a skip is still reported when the suite itself failed - a run that both
+        # failed and silently stopped running 90 tests should say so, since the skip is usually
+        # the cause rather than a second problem.
+        if: always()
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("pytest-report.xml")
+          if not report.is_file():
+              sys.exit("::error::pytest produced no report; the suite did not run.")
+
+          root = ET.parse(report).getroot()
+          suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
+          bad = []
+          for suite in suites:
+              for case in suite.iter("testcase"):
+                  for kind in ("skipped", "flaky"):
+                      for node in case.findall(kind):
+                          name = f"{case.get('classname', '')}::{case.get('name', '')}"
+                          bad.append(f"{kind}: {name} - {node.get('message', '') or node.get('type', '')}")
+          if bad:
+              print("::error::A skipped test is not a passing test. A required dependency is "
+                    "probably missing; see scripts/setup_dev_env.sh.")
+              for line in bad:
+                  print(f"  {line}")
+              sys.exit(1)
+          total = sum(int(s.get("tests", 0)) for s in suites)
+          print(f"{total} tests ran, none skipped.")
+          PY
+
+      # Coverage is measured and **reported**, not gated. A threshold chosen before anyone has
+      # seen the number either passes by accident or blocks the first honest measurement; the
+      # figure is published here so a later PR can set a floor against something real.
+      #
+      # Run as a second pass rather than by adding `--cov` to `addopts`, and that is not merely
+      # tidiness: coverage instrumentation changes garbage-collection timing, which is enough to
+      # move an unclosed-socket `ResourceWarning` raised inside yt-dlp from after the session into
+      # the middle of a test - where `filterwarnings = error` correctly fails it. Keeping the
+      # gating run uninstrumented means the suite that decides whether this build passes is the
+      # same one a developer runs locally.
+      - name: Coverage (reported, not gated)
+        run: |
+          pytest -q -p no:cacheprovider \
+            --cov=api --cov=worker --cov=publishers --cov=storage_backends \
+            --cov=config --cov=profiles --cov=runtime_config --cov=updates \
+            --cov-report=term --cov-report=xml:coverage.xml \
+            | tail -40
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: warn
+
+      # `scripts/smoke_reel.py` renders one clip with every effect enabled. It exists because
+      # "nothing measured the real output", and until now it ran only when someone remembered to
+      # run it. The artifact is the point: a human can watch 20 seconds of video and see a
+      # regression that no assertion in the suite describes.
+      - name: Visual smoke reel
+        run: python scripts/smoke_reel.py --out smoke_reel.mp4
+
+      - name: Upload smoke reel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-reel
+          path: smoke_reel.mp4
+          if-no-files-found: warn
+
+      # Isolated on purpose. `pip-audit` depends on `requests`, and installing `requests` into the
+      # environment the suite runs in switches yt-dlp to a request handler that leaks a socket -
+      # whose `ResourceWarning` then fails an unrelated test under `filterwarnings = error`
+      # (measured: 3-4 non-deterministic failures in tests/test_url_ingest.py). Auditing the
+      # dependency set must not alter the dependency set. A separate venv keeps both true, which
+      # is also why pip-audit is not in requirements-dev.txt.
+      #
+      # Non-blocking for now, matching the frontend's stance that a gate which cannot be satisfied
+      # without breaking the build gets ignored: three direct dependencies are still unbounded
+      # (python-multipart, ffmpeg-python, yt-dlp) and there is no lockfile, both of which the
+      # supply-chain phase addresses. The findings are printed either way.
+      - name: Audit Python dependencies (pip-audit, isolated)
+        continue-on-error: true
+        run: |
+          python -m venv /tmp/audit-venv
+          /tmp/audit-venv/bin/pip install --quiet --upgrade pip pip-audit
+          /tmp/audit-venv/bin/pip-audit --requirement requirements.txt --strict --desc
 
   frontend:
-    name: Frontend (lint + tests + build)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
+    strategy:
+      # Both legs run to completion; a Node 20 failure should not hide a Node 22 one, since the
+      # whole reason for the matrix is that the two runtimes have already diverged once.
+      fail-fast: false
+      matrix:
+        # `package.json` declares `engines.node: ^20.9.0 || >=22.0.0`, so Node 20 was a
+        # **supported but untested** configuration - and `.npmrc` records that it has already
+        # broken once (jsdom@30 and @testing-library/jest-dom@7 both require >=22 and were
+        # installed from a Node 22 machine, which `engine-strict=true` now prevents). Testing the
+        # floor is what makes that declaration mean something.
+        #
+        # 20.19 rather than 20: vite 8 requires ^20.19.0 || >=22.12.0, so the declared floor of
+        # 20.9 cannot actually build. That gap is real and worth stating - the honest floor for a
+        # *build* is 20.19 even though the dependency metadata permits 20.9.
+        node-version: ["20.19", "22"]
+    name: Frontend (node ${{ matrix.node-version }})
     steps:
       - uses: actions/checkout@v4
 
-      # Node 22: vite 8 requires ^20.19.0 || >=22.12.0 (I10). "20" here resolves to the latest
-      # 20.x, which satisfies that today, but pinning the major we actually target means CI
-      # cannot start testing on a runtime the Dockerfile does not use.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -154,6 +271,21 @@ jobs:
 
       - name: Tests (vitest)
         run: npm run test:run
+
+      # Reported, not gated, and on one leg only - the number does not depend on the Node version,
+      # so measuring it twice would just produce two artifacts with the same content.
+      # `@vitest/coverage-v8` was already installed and had never been configured.
+      - name: Coverage (reported, not gated)
+        if: matrix.node-version == '22'
+        run: npm run test:coverage
+
+      - name: Upload frontend coverage
+        if: always() && matrix.node-version == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          if-no-files-found: warn
 
       - name: Build
         run: npm run build

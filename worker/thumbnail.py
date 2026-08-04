@@ -58,7 +58,7 @@ def _score_frame(path: str | Path) -> Optional[float]:
     codebase - in which case there is no signal and the caller keeps the default frame.
     """
     try:
-        from PIL import Image, ImageFilter, ImageStat  # type: ignore
+        from PIL import Image, ImageFilter, ImageStat
     except Exception:
         return None
 

@@ -587,12 +587,17 @@ def run_pipeline(
             applied.extend(compose.markers)
 
         # 6. thumbnail from the finished clip
-        thumb = clips_dir / f"clip_{clip_id}.jpg"
+        # Two names because they mean different things: `thumb_path` is where the thumbnail would
+        # go and is always a path, while `thumb` is the result recorded on the clip and is None
+        # when generation failed. Collapsing them into one made the failure assignment look like a
+        # type error at the point of *use* rather than where the distinction is.
+        thumb_path = clips_dir / f"clip_{clip_id}.jpg"
+        thumb: Optional[Path] = thumb_path
         try:
             # V17: score a few candidate frames rather than taking a fixed position, which on a
             # clip opening on a cut or a blink chose exactly the wrong still.
             fu.generate_thumbnail(
-                final, thumb, at=thumbnail.choose_thumbnail_time(final, c.duration)
+                final, thumb_path, at=thumbnail.choose_thumbnail_time(final, c.duration)
             )
         except fu.FFmpegError:
             thumb = None
