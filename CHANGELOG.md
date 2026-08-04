@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a sweep that deleted running jobs, and timings that named the wrong stage
+
+- **The retention sweep removed the directories of jobs that were still running.** This failed
+  **every** job submitted through the API, and 1911 tests missed it by a five-second margin.
+
+  `cleanup_expired`'s file branch checked age; its directory branch did not. Any *empty* directory
+  under `storage/clips` or `storage/temp` was removed regardless of age. `JobManager._execute`
+  creates `clips/<job_id>/` and `temp/<job_id>/` empty and they stay empty until the first clip
+  lands — around twenty seconds into a render — while `RetentionSweeper._loop` sweeps **five seconds
+  after startup**. So the destination directory was deleted mid-render, and the render then died at
+  `geo.replace(final)` with `FileNotFoundError: [Errno 2] No such file or directory:
+  '.../temp/<job>/geo_01_*.mp4' -> '.../clips/<job>/clip_01_*.mp4'`. `os.replace` names both paths,
+  which reads as a missing *source* and sent the diagnosis in the wrong direction; the file that was
+  missing was the destination directory.
+
+  Compounding it, `removed` was only incremented in the file branch, so the sweep deleted
+  directories and reported `{'removed': 0}` — a destructive operation that reported doing nothing,
+  which is worse than one that fails because nobody looks for it.
+
+  An empty directory belonging to a running job is indistinguishable by *contents* from one
+  abandoned months ago, so **age is the only safe discriminator**; the directory branch now uses the
+  same cutoff the file branch does, and counts what it removes. The sweep's five-second prompt run is
+  deliberate and stays — an instance restarted daily would otherwise never sweep — and both it and
+  `RETENTION_SWEEP_HOURS` now carry a comment saying so, because that timing is what made this
+  reachable. Belt and braces, `run_pipeline` re-`mkdir`s the clips and temp directories once per clip
+  and `JobManager._execute` does the same before writing sidecars: one syscall against a lost
+  twenty-minute render.
+
+  **Why no test could see it.** Every API test finishes inside five seconds, and every pipeline test
+  calls `run_pipeline` directly with no sweeper thread in existence. The gap was structural, not a
+  missing assertion, so the regression test is a shape the suite did not have —
+  `tests/test_retention_live_sweep.py` runs a real render through `TestClient` **as a context
+  manager**, which executes the app's real lifespan and therefore starts the real sweeper, with a
+  sweep running concurrently. It fails on the pre-fix code with the production error verbatim.
+
+- **`M5`'s stage timings attributed two thirds of a render to a stage that takes microseconds.** The
+  per-clip loop reported `Writing copy for clip N` at step 2 and then said nothing until `Adding
+  effects` at step 5, so word slicing, filler removal, the AUDIO-stage engines, **the geometry ladder
+  — Haar face detection over up to 120 sampled frames plus a full `reformat_aspect` re-encode** — and
+  the GEOMETRY-stage engines were all filed under metadata generation, which returns
+  `_fallback_metadata` immediately when no LLM is configured. Measured on a 44s source, 2 clips,
+  reframe on: `Writing copy` 15.06s (37.6%, the largest row) before, `0.000s` after, with the time
+  now shown against a new `Reframing` stage at 14.78s. M5 exists because nobody knew where the
+  minutes went; pointing confidently at the wrong stage is worse than not measuring.
+
+  Reading that measurement — rather than the tests — turned up three more stages the pipeline reports
+  that were absent from `JOB_STAGES`: `Rendered clip N of M` (which does **not** prefix-match
+  `Rendering clip`), `Done`, and `Translating subtitles`. An unlisted stage resolves to `0`, which
+  hides the UI's step counter *and* makes `_stage_label` fall through to the raw per-clip string, so
+  a five-clip job produced five one-off timing rows — precisely the fragmentation `_stage_label`
+  exists to prevent. And `Adding effects` was listed *before* `Writing copy` although the pipeline
+  reports them the other way round, so a single clip's `stage_index` counted 7 → 10 → 9 and the step
+  counter went backwards. `JOB_STAGES` is now in the order the pipeline actually reports.
+
+### Added — two CPU levers that were never set, and an AMD host that failed on startup
+
+- **`WHISPER_CPU_THREADS` / `WHISPER_NUM_WORKERS`.** `WhisperModel` accepts both and neither was ever
+  passed, so CTranslate2's CPU parallelism was whatever the library guessed with no way to correct
+  it. Both are now settings, both default to the library's own value, and **both are part of the
+  process-wide model cache key** — they are constructor arguments, so without that the first
+  transcription of a process fixed the thread count for every later one and changing the setting
+  would be accepted and silently do nothing. `0` is passed as *absence* rather than as `0`, so an
+  unconfigured install constructs the model with no thread count at all, exactly as before.
+
+  Measured, and it contradicts the assumption that this is a free multi-× win: on 4 physical cores /
+  8 SMT siblings, `small`/int8 over a 44s source took 13.7–14.0s at `0`, 13.8–14.8s at `4` (the same
+  within noise) and **33.1–34.3s at `8` — 2.4× slower**, because 8 is the SMT sibling count and not a
+  core count. CTranslate2's default already picks the physical count, which is the right answer, so
+  there is no speedup here to collect — only a lever for a host where the guess is wrong, and a
+  documented warning never to use the SMT count.
+
+- **`FFMPEG_THREADS`.** There was no `-threads` anywhere in the codebase. Not a defect — libx264
+  auto-detects — but not tunable either, and the guess is reliably wrong inside a CPU-quota'd
+  container, where ffmpeg counts the host's cores rather than the cgroup's share. Emitted from
+  `ffmpeg_utils.h264_args` only, beside the encoder/preset/quality flags that are centralised there
+  because they were once spread across seven call sites — which is how three of them came to be
+  missing from all seven. A fourth boundary guard now keeps `-threads` in the same place. `0` omits
+  the flag entirely rather than emitting `-threads 0`: identical to ffmpeg, but only the omission is
+  byte-identical to earlier releases, and that is something a test can assert.
+
+  Measured, and it changes nothing on a host that can see its cores: 17.44s at `0`, 17.26s at `2`,
+  18.24s at `4`, 17.74s at `8` and 18.78s at **one** thread — all within 8%, because the pass is
+  filter-bound on `gblur` and `-threads` is the *codec* thread count. Reported rather than followed
+  with more unmeasured knobs. One caveat: x264's output bytes move with its thread count, so a
+  non-zero value changes the encoded file at identical quality settings and would shift the `M1`
+  golden renders. At `0` nothing changes.
+
+- **`WHISPER_DEVICE=auto` mistook a ROCm PyTorch for CUDA.** ROCm builds expose AMD hardware *through
+  the `torch.cuda` API*, so `torch.cuda.is_available()` returns `True` on a machine with no CUDA at
+  all. Auto-detection therefore selected `cuda`, and there is nothing below it to catch the fall:
+  `WhisperModel` accepts only `cpu`/`cuda`/`auto` and **CTranslate2 has no ROCm backend** (checked
+  against ctranslate2 4.8.1), so the construction raises `CUDA failed with error CUDA driver version
+  is insufficient for CUDA runtime version` rather than degrading. `torch.version.hip` is the
+  discriminator — set on a ROCm build, absent on a CUDA one — and when it is set the resolution is
+  CPU regardless of what `cuda.is_available()` claims. Logged at info level naming CTranslate2 and
+  how to override, on the same reasoning `video_encoders` already applies to a named-but-unavailable
+  encoder: silence here is how an operator spends a week believing their GPU is in use.
+
 ### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
 
 - **`C21` — a caption font that can actually render what was said.** Captions were drawn in a Latin
