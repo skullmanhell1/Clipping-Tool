@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config import settings
-from worker import script_support, text_metrics
+from worker import ass_spans, script_support, text_metrics
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -609,18 +609,20 @@ def build_word_span(
     w_start, w_end = _word_bounds(word)
     rel_ms = max(0, int(round((w_start - cue_start) * 1000)))
 
-    if animation == "pop":
-        span = (
-            f"{{\\fscx60\\fscy60\\t({rel_ms},{rel_ms + 120},"
-            f"\\fscx100\\fscy100)}}{escaped}"
+    # The animation tags themselves live in `worker.ass_spans`, which is the *only* place they are
+    # spelled. `engines.kinetic._style_span` calls the same function, which is what the byte-for-byte
+    # agreement between the two paths now rests on - previously it rested on two independently
+    # written f-strings and a property test that could report a divergence only after it happened.
+    #
+    # Gated on `LEGACY_ANIMATIONS` rather than passing `animation` straight through, because
+    # `ass_spans` also knows the three kinetic-only styles. A `CaptionPreset` cannot select one
+    # (`caption_presets.VALID_ANIMATIONS` is the legacy four) but this function reads the field with
+    # `getattr` off a duck-typed object, so an unexpected value must keep degrading to the plain
+    # word exactly as it did before rather than acquiring a kinetic animation.
+    if animation in ass_spans.LEGACY_ANIMATIONS:
+        span = ass_spans.animation_span(
+            animation, escaped, rel_ms=rel_ms, duration_s=w_end - w_start
         )
-    elif animation == "typewriter":
-        span = (
-            f"{{\\alpha&HFF&\\t({rel_ms},{rel_ms + 30},\\alpha&H00&)}}{escaped}"
-        )
-    elif animation == "karaoke_fill":
-        dur_cs = max(1, int(round((w_end - w_start) * 100)))
-        span = f"{{\\kf{dur_cs}}}{escaped}"
     else:
         span = escaped
 
