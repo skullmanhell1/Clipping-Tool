@@ -298,7 +298,11 @@ class Settings(BaseSettings):
     delete_local_after_publish: bool = Field(
         default=False, description="Delete the local clip after a successful publish."
     )
-    # How often the background retention sweeper runs.
+    # How often the background retention sweeper runs. Note this is the *interval between*
+    # sweeps, not a delay before the first one: ``RetentionSweeper._loop`` sweeps five
+    # seconds after startup and only then waits this long. A job submitted right after
+    # startup is therefore swept over while it is still running, which is what made the
+    # empty-directory bug in ``cleanup_expired`` reachable.
     retention_sweep_hours: float = Field(default=6.0, description="Retention sweep interval (hours).")
     # Low-disk warning thresholds surfaced in the UI.
     disk_warn_free_gb: float = Field(default=2.0, description="Warn when free space drops below this (GB).")
