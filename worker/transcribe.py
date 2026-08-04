@@ -82,14 +82,42 @@ def _resolve_device() -> tuple[str, str]:
 
     ``auto`` attempts CUDA and falls back to CPU. Returns a tuple suitable for
     passing to ``WhisperModel``.
+
+    An explicit ``whisper_device`` is honoured as given - only ``auto`` probes the host.
     """
     device = settings.whisper_device
     compute_type = settings.whisper_compute_type
 
     if device == "auto":
-        try:  # pragma: no cover - depends on host hardware
+        try:
             import torch  # type: ignore
 
+            # A ROCm torch is not a CUDA torch, however much it looks like one.
+            #
+            # PyTorch's ROCm builds expose AMD hardware *through the torch.cuda API*, so
+            # `torch.cuda.is_available()` returns True on a machine with no CUDA at all.
+            # `torch.version.hip` is the only reliable discriminator: it is set on a ROCm
+            # build and absent on a CUDA one.
+            #
+            # It matters because there is nothing to fall back to. `WhisperModel` accepts
+            # only "cpu", "cuda" or "auto", and **CTranslate2 has no ROCm backend at all**
+            # (checked against ctranslate2 4.8.1) - so returning "cuda" here does not run
+            # slowly or degrade, it raises:
+            #
+            #   RuntimeError: CUDA failed with error CUDA driver version is insufficient
+            #                 for CUDA runtime version
+            #
+            # and fails every job. Do not "fix" this back by trusting `cuda.is_available()`
+            # alone; if CTranslate2 ever gains a ROCm backend, this is the place to add it,
+            # and the check to make is for that backend rather than for the torch build.
+            if getattr(getattr(torch, "version", None), "hip", None):
+                logger.info(
+                    "whisper: torch is a ROCm build (hip %s) and reports cuda.is_available()"
+                    " = %s, but CTranslate2 has no ROCm backend - transcribing on CPU."
+                    " Set WHISPER_DEVICE explicitly to override.",
+                    getattr(torch.version, "hip", "?"), torch.cuda.is_available(),
+                )
+                return "cpu", "int8"
             if torch.cuda.is_available():
                 return "cuda", "float16"
         except Exception:
