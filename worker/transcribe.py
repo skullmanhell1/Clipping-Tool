@@ -70,7 +70,11 @@ class Transcript:
 
 # --- lazy model cache -------------------------------------------------------
 _model_lock = threading.Lock()
-_model_cache: dict[tuple[str, str, str], object] = {}
+#: Keyed on ``(model, device, compute_type, cpu_threads, num_workers)``. The last two are
+#: part of the key because they are constructor arguments: a cached model built with one
+#: thread count cannot serve a request for another, and without them in the key the second
+#: setting would be accepted, stored, and silently do nothing.
+_model_cache: dict[tuple[str, str, str, int, int], object] = {}
 
 
 def _resolve_device() -> tuple[str, str]:
@@ -94,20 +98,47 @@ def _resolve_device() -> tuple[str, str]:
     return device, compute_type
 
 
+def model_kwargs() -> dict:
+    """The ``WhisperModel`` constructor arguments implied by the current settings.
+
+    Split out for the same reason :func:`vad_parameters` is: the cache key and the
+    construction must read the *same* values, and it makes the argument set assertable
+    without loading a model.
+
+    ``cpu_threads`` is omitted entirely when it is ``0`` rather than passed as ``0``. Both
+    mean "library default" to CTranslate2, so this is not about behaviour - it is so the
+    unconfigured path passes no thread count at all, and a test can assert that rather than
+    take it on trust. ``num_workers`` is always passed because its default *is* ``1``, so
+    the value and its absence are the same thing to the library.
+    """
+    device, compute_type = _resolve_device()
+    kwargs: dict = {
+        "device": device,
+        "compute_type": compute_type,
+        "num_workers": int(settings.whisper_num_workers),
+    }
+    cpu_threads = int(settings.whisper_cpu_threads)
+    if cpu_threads > 0:
+        kwargs["cpu_threads"] = cpu_threads
+    return kwargs
+
+
 def _get_model():
     """Load (and cache) the configured faster-whisper model."""
     from faster_whisper import WhisperModel
 
-    device, compute_type = _resolve_device()
-    key = (settings.whisper_model, device, compute_type)
+    kwargs = model_kwargs()
+    key = (
+        settings.whisper_model,
+        kwargs["device"],
+        kwargs["compute_type"],
+        kwargs.get("cpu_threads", 0),
+        kwargs["num_workers"],
+    )
     with _model_lock:
         model = _model_cache.get(key)
         if model is None:
-            model = WhisperModel(
-                settings.whisper_model,
-                device=device,
-                compute_type=compute_type,
-            )
+            model = WhisperModel(settings.whisper_model, **kwargs)
             _model_cache[key] = model
     return model
 
