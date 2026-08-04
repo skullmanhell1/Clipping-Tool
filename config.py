@@ -370,6 +370,28 @@ class Settings(BaseSettings):
     # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
     x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
+    # There was no `-threads` anywhere in the codebase. libx264 auto-detects a reasonable
+    # count, so this was never *broken* - it was simply not tunable, and a container with a
+    # CPU quota is exactly where ffmpeg's guess (based on the host's core count, not the
+    # cgroup's) is wrong. ``0`` omits the flag entirely, which is what every release up to
+    # 0.11.0 emitted.
+    #
+    # Emitted from ``worker/ffmpeg_utils.h264_args`` only, alongside the encoder, preset and
+    # quality flags: `tests/test_output_compat.py` forbids naming those outside
+    # ffmpeg_utils/video_encoders because they were once spread over seven call sites, which
+    # is how three of them came to be missing from all seven.
+    # Measured before documenting, and it makes no difference on a host that can see its
+    # cores: the crop_blur reformat of a 44s 720p source took 17.4s at 0, 17.3s at 2, 18.2s
+    # at 4, 17.7s at 8 and 18.8s at *one* thread - all within 8%, because that pass is
+    # filter-bound (gblur) and `-threads` is the codec thread count. Note also that x264's
+    # output bytes move with its thread count, so a non-zero value shifts the M1 goldens.
+    ffmpeg_threads: int = Field(
+        default=0,
+        description="Encoder threads passed to ffmpeg as -threads (0 = omit the flag and "
+                    "let ffmpeg decide, which is the pre-0.12 behaviour). Worth setting "
+                    "inside a CPU-quota'd container, where ffmpeg counts the host's cores; "
+                    "measured to make no difference otherwise.",
+    )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
