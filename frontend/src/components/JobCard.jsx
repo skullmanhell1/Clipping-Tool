@@ -422,6 +422,7 @@ export default function JobCard({
                     </tbody>
                   </table>
                 )}
+                <LlmUsage usage={timings.llm_usage} />
               </div>
             )}
           </div>
@@ -430,6 +431,80 @@ export default function JobCard({
     </div>
   );
 }
+
+/**
+ * Phase 7: what this job spent on LLM tokens, shown beside where its time went.
+ *
+ * Rendered only when there were calls, because a row reading "0 tokens" on a job that never
+ * used the LLM is noise — and with no API key configured that is every job.
+ */
+function LlmUsage({ usage }) {
+  const calls = usage?.calls || 0;
+  if (!usage || calls === 0) return null;
+
+  const tokens = usage.total_tokens || 0;
+  const cost = usage.cost_usd;
+  const unmetered = usage.unmetered_calls || 0;
+
+  return (
+    <div className="mt-2 border-t border-slate-800 pt-2">
+      <div className="text-slate-400">
+        LLM — {calls} call{calls === 1 ? "" : "s"} · {tokens.toLocaleString()} tokens
+        {/* The distinction this whole feature turns on. `cost_usd` is null when no price is
+            configured, and showing "$0.00" there would be read as "this was free" and believed.
+            So an unpriced job says so, and points at the setting that changes it. */}
+        {cost === null || cost === undefined ? (
+          <span className="text-slate-500"> · cost not priced</span>
+        ) : (
+          <span className="text-slate-300"> · ${cost.toFixed(4)}</span>
+        )}
+      </div>
+      {cost === null || cost === undefined ? (
+        <div className="mt-0.5 text-slate-500">
+          Set LLM_PRICE_INPUT_PER_MTOK and LLM_PRICE_OUTPUT_PER_MTOK to see spend.
+        </div>
+      ) : null}
+      {/* A cost derived from an incomplete token count is a lower bound, and saying so is the
+          difference between an understated bill and an unexplained one. */}
+      {unmetered > 0 ? (
+        <div className="mt-0.5 text-amber-300/80">
+          {unmetered} call{unmetered === 1 ? "" : "s"} reported no token count, so this is a
+          minimum.
+        </div>
+      ) : null}
+      {(usage.models || []).length > 1 ? (
+        <table className="mt-1 w-full text-left">
+          <tbody>
+            {usage.models.map((m) => (
+              <tr key={m.model}>
+                <td className="py-0.5 pr-3 text-slate-300">{m.model}</td>
+                <td className="py-0.5 pr-3 text-slate-400">
+                  {(m.total_tokens || 0).toLocaleString()} tokens
+                </td>
+                <td className="py-0.5 text-slate-500">
+                  {m.calls}× {m.cost_usd === null ? "" : `· $${(m.cost_usd || 0).toFixed(4)}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </div>
+  );
+}
+
+LlmUsage.propTypes = {
+  // Optional: absent for a job that predates the field, and `{}` for one that made no calls.
+  usage: PropTypes.shape({
+    calls: PropTypes.number,
+    total_tokens: PropTypes.number,
+    unmetered_calls: PropTypes.number,
+    // Deliberately nullable — null means "no rate configured", which is not zero.
+    cost_usd: PropTypes.number,
+    priced: PropTypes.bool,
+    models: PropTypes.array,
+  }),
+};
 
 JobCard.propTypes = {
   // Required, and required in the two fields the card cannot do without: `id` addresses every call

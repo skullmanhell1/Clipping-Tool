@@ -224,3 +224,106 @@ describe("JobCard keyboard shortcuts (U11)", () => {
     expect(api.reviewClip).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Phase 7: per-job LLM spend, shown in the timings panel.
+ *
+ * The tests that matter here are the two false-zero cases. `cost_usd: null` means "nobody
+ * configured a price" and must never render as "$0.00", because a reader would conclude their
+ * token spend was negligible and stop looking. And a job with no LLM calls must render nothing at
+ * all rather than a row of zeroes — with no API key configured that is every job, and a permanent
+ * "0 tokens" line trains people to ignore the panel.
+ */
+describe("JobCard LLM cost accounting", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const openTimings = async (llm_usage) => {
+    vi.spyOn(api, "jobTimings").mockResolvedValue({
+      job_id: "job1",
+      status: "completed",
+      total_seconds: 12.5,
+      stages: [{ stage: "Transcribing audio", seconds: 12.5, count: 1, mean_seconds: 12.5 }],
+      llm_usage,
+    });
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /show render timings/i }));
+    await waitFor(() => expect(screen.getByText(/render timings/i)).toBeInTheDocument());
+  };
+
+  it("reports calls, tokens and a priced cost", async () => {
+    await openTimings({
+      calls: 4,
+      prompt_tokens: 9000,
+      completion_tokens: 1000,
+      total_tokens: 10000,
+      unmetered_calls: 0,
+      cost_usd: 0.0123,
+      priced: true,
+      models: [{ model: "gpt-4o-mini", calls: 4, total_tokens: 10000, cost_usd: 0.0123 }],
+    });
+
+    expect(screen.getByText(/4 calls/)).toBeInTheDocument();
+    expect(screen.getByText(/10,000 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.0123/)).toBeInTheDocument();
+  });
+
+  it("says the cost is not priced rather than showing zero", async () => {
+    // The central claim. `$0.00` here would be read as "free" and acted on.
+    await openTimings({
+      calls: 2,
+      total_tokens: 5000,
+      unmetered_calls: 0,
+      cost_usd: null,
+      priced: false,
+      models: [{ model: "gpt-4o-mini", calls: 2, total_tokens: 5000, cost_usd: null }],
+    });
+
+    expect(screen.getByText(/cost not priced/i)).toBeInTheDocument();
+    expect(screen.getByText(/LLM_PRICE_INPUT_PER_MTOK/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+    // The tokens are still reported — that is the whole point of separating the two.
+    expect(screen.getByText(/5,000 tokens/)).toBeInTheDocument();
+  });
+
+  it("flags a cost derived from an incomplete token count as a minimum", async () => {
+    await openTimings({
+      calls: 3,
+      total_tokens: 1000,
+      unmetered_calls: 1,
+      cost_usd: 0.005,
+      priced: true,
+      models: [{ model: "m", calls: 3, total_tokens: 1000, cost_usd: 0.005 }],
+    });
+    expect(screen.getByText(/reported no token count, so this is a minimum/i)).toBeInTheDocument();
+  });
+
+  it("renders nothing when the job made no LLM calls", async () => {
+    await openTimings({ calls: 0, total_tokens: 0, cost_usd: null, priced: false, models: [] });
+    expect(screen.queryByText(/LLM —/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cost not priced/i)).not.toBeInTheDocument();
+  });
+
+  it("renders nothing for a job that predates the field", async () => {
+    // `llm_usage` is absent from every job record written before Phase 7.
+    await openTimings(undefined);
+    expect(screen.queryByText(/LLM —/)).not.toBeInTheDocument();
+  });
+
+  it("breaks down by model only when more than one was used", async () => {
+    await openTimings({
+      calls: 2,
+      total_tokens: 300,
+      unmetered_calls: 0,
+      cost_usd: 0.001,
+      priced: true,
+      models: [
+        { model: "gpt-4o-mini", calls: 1, total_tokens: 200, cost_usd: 0.0008 },
+        { model: "claude-3-5-sonnet-latest", calls: 1, total_tokens: 100, cost_usd: 0.0002 },
+      ],
+    });
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+    expect(screen.getByText("claude-3-5-sonnet-latest")).toBeInTheDocument();
+  });
+});

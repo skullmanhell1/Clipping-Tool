@@ -178,6 +178,26 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         description="Gemini OpenAI-compatible base URL.",
     )
+    # Phase 7: token prices, for per-job cost accounting. Tokens are counted unconditionally;
+    # these only decide whether the count is also expressed as money.
+    #
+    # Zero means *unpriced*, and an unpriced job reports `cost_usd: null` rather than `$0.00` -
+    # "cost nothing" and "nobody said what this costs" are different facts, and reporting the
+    # second as the first would be believed and acted on.
+    #
+    # No default price table ships on purpose. One would make this work out of the box and be
+    # wrong within a quarter, silently, because a stale rate still yields a plausible number.
+    # Set these for the model named above, from that provider's current pricing page.
+    llm_price_input_per_mtok: float = Field(
+        default=0.0,
+        description="Price per million input (prompt) tokens for the configured model. "
+        "0 disables cost reporting; token counts are recorded either way.",
+    )
+    llm_price_output_per_mtok: float = Field(
+        default=0.0,
+        description="Price per million output (completion) tokens for the configured model. "
+        "0 disables cost reporting; token counts are recorded either way.",
+    )
 
     # ------------------------------------------------------- transcription --
     # faster-whisper model size, e.g. tiny/base/small/medium/large-v3.

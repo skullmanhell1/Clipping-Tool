@@ -526,11 +526,15 @@ def cancel_job(job_id: str) -> dict:
 
 @router.get("/api/jobs/{job_id}/timings", tags=["jobs"])
 def get_job_timings(job_id: str) -> dict:
-    """Per-stage render timings for a job (M5).
+    """Per-stage render timings and LLM token spend for a job (M5, Phase 7).
 
     Read from the job record rather than from the live metrics registry, so the numbers survive
     a restart and remain available for a job that finished long ago - which is when someone
     actually asks where the time went.
+
+    Token spend is reported here rather than on its own route because it answers the same
+    question - what did this job cost - in the other currency, and a caller asking one almost
+    always wants the other.
     """
     job = get_manager().store.get(job_id)
     if job is None:
@@ -541,6 +545,9 @@ def get_job_timings(job_id: str) -> dict:
         "status": job.status.value,
         "total_seconds": round(sum(float(t.get("seconds") or 0.0) for t in timings), 3),
         "stages": timings,
+        # Empty for a job that predates this field or made no LLM calls. `cost_usd` inside is
+        # null when no price is configured - see worker/llm_cost.py for why that is not 0.
+        "llm_usage": dict(job.llm_usage or {}),
     }
 
 

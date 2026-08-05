@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any
 
 from config import LLMProvider, settings
+from worker import llm_cost
 
 
 class LLMError(RuntimeError):
@@ -100,6 +101,9 @@ class OpenAIClient(BaseLLMClient):
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Phase 7: count the tokens while the response is still in scope. This used to be
+            # discarded on the next line, which is why per-job spend was unanswerable.
+            llm_cost.record_response(self._model, resp)
             return (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # normalise SDK errors
             raise LLMError(f"OpenAI request failed: {exc}") from exc
@@ -125,6 +129,9 @@ class AnthropicClient(BaseLLMClient):
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Phase 7: as above. Anthropic spells the two counts `input_tokens`/`output_tokens`
+            # rather than `prompt`/`completion`; `llm_cost` reads both spellings.
+            llm_cost.record_response(self._model, resp)
             # Concatenate any text blocks in the response.
             parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
             return "".join(parts).strip()
@@ -143,18 +150,41 @@ class MockLLMClient(BaseLLMClient):
         self,
         responses: list[str] | None = None,
         handler: Callable[[str, str | None], str] | None = None,
+        usage: llm_cost.Token_Usage | None = None,
+        model: str = "mock",
     ) -> None:
         self._responses = list(responses or [])
         self._handler = handler
+        # Phase 7: token usage to report per call, or None to report none.
+        #
+        # Defaults to None so a mock stays a mock: it has no real token counts, and inventing
+        # some would put fabricated numbers into a cost report. Tests that need the accounting
+        # path exercised pass a usage explicitly - which is also the only way to drive it
+        # without a live API key, since the real counts come from the provider.
+        self._usage = usage
+        self._model = model
         self.calls: list[dict[str, Any]] = []  # recorded for assertions
 
     def complete(self, prompt, system=None, temperature=0.7, max_tokens=1024) -> str:
         self.calls.append({"prompt": prompt, "system": system})
+        if self._usage is not None:
+            llm_cost.record_response(self._model, _Mock_Response(self._usage))
         if self._handler is not None:
             return self._handler(prompt, system)
         if self._responses:
             return self._responses.pop(0) if len(self._responses) > 1 else self._responses[0]
         return ""
+
+
+class _Mock_Response:
+    """A provider-shaped response carrying only usage, for :class:`MockLLMClient`.
+
+    Deliberately routed through ``llm_cost.extract_usage`` like a real response rather than
+    calling ``record`` directly, so a mock-driven test exercises the extraction too.
+    """
+
+    def __init__(self, usage: llm_cost.Token_Usage) -> None:
+        self.usage = usage
 
 
 # --- JSON extraction helper -------------------------------------------------

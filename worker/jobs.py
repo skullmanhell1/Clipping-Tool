@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker import cancellation, observability
+from worker import cancellation, llm_cost, observability
 from worker import download as dl
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
@@ -245,6 +245,10 @@ class JobManager:
         # hex and a collision is unlikely rather than impossible, and inheriting a previous
         # job's cancellation would stop a brand-new job before it started.
         cancellation.clear(job.id)
+        # Phase 7: and for the same reason, do not inherit a previous job's token spend. That
+        # failure would be quieter than the cancellation one - the new job would simply be
+        # billed for work it did not do, and the number would look ordinary.
+        llm_cost.clear_usage(job.id)
         self._executor.submit(self._run, job.id)
         return job
 
@@ -345,6 +349,7 @@ class JobManager:
                 stage_index=stage_position(stage),
                 stage_total=len(JOB_STAGES),
                 stage_timings=metrics.to_list(),
+                llm_usage=llm_cost.usage_for(job_id).to_dict(),
             )
 
         with observability.job_context(job_id):
@@ -552,6 +557,7 @@ class JobManager:
                 stage_index=len(JOB_STAGES),
                 stage_total=len(JOB_STAGES),
                 stage_timings=metrics.to_list(),
+                llm_usage=llm_cost.usage_for(job_id).to_dict(),
             )
             # M5: one line naming where the minutes went. Logged at completion rather than
             # sampled, because the only comparison worth making is between whole renders.
@@ -583,6 +589,7 @@ class JobManager:
                 stage="Cancelled",
                 error=None,
                 stage_timings=metrics.to_list(),
+                llm_usage=llm_cost.usage_for(job_id).to_dict(),
             )
             logger.info("job stopped at a checkpoint after %s", metrics.summary())
         except Exception as exc:  # capture any failure and surface it
@@ -593,6 +600,7 @@ class JobManager:
                 error=str(exc),
                 stage="Failed",
                 stage_timings=metrics.to_list(),
+                llm_usage=llm_cost.usage_for(job_id).to_dict(),
             )
             # M5: timings for a *failed* render are the most useful rows in a performance
             # report - a stage that reliably burns ninety seconds and then throws would be

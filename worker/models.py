@@ -684,6 +684,14 @@ class Job:
     stage_index: int = 0
     stage_total: int = 0
     stage_timings: list[dict] = field(default_factory=list)
+    # Phase 7: LLM tokens spent on this job, as `worker.llm_cost.Job_LLM_Usage.to_dict()`.
+    #
+    # A dict rather than a few scalar columns because it carries a per-model breakdown and a
+    # `priced` flag, and because `cost_usd` is deliberately nullable - flattening it would lose
+    # the distinction between "no spend" and "no rate configured". Recorded on the job for the
+    # same reason `stage_timings` is: the in-process registry is bounded and lost on restart,
+    # and a cost report that disappears when the process does cannot be reconciled with a bill.
+    llm_usage: dict = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -704,6 +712,7 @@ class Job:
             "stage_index": self.stage_index,
             "stage_total": self.stage_total,
             "stage_timings": self.stage_timings,
+            "llm_usage": self.llm_usage,
             "title": self.title,
             "duration": self.duration,
             "thumbnail": self.thumbnail,
@@ -750,6 +759,7 @@ class Job:
             stage_index=int(data.get("stage_index") or 0),
             stage_total=int(data.get("stage_total") or 0),
             stage_timings=list(data.get("stage_timings") or []),
+            llm_usage=dict(data.get("llm_usage") or {}),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
         )
