@@ -54,10 +54,50 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
 
-      - name: Install Python dependencies
+      # From the lockfile, with hashes enforced. Previously `-r requirements-dev.txt`, which states
+      # ranges — so two runs of the same commit could test two different dependency sets, and a
+      # green run said nothing about which versions were green. `--require-hashes` additionally
+      # makes pip reject any artifact whose digest does not match, and refuses the file outright if
+      # any requirement lacks a hash, so the lock cannot be partially bypassed.
+      #
+      # `requirements-dev.lock` is the superset (requirements-dev.txt includes requirements.txt), so
+      # this single install covers runtime and tooling. Installing the two locks in separate steps
+      # would let the second resolve a different version of a shared transitive dependency.
+      - name: Install Python dependencies (locked)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install --require-hashes -r requirements-dev.lock
+
+      # A lock that has drifted from the requirements it was generated from is worse than no lock:
+      # it looks authoritative while pinning the wrong set. This regenerates both locks and fails if
+      # the result differs from what is committed — the same argument as `black --check`, applied to
+      # dependency resolution.
+      #
+      # This is a *consistency* check, not an upgrade check, and that distinction is what makes it
+      # safe to block on. `uv pip compile` reads the existing output file and prefers the versions
+      # already pinned there, so re-running it does not drag in whatever was published this morning
+      # — verified: recompiling the committed lock reproduces it byte for byte (same sha256). It
+      # fails when someone edits requirements.txt and forgets to regenerate.
+      #
+      # `uv` comes from the locked install above rather than from a piped install script; see the
+      # note in requirements-dev.txt.
+      - name: Locks match their requirements files
+        run: |
+          cp requirements.lock /tmp/requirements.lock.committed
+          cp requirements-dev.lock /tmp/requirements-dev.lock.committed
+          uv pip compile --universal --generate-hashes --python-version 3.11 \
+            --output-file requirements.lock requirements.txt --quiet
+          uv pip compile --universal --generate-hashes --python-version 3.11 \
+            --output-file requirements-dev.lock requirements-dev.txt --quiet
+          if ! diff -u /tmp/requirements.lock.committed requirements.lock; then
+            echo "::error::requirements.lock is stale. Regenerate it (see requirements.txt)."
+            exit 1
+          fi
+          if ! diff -u /tmp/requirements-dev.lock.committed requirements-dev.lock; then
+            echo "::error::requirements-dev.lock is stale. Regenerate it (see requirements.txt)."
+            exit 1
+          fi
+          echo "both locks agree with their requirements files"
 
       # Blocking, unlike the previous `ruff check . || true`. That step could not fail, so it
       # reported nothing; and with no [tool.ruff] config the enforced rule set was whatever
@@ -95,6 +135,52 @@ jobs:
         run: |
           python -c "import config; print('config OK', config.settings.app_name)"
           python -c "from api.main import app; print('FastAPI app OK', app.title)"
+
+      # The two native dependencies that can be "installed" and still not work, asserted here so a
+      # runner-image or wheel change fails loudly instead of silently switching every dependent code
+      # path to its degraded branch.
+      #
+      # `import cv2` is not redundant with installing opencv: it needs libgl1/libglib2.0-0 at
+      # *runtime*, and without them it raises `libGL.so.1: cannot open shared object file`. That
+      # exact gap already existed here — CI installed opencv and got no coverage from it, because
+      # every vision path caught the ImportError and degraded. The libs are installed above; this is
+      # what proves it.
+      #
+      # ffmpeg is checked for the same two properties the Dockerfile checks, for the same reasons: a
+      # major version floor (the `-filters` parser depends on the 7.x flag column, and has been
+      # wrong once, hiding 124 of 486 filters) and the presence of `subtitles`, i.e. libass, without
+      # which burned captions — the core feature — cannot render at all.
+      - name: Native dependencies actually work (opencv, ffmpeg + libass)
+        run: |
+          python - <<'PY'
+          import subprocess, sys, re
+
+          import cv2  # noqa: F401  - the import IS the assertion
+          print("opencv OK", cv2.__version__)
+
+          first = subprocess.run(
+              ["ffmpeg", "-hide_banner", "-version"], capture_output=True, text=True, check=True
+          ).stdout.splitlines()[0]
+          print(first)
+          match = re.match(r"ffmpeg version n?(\d+)", first)
+          if not match:
+              sys.exit(f"::error::could not read a major version out of {first!r}")
+          major = int(match.group(1))
+          if major < 5:
+              sys.exit(f"::error::ffmpeg major {major} is below the required 5")
+
+          filters = subprocess.run(
+              ["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True, check=True
+          ).stdout
+          names = {
+              line.split()[1]
+              for line in filters.splitlines()
+              if len(line.split()) > 2 and "->" in line
+          }
+          if "subtitles" not in names:
+              sys.exit("::error::this ffmpeg has no 'subtitles' filter: built without libass")
+          print(f"ffmpeg OK (major {major}, libass present, {len(names)} filters)")
+          PY
 
       # A7: the emoji the built-in keyword map can produce must be committed, not fetched
       # at render time. `.gitignore` previously excluded them with the comment "downloaded
@@ -224,16 +310,32 @@ jobs:
       # dependency set must not alter the dependency set. A separate venv keeps both true, which
       # is also why pip-audit is not in requirements-dev.txt.
       #
-      # Non-blocking for now, matching the frontend's stance that a gate which cannot be satisfied
-      # without breaking the build gets ignored: three direct dependencies are still unbounded
-      # (python-multipart, ffmpeg-python, yt-dlp) and there is no lockfile, both of which the
-      # supply-chain phase addresses. The findings are printed either way.
+      # **Now blocking**, and audits the lock rather than the ranges.
+      #
+      # It was `continue-on-error: true`, with the honest reason that three dependencies were
+      # unbounded and there was no lockfile, so the step could not be satisfied. Both are fixed, and
+      # leaving it advisory would repeat the mistake the repo already made with `ruff check . || true`
+      # — a step that cannot fail reports nothing.
+      #
+      # Flipping it also immediately paid for itself: auditing the resolved set instead of the
+      # ranges surfaced **17 vulnerabilities in pillow 10.4.0**, all fixed in 12.x, i.e. reachable
+      # only by raising the `<11.0` ceiling. The upper bound meant to prevent an unreviewed upgrade
+      # was pinning the project to known heap-corruption defects in the image and font parsers this
+      # app feeds arbitrary downloaded media through. That is now `>=12.3,<13.0` and the audit is
+      # clean (69 packages, zero findings).
+      #
+      # Auditing `requirements.lock` is the point: `requirements.txt` states ranges, so auditing it
+      # asks "could a safe version satisfy this?" when the question that matters is "is the version
+      # we actually ship safe?".
+      #
+      # A newly published advisory can now redden a PR that changed nothing. That is intended — it
+      # is a dependency that needs upgrading, Dependabot opens that PR automatically, and the lock
+      # makes the upgrade a reviewable diff.
       - name: Audit Python dependencies (pip-audit, isolated)
-        continue-on-error: true
         run: |
           python -m venv /tmp/audit-venv
           /tmp/audit-venv/bin/pip install --quiet --upgrade pip pip-audit
-          /tmp/audit-venv/bin/pip-audit --requirement requirements.txt --strict --desc
+          /tmp/audit-venv/bin/pip-audit --requirement requirements.lock --strict --desc
 
   frontend:
     runs-on: ubuntu-latest

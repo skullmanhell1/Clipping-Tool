@@ -2,5 +2,6 @@
   "name": "video-clipper-publisher-bridge",
   "private": true,
   "type": "module",
-  "dependencies": {"@whop/sdk": "latest"}
+  "//": "@whop/sdk was \"latest\", which resolved at build time to whatever had been published that morning — an unreviewed third-party package running in the same container as the API, chosen by wall-clock time. Pinned exactly; Dependabot proposes upgrades so they arrive as reviewable PRs.",
+  "dependencies": { "@whop/sdk": "0.0.42" }
 }

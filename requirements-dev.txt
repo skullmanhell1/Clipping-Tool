@@ -8,6 +8,26 @@ pytest>=8.2,<9.0      # test runner
 pytest-cov>=5.0,<8.0  # coverage measurement (reported in CI, not gated)
 hypothesis>=6.100,<7.0 # property-based testing
 
+# `tests/test_supply_chain.py` parses docker-compose.yml and the workflow files to assert on them,
+# and asserting on YAML by regex is how a test ends up passing for the wrong reason.
+#
+# Declared rather than relied on implicitly: PyYAML was already in the resolved set three times over
+# (via ctranslate2, huggingface-hub and uvicorn), so this adds nothing to the dependency closure —
+# it only stops the test suite depending on a package no file asks for, which is the same implicit
+# coupling this phase exists to remove. If a future upgrade drops those three transitive paths, the
+# tests keep working instead of failing to import.
+PyYAML>=6.0,<7.0      # parsing workflow/compose YAML in tests
+
+# The lockfile generator, declared here so CI gets it from the hash-verified install rather than
+# from `curl https://astral.sh/uv/install.sh | sh`. Piping a script from the network into a shell to
+# set up a supply-chain control would undo the control: the one step that checks every other
+# dependency's digest would itself be an unverified download.
+#
+# Safe to install alongside the suite, unlike `pip-audit` above: `uv` is a self-contained binary
+# wheel that requires no Python packages at all (verified — `importlib.metadata.requires("uv")` is
+# None), so it cannot pull in `requests` or otherwise change what the tests import.
+uv>=0.12,<1.0
+
 # `pip-audit` is deliberately NOT listed here, and that is not an oversight.
 #
 # It depends on `requests`, and installing `requests` into the environment the suite runs in

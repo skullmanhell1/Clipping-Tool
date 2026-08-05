@@ -1,0 +1,66 @@
+# CodeQL static analysis.
+#
+# This looks for a different class of defect than anything already in CI. `ruff` and `mypy` analyse
+# one module at a time and reason about style and types; `pip-audit` and `npm audit` only know about
+# *other people's* published vulnerabilities. Neither can see a taint path through this repo's own
+# code — and that is the shape of the bugs that matter most here, because the app takes a URL from a
+# caller, hands it to yt-dlp, builds ffmpeg filter arguments influenced by request data, and writes
+# files under a path derived from user input. Phase 1 fixed the SSRF and path cases it could find by
+# reading; this is what keeps finding them after the reading stops.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A weekly run matters for a static analyser in a way it does not for a test suite: the queries
+  # are updated by GitHub, so the same unchanged code can become a finding when a new query ships.
+  # Without this, that finding would wait for whoever next touched the file.
+  schedule:
+    - cron: "27 4 * * 1"
+
+# Same reasoning as ci.yml: without this, each push leaves the previous analysis running to
+# completion, and CodeQL runs are long enough for several to pile up competing for runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Least privilege, listed explicitly. `security-events: write` is the only elevated permission
+      # CodeQL needs — it is how findings are published to the Security tab. Everything else is read.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both halves of the repo. Analysing only Python would miss the frontend entirely, and the
+        # frontend is where the API token handling and the URL construction live.
+        language: ["python", "javascript-typescript"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `security-and-quality` rather than the default `security-extended`/`default` set. The
+          # extra cost is tolerable on a repo this size, and the quality queries catch the same
+          # category of thing the drift pins in the test suite exist for: code that no longer does
+          # what it appears to.
+          queries: security-and-quality
+
+      # No build step. Python and JavaScript are both interpreted languages that CodeQL extracts
+      # directly from source, so `autobuild` would only add a chance of failing on a compilation
+      # step that does not exist. Installing dependencies is not needed either — and deliberately
+      # skipped, because `pip install` here would mean running arbitrary setup code from the index
+      # inside a job holding `security-events: write`.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
