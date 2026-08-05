@@ -136,6 +136,38 @@ jobs:
           python -c "import config; print('config OK', config.settings.app_name)"
           python -c "from api.main import app; print('FastAPI app OK', app.title)"
 
+      # The API surface, committed and diffed. `/openapi.json` is served at runtime and was
+      # recorded nowhere, so a change that renamed a field or altered a response shape was
+      # visible only in the diff of the code that produced it — and a breaking change to a
+      # response model reads as a small refactor. The frontend and any external caller consume
+      # that surface, so a silent change to it is a silent integration break.
+      #
+      # Same argument as "Locks match their requirements files" above, applied to the API: a
+      # committed document that has drifted is worse than none, because it looks authoritative
+      # while describing an API that no longer exists.
+      #
+      # This duplicates a check in the suite (tests/test_openapi_contract.py) on purpose. It runs
+      # here because it costs a second and fails *before* the ~8 minute test job, with a labelled
+      # step name and a unified diff, rather than as one failure among 2300 — and because the
+      # step is what produces the artifact below.
+      #
+      # `info.version` is normalised out of the committed document. It comes from `VERSION`, and
+      # release.yml fires on a change to that file, so a real version would make the document
+      # stale on every release and fail the release PR for a line that says nothing about the
+      # API. A check that fails predictably is one people learn to override.
+      - name: OpenAPI document matches the code
+        run: python scripts/export_openapi.py --check
+
+      # Uploaded so the surface for any build can be downloaded and fed to a client generator or
+      # diffed against another branch without checking the code out.
+      - name: Upload OpenAPI document
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: openapi.json
+          if-no-files-found: error
+
       # The two native dependencies that can be "installed" and still not work, asserted here so a
       # runner-image or wheel change fails loudly instead of silently switching every dependent code
       # path to its degraded branch.

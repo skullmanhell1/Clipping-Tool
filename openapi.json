@@ -1,0 +1,3808 @@
+{
+  "components": {
+    "schemas": {
+      "BatchRequest": {
+        "properties": {
+          "options": {
+            "$ref": "#/components/schemas/OptionsModel",
+            "default": {
+              "aspect": "9:16",
+              "asset_sourcing_mode": "off",
+              "broll": false,
+              "broll_intensity": "standard",
+              "broll_provider": "",
+              "campaign_id": "",
+              "caption_animation": "",
+              "caption_emoji": false,
+              "caption_keyword_ai": false,
+              "caption_keyword_highlight": false,
+              "caption_position": "bottom",
+              "caption_preset": "karaoke",
+              "caption_template": "karaoke",
+              "captions": true,
+              "clip_length": "auto",
+              "color": "",
+              "diarization": false,
+              "emoji": "off",
+              "emoji_animate": true,
+              "emoji_mode": "keyword",
+              "fades": false,
+              "filler_removal": false,
+              "hashtag_count": 5,
+              "hook_title": false,
+              "kinetic_confidence_floor": 0.0,
+              "kinetic_font": "",
+              "kinetic_max_line_width": 22,
+              "kinetic_max_lines": 2,
+              "kinetic_motion_ms": 120,
+              "kinetic_reveal": "cumulative",
+              "kinetic_safe_area_x_pct": 6.0,
+              "kinetic_safe_area_y_pct": 10.0,
+              "kinetic_style": "karaoke_fill",
+              "kinetic_typography_enabled": false,
+              "metadata": true,
+              "music": "",
+              "music_volume": 0.12,
+              "num_clips": "auto",
+              "permissibility_mode": false,
+              "platform": "generic",
+              "progress_bar": false,
+              "publish_mode": "review",
+              "publish_to": [],
+              "reframe": false,
+              "reframe_intensity": "standard",
+              "reframe_layout": "follow_active",
+              "selection_prompt": "",
+              "speaker_reframe": false,
+              "stem_backend": "auto",
+              "stem_declick": false,
+              "stem_gain_music": 1.0,
+              "stem_gain_other": 1.0,
+              "stem_gain_vocals": 1.0,
+              "stem_inpainting_enabled": false,
+              "stem_mix_preset": "custom",
+              "stem_model": "htdemucs",
+              "stem_repair_mode": "crossfade",
+              "stem_repair_window_ms": 12,
+              "stem_retain_stems": false,
+              "strategy": "ai",
+              "topic": "",
+              "transitions": false,
+              "translate": false,
+              "vibe": "",
+              "visual_selection": false,
+              "vocabulary": "",
+              "zoom": false
+            }
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Urls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "urls"
+        ],
+        "title": "BatchRequest",
+        "type": "object"
+      },
+      "BatchReviewModel": {
+        "description": "Set the review state of many clips at once (U9).\n\n``clip_ids`` is scoped to one job, which is how review actually happens - you work through\nthe clips a job produced. A cross-job version would need per-job permission checks that do\nnot exist yet in a single-tenant product.",
+        "properties": {
+          "clip_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Clip Ids",
+            "type": "array"
+          },
+          "review_note": {
+            "default": "",
+            "title": "Review Note",
+            "type": "string"
+          },
+          "review_state": {
+            "title": "Review State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clip_ids",
+          "review_state"
+        ],
+        "title": "BatchReviewModel",
+        "type": "object"
+      },
+      "Body_upload_api_upload_post": {
+        "properties": {
+          "aspect": {
+            "default": "9:16",
+            "title": "Aspect",
+            "type": "string"
+          },
+          "asset_sourcing_mode": {
+            "default": "off",
+            "title": "Asset Sourcing Mode",
+            "type": "string"
+          },
+          "broll": {
+            "default": false,
+            "title": "Broll",
+            "type": "boolean"
+          },
+          "broll_intensity": {
+            "default": "standard",
+            "title": "Broll Intensity",
+            "type": "string"
+          },
+          "broll_provider": {
+            "default": "",
+            "title": "Broll Provider",
+            "type": "string"
+          },
+          "campaign_id": {
+            "default": "",
+            "title": "Campaign Id",
+            "type": "string"
+          },
+          "caption_animation": {
+            "default": "",
+            "title": "Caption Animation",
+            "type": "string"
+          },
+          "caption_emoji": {
+            "default": false,
+            "title": "Caption Emoji",
+            "type": "boolean"
+          },
+          "caption_keyword_ai": {
+            "default": false,
+            "title": "Caption Keyword Ai",
+            "type": "boolean"
+          },
+          "caption_keyword_highlight": {
+            "default": false,
+            "title": "Caption Keyword Highlight",
+            "type": "boolean"
+          },
+          "caption_position": {
+            "default": "bottom",
+            "title": "Caption Position",
+            "type": "string"
+          },
+          "caption_preset": {
+            "default": "karaoke",
+            "title": "Caption Preset",
+            "type": "string"
+          },
+          "caption_template": {
+            "default": "karaoke",
+            "title": "Caption Template",
+            "type": "string"
+          },
+          "captions": {
+            "default": true,
+            "title": "Captions",
+            "type": "boolean"
+          },
+          "clip_length": {
+            "default": "auto",
+            "title": "Clip Length",
+            "type": "string"
+          },
+          "color": {
+            "default": "",
+            "title": "Color",
+            "type": "string"
+          },
+          "diarization": {
+            "default": false,
+            "title": "Diarization",
+            "type": "boolean"
+          },
+          "emoji": {
+            "default": "off",
+            "title": "Emoji",
+            "type": "string"
+          },
+          "emoji_animate": {
+            "default": true,
+            "title": "Emoji Animate",
+            "type": "boolean"
+          },
+          "emoji_mode": {
+            "default": "keyword",
+            "title": "Emoji Mode",
+            "type": "string"
+          },
+          "fades": {
+            "default": false,
+            "title": "Fades",
+            "type": "boolean"
+          },
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "filler_removal": {
+            "default": false,
+            "title": "Filler Removal",
+            "type": "boolean"
+          },
+          "hashtag_count": {
+            "default": 5,
+            "title": "Hashtag Count",
+            "type": "integer"
+          },
+          "hook_title": {
+            "default": false,
+            "title": "Hook Title",
+            "type": "boolean"
+          },
+          "kinetic_confidence_floor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Confidence Floor"
+          },
+          "kinetic_font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Font"
+          },
+          "kinetic_max_line_width": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Max Line Width"
+          },
+          "kinetic_max_lines": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Max Lines"
+          },
+          "kinetic_motion_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Motion Ms"
+          },
+          "kinetic_reveal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Reveal"
+          },
+          "kinetic_safe_area_x_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Safe Area X Pct"
+          },
+          "kinetic_safe_area_y_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Safe Area Y Pct"
+          },
+          "kinetic_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Style"
+          },
+          "kinetic_typography_enabled": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinetic Typography Enabled"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "metadata": {
+            "default": true,
+            "title": "Metadata",
+            "type": "boolean"
+          },
+          "music": {
+            "default": "",
+            "title": "Music",
+            "type": "string"
+          },
+          "music_volume": {
+            "default": 0.12,
+            "title": "Music Volume",
+            "type": "number"
+          },
+          "num_clips": {
+            "default": "auto",
+            "title": "Num Clips",
+            "type": "string"
+          },
+          "permissibility_mode": {
+            "default": false,
+            "title": "Permissibility Mode",
+            "type": "boolean"
+          },
+          "platform": {
+            "default": "generic",
+            "title": "Platform",
+            "type": "string"
+          },
+          "progress_bar": {
+            "default": false,
+            "title": "Progress Bar",
+            "type": "boolean"
+          },
+          "publish_mode": {
+            "default": "review",
+            "title": "Publish Mode",
+            "type": "string"
+          },
+          "publish_to": {
+            "default": "",
+            "title": "Publish To",
+            "type": "string"
+          },
+          "range_end": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End"
+          },
+          "range_start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start"
+          },
+          "reframe": {
+            "default": false,
+            "title": "Reframe",
+            "type": "boolean"
+          },
+          "reframe_intensity": {
+            "default": "standard",
+            "title": "Reframe Intensity",
+            "type": "string"
+          },
+          "reframe_layout": {
+            "default": "follow_active",
+            "title": "Reframe Layout",
+            "type": "string"
+          },
+          "schedule_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule At"
+          },
+          "selection_prompt": {
+            "default": "",
+            "title": "Selection Prompt",
+            "type": "string"
+          },
+          "speaker_reframe": {
+            "default": false,
+            "title": "Speaker Reframe",
+            "type": "boolean"
+          },
+          "stem_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Backend"
+          },
+          "stem_declick": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Declick"
+          },
+          "stem_gain_music": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Gain Music"
+          },
+          "stem_gain_other": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Gain Other"
+          },
+          "stem_gain_vocals": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Gain Vocals"
+          },
+          "stem_inpainting_enabled": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Inpainting Enabled"
+          },
+          "stem_mix_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Mix Preset"
+          },
+          "stem_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Model"
+          },
+          "stem_repair_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Repair Mode"
+          },
+          "stem_repair_window_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Repair Window Ms"
+          },
+          "stem_retain_stems": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stem Retain Stems"
+          },
+          "strategy": {
+            "default": "ai",
+            "title": "Strategy",
+            "type": "string"
+          },
+          "subtitle_sidecar": {
+            "default": "false",
+            "title": "Subtitle Sidecar",
+            "type": "string"
+          },
+          "topic": {
+            "default": "",
+            "title": "Topic",
+            "type": "string"
+          },
+          "transitions": {
+            "default": false,
+            "title": "Transitions",
+            "type": "boolean"
+          },
+          "translate": {
+            "default": false,
+            "title": "Translate",
+            "type": "boolean"
+          },
+          "vibe": {
+            "default": "",
+            "title": "Vibe",
+            "type": "string"
+          },
+          "visual_selection": {
+            "default": false,
+            "title": "Visual Selection",
+            "type": "boolean"
+          },
+          "vocabulary": {
+            "default": "",
+            "title": "Vocabulary",
+            "type": "string"
+          },
+          "zoom": {
+            "default": false,
+            "title": "Zoom",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_api_upload_post",
+        "type": "object"
+      },
+      "CampaignModel": {
+        "properties": {
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "routes": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Routes",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "routes"
+        ],
+        "title": "CampaignModel",
+        "type": "object"
+      },
+      "CaptionPreviewModel": {
+        "description": "Request a rendered caption sample for a preset (C18).",
+        "properties": {
+          "aspect": {
+            "default": "9:16",
+            "title": "Aspect",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Overrides",
+            "type": "object"
+          },
+          "position": {
+            "default": "",
+            "title": "Position",
+            "type": "string"
+          },
+          "preset": {
+            "default": "karaoke",
+            "title": "Preset",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "title": "CaptionPreviewModel",
+        "type": "object"
+      },
+      "ClipEditModel": {
+        "description": "Editable clip metadata fields (all optional; only provided ones apply).",
+        "properties": {
+          "cta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "hashtags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hashtags"
+          },
+          "hook_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hook Text"
+          },
+          "mentions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentions"
+          },
+          "thumbnail_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Text"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "title_alternatives": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Alternatives"
+          }
+        },
+        "title": "ClipEditModel",
+        "type": "object"
+      },
+      "ClipReviewModel": {
+        "description": "Set the review state of one clip (U9).",
+        "properties": {
+          "review_note": {
+            "default": "",
+            "title": "Review Note",
+            "type": "string"
+          },
+          "review_state": {
+            "title": "Review State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_state"
+        ],
+        "title": "ClipReviewModel",
+        "type": "object"
+      },
+      "CutRange": {
+        "description": "One clip-relative range to remove (U4).",
+        "properties": {
+          "end": {
+            "minimum": 0.0,
+            "title": "End",
+            "type": "number"
+          },
+          "start": {
+            "minimum": 0.0,
+            "title": "Start",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CutRange",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "OptionsModel": {
+        "description": "Processing options accepted from the UI (all optional, sane defaults).",
+        "properties": {
+          "aspect": {
+            "default": "9:16",
+            "title": "Aspect",
+            "type": "string"
+          },
+          "asset_sourcing_mode": {
+            "default": "off",
+            "title": "Asset Sourcing Mode",
+            "type": "string"
+          },
+          "broll": {
+            "default": false,
+            "title": "Broll",
+            "type": "boolean"
+          },
+          "broll_intensity": {
+            "default": "standard",
+            "title": "Broll Intensity",
+            "type": "string"
+          },
+          "broll_provider": {
+            "default": "",
+            "title": "Broll Provider",
+            "type": "string"
+          },
+          "campaign_id": {
+            "default": "",
+            "title": "Campaign Id",
+            "type": "string"
+          },
+          "caption_animation": {
+            "default": "",
+            "title": "Caption Animation",
+            "type": "string"
+          },
+          "caption_emoji": {
+            "default": false,
+            "title": "Caption Emoji",
+            "type": "boolean"
+          },
+          "caption_keyword_ai": {
+            "default": false,
+            "title": "Caption Keyword Ai",
+            "type": "boolean"
+          },
+          "caption_keyword_highlight": {
+            "default": false,
+            "title": "Caption Keyword Highlight",
+            "type": "boolean"
+          },
+          "caption_position": {
+            "default": "bottom",
+            "title": "Caption Position",
+            "type": "string"
+          },
+          "caption_preset": {
+            "default": "karaoke",
+            "title": "Caption Preset",
+            "type": "string"
+          },
+          "caption_template": {
+            "default": "karaoke",
+            "title": "Caption Template",
+            "type": "string"
+          },
+          "captions": {
+            "default": true,
+            "title": "Captions",
+            "type": "boolean"
+          },
+          "clip_length": {
+            "default": "auto",
+            "title": "Clip Length",
+            "type": "string"
+          },
+          "color": {
+            "default": "",
+            "title": "Color",
+            "type": "string"
+          },
+          "diarization": {
+            "default": false,
+            "title": "Diarization",
+            "type": "boolean"
+          },
+          "emoji": {
+            "default": "off",
+            "title": "Emoji",
+            "type": "string"
+          },
+          "emoji_animate": {
+            "default": true,
+            "title": "Emoji Animate",
+            "type": "boolean"
+          },
+          "emoji_mode": {
+            "default": "keyword",
+            "title": "Emoji Mode",
+            "type": "string"
+          },
+          "fades": {
+            "default": false,
+            "title": "Fades",
+            "type": "boolean"
+          },
+          "filler_removal": {
+            "default": false,
+            "title": "Filler Removal",
+            "type": "boolean"
+          },
+          "hashtag_count": {
+            "default": 5,
+            "title": "Hashtag Count",
+            "type": "integer"
+          },
+          "hook_title": {
+            "default": false,
+            "title": "Hook Title",
+            "type": "boolean"
+          },
+          "kinetic_confidence_floor": {
+            "default": 0.0,
+            "title": "Kinetic Confidence Floor",
+            "type": "number"
+          },
+          "kinetic_font": {
+            "default": "",
+            "title": "Kinetic Font",
+            "type": "string"
+          },
+          "kinetic_max_line_width": {
+            "default": 22,
+            "title": "Kinetic Max Line Width",
+            "type": "integer"
+          },
+          "kinetic_max_lines": {
+            "default": 2,
+            "title": "Kinetic Max Lines",
+            "type": "integer"
+          },
+          "kinetic_motion_ms": {
+            "default": 120,
+            "title": "Kinetic Motion Ms",
+            "type": "integer"
+          },
+          "kinetic_reveal": {
+            "default": "cumulative",
+            "title": "Kinetic Reveal",
+            "type": "string"
+          },
+          "kinetic_safe_area_x_pct": {
+            "default": 6.0,
+            "title": "Kinetic Safe Area X Pct",
+            "type": "number"
+          },
+          "kinetic_safe_area_y_pct": {
+            "default": 10.0,
+            "title": "Kinetic Safe Area Y Pct",
+            "type": "number"
+          },
+          "kinetic_style": {
+            "default": "karaoke_fill",
+            "title": "Kinetic Style",
+            "type": "string"
+          },
+          "kinetic_typography_enabled": {
+            "default": false,
+            "title": "Kinetic Typography Enabled",
+            "type": "boolean"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "metadata": {
+            "default": true,
+            "title": "Metadata",
+            "type": "boolean"
+          },
+          "music": {
+            "default": "",
+            "title": "Music",
+            "type": "string"
+          },
+          "music_volume": {
+            "default": 0.12,
+            "title": "Music Volume",
+            "type": "number"
+          },
+          "num_clips": {
+            "default": "auto",
+            "title": "Num Clips",
+            "type": "string"
+          },
+          "permissibility_mode": {
+            "default": false,
+            "title": "Permissibility Mode",
+            "type": "boolean"
+          },
+          "platform": {
+            "default": "generic",
+            "title": "Platform",
+            "type": "string"
+          },
+          "progress_bar": {
+            "default": false,
+            "title": "Progress Bar",
+            "type": "boolean"
+          },
+          "publish_mode": {
+            "default": "review",
+            "title": "Publish Mode",
+            "type": "string"
+          },
+          "publish_to": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Publish To",
+            "type": "array"
+          },
+          "range_end": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End"
+          },
+          "range_start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start"
+          },
+          "reframe": {
+            "default": false,
+            "title": "Reframe",
+            "type": "boolean"
+          },
+          "reframe_intensity": {
+            "default": "standard",
+            "title": "Reframe Intensity",
+            "type": "string"
+          },
+          "reframe_layout": {
+            "default": "follow_active",
+            "title": "Reframe Layout",
+            "type": "string"
+          },
+          "schedule_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule At"
+          },
+          "selection_prompt": {
+            "default": "",
+            "title": "Selection Prompt",
+            "type": "string"
+          },
+          "speaker_reframe": {
+            "default": false,
+            "title": "Speaker Reframe",
+            "type": "boolean"
+          },
+          "stem_backend": {
+            "default": "auto",
+            "title": "Stem Backend",
+            "type": "string"
+          },
+          "stem_declick": {
+            "default": false,
+            "title": "Stem Declick",
+            "type": "boolean"
+          },
+          "stem_gain_music": {
+            "default": 1.0,
+            "title": "Stem Gain Music",
+            "type": "number"
+          },
+          "stem_gain_other": {
+            "default": 1.0,
+            "title": "Stem Gain Other",
+            "type": "number"
+          },
+          "stem_gain_vocals": {
+            "default": 1.0,
+            "title": "Stem Gain Vocals",
+            "type": "number"
+          },
+          "stem_inpainting_enabled": {
+            "default": false,
+            "title": "Stem Inpainting Enabled",
+            "type": "boolean"
+          },
+          "stem_mix_preset": {
+            "default": "custom",
+            "title": "Stem Mix Preset",
+            "type": "string"
+          },
+          "stem_model": {
+            "default": "htdemucs",
+            "title": "Stem Model",
+            "type": "string"
+          },
+          "stem_repair_mode": {
+            "default": "crossfade",
+            "title": "Stem Repair Mode",
+            "type": "string"
+          },
+          "stem_repair_window_ms": {
+            "default": 12,
+            "title": "Stem Repair Window Ms",
+            "type": "integer"
+          },
+          "stem_retain_stems": {
+            "default": false,
+            "title": "Stem Retain Stems",
+            "type": "boolean"
+          },
+          "strategy": {
+            "default": "ai",
+            "title": "Strategy",
+            "type": "string"
+          },
+          "topic": {
+            "default": "",
+            "title": "Topic",
+            "type": "string"
+          },
+          "transitions": {
+            "default": false,
+            "title": "Transitions",
+            "type": "boolean"
+          },
+          "translate": {
+            "default": false,
+            "title": "Translate",
+            "type": "boolean"
+          },
+          "vibe": {
+            "default": "",
+            "title": "Vibe",
+            "type": "string"
+          },
+          "visual_selection": {
+            "default": false,
+            "title": "Visual Selection",
+            "type": "boolean"
+          },
+          "vocabulary": {
+            "default": "",
+            "title": "Vocabulary",
+            "type": "string"
+          },
+          "zoom": {
+            "default": false,
+            "title": "Zoom",
+            "type": "boolean"
+          }
+        },
+        "title": "OptionsModel",
+        "type": "object"
+      },
+      "PreviewRequest": {
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "PreviewRequest",
+        "type": "object"
+      },
+      "ProfileModel": {
+        "description": "Create/update a saved settings profile.",
+        "properties": {
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "make_default": {
+            "default": false,
+            "title": "Make Default",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "publishing": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Publishing",
+            "type": "object"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProfileModel",
+        "type": "object"
+      },
+      "PublishClipRequest": {
+        "properties": {
+          "campaign_id": {
+            "default": "",
+            "title": "Campaign Id",
+            "type": "string"
+          },
+          "mode": {
+            "default": "auto",
+            "title": "Mode",
+            "type": "string"
+          },
+          "platforms": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "routes": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "title": "Routes",
+            "type": "object"
+          },
+          "schedule_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule At"
+          }
+        },
+        "title": "PublishClipRequest",
+        "type": "object"
+      },
+      "RegenerateRequest": {
+        "description": "Request to regenerate a single metadata field for a clip.",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "RegenerateRequest",
+        "type": "object"
+      },
+      "RerenderRequest": {
+        "description": "Re-render one clip, optionally with changed settings (U7) or a cut list (U4).\n\n``settings`` is a partial options blob; unknown keys are ignored, so a UI can send its whole\nsettings object without knowing which fields this build understands.\n\n``cuts`` is a **separate, typed field rather than a key inside** ``settings``, for two\nreasons. ``settings`` is filtered against ``ProcessingOptions`` fields and unknown keys are\ndropped silently, so a cut list sent that way would be discarded without a word - the worst\npossible failure for a destructive edit the user is watching for. And a cut list describes\none clip, whereas everything in ``settings`` describes the job, so putting it there would\ninvite it being applied to clips it was not drawn against.",
+        "properties": {
+          "cuts": {
+            "items": {
+              "$ref": "#/components/schemas/CutRange"
+            },
+            "title": "Cuts",
+            "type": "array"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "title": "RerenderRequest",
+        "type": "object"
+      },
+      "RescheduleModel": {
+        "description": "A new time for a pending publish attempt (PB7).",
+        "properties": {
+          "schedule_at": {
+            "title": "Schedule At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "schedule_at"
+        ],
+        "title": "RescheduleModel",
+        "type": "object"
+      },
+      "StorageSettingsModel": {
+        "description": "User-tunable storage settings (runtime-persisted).",
+        "properties": {
+          "auto_delete_temp": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Delete Temp"
+          },
+          "delete_local_after_publish": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delete Local After Publish"
+          },
+          "retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Days"
+          }
+        },
+        "title": "StorageSettingsModel",
+        "type": "object"
+      },
+      "UrlJobRequest": {
+        "properties": {
+          "options": {
+            "$ref": "#/components/schemas/OptionsModel",
+            "default": {
+              "aspect": "9:16",
+              "asset_sourcing_mode": "off",
+              "broll": false,
+              "broll_intensity": "standard",
+              "broll_provider": "",
+              "campaign_id": "",
+              "caption_animation": "",
+              "caption_emoji": false,
+              "caption_keyword_ai": false,
+              "caption_keyword_highlight": false,
+              "caption_position": "bottom",
+              "caption_preset": "karaoke",
+              "caption_template": "karaoke",
+              "captions": true,
+              "clip_length": "auto",
+              "color": "",
+              "diarization": false,
+              "emoji": "off",
+              "emoji_animate": true,
+              "emoji_mode": "keyword",
+              "fades": false,
+              "filler_removal": false,
+              "hashtag_count": 5,
+              "hook_title": false,
+              "kinetic_confidence_floor": 0.0,
+              "kinetic_font": "",
+              "kinetic_max_line_width": 22,
+              "kinetic_max_lines": 2,
+              "kinetic_motion_ms": 120,
+              "kinetic_reveal": "cumulative",
+              "kinetic_safe_area_x_pct": 6.0,
+              "kinetic_safe_area_y_pct": 10.0,
+              "kinetic_style": "karaoke_fill",
+              "kinetic_typography_enabled": false,
+              "metadata": true,
+              "music": "",
+              "music_volume": 0.12,
+              "num_clips": "auto",
+              "permissibility_mode": false,
+              "platform": "generic",
+              "progress_bar": false,
+              "publish_mode": "review",
+              "publish_to": [],
+              "reframe": false,
+              "reframe_intensity": "standard",
+              "reframe_layout": "follow_active",
+              "selection_prompt": "",
+              "speaker_reframe": false,
+              "stem_backend": "auto",
+              "stem_declick": false,
+              "stem_gain_music": 1.0,
+              "stem_gain_other": 1.0,
+              "stem_gain_vocals": 1.0,
+              "stem_inpainting_enabled": false,
+              "stem_mix_preset": "custom",
+              "stem_model": "htdemucs",
+              "stem_repair_mode": "crossfade",
+              "stem_repair_window_ms": 12,
+              "stem_retain_stems": false,
+              "strategy": "ai",
+              "topic": "",
+              "transitions": false,
+              "translate": false,
+              "vibe": "",
+              "visual_selection": false,
+              "vocabulary": "",
+              "zoom": false
+            }
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "UrlJobRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WatchToggleRequest": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "options": {
+            "$ref": "#/components/schemas/OptionsModel",
+            "default": {
+              "aspect": "9:16",
+              "asset_sourcing_mode": "off",
+              "broll": false,
+              "broll_intensity": "standard",
+              "broll_provider": "",
+              "campaign_id": "",
+              "caption_animation": "",
+              "caption_emoji": false,
+              "caption_keyword_ai": false,
+              "caption_keyword_highlight": false,
+              "caption_position": "bottom",
+              "caption_preset": "karaoke",
+              "caption_template": "karaoke",
+              "captions": true,
+              "clip_length": "auto",
+              "color": "",
+              "diarization": false,
+              "emoji": "off",
+              "emoji_animate": true,
+              "emoji_mode": "keyword",
+              "fades": false,
+              "filler_removal": false,
+              "hashtag_count": 5,
+              "hook_title": false,
+              "kinetic_confidence_floor": 0.0,
+              "kinetic_font": "",
+              "kinetic_max_line_width": 22,
+              "kinetic_max_lines": 2,
+              "kinetic_motion_ms": 120,
+              "kinetic_reveal": "cumulative",
+              "kinetic_safe_area_x_pct": 6.0,
+              "kinetic_safe_area_y_pct": 10.0,
+              "kinetic_style": "karaoke_fill",
+              "kinetic_typography_enabled": false,
+              "metadata": true,
+              "music": "",
+              "music_volume": 0.12,
+              "num_clips": "auto",
+              "permissibility_mode": false,
+              "platform": "generic",
+              "progress_bar": false,
+              "publish_mode": "review",
+              "publish_to": [],
+              "reframe": false,
+              "reframe_intensity": "standard",
+              "reframe_layout": "follow_active",
+              "selection_prompt": "",
+              "speaker_reframe": false,
+              "stem_backend": "auto",
+              "stem_declick": false,
+              "stem_gain_music": 1.0,
+              "stem_gain_other": 1.0,
+              "stem_gain_vocals": 1.0,
+              "stem_inpainting_enabled": false,
+              "stem_mix_preset": "custom",
+              "stem_model": "htdemucs",
+              "stem_repair_mode": "crossfade",
+              "stem_repair_window_ms": 12,
+              "stem_retain_stems": false,
+              "strategy": "ai",
+              "topic": "",
+              "transitions": false,
+              "translate": false,
+              "vibe": "",
+              "visual_selection": false,
+              "vocabulary": "",
+              "zoom": false
+            }
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "WatchToggleRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "AI-powered video clipping & auto-publishing tool — Phase 5 (storage, profiles & updates).",
+    "title": "AI Video Clipper",
+    "version": "normalised-see-VERSION-file"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/batches/{batch_id}": {
+      "get": {
+        "operationId": "get_batch_api_batches__batch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Batch Api Batches  Batch Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Batch",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/campaigns": {
+      "get": {
+        "operationId": "list_campaigns_api_campaigns_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Campaigns Api Campaigns Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Campaigns",
+        "tags": [
+          "publishing"
+        ]
+      },
+      "post": {
+        "operationId": "save_campaign_api_campaigns_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Save Campaign Api Campaigns Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Campaign",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/captions/preview": {
+      "post": {
+        "description": "Render a two-second caption sample for a preset (C18).\n\nThe settings panel's style picker (U5) draws its preview in CSS, which can show the typeface,\ncolours, case and placement but *not* the things that distinguish these presets: the word-by-word\nfill, the active-word punch, the per-word pill, the dual stroke, the measured wrapping. Those are\nlibass' work, so previewing them honestly means letting libass do it.\n\nReturns the video inline. Two seconds rather than a still, because a still cannot show a sweep or\na reveal - which is most of what a preset is.",
+        "operationId": "caption_preview_api_captions_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptionPreviewModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Caption Preview",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/clips/{job_id}/{filename}/download": {
+      "get": {
+        "operationId": "download_clip_api_clips__job_id___filename__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Clip",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/clips/{job_id}/{filename}/video": {
+      "get": {
+        "operationId": "download_video_only_api_clips__job_id___filename__video_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Video Only",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/history": {
+      "get": {
+        "operationId": "history_api_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Platform",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response History Api History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/info": {
+      "get": {
+        "operationId": "info_api_info_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Info Api Info Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Info",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Jobs Api Jobs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Jobs",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/batch": {
+      "post": {
+        "description": "Submit a batch of URLs; they are processed in line (sequentially).",
+        "operationId": "submit_batch_api_jobs_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Batch Api Jobs Batch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Batch",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/events": {
+      "get": {
+        "description": "Stream job progress as Server-Sent Events (Phase 5.5).\n\nReplaces the frontend poll loop, which refetched *every* job with all of its clips and its\n~100-field options object twice a second for as long as a tab was open, and did so whether\nor not anything had changed. This sends a job only when its ``updated_at`` moves.\n\nThe protocol is two named events:\n\n``snapshot``\n    Every job, sent once immediately on connect. Authoritative: a client replaces its\n    state with this. That is what makes reconnection self-healing — a client that missed\n    updates while disconnected does not have to reason about the gap, because the next\n    snapshot supersedes whatever it held.\n``jobs``\n    Only the jobs whose ``updated_at`` changed since the last frame. A client merges these\n    by id.\n\nPlus SSE comment frames (``: ping``) as an idle keepalive; see\n``settings.job_events_heartbeat_seconds``.\n\nIncremental frames can be additive because nothing removes a job from the in-memory store\nwithin a process lifetime — ``JobStore`` has no delete, and ``max_persisted_jobs`` prunes\nthe SQLite table, which only takes effect on the next restore. If a delete is ever added,\nthis needs a ``removed`` event; the snapshot-replaces/incremental-merges split above is\nwhere that would go.\n\n``async def`` rather than ``def``: a sync route runs in Starlette's threadpool, which\ndefaults to 40 workers, and a sync generator would hold one for the entire life of the\nconnection. A handful of open tabs would then starve every other sync route in the app.\n\nAuthentication is inherited from the app-level ``require_api_token`` dependency, and this\nroute is deliberately *not* in ``api.security._QUERY_TOKEN_PATHS`` — the browser\n``EventSource`` API cannot set headers, but rather than widen the query-token allowance to\na long-lived connection whose URL would sit in access logs for the life of the stream, the\nfrontend reads this with ``fetch`` and a ``ReadableStream``, which can send the header\nnormally. See ``api.jobEvents`` in ``frontend/src/api.js``.",
+        "operationId": "job_events_api_jobs_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Job Events",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/url": {
+      "post": {
+        "description": "Submit a single URL for processing.",
+        "operationId": "submit_url_api_jobs_url_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UrlJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Url Api Jobs Url Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Url",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_api_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Job Api Jobs  Job Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "description": "Ask a queued or running job to stop (I4).\n\n``409`` rather than ``404`` for a job that has already finished: the job exists, it simply\ncannot be cancelled, and answering 404 would tell the client the wrong thing about why.\n\nThe response says ``cancelling`` for a job that was mid-render, because the worker stops at\nits next checkpoint and a job already inside an ffmpeg pass finishes that pass first. Saying\n\"cancelled\" while a render is still writing would be a claim the API cannot back.\n\nPhase 7: ``state`` is now read back off the job rather than predicted from its status\n*before* the call. The prediction was a second implementation of the rule that lives in\n``JobManager.cancel``, and the two could disagree with no test able to see it - the response\nwould say one thing while the record the UI polls said another. ``cancelling`` is a real\npersisted status now, so there is one answer and this route reports it.",
+        "operationId": "cancel_job_api_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Job Api Jobs  Job Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/review": {
+      "post": {
+        "description": "Approve or reject many clips of one job in a single call (U9).\n\nA job produces up to ten clips and each had to be judged individually with nowhere to record\nthe verdict, so an interrupted review pass had to be redone from the top.",
+        "operationId": "review_clips_api_jobs__job_id__clips_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchReviewModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Clips Api Jobs  Job Id  Clips Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Clips",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}": {
+      "patch": {
+        "description": "Update editable metadata fields on a clip (title, hashtags, hook, ...).",
+        "operationId": "edit_clip_api_jobs__job_id__clips__clip_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClipEditModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Edit Clip Api Jobs  Job Id  Clips  Clip Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Clip",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}/publish": {
+      "post": {
+        "operationId": "publish_clip_api_jobs__job_id__clips__clip_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishClipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Clip Api Jobs  Job Id  Clips  Clip Id  Publish Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Clip",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}/regenerate": {
+      "post": {
+        "description": "Regenerate a single metadata field for a clip via the LLM.\n\nRequires an LLM to be configured; returns 400 for unknown fields and 409\nwhen no LLM is available.",
+        "operationId": "regenerate_clip_field_api_jobs__job_id__clips__clip_id__regenerate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Regenerate Clip Field Api Jobs  Job Id  Clips  Clip Id  Regenerate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regenerate Clip Field",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}/rerender": {
+      "post": {
+        "description": "Re-render one clip, optionally with changed settings (U7).\n\nChanging one setting previously meant resubmitting the whole source: the download, the\ntranscription, the selection call, the metadata generation and every *other* clip. It also\nproduced a different set of clips, because selection is not deterministic with an LLM in it.\n\nThis runs synchronously. A re-render is a cut, a geometry pass and a composite of one clip -\nseconds to a minute - and the caller is a user who has just pressed a button and is watching\nfor the result. Handing back a job id to poll would be the right shape for a whole-source\nrun and the wrong one here.",
+        "operationId": "rerender_clip_endpoint_api_jobs__job_id__clips__clip_id__rerender_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rerender Clip Endpoint Api Jobs  Job Id  Clips  Clip Id  Rerender Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerender Clip Endpoint",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}/review": {
+      "post": {
+        "description": "Approve, reject or reset one clip (U9).",
+        "operationId": "review_clip_api_jobs__job_id__clips__clip_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClipReviewModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Clip Api Jobs  Job Id  Clips  Clip Id  Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Clip",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/clips/{clip_id}/transcript": {
+      "get": {
+        "description": "Word-level timings for one rendered clip, for the transcript editor (U4).\n\nDeliberately **not** rate limited, following the rule set when the limiter was added: the\neight expensive routes are throttled and reads are not, because the UI polls. This is a\ncache read behind a click, and a budget on it would throttle the shipped editor rather\nthan an abuser. It is still authenticated - the app-level dependency covers every route,\nwhich is why that was chosen over per-decorator wiring.\n\nRead-only and cheap: the words come from the T8 transcript cache entry the render itself\nconsumed, so they are the words that were burned in, and no ASR runs. A miss is a **409**\nrather than an empty list, because \"this clip has no words\" and \"I cannot tell you this\nclip's words\" call for completely different things from the UI - the first should offer\nnothing to edit, the second should say why.\n\nOffsets are clip-relative, which is the frame a cut list must be expressed in. A clip\nalready tightened by filler removal is the one case where these do not line up with the\nrendered media, and it is reported rather than papered over: see ``trimmed``.",
+        "operationId": "clip_transcript_api_jobs__job_id__clips__clip_id__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Clip Transcript Api Jobs  Job Id  Clips  Clip Id  Transcript Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clip Transcript",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/resume": {
+      "post": {
+        "description": "Render a failed job's unfinished clips, keeping the ones it already produced (I5).\n\nAn interrupted job was marked failed *wholesale*: the clips it had already rendered were on\ndisk and listed in the record, and the only way forward was to re-submit the source and pay for\neverything again - including re-rendering the clips that had succeeded.\n\n``409`` names why a job cannot be resumed rather than silently starting a full re-run, because\na full re-run is exactly the expensive thing the caller was trying to avoid.",
+        "operationId": "resume_job_api_jobs__job_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resume Job Api Jobs  Job Id  Resume Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/source": {
+      "delete": {
+        "description": "Delete a job's original source video. Requires ``confirm=true``.\n\nSource video is never auto-deleted; this endpoint is the only way to remove\nit, and it refuses to act without explicit confirmation.",
+        "operationId": "delete_source_api_jobs__job_id__source_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Source Api Jobs  Job Id  Source Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Source",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/timings": {
+      "get": {
+        "description": "Per-stage render timings and LLM token spend for a job (M5, Phase 7).\n\nRead from the job record rather than from the live metrics registry, so the numbers survive\na restart and remain available for a job that finished long ago - which is when someone\nactually asks where the time went.\n\nToken spend is reported here rather than on its own route because it answers the same\nquestion - what did this job cost - in the other currency, and a caller asking one almost\nalways wants the other.",
+        "operationId": "get_job_timings_api_jobs__job_id__timings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Job Timings Api Jobs  Job Id  Timings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job Timings",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/preview": {
+      "post": {
+        "description": "Return preview metadata for a URL (title, duration, thumbnail).",
+        "operationId": "preview_api_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Api Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview",
+        "tags": [
+          "input"
+        ]
+      }
+    },
+    "/api/profiles": {
+      "get": {
+        "operationId": "list_profiles_api_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Profiles Api Profiles Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Profiles",
+        "tags": [
+          "profiles"
+        ]
+      },
+      "post": {
+        "operationId": "save_profile_api_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Save Profile Api Profiles Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Profile",
+        "tags": [
+          "profiles"
+        ]
+      }
+    },
+    "/api/profiles/builtin": {
+      "get": {
+        "description": "The shipped opinionated profiles (U2).\n\nDistinct from ``GET /api/profiles``, which lists profiles a *user* saved. These are\nread-only bundles: pass ``profile: \"<name>\"`` alongside a process request and the bundle\nis expanded into the individual options, with anything else in the request overriding it.\n\n``settings`` is returned in full rather than summarised so a client can show what\npicking a profile will actually change, and ``rationale`` is included because a profile\nis a set of judgement calls a user is entitled to disagree with.",
+        "operationId": "list_builtin_profiles_api_profiles_builtin_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Builtin Profiles Api Profiles Builtin Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Builtin Profiles",
+        "tags": [
+          "profiles"
+        ]
+      }
+    },
+    "/api/profiles/{profile_id}": {
+      "delete": {
+        "operationId": "delete_profile_api_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Profile Api Profiles  Profile Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Profile",
+        "tags": [
+          "profiles"
+        ]
+      }
+    },
+    "/api/profiles/{profile_id}/default": {
+      "post": {
+        "operationId": "set_default_profile_api_profiles__profile_id__default_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Default Profile Api Profiles  Profile Id  Default Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Default Profile",
+        "tags": [
+          "profiles"
+        ]
+      }
+    },
+    "/api/publish-attempts/{attempt_id}": {
+      "get": {
+        "operationId": "publish_attempt_api_publish_attempts__attempt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Attempt Api Publish Attempts  Attempt Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Attempt",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publish-attempts/{attempt_id}/approve": {
+      "post": {
+        "description": "Approve a ``review_required`` attempt and queue it for direct publishing.\n\nThree of the five publishers can return ``review_required`` — Instagram and X when\nthe account lacks direct-publish approval, Whop when the upload could not be\nattached to a target — and before this endpoint existed there was no way to act on\nit, so such attempts stopped permanently.",
+        "operationId": "approve_publish_attempt_api_publish_attempts__attempt_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Publish Attempt Api Publish Attempts  Attempt Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Publish Attempt",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publish-attempts/{attempt_id}/cancel": {
+      "post": {
+        "description": "Cancel a pending attempt so it never publishes (PB7).\n\nRecorded as ``failed`` with an explicit message rather than deleted. The attempt is part of\nthe audit trail - somebody chose to schedule it - and a row that vanishes is\nindistinguishable from one that never existed when a post is later found missing.",
+        "operationId": "cancel_publish_attempt_api_publish_attempts__attempt_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Publish Attempt Api Publish Attempts  Attempt Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Publish Attempt",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publish-attempts/{attempt_id}/retry": {
+      "post": {
+        "description": "Re-queue a failed (or still-in-review) attempt without changing its mode.\n\nSeparate from ``/approve`` on purpose: a retry is for transient trouble — an expired\ntoken, a network blip, a clip that was briefly missing — and must not silently\nescalate a review-mode submission into a live post.",
+        "operationId": "retry_publish_attempt_api_publish_attempts__attempt_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Publish Attempt Api Publish Attempts  Attempt Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Publish Attempt",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publish-attempts/{attempt_id}/schedule": {
+      "patch": {
+        "description": "Move a pending attempt to a different time (PB7).\n\nBefore this, a scheduled post could not be moved at all: the time was fixed when the attempt\nwas created, and the only recourse was to let it publish or leave it stuck.",
+        "operationId": "reschedule_publish_attempt_api_publish_attempts__attempt_id__schedule_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RescheduleModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reschedule Publish Attempt Api Publish Attempts  Attempt Id  Schedule Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reschedule Publish Attempt",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publishers": {
+      "get": {
+        "operationId": "publisher_statuses_api_publishers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publisher Statuses Api Publishers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Publisher Statuses",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/publishers/{platform}/refresh": {
+      "post": {
+        "description": "Force an OAuth token refresh for one platform (PB4).\n\nReturns ``refreshed: false`` for the four publishers that cannot refresh - TikTok, Instagram\nand X use long-lived tokens an operator pasted in, Whop an API key - rather than pretending to\nact. The status in the response says which kind each is, so the answer is actionable.",
+        "operationId": "refresh_publisher_credentials_api_publishers__platform__refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "title": "Platform",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Refresh Publisher Credentials Api Publishers  Platform  Refresh Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Publisher Credentials",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/schedule": {
+      "get": {
+        "description": "Publish attempts scheduled within a window, for the calendar view (PB7).\n\nDefaults to the 30 days around now. Returns every state, not just pending ones: a calendar\nthat hid what had already gone out would show an operator an empty week they had in fact\nfilled, and \"what did I post on Tuesday\" is the same question as \"what am I posting Thursday\".",
+        "operationId": "schedule_window_api_schedule_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Schedule Window Api Schedule Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Schedule Window",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/schedule/suggestions": {
+      "get": {
+        "description": "Suggested posting times for a platform (PB7).\n\nThe response carries ``basis`` describing where the numbers come from, and it is not\nflattering: these are published third-party heuristics, not measurements of this account's\naudience. Per-account timing needs post-publish engagement data (PB8), which is not collected\nyet, and a UI that presented a guess as an analysis would be the actual harm here.",
+        "operationId": "schedule_suggestions_api_schedule_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "per_day",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "title": "Per Day",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Schedule Suggestions Api Schedule Suggestions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Schedule Suggestions",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/api/storage": {
+      "get": {
+        "operationId": "storage_status_api_storage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Storage Status Api Storage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Storage Status",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/api/storage/cleanup": {
+      "post": {
+        "description": "Run cleanup now: expired clips (per retention) and/or all temp files.",
+        "operationId": "storage_cleanup_api_storage_cleanup_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "temp",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Temp",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expired",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Expired",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Storage Cleanup Api Storage Cleanup Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Storage Cleanup",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/api/storage/settings": {
+      "post": {
+        "operationId": "update_storage_settings_api_storage_settings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageSettingsModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Storage Settings Api Storage Settings Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Storage Settings",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/api/updates": {
+      "get": {
+        "operationId": "check_updates_api_updates_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Check Updates Api Updates Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Updates",
+        "tags": [
+          "updates"
+        ]
+      }
+    },
+    "/api/upload": {
+      "post": {
+        "description": "Upload one or more video files and submit them for processing.\n\nA single file creates one job; multiple files create a batch processed in\nline.",
+        "operationId": "upload_api_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_api_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upload Api Upload Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/watch": {
+      "get": {
+        "operationId": "watch_status_api_watch_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Watch Status Api Watch Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Watch Status",
+        "tags": [
+          "watch"
+        ]
+      }
+    },
+    "/api/watch/options": {
+      "post": {
+        "operationId": "watch_options_api_watch_options_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Watch Options Api Watch Options Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Watch Options",
+        "tags": [
+          "watch"
+        ]
+      }
+    },
+    "/api/watch/toggle": {
+      "post": {
+        "operationId": "watch_toggle_api_watch_toggle_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Watch Toggle Api Watch Toggle Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Watch Toggle",
+        "tags": [
+          "watch"
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Prometheus exposition for this instance.\n\nAuthenticated by the app-level dependency, like every other route. Not rate limited: a scrape\nis one cheap request on a fixed interval, and throttling it would drop samples and leave gaps\nthat look like the app was down.",
+        "operationId": "prometheus_metrics_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Prometheus Metrics",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  }
+}
