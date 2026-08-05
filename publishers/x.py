@@ -23,7 +23,7 @@ class XPublisher(BasePublisher):
         return PublisherStatus(self.name,ok,ok,approved,"ready" if ok else "not_configured",msg,
           account_id or (settings.x_account_id or ""),not approved,
           # PB4: static OAuth user-context token; renewal is a manual step.
-          token_kind="static")
+          token_kind="static")  # noqa: S106 - a credential *kind*, not a credential
     def _h(self): return {"Authorization":f"Bearer {settings.x_access_token}"}
     def publish(self,request):
         st=self.status(request.account_id)

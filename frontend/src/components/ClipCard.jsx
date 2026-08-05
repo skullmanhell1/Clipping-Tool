@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, formatDuration } from "../api.js";
 import ClipPlayer from "./ClipPlayer.jsx";
+import TranscriptEditor from "./TranscriptEditor.jsx";
 
 const PLATFORM_LABELS = {
   whop: "Whop",
@@ -102,6 +103,7 @@ export default function ClipCard({
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [rerendering, setRerendering] = useState(false);
+  const [editingTranscript, setEditingTranscript] = useState(false);
 
   useEffect(() => {
     setSelectedPlatforms(publishing?.platforms || []);
@@ -230,18 +232,29 @@ export default function ClipCard({
   // U7: re-render this clip with the settings currently in the panel. Resubmitting the source
   // would re-download, re-transcribe, re-select and re-render every other clip — and would
   // produce a *different set* of clips, because selection is not deterministic with an LLM.
-  const rerender = useCallback(async () => {
-    setRerendering(true);
-    setError("");
-    try {
-      const updated = await api.rerenderClip(jobId, clip.id, settings || {});
-      onUpdated?.(updated);
-    } catch (rerenderError) {
-      setError(rerenderError.message || "Re-render failed.");
-    } finally {
-      setRerendering(false);
-    }
-  }, [clip.id, jobId, onUpdated, settings]);
+  const rerender = useCallback(
+    async (cuts = []) => {
+      setRerendering(true);
+      setError("");
+      try {
+        const updated = await api.rerenderClip(jobId, clip.id, settings || {}, cuts);
+        onUpdated?.(updated);
+        // U4: the struck words have been applied and the clip record replaced, so leaving the
+        // editor open would show a selection against a transcript that no longer describes the
+        // media. Closing it forces a fresh fetch if the user wants to trim again.
+        if (cuts.length > 0) setEditingTranscript(false);
+      } catch (rerenderError) {
+        setError(rerenderError.message || "Re-render failed.");
+      } finally {
+        setRerendering(false);
+      }
+    },
+    [clip.id, jobId, onUpdated, settings],
+  );
+
+  // U4: the transcript editor is a panel rather than a separate view, so the player stays
+  // visible — checking a cut means watching the seam, and that is the whole review loop.
+  const applyCuts = useCallback((cuts) => rerender(cuts), [rerender]);
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand-accent";
@@ -323,12 +336,22 @@ export default function ClipCard({
         </div>
         <button
           type="button"
-          onClick={rerender}
+          onClick={() => rerender()}
           disabled={rerendering}
           title="Re-render just this clip with the settings currently selected above"
           className="mt-1 w-full rounded-lg border border-slate-700 py-1 text-xs text-slate-300 hover:border-brand-accent disabled:opacity-50"
         >
           {rerendering ? "Re-rendering…" : "↻ Re-render this clip"}
+        </button>
+        {/* U4: click words out of the transcript and re-render without them. */}
+        <button
+          type="button"
+          onClick={() => setEditingTranscript((open) => !open)}
+          aria-expanded={editingTranscript}
+          title="Cut words out of this clip by striking them from its transcript"
+          className="mt-1 w-full rounded-lg border border-slate-700 py-1 text-xs text-slate-300 hover:border-brand-accent"
+        >
+          {editingTranscript ? "Close transcript" : "✂ Trim by transcript"}
         </button>
         {onToggleSelected ? (
           <label className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
@@ -359,6 +382,17 @@ export default function ClipCard({
             ))}
           </div>
         )}
+
+        {/* U4: mounted only while open, so the transcript request happens on demand and a
+            re-open after a trim re-fetches rather than showing stale word times. */}
+        {editingTranscript ? (
+          <TranscriptEditor
+            jobId={jobId}
+            clipId={clip.id}
+            onApply={applyCuts}
+            applying={rerendering}
+          />
+        ) : null}
 
         <Field
           label="Title"

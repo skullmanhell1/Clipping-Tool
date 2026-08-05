@@ -419,6 +419,55 @@ def _enumerate_system_fonts() -> Optional[frozenset[str]]:
     return fonts
 
 
+def _bundled_font_families() -> frozenset[str]:
+    """Lower-cased vendored families libass can load straight from the ``fontsdir``.
+
+    :func:`subtitles_filter` hands ``settings.font_assets_dir`` to libass, so a vendored face
+    renders whether or not the host has it installed — the same reasoning
+    :func:`discovered_fonts` already records for operator-supplied files. ``fc-list`` cannot
+    see that directory, which is why this is a second probe rather than more entries in
+    :func:`_enumerate_system_fonts`.
+
+    **Variable faces are excluded**, matching :func:`available_fonts`: libass' directory
+    provider cannot select a named instance of one, so a request for such a family silently
+    resolves to something else. ``assets/fonts.json`` records ``Montserrat`` becoming
+    ``NotoSans-Bold``, and it is why no variable family sits on :data:`FALLBACK_FONTS`.
+    Counting them here would substitute *towards* a face that cannot be rendered.
+
+    Scoped to the manifest on purpose. Those are the faces CI verifies are present and the
+    only ones a preset may name; operator-supplied files keep their existing behaviour —
+    they render through ``fontsdir`` and become visible to fontconfig after
+    :func:`refresh_font_cache_if_changed`. Widening this to a directory scan would mean
+    parsing font metadata on a per-clip path for no gain.
+
+    ``FONT_MANIFEST`` is defined further down this module; the reference resolves at call
+    time, so the ordering is fine.
+    """
+    if "bundled" in _FONT_CACHE:
+        return _FONT_CACHE["bundled"] or frozenset()
+
+    families: set[str] = set()
+    fonts_dir = Path(getattr(settings, "font_assets_dir", "") or "")
+    if fonts_dir.is_dir():
+        try:
+            entries = json.loads(FONT_MANIFEST.read_text(encoding="utf-8"))["fonts"]
+        except Exception:
+            entries = []  # an unreadable manifest degrades to "nothing bundled"
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("variable"):
+                continue
+            family = str(entry.get("family") or "").strip()
+            filename = str(entry.get("file") or "").strip()
+            # The manifest is a declaration; the file is what libass will open. A CI step
+            # exists precisely because the two once disagreed.
+            if family and filename and (fonts_dir / filename).is_file():
+                families.add(family.lower())
+
+    resolved = frozenset(families)
+    _FONT_CACHE["bundled"] = resolved
+    return resolved
+
+
 def font_available(name: str) -> bool:
     """Return whether ``name`` is a locally available font family (best-effort).
 
@@ -426,13 +475,25 @@ def font_available(name: str) -> bool:
     return ``True`` so a real font is never falsely substituted. When we *can*
     enumerate, an obviously-absent family reports ``False`` (this is also the
     monkeypatch point used by the font-substitution tests).
+
+    The vendored directory is consulted first, because a face this repository ships is
+    available by virtue of being shipped. Probing only fontconfig reported every vendored
+    face missing wherever the Dockerfile's ``fc-cache`` had not run, and ``resolve_font``
+    then substituted a font that would have rendered perfectly well — C1's failure mode one
+    layer up. ``scripts/setup_dev_env.sh`` and the Dockerfile both work around it by
+    installing the faces system-wide; `.github/workflows/ci.yml` does not, which is why six
+    preset assertions failed there. Consulting the directory removes the need for the
+    workaround rather than adding a third copy of it.
     """
     if not isinstance(name, str) or not name.strip():
         return False
+    wanted = name.strip().lower()
+    if wanted in _bundled_font_families():
+        return True
     fonts = _enumerate_system_fonts()
     if not fonts:
         return True  # uncertain -> assume available
-    return name.strip().lower() in fonts
+    return wanted in fonts
 
 
 def resolve_font(
@@ -891,9 +952,12 @@ def refresh_font_cache() -> bool:
     except (OSError, subprocess.SubprocessError):
         logger.debug("A5: fc-cache refresh failed for %s", directory, exc_info=True)
         return False
-    # The libass family cache is now stale: a newly registered face would otherwise be reported
-    # unavailable until the process restarted.
+    # Both font caches are now stale: a newly registered face would otherwise be reported
+    # unavailable until the process restarted. ``bundled`` is cleared as well because a
+    # manifest face that was missing from disk when it was first computed (a partial
+    # checkout, or a vendored file restored afterwards) would stay absent from it.
     _FONT_CACHE.pop("fonts", None)
+    _FONT_CACHE.pop("bundled", None)
     return True
 
 

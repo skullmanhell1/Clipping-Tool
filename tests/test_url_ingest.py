@@ -41,26 +41,32 @@ requires_ffmpeg = pytest.mark.skipif(
 FFMPEG = settings.ffmpeg_binary
 
 
+@pytest.fixture(autouse=True)
+def _allow_loopback_ingest(monkeypatch):
+    """Let this module fetch from ``127.0.0.1``, which ingest otherwise refuses.
+
+    ``download.validate_public_url`` rejects loopback, link-local and private addresses, because
+    an unauthenticated URL endpoint handed to yt-dlp is otherwise a request forwarder into the
+    deployment's own network. Every URL here is the local ``media_server`` fixture, which is the
+    entire point of the module docstring above: serving locally is what makes this test exercise
+    the real yt-dlp path without depending on the public internet.
+
+    So the loopback address is deliberate here and forbidden everywhere else. Opting in module-wide
+    keeps that explicit in one place; the default-deny rules are covered on their own in
+    ``tests/test_url_guard.py``, which calls the validator directly and so cannot be affected by
+    this fixture.
+    """
+    monkeypatch.setattr(settings, "url_ingest_allow_private", True)
+
+
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_args):      # keep the test output readable
         pass
 
 
 @pytest.fixture
-def media_server(tmp_path, monkeypatch):
-    """Serve ``tmp_path`` over HTTP and yield ``base_url``.
-
-    ``allow_private_url_ingest`` is enabled for the duration, and the reason belongs right
-    here next to the loopback bind: the SSRF guard in ``download.assert_safe_url`` refuses
-    loopback, link-local and private addresses, which is exactly what this fixture serves
-    from. Serving locally is deliberate (see the module docstring) - it exercises the whole
-    yt-dlp path without making CI depend on the public internet - so the guard has to be
-    opted out of, not worked around.
-
-    The guard's default-deny behaviour is covered directly in ``tests/test_api_auth.py``,
-    including the loopback and cloud-metadata cases, so relaxing it here loses no coverage.
-    """
-    monkeypatch.setattr(settings, "allow_private_url_ingest", True, raising=False)
+def media_server(tmp_path):
+    """Serve ``tmp_path`` over HTTP and yield ``base_url``."""
     handler = functools.partial(_QuietHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

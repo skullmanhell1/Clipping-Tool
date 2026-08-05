@@ -54,6 +54,12 @@ class ClipCandidate:
     # On the **fallback path** they *are* the ranking (S11), because what they replace there
     # was "keep the longest segments" - a rule that needs no benchmark to beat.
     features: dict = field(default_factory=dict)
+    # U4: clip-relative ranges the user struck out in the transcript editor, as
+    # ``(start, end)`` pairs. Empty means "render the whole window", which is what every
+    # selection path produces - only an explicit edit ever populates it. Carried here
+    # rather than on ``ProcessingOptions`` because a cut list describes *one* clip, while
+    # options are shared by every clip in the job. See :mod:`worker.transcript_trim`.
+    cuts: list = field(default_factory=list)
 
     @property
     def duration(self) -> float:

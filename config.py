@@ -63,49 +63,58 @@ class Settings(BaseSettings):
     app_name: str = Field(default="AI Video Clipper", description="Display name.")
     environment: str = Field(default="development", description="dev/staging/prod.")
     debug: bool = Field(default=True, description="Enable verbose debug behaviour.")
-    api_host: str = Field(default="0.0.0.0", description="API bind host.")
+    api_host: str = Field(default="0.0.0.0", description="API bind host.")  # noqa: S104 - deliberate: a container must bind all interfaces to be reachable
     api_port: int = Field(default=8000, description="API bind port.")
     # Comma-separated list of allowed CORS origins.
     cors_origins: str = Field(default="*", description="Allowed CORS origins.")
 
-    # ------------------------------------------------------------ API auth --
-    # Every route was unauthenticated. On a localhost-only install that is correct and
-    # this stays unset. On a reachable host it is not: the API can queue unbounded CPU
-    # work, read back every rendered clip, fetch arbitrary URLs, and publish to the
-    # operator's real social accounts using stored tokens.
+    # ------------------------------------------------------------ security --
+    # Every route was unauthenticated, and `render.yaml` deploys this publicly with
+    # `autoDeploy: true`. A single shared secret is the whole scheme on purpose: this is a
+    # single-tenant self-hosted tool, and per-user accounts are plan item U12 (P2/L), a
+    # different and much larger change.
     #
-    # Unset (the default) means "allow everything", which preserves existing behaviour
-    # exactly and keeps the test suite and local development untouched — a startup
-    # warning is emitted instead, in the same spirit as the CORS wildcard warning.
+    # Unset means "allow everything", because an existing deployment must not lose access on
+    # upgrade - the same reasoning the CORS wildcard default follows. Startup logs a loud
+    # warning in that case, and refuses to boot outright under ENVIRONMENT=production.
     api_auth_token: Optional[str] = Field(
         default=None,
-        description="Shared secret required on /api and /clips requests. Unset = no auth "
-                    "(correct for localhost, unsafe on a reachable host). Accepted as an "
-                    "X-API-Key header, an Authorization: Bearer header, or HTTP Basic "
-                    "password (any username) so a browser can prompt for it.",
+        description="Shared secret required on /api/* and /clips/*. Unset = no auth (a "
+                    "startup warning is logged; refused outright in production).",
     )
-    # Paths that never require the token: the health probe (so orchestrators can check a
-    # locked-down instance) and the SPA shell itself (so the browser can load the page
-    # that then prompts for credentials).
-    api_auth_exempt_paths: str = Field(
-        default="/healthz",
-        description="Comma-separated path prefixes exempt from api_auth_token.",
+    # Rate limiting is in-process on purpose. `redis` and `rq` are declared dependencies that
+    # nothing imports, and adding a live Redis requirement to make the app safe would turn an
+    # optional dependency into a mandatory one.
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description="Throttle the expensive write routes (jobs, upload, preview, rerender).",
     )
-    # The one deliberate escape hatch. A public, wildcard-CORS, unauthenticated instance
-    # is refused at boot rather than warned about, because nothing downstream can make it
-    # safe. Setting this to true says "I know, and I accept it" — which is a different
-    # act from never having been told.
-    allow_insecure_public: bool = Field(
+    rate_limit_requests: int = Field(
+        default=30,
+        description="Requests allowed per client per window on rate-limited routes.",
+    )
+    rate_limit_window_seconds: float = Field(
+        default=60.0,
+        description="Length of the rate-limit window in seconds.",
+    )
+    # SSRF guard. yt-dlp will fetch whatever it is given, so an unauthenticated URL endpoint is
+    # a request forwarder into the deployment's own network - including cloud metadata at
+    # 169.254.169.254. Self-hosters who genuinely want to ingest from a LAN media server can opt
+    # back in; it is off by default because the safe choice must not require a decision.
+    url_ingest_allow_private: bool = Field(
         default=False,
-        description="Permit booting with environment=production, wildcard CORS and no "
-                    "api_auth_token. Off by default; the combination is refused.",
+        description="Allow URL ingest from loopback/link-local/private address ranges. "
+                    "Leave false unless you are deliberately ingesting from a LAN host.",
     )
-    # SSRF guard for URL ingest. yt-dlp will happily fetch a cloud metadata endpoint or an
-    # internal host, and /api/jobs/url takes its target from the request body.
-    allow_private_url_ingest: bool = Field(
+    # Whether to believe X-Forwarded-For when identifying a client for rate limiting. False by
+    # default because a client can forge the header when the app is directly exposed, and
+    # trusting it then lets one caller present as unlimited distinct clients. Behind a proxy
+    # that sets it (Render, nginx) the opposite is true: without this every request looks like
+    # the proxy, so one bucket is shared by everyone. Set it to match the deployment.
+    trust_forwarded_for: bool = Field(
         default=False,
-        description="Permit URL ingest from loopback, link-local and private ranges. Off "
-                    "by default; enable only to clip from a host on your own LAN.",
+        description="Trust X-Forwarded-For for client identity. Enable only when running "
+                    "behind a proxy that sets it.",
     )
 
     # --------------------------------------------------------------- queue --
@@ -1100,6 +1109,31 @@ class Settings(BaseSettings):
         Setting an explicit ``CORS_ORIGINS`` list re-enables credentials.
         """
         return not self.cors_allow_wildcard
+
+    @property
+    def is_local_environment(self) -> bool:
+        """Whether ``environment`` names a developer machine rather than a deployment.
+
+        The same four names were already inlined at the CORS startup check, and the auth and
+        SSRF checks need exactly the same question answered. A third and fourth copy of the
+        tuple is how they drift apart, so it lives here once.
+        """
+        return self.environment.strip().lower() in ("development", "dev", "local", "test")
+
+    @property
+    def auth_enabled(self) -> bool:
+        """Whether a shared secret is configured.
+
+        Treats whitespace as unset: ``API_AUTH_TOKEN=" "`` in an env file is a mistake, and
+        reading it as a real secret would mean requiring a token nobody can guess *and* nobody
+        intended, which presents as the app being broken rather than as being misconfigured.
+        """
+        return bool((self.api_auth_token or "").strip())
+
+    @property
+    def api_auth_token_value(self) -> str:
+        """The configured secret, stripped. Empty string when auth is disabled."""
+        return (self.api_auth_token or "").strip()
 
 
 @lru_cache
