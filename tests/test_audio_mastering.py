@@ -27,8 +27,11 @@ command-line assertion.
 
 from __future__ import annotations
 
+import json
+import math
 import shutil
 import subprocess
+import types
 
 import pytest
 
@@ -118,6 +121,46 @@ def test_platform_targets_differ_and_fall_back_to_the_configured_default():
     assert audio.platform_loudness_target("whop") == app_settings.loudness_target_lufs
     assert audio.platform_loudness_target("") == app_settings.loudness_target_lufs
     assert audio.platform_loudness_target("  YouTube ") == -14.0
+
+
+def test_a_measurement_of_negative_zero_is_read_as_zero(monkeypatch):
+    """``-0.00`` in ffmpeg's report must not become ``-0`` in the filter (no real binary needed).
+
+    ``loudnorm`` rounds its report to two decimals, so a measurement that is zero at that precision
+    is printed as ``0.00`` or ``-0.00`` depending on which side of zero the unrounded value fell -
+    and different ffmpeg builds disagree for identical input. ``float("-0.00")`` keeps the sign bit
+    and ``format(_, "g")`` renders it ``-0``, so that disagreement reached the emitted filter and,
+    through it, the frozen graph in ``tests/golden/compositor_commands.json``. The parity test failed
+    on ubuntu-latest's ffmpeg 6.1.1 over a value both builds agreed was zero.
+
+    Hermetic on purpose: the sign of a zero is a parsing property, and pinning it should not need a
+    render. Asserted on the parsed stats *and* on the rendered filter, because either half alone
+    would let the string regress.
+    """
+    report = json.dumps(
+        {
+            "input_i": "-21.87",
+            "input_tp": "-0.00",
+            "input_lra": "-0.00",
+            "input_thresh": "-31.87",
+            "target_offset": "-0.00",
+        }
+    )
+    monkeypatch.setattr(
+        audio.subprocess,
+        "run",
+        lambda *a, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=f"...\n{report}\n"),
+    )
+
+    stats = audio.measure_loudness("anything.wav")
+    assert stats is not None
+    for field in ("input_tp", "input_lra", "target_offset"):
+        value = getattr(stats, field)
+        assert value == 0.0 and math.copysign(1.0, value) > 0, f"{field} kept its negative zero"
+
+    rendered = audio.loudnorm_filter(stats, -14.0)
+    assert "=-0:" not in rendered and not rendered.endswith("=-0"), rendered
+    assert "offset=0:" in rendered, rendered
 
 
 @requires_ffmpeg

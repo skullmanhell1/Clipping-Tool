@@ -34,11 +34,6 @@
       "app": "StaticFiles",
       "name": "clips",
       "path": "/clips"
-    },
-    {
-      "app": "StaticFiles",
-      "name": "ui",
-      "path": ""
     }
   ],
   "routes": {

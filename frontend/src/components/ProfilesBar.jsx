@@ -25,6 +25,19 @@ export default function ProfilesBar({
       setBusy(true);
       try {
         await fn(...args);
+      } catch (err) {
+        // `try`/`finally` with no `catch` re-throws, and every one of these actions awaits an API
+        // request through a parent handler in `App.jsx` that does not catch either — so a rejected
+        // save, delete or set-default became an *unhandled* promise rejection. In the browser that
+        // is a console error nobody sees; under vitest it is a run-level failure, which is how CI
+        // reported `Error: nope` from the "re-enables the controls when the request fails" test
+        // while all 384 tests passed and the job still went red.
+        //
+        // Caught and logged, not reported in the UI: showing the failure to the user is a real
+        // improvement and a bigger change (an alert region, one message per silent path, tests for
+        // each), and it belongs in a frontend change rather than in this one, which is about
+        // dependency locking. The sibling lineage does it in `8107942`.
+        console.error("profile action failed", err);
       } finally {
         setBusy(false);
       }

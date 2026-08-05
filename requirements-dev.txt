@@ -7,6 +7,16 @@ mypy>=1.10,<2.0       # static typing
 pytest>=8.2,<9.0      # test runner
 hypothesis>=6.100,<7.0 # property-based testing
 
+# The CI Tests step runs `pytest --junitxml=... --cov=. --cov-report=xml --cov-report=term`, and
+# pytest does not ignore arguments it does not recognise — it refuses to start:
+#
+#     error: unrecognized arguments: --cov=. --cov-report=xml:coverage.xml
+#
+# So the Backend job died about a minute in, having run zero tests, and the "Fail if any test was
+# skipped" step then had no report to read. The workflow asked for coverage; nothing installed the
+# thing that measures it.
+pytest-cov>=5.0,<8.0  # --cov, for the coverage report the Tests step already asks for
+
 # Resolves requirements*.txt into requirements*.lock (scripts/lock_requirements.sh). Needed in CI
 # because the lock-drift check re-resolves and compares.
 #

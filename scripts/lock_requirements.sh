@@ -54,14 +54,34 @@ for pair in "requirements.txt:requirements.lock" "requirements-dev.txt:requireme
     output="${pair##*:}"
 
     if [ "$CHECK" -eq 1 ]; then
+        # Re-resolved *in place*, over the committed lock, and restored afterwards.
+        #
+        # This used to compile into a fresh temp file, which quietly made it a different check than
+        # the one it claims to be. `uv pip compile` reads its output file first and prefers the
+        # versions already pinned there; given an empty temp file it has nothing to prefer, so it
+        # resolves whatever the index offers today. The result was a gate that failed because time
+        # passed rather than because anyone edited a requirement — on this branch,
+        # `boto3 1.43.62 -> 1.43.64` and `cffi 2.1.0 -> 2.1.1`, neither of which anyone asked for.
+        # It fails before the lint steps, so it took the whole job down on every PR.
+        #
+        # Compiling in place keeps the check honest about its purpose: it catches a *range* edited
+        # without re-locking (uv cannot honour a pin that no longer satisfies the input), and it
+        # ignores releases that happened since. Upgrading is a deliberate act — run this script
+        # without `--check` — not something a gate should force at an arbitrary moment.
+        #
+        # The write path below already compiled in place; only this one did not, which is why the
+        # two disagreed about the same repository.
         tmp="$(mktemp)"
-        trap 'rm -f "$tmp"' EXIT
-        compile_one "$input" "$tmp"
+        cp "$output" "$tmp"
+        trap 'cp -f "$tmp" "$output"; rm -f "$tmp"' EXIT
+        compile_one "$input" "$output"
         # Compared in Python rather than with `diff`. diffutils is not present in every slim
         # image — including this project's own dev sandbox — and a gate that silently reports
         # "out of date" because a coreutils binary is missing is worse than no gate: the
         # obvious response is to stop trusting it.
-        if ! python3 - "$output" "$tmp" <<'PY'; then
+        # `$tmp` holds the committed lock and `$output` the re-resolved one, so the two labels
+        # below stay accurate now that the compile happens in place.
+        if ! python3 - "$tmp" "$output" <<'PY'; then
 import sys
 
 def body(path):
@@ -86,6 +106,9 @@ PY
         else
             echo "$output is in step with $input"
         fi
+        # Put the committed lock back: `--check` must leave the tree exactly as it found it,
+        # whether it passed or failed. The trap covers the paths that do not reach here.
+        cp -f "$tmp" "$output"
         rm -f "$tmp"
         trap - EXIT
     else
