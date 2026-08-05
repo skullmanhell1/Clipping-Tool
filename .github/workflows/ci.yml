@@ -46,13 +46,26 @@ jobs:
       # its degraded branch here even though the packages were installed — CI was installing
       # opencv and getting no coverage from it. The Dockerfile has always installed these.
       #
+      # libegl1 / libgles2 are a *second* pair, and importing mediapipe does not need them —
+      # which is exactly why they were missed. `mediapipe/tasks/c/libmediapipe.so` declares
+      # `NEEDED libGLESv2.so.2` and `NEEDED libEGL.so.1`, and that library is dlopen'd only when
+      # a task graph is constructed. So `import mediapipe` succeeds, the version assertion in
+      # tests/test_vision_runtime.py passes, and then
+      # `vision.FaceDetector.create_from_options` raises
+      # `OSError: libGLESv2.so.2: cannot open shared object file` — six failures and three
+      # collection errors across tests/test_face_detection_markers.py and
+      # tests/test_face_detection_real_binary.py that no import smoke test can predict.
+      # `scripts/setup_dev_env.sh` already installs the equivalent (`mesa-libGLES`) on its dnf
+      # path; this is the apt half that was never written.
+      # Verify with:  objdump -p .../mediapipe/tasks/c/libmediapipe.so | grep NEEDED
+      #
       # ffmpeg is likewise not optional: ~90 tests skip without it, and the real-binary
       # capability tests (tests/test_capabilities_real_binary.py) exist specifically to catch
       # probe bugs that every mocked test misses, so they must actually run.
-      - name: Install system dependencies (FFmpeg + fonts + opencv runtime libs)
+      - name: Install system dependencies (FFmpeg + fonts + opencv/mediapipe runtime libs)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
+          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0 libegl1 libgles2
 
       - name: Install Python dependencies
         run: |

@@ -24,12 +24,23 @@ FROM python:3.11-slim
 
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
-# - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe
+# - libgl1 / libglib2.0-0: runtime libs required to *import* opencv / mediapipe
+# - libegl1 / libgles2: required to *run* a mediapipe task graph, which is a different thing.
+#   `mediapipe/tasks/c/libmediapipe.so` declares `NEEDED libGLESv2.so.2` and `NEEDED
+#   libEGL.so.1`, and is dlopen'd only when a detector is constructed — so an image without
+#   these imports mediapipe fine and then fails inside
+#   `FaceDetector.create_from_options` with `OSError: libGLESv2.so.2: cannot open shared
+#   object file`. The symptom is not a crash: `reframe.resolve_detector` catches it and
+#   returns the `substituted:mediapipe:haar` label, so the image ships and every clip is
+#   quietly framed by the weaker detector — the same failure the vendored-model check exists
+#   to prevent, arriving through the shared libraries instead of through the model file.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
+        libegl1 \
+        libgles2 \
         fonts-liberation \
         fontconfig \
     && rm -rf /var/lib/apt/lists/*
