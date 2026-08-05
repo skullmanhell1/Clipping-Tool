@@ -378,6 +378,66 @@ def ema_smooth(
     return out
 
 
+def ema_smooth_zero_phase(
+    values: list[float],
+    alpha: float = 0.35,
+    *,
+    reset_at: Sequence[int] = (),
+) -> list[float]:
+    """Zero-phase (lag-free) smoothing of a 1-D sequence, segment by segment.
+
+    :func:`ema_smooth` is *causal*: every output depends only on samples at or before it, so
+    the smoothed path necessarily trails the real one. That is unavoidable when filtering a
+    live stream and entirely avoidable here — the whole face path is collected before ffmpeg
+    is invoked, so the filter is allowed to look ahead.
+
+    The measured cost of not looking ahead, against a ground-truth path where the subject
+    pans 500 px/s (``scripts/bench_reframe.py``): a **mean centre error of 40 px and a p95 of
+    159 px** at the full 5 fps sampling rate. The 9:16 crop of a 1080p frame is 608 px wide,
+    so a p95 of 159 px puts the subject a quarter of the way to the edge of shot while the
+    crop is still catching up. On screen that is the crop lagging behind a moving presenter
+    and overshooting when they stop.
+
+    The fix runs the same causal filter forwards and backwards and **averages** the two
+    results. Their phase shifts are equal and opposite, so the average is centred on the
+    input rather than delayed behind it: for a symmetric input the output is exactly
+    symmetric, which is the definition of zero phase and is what
+    ``test_zero_phase_smoothing_is_symmetric_and_the_causal_filter_is_not`` asserts.
+
+    Averaging rather than *cascading* the two passes, for two reasons found by measurement:
+
+    * cascading does not actually achieve zero phase here. :func:`ema_smooth` seeds itself
+      with ``values[0]``, and that initialisation is asymmetric, so it survives the round
+      trip — ``[0, 100, 0]`` cascades to ``[18.24, 30.4, 24]``, still lopsided.
+    * cascading applies the filter twice, squaring its attenuation. That over-smooths, and
+      over-smoothing is not free: at a starved sample rate the wider kernel erases real
+      movement, which showed up in the benchmark as mean error getting *worse*. Averaging
+      keeps the nominal bandwidth of a single pass.
+
+    ``reset_at`` is honoured as a hard boundary in **both** directions, which is the part that
+    matters for correctness rather than smoothness. A cut is a discontinuity in the input, so
+    the response to it must be a discontinuity in the output (V4) — and a backward pass that
+    ran across a cut would drag the *next* shot's framing into the end of the previous one,
+    which is the same defect V4 fixed, reflected in time. Each segment between resets is
+    therefore filtered independently, and a single-sample segment passes through untouched.
+    """
+    if not values:
+        return []
+    breaks = sorted({int(i) for i in reset_at if 0 < int(i) < len(values)})
+    bounds = [0, *breaks, len(values)]
+
+    out: list[float] = []
+    for start, end in zip(bounds, bounds[1:]):
+        segment = values[start:end]
+        if len(segment) <= 1:
+            out.extend(segment)
+            continue
+        forward = ema_smooth(segment, alpha)
+        backward = ema_smooth(segment[::-1], alpha)[::-1]
+        out.extend((f + b) / 2.0 for f, b in zip(forward, backward))
+    return out
+
+
 def cut_indices(samples: Sequence[Center], cuts: Sequence[float]) -> list[int]:
     """Sample indices that are the first on the far side of a cut (V4).
 
@@ -401,16 +461,26 @@ def smooth_centers(
     alpha: float = 0.35,
     *,
     cuts: Sequence[float] = (),
+    zero_phase: Optional[bool] = None,
 ) -> list[Center]:
-    """Smooth the x/y paths of ``samples`` independently with an EMA.
+    """Smooth the x/y paths of ``samples`` independently.
 
-    ``cuts`` are absolute shot-change times; the average restarts at each (V4).
+    ``cuts`` are absolute shot-change times; smoothing restarts at each (V4).
+
+    ``zero_phase`` selects :func:`ema_smooth_zero_phase` over the causal :func:`ema_smooth`,
+    defaulting to ``settings.reframe_zero_phase``. It is a setting rather than a constant
+    only so the previous behaviour is recoverable on a specific clip; the default is on
+    because the causal filter's lag is measurable and visible (see
+    :func:`ema_smooth_zero_phase`).
     """
     if not samples:
         return []
+    if zero_phase is None:
+        zero_phase = bool(getattr(settings, "reframe_zero_phase", True))
+    smoother = ema_smooth_zero_phase if zero_phase else ema_smooth
     breaks = cut_indices(samples, cuts)
-    xs = ema_smooth([s.cx for s in samples], alpha, reset_at=breaks)
-    ys = ema_smooth([s.cy for s in samples], alpha, reset_at=breaks)
+    xs = smoother([s.cx for s in samples], alpha, reset_at=breaks)
+    ys = smoother([s.cy for s in samples], alpha, reset_at=breaks)
     return [Center(s.t, x, y) for s, x, y in zip(samples, xs, ys)]
 
 
@@ -1674,9 +1744,19 @@ def build_follow_active_path(
                 bx, by = base_orig[j]
                 base[j] = (fx + (bx - fx) * frac, fy + (by - fy) * frac)
 
-    # EMA-smooth the x/y series with the intensity alpha.
-    xs = ema_smooth([c[0] for c in base], alpha)
-    ys = ema_smooth([c[1] for c in base], alpha)
+    # Smooth the x/y series with the intensity alpha. Zero-phase by default for the same
+    # reason as the single-speaker path: this grid is fully known before ffmpeg runs, so
+    # there is no reason to accept a causal filter's lag. The deliberate speaker-change
+    # ramps above survive it — symmetric smoothing widens a transition by roughly
+    # ``1/alpha`` grid steps either side (~125 ms at alpha 0.35 on a 24 fps grid), which
+    # softens the start and end of a move rather than displacing it.
+    smoother = (
+        ema_smooth_zero_phase
+        if bool(getattr(settings, "reframe_zero_phase", True))
+        else ema_smooth
+    )
+    xs = smoother([c[0] for c in base], alpha)
+    ys = smoother([c[1] for c in base], alpha)
 
     # Clamp every centre so the crop window stays fully in-frame throughout.
     lo_x, hi_x = crop_w / 2.0, src_w - crop_w / 2.0
