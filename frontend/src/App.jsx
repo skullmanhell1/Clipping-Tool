@@ -74,23 +74,27 @@ const DEFAULT_SETTINGS = {
   range_start: "",
   range_end: "",
   metadata: true,
-  // Phase 4 — visual effects (all individually toggleable)
+  // Phase 4 — visual effects (all individually toggleable). Defaults mirror
+  // ProcessingOptions: U1 turned these on because shipping them off made the tool look
+  // worse than it is capable of, and a panel that opens with them off undoes that for
+  // every user who never opens it.
   caption_template: "karaoke",
   caption_position: "bottom",
-  reframe: false,
-  zoom: false,
-  transitions: false,
-  hook_title: false,
-  fades: false,
-  progress_bar: false,
+  reframe: true,
+  zoom: true,
+  transitions: true,
+  hook_title: true,
+  fades: true,
+  progress_bar: true,
   color: "",
   music: "",
   music_volume: 0.12,
-  emoji: "off",
+  emoji: "standard",
   emoji_mode: "keyword",
   emoji_animate: true,
   filler_removal: false,
-  // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
+  // Tier 1 — animated captions / b-roll / visual selection (b-roll and AI keywording
+  // stay off: one needs assets, the other costs an LLM call)
   caption_preset: "karaoke",
   // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
   // blob, so a kit is saved, applied and set as default by machinery that already exists.
@@ -103,15 +107,15 @@ const DEFAULT_SETTINGS = {
   brand_logo_scale: 0.16,
   brand_logo_opacity: 0.85,
   caption_animation: "",
-  caption_keyword_highlight: false,
+  caption_keyword_highlight: true,
   caption_keyword_ai: false,
-  caption_emoji: false,
+  caption_emoji: true,
   broll: false,
   broll_intensity: "standard",
   asset_sourcing_mode: "off",
   broll_provider: "",
   selection_prompt: "",
-  visual_selection: false,
+  visual_selection: true,
   permissibility_mode: false,
   // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
   diarization: false,
