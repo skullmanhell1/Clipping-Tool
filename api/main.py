@@ -37,13 +37,35 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from api.security import ClipsAuthMiddleware, rate_limit, require_api_token
+from api.security import (
+    AuthMiddleware,
+    ClipsAuthMiddleware,
+    bootstrap_admin,
+    client_key,
+    current_user,
+    login_rate_limiter,
+    may_access_job,
+    rate_limit,
+    require_admin,
+    require_api_token,
+)
+from auth import get_auth_store
+from auth.passwords import PasswordError
 from config import settings
 from profiles import get_profile_store
 from publishers import best_times
@@ -103,11 +125,16 @@ def _check_deployment_security() -> None:
 
     Two rules with deliberately different severity:
 
-    * **No shared secret** warns locally and **refuses to boot in production**. Every route was
+    * **No credential at all** warns locally and **refuses to boot in production**. Every route was
       open, and ``render.yaml`` publishes this with ``autoDeploy: true`` — so the failure mode was
       not "an operator forgot", it was "the default deployment is public". A warning would scroll
       past in a platform log; refusing cannot be missed. Unset remains fine for local work, so
       running the app on a laptop needs no configuration.
+
+      "No credential at all" means neither scheme, which is what ``settings.any_auth_active``
+      answers. Before U12 there was only ``API_AUTH_TOKEN`` and this asked about that alone;
+      keeping it that way would refuse to boot a deployment that is authenticated by *accounts*,
+      demanding a shared secret the merged ``api/security.py`` then deliberately ignores.
     * **Wildcard CORS** refuses in production too, which is the change item 3 of the security phase
       asked for. It previously only warned, on the grounds that an operator might terminate CORS at
       a proxy — a real scenario, so the escape hatch is to set ``CORS_ORIGINS`` explicitly rather
@@ -119,17 +146,18 @@ def _check_deployment_security() -> None:
     production = not settings.is_local_environment
     problems: list[str] = []
 
-    if not settings.auth_enabled:
+    if not settings.any_auth_active:
         if production:
             problems.append(
-                "API_AUTH_TOKEN is unset, which leaves every /api and /clips route open to "
-                "anyone who can reach this host"
+                "neither AUTH_ENABLED nor API_AUTH_TOKEN is set, which leaves every /api and "
+                "/clips route open to anyone who can reach this host"
             )
         else:
             logger.warning(
-                "API_AUTH_TOKEN is unset with environment=%r, so every /api and /clips route "
-                "is open. Fine for local work; set a token before exposing this host. A "
-                "production environment refuses to boot without one.",
+                "no authentication is configured with environment=%r, so every /api and /clips "
+                "route is open. Fine for local work; set AUTH_ENABLED=true (accounts) or "
+                "API_AUTH_TOKEN (one shared secret) before exposing this host. A production "
+                "environment refuses to boot with neither.",
                 settings.environment,
             )
 
@@ -168,7 +196,18 @@ def _run_startup() -> None:
         logger.exception("could not install job-scoped log context")
     settings.ensure_local_dirs()
     Path(settings.clips_dir).mkdir(parents=True, exist_ok=True)
+    # This branch's own CORS-wildcard warning is gone, not lost: `_check_deployment_security`
+    # already makes the same check and does more with it — it refuses to boot on a wildcard in
+    # production rather than only warning. Keeping both would have logged the warning twice.
     _check_deployment_security()
+    # U12: create the configured first admin when auth is on and the user table is empty.
+    # Deliberately *not* wrapped in a try/except that swallows: bootstrap_admin raises when
+    # auth is enabled with no way to authenticate, and that has to stop the boot. A server
+    # that starts and then refuses every request is the harder problem to diagnose.
+    #
+    # After the security check, so that a deployment which is misconfigured in both ways reports
+    # the configuration problem rather than the empty user table — the former explains the latter.
+    bootstrap_admin()
     try:
         from storage_backends.retention import get_sweeper
 
@@ -217,10 +256,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Added after CORSMiddleware and therefore *inside* it: Starlette applies middleware in reverse
-# registration order, so CORS headers are still attached to the 401 this can return. Without that
-# a browser reports a cross-origin failure instead of the actual authentication error.
+# Both middlewares are registered, and exactly one of them acts on any given request: each
+# returns immediately unless its scheme is the active one (`AUTH_ENABLED` decides — see the
+# api/security.py docstring). Registering both unconditionally is deliberate for the same reason
+# U12 gave for registering its own that way: the settings are read *per request*, so a test can
+# switch schemes, whereas an `if` here would bake the choice in at import time and no test could
+# reach the other branch. That is the trap `tests/test_cors.py` documents for CORS.
+#
+# Added *after* CORS, which means they run **inside** it: Starlette applies middleware in reverse
+# registration order, so CORS is outermost and a 401 from either still carries the CORS headers a
+# browser needs in order to read the status rather than reporting an opaque network error.
+#
+# AuthMiddleware last, so it is the innermost of the two and therefore runs *after*
+# ClipsAuthMiddleware. Order is not load-bearing while only one can act, but this is the one that
+# stays correct if that ever stops being true: the shared secret is the coarser check.
 app.add_middleware(ClipsAuthMiddleware)
+app.add_middleware(AuthMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +502,250 @@ class PreviewRequest(BaseModel):
 class WatchToggleRequest(BaseModel):
     enabled: bool
     options: OptionsModel = OptionsModel()
+
+
+class LoginRequest(BaseModel):
+    """U12: exchange a username and password for a session."""
+
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    """U12: an administrator creating an account."""
+
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class PasswordChangeRequest(BaseModel):
+    """U12: a user changing their own password, proving the current one first."""
+
+    current_password: str
+    new_password: str
+
+
+class DisableUserRequest(BaseModel):
+    disabled: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Authorization helpers (U12)
+# ---------------------------------------------------------------------------
+def _authorised_job(request: Request, job_id: str):
+    """The job, if the caller may see it. Raises 404 otherwise.
+
+    Every job-scoped endpoint goes through this instead of calling
+    ``manager.store.get(job_id)`` directly, so authorization is one function rather than a
+    convention repeated forty times - the kind of convention that holds until the day
+    somebody adds an endpoint.
+
+    **404, never 403.** A caller who is not the owner is told the job does not exist, because
+    a 403 confirms that a guessed id is real. Job ids are 12 hex characters and appear in
+    URLs; distinguishing "yours", "someone else's" and "no such thing" turns them into an
+    enumerable namespace. The owner sees no difference, and the operator has the logs.
+    """
+    job = get_manager().store.get(job_id)
+    if job is None or not may_access_job(job, current_user(request)):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+def _owner_id(request: Request) -> str:
+    """The owner to stamp on a new job: the user's id, or ``""`` when auth is off."""
+    user = current_user(request)
+    return user.id if user is not None else ""
+
+
+def _owner_filter(request: Request) -> Optional[str]:
+    """The owner to filter listings by, or ``None`` for no filtering.
+
+    ``None`` for a single-tenant install *and* for an admin, which is what makes the two
+    behave identically - an admin's job list is the whole job list, exactly as it was before
+    U12 existed.
+    """
+    user = current_user(request)
+    if user is None or user.is_admin:
+        return None
+    return user.id
+
+
+# ---------------------------------------------------------------------------
+# Authentication (U12)
+# ---------------------------------------------------------------------------
+def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
+    """Attach the session cookie.
+
+    ``httponly`` so a cross-site scripting bug cannot read the token out of
+    ``document.cookie`` - the reason the token is never put in ``localStorage`` either.
+    ``samesite="lax"`` so it is not sent on cross-site POSTs, which is the CSRF defence this
+    relies on. ``secure`` follows ``AUTH_COOKIE_SECURE`` rather than being forced on, because
+    a browser silently discards a Secure cookie over plain http and a default-on flag would
+    make a localhost install unable to log in with no visible reason.
+    """
+    response.set_cookie(
+        key=str(settings.auth_session_cookie or "clipper_session"),
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        samesite="lax",
+        secure=bool(settings.auth_cookie_secure),
+        path="/",
+    )
+
+
+@app.get("/api/auth/config", tags=["auth"])
+def auth_config() -> dict:
+    """Whether this deployment requires a login (U12).
+
+    Unauthenticated by necessity and by design: the SPA cannot otherwise distinguish "auth is
+    off" from "auth is on and I am signed out", and would show a login form for an account
+    system that does not exist. One boolean, and no information about users.
+    """
+    return {"auth_enabled": bool(settings.auth_enabled)}
+
+
+@app.post("/api/auth/login", tags=["auth"])
+def login(request: Request, response: Response, req: LoginRequest) -> dict:
+    """Exchange a username and password for a session cookie (U12)."""
+    if not settings.auth_enabled:
+        # Issuing a session that nothing checks would be worse than refusing: the UI would
+        # show a signed-in state that means nothing.
+        raise HTTPException(
+            status_code=404, detail="This deployment does not use authentication."
+        )
+
+    username = (req.username or "").strip().lower()
+    client = client_key(request)
+    if not login_rate_limiter.check(username, client):
+        # 429 with no detail about whether the username exists.
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts. Wait a few minutes and try again.",
+        )
+
+    user = get_auth_store().authenticate(username, req.password or "")
+    if user is None:
+        login_rate_limiter.record_failure(username, client)
+        # One message for a missing user, a wrong password and a disabled account alike.
+        # Naming which one is wrong confirms that a username exists, which is the first
+        # half of credential stuffing.
+        raise HTTPException(status_code=401, detail="Incorrect username or password.")
+
+    login_rate_limiter.clear(username, client)
+    ttl_seconds = max(60.0, float(settings.auth_session_ttl_hours) * 3600.0)
+    session = get_auth_store().create_session(user.id, ttl_seconds=ttl_seconds)
+    _set_session_cookie(response, session.token, int(ttl_seconds))
+    logger.info("U12: %r signed in", user.username)
+    return {"user": user.to_dict()}
+
+
+@app.post("/api/auth/logout", tags=["auth"])
+def logout(request: Request, response: Response) -> dict:
+    """End the current session (U12).
+
+    The session row is deleted, not merely un-cookied: a token that still resolves after a
+    logout is a token that works for anyone who captured it.
+    """
+    from api.security import extract_token
+
+    token = extract_token(request.headers)
+    if token:
+        get_auth_store().delete_session(token)
+    response.delete_cookie(
+        key=str(settings.auth_session_cookie or "clipper_session"), path="/"
+    )
+    return {"ok": True}
+
+
+@app.get("/api/auth/session", tags=["auth"])
+def auth_session(request: Request) -> dict:
+    """The signed-in user, or ``null`` when this deployment has no authentication."""
+    user = current_user(request)
+    return {"user": user.to_dict() if user is not None else None}
+
+
+@app.post("/api/auth/password", tags=["auth"])
+def change_password(
+    request: Request, response: Response, req: PasswordChangeRequest
+) -> dict:
+    """Change your own password, proving the current one (U12).
+
+    Requiring the current password is what stops a borrowed session from becoming a
+    permanent takeover. Every *other* session for the account is then ended, because a
+    password change is the action someone takes when they think a session is compromised,
+    and leaving the others alive defeats the point.
+    """
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(
+            status_code=404, detail="This deployment does not use authentication."
+        )
+    store = get_auth_store()
+    if store.authenticate(user.username, req.current_password or "") is None:
+        raise HTTPException(status_code=403, detail="Current password is incorrect.")
+    try:
+        store.set_password(user.id, req.new_password or "")
+    except PasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Every existing session for the account is ended, including this one. A password change
+    # is what someone does when they believe a session is compromised, so leaving the others
+    # alive defeats the point.
+    store.delete_sessions_for_user(user.id)
+    # ...and the caller is immediately given a new one, so changing a password does not sign
+    # you out of the tab you changed it in. This is a fresh token, not the old one revived.
+    ttl_seconds = max(60.0, float(settings.auth_session_ttl_hours) * 3600.0)
+    session = store.create_session(user.id, ttl_seconds=ttl_seconds)
+    _set_session_cookie(response, session.token, int(ttl_seconds))
+    return {"ok": True, "sessions_ended": True}
+
+
+@app.get("/api/users", tags=["auth"])
+def list_users(request: Request) -> dict:
+    """Every account (admin only, U12)."""
+    require_admin(request)
+    return {"users": [u.to_dict() for u in get_auth_store().list_users()]}
+
+
+@app.post("/api/users", tags=["auth"])
+def create_user(request: Request, req: CreateUserRequest) -> dict:
+    """Create an account (admin only, U12).
+
+    There is no self-service registration, deliberately: an open sign-up endpoint on a tool
+    that spends GPU minutes per request is an invitation, and who may have an account is a
+    decision for whoever runs the instance.
+    """
+    require_admin(request)
+    try:
+        user = get_auth_store().create_user(
+            req.username, req.password, is_admin=bool(req.is_admin)
+        )
+    except PasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"user": user.to_dict()}
+
+
+@app.post("/api/users/{user_id}/disabled", tags=["auth"])
+def set_user_disabled(request: Request, user_id: str, req: DisableUserRequest) -> dict:
+    """Disable or re-enable an account (admin only, U12).
+
+    Disabling ends the account's sessions. An admin cannot disable themselves, which is not
+    paternalism: with one admin it would lock the instance out of its own user administration
+    and the only way back would be editing the database by hand.
+    """
+    admin = require_admin(request)
+    if user_id == admin.id and req.disabled:
+        raise HTTPException(
+            status_code=409,
+            detail="You cannot disable your own administrator account.",
+        )
+    if not get_auth_store().set_disabled(user_id, bool(req.disabled)):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +1002,7 @@ def preview(req: PreviewRequest) -> dict:
 # Job submission
 # ---------------------------------------------------------------------------
 @app.post("/api/jobs/url", tags=["jobs"], dependencies=[Depends(rate_limit)])
-def submit_url(req: UrlJobRequest) -> dict:
+def submit_url(request: Request, req: UrlJobRequest) -> dict:
     """Submit a single URL for processing."""
     if not is_url(req.url):
         raise HTTPException(status_code=400, detail="Not a valid URL")
@@ -719,12 +1014,14 @@ def submit_url(req: UrlJobRequest) -> dict:
         validate_public_url(req.url)
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    job = get_manager().submit("url", req.url, req.options.to_options())
+    job = get_manager().submit(
+        "url", req.url, req.options.to_options(), owner=_owner_id(request)
+    )
     return job.to_dict()
 
 
 @app.post("/api/jobs/batch", tags=["jobs"], dependencies=[Depends(rate_limit)])
-def submit_batch(req: BatchRequest) -> dict:
+def submit_batch(request: Request, req: BatchRequest) -> dict:
     """Submit a batch of URLs; they are processed in line (sequentially)."""
     urls = [u for u in req.urls if is_url(u)]
     if not urls:
@@ -739,7 +1036,9 @@ def submit_batch(req: BatchRequest) -> dict:
         except UnsafeURLError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     items = [{"input_type": "url", "source": u} for u in urls]
-    batch_id = get_manager().submit_batch(items, req.options.to_options())
+    batch_id = get_manager().submit_batch(
+        items, req.options.to_options(), owner=_owner_id(request)
+    )
     jobs = get_manager().store.by_batch(batch_id)
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
 
@@ -806,6 +1105,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
 
 @app.post("/api/upload", tags=["jobs"], dependencies=[Depends(rate_limit)])
 async def upload(
+    request: Request,
     files: list[UploadFile] = File(...),
     language: Optional[str] = Form(None),
     translate: bool = Form(False),
@@ -1006,13 +1306,14 @@ async def upload(
         raise
 
     manager = get_manager()
+    owner = _owner_id(request)
     if len(saved) == 1:
         job = manager.submit(
-            "file", saved[0]["source"], options, title=saved[0]["title"]
+            "file", saved[0]["source"], options, title=saved[0]["title"], owner=owner
         )
         return {"jobs": [job.to_dict()]}
 
-    batch_id = manager.submit_batch(saved, options)
+    batch_id = manager.submit_batch(saved, options, owner=owner)
     jobs = manager.store.by_batch(batch_id)
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
 
@@ -1021,20 +1322,21 @@ async def upload(
 # Job status
 # ---------------------------------------------------------------------------
 @app.get("/api/jobs", tags=["jobs"])
-def list_jobs() -> dict:
-    return {"jobs": [j.to_dict() for j in get_manager().store.all()]}
+def list_jobs(request: Request) -> dict:
+    # U12: filtered to the caller's own jobs. An admin, and a single-tenant install, get no
+    # filter at all - so the list is exactly what it was before ownership existed.
+    return {
+        "jobs": [j.to_dict() for j in get_manager().store.all(owner=_owner_filter(request))]
+    }
 
 
 @app.get("/api/jobs/{job_id}", tags=["jobs"])
-def get_job(job_id: str) -> dict:
-    job = get_manager().store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job.to_dict()
+def get_job(request: Request, job_id: str) -> dict:
+    return _authorised_job(request, job_id).to_dict()
 
 
 @app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])
-def cancel_job(job_id: str) -> dict:
+def cancel_job(request: Request, job_id: str) -> dict:
     """Ask a queued or running job to stop (I4).
 
     ``409`` rather than ``404`` for a job that has already finished: the job exists, it simply
@@ -1045,9 +1347,7 @@ def cancel_job(job_id: str) -> dict:
     "cancelled" while a render is still writing would be a claim the API cannot back.
     """
     manager = get_manager()
-    job = manager.store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _authorised_job(request, job_id)
     was_running = job.status.value == "processing"
     if not manager.cancel(job_id):
         raise HTTPException(
@@ -1065,16 +1365,14 @@ def cancel_job(job_id: str) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/timings", tags=["jobs"])
-def get_job_timings(job_id: str) -> dict:
+def get_job_timings(request: Request, job_id: str) -> dict:
     """Per-stage render timings for a job (M5).
 
     Read from the job record rather than from the live metrics registry, so the numbers survive
     a restart and remain available for a job that finished long ago - which is when someone
     actually asks where the time went.
     """
-    job = get_manager().store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _authorised_job(request, job_id)
     timings = list(job.stage_timings or [])
     return {
         "job_id": job_id,
@@ -1085,8 +1383,11 @@ def get_job_timings(job_id: str) -> dict:
 
 
 @app.get("/api/batches/{batch_id}", tags=["jobs"])
-def get_batch(batch_id: str) -> dict:
-    jobs = get_manager().store.by_batch(batch_id)
+def get_batch(request: Request, batch_id: str) -> dict:
+    # U12: filtered by owner, so a batch id belonging to someone else reads as "not found"
+    # rather than returning their jobs. A batch is submitted by one user, so a filtered
+    # lookup either returns all of it or none of it.
+    jobs = get_manager().store.by_batch(batch_id, owner=_owner_filter(request))
     if not jobs:
         raise HTTPException(status_code=404, detail="Batch not found")
     return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
@@ -1096,8 +1397,9 @@ def get_batch(batch_id: str) -> dict:
 # Clip metadata editing + per-field regeneration
 # ---------------------------------------------------------------------------
 @app.patch("/api/jobs/{job_id}/clips/{clip_id}", tags=["metadata"])
-def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
+def edit_clip(request: Request, job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
     """Update editable metadata fields on a clip (title, hashtags, hook, ...)."""
+    _authorised_job(request, job_id)
     fields = {k: v for k, v in edit.model_dump().items() if v is not None}
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -1129,7 +1431,7 @@ def _preset_detail(preset) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/resume", tags=["jobs"], dependencies=[Depends(rate_limit)])
-def resume_job(job_id: str) -> dict:
+def resume_job(request: Request, job_id: str) -> dict:
     """Render a failed job's unfinished clips, keeping the ones it already produced (I5).
 
     An interrupted job was marked failed *wholesale*: the clips it had already rendered were on
@@ -1140,9 +1442,7 @@ def resume_job(job_id: str) -> dict:
     a full re-run is exactly the expensive thing the caller was trying to avoid.
     """
     manager = get_manager()
-    job = manager.store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _authorised_job(request, job_id)
     if job.status.value not in ("failed", "cancelled"):
         raise HTTPException(
             status_code=409,
@@ -1216,7 +1516,9 @@ def caption_preview(req: CaptionPreviewModel) -> FileResponse:
 REVIEW_STATES = frozenset({"pending", "approved", "rejected"})
 
 
-def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list[dict]:
+def _set_review(
+    request: Request, job_id: str, clip_ids: list[str], state: str, note: str
+) -> list[dict]:
     """Apply a review state to several clips of one job. Returns the updated clips."""
     if state not in REVIEW_STATES:
         raise HTTPException(
@@ -1224,8 +1526,7 @@ def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list
             detail=f"review_state must be one of {sorted(REVIEW_STATES)}",
         )
     manager = get_manager()
-    if manager.store.get(job_id) is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    _authorised_job(request, job_id)
 
     updated: list[dict] = []
     missing: list[str] = []
@@ -1248,14 +1549,16 @@ def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/review", tags=["metadata"])
-def review_clip(job_id: str, clip_id: str, req: ClipReviewModel) -> dict:
+def review_clip(
+    request: Request, job_id: str, clip_id: str, req: ClipReviewModel
+) -> dict:
     """Approve, reject or reset one clip (U9)."""
-    updated = _set_review(job_id, [clip_id], req.review_state, req.review_note)
+    updated = _set_review(request, job_id, [clip_id], req.review_state, req.review_note)
     return updated[0]
 
 
 @app.post("/api/jobs/{job_id}/clips/review", tags=["metadata"])
-def review_clips(job_id: str, req: BatchReviewModel) -> dict:
+def review_clips(request: Request, job_id: str, req: BatchReviewModel) -> dict:
     """Approve or reject many clips of one job in a single call (U9).
 
     A job produces up to ten clips and each had to be judged individually with nowhere to record
@@ -1263,12 +1566,12 @@ def review_clips(job_id: str, req: BatchReviewModel) -> dict:
     """
     if not req.clip_ids:
         raise HTTPException(status_code=400, detail="clip_ids must not be empty")
-    updated = _set_review(job_id, req.clip_ids, req.review_state, req.review_note)
+    updated = _set_review(request, job_id, req.clip_ids, req.review_state, req.review_note)
     return {"updated": updated, "count": len(updated)}
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/transcript", tags=["metadata"])
-def clip_transcript(job_id: str, clip_id: str) -> dict:
+def clip_transcript(request: Request, job_id: str, clip_id: str) -> dict:
     """Word-level timings for one rendered clip, for the transcript editor (U4).
 
     Deliberately **not** rate limited, following the rule set when the limiter was added: the
@@ -1288,9 +1591,9 @@ def clip_transcript(job_id: str, clip_id: str) -> dict:
     rendered media, and it is reported rather than papered over: see ``trimmed``.
     """
     manager = get_manager()
-    job = manager.store.get(job_id)
+    job = _authorised_job(request, job_id)
     clip = manager.store.get_clip(job_id, clip_id)
-    if job is None or clip is None:
+    if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
 
     from worker import clip_transcript as ct
@@ -1359,7 +1662,9 @@ def _trim_module():
     tags=["metadata"],
     dependencies=[Depends(rate_limit)],
 )
-def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> dict:
+def rerender_clip_endpoint(
+    request: Request, job_id: str, clip_id: str, req: RerenderRequest
+) -> dict:
     """Re-render one clip, optionally with changed settings (U7).
 
     Changing one setting previously meant resubmitting the whole source: the download, the
@@ -1372,9 +1677,9 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     run and the wrong one here.
     """
     manager = get_manager()
-    job = manager.store.get(job_id)
+    job = _authorised_job(request, job_id)
     clip = manager.store.get_clip(job_id, clip_id)
-    if job is None or clip is None:
+    if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
 
     from worker import rerender as rerender_module
@@ -1411,8 +1716,14 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     return (stored or updated).to_dict()
 
 
-@app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"], dependencies=[Depends(rate_limit)])
-def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> dict:
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/regenerate",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
+def regenerate_clip_field(
+    request: Request, job_id: str, clip_id: str, req: RegenerateRequest
+) -> dict:
     """Regenerate a single metadata field for a clip via the LLM.
 
     Requires an LLM to be configured; returns 400 for unknown fields and 409
@@ -1424,9 +1735,9 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
             detail=f"Field must be one of {list(REGENERATABLE_FIELDS)}",
         )
     manager = get_manager()
-    job = manager.store.get(job_id)
+    job = _authorised_job(request, job_id)
     clip = manager.store.get_clip(job_id, clip_id)
-    if job is None or clip is None:
+    if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
 
     if not _llm_available_safe():
@@ -1475,11 +1786,14 @@ def save_campaign(req: CampaignModel) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/publish", tags=["publishing"])
-def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
+def publish_clip(
+    request: Request, job_id: str, clip_id: str, req: PublishClipRequest
+) -> dict:
     manager = get_manager()
-    job = manager.store.get(job_id)
+    # Called for its authorization check; this handler works from the clip, not the job.
+    _authorised_job(request, job_id)
     clip = manager.store.get_clip(job_id, clip_id)
-    if job is None or clip is None:
+    if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     if req.mode not in ("auto","review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
@@ -1789,7 +2103,7 @@ def storage_cleanup(temp: bool = True, expired: bool = True) -> dict:
 
 
 @app.delete("/api/jobs/{job_id}/source", tags=["storage"])
-def delete_source(job_id: str, confirm: bool = False) -> dict:
+def delete_source(request: Request, job_id: str, confirm: bool = False) -> dict:
     """Delete a job's original source video. Requires ``confirm=true``.
 
     Source video is never auto-deleted; this endpoint is the only way to remove
@@ -1798,9 +2112,7 @@ def delete_source(job_id: str, confirm: bool = False) -> dict:
     if not confirm:
         raise HTTPException(status_code=400,
                             detail="Deleting the original source requires confirm=true")
-    job = get_manager().store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _authorised_job(request, job_id)
     if job.input_type != "file":
         raise HTTPException(status_code=400,
                             detail="Only uploaded/downloaded source files can be deleted here")
@@ -1919,10 +2231,12 @@ def _clip_metadata_text(clip) -> str:
 
 
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
-def download_clip(job_id: str, filename: str) -> StreamingResponse:
+def download_clip(request: Request, job_id: str, filename: str) -> StreamingResponse:
     safe_name = Path(filename).name
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
-    job=get_manager().store.get(job_id)
+    # U12: authorised first, so a caller who does not own the job cannot tell a real clip
+    # filename from an invented one.
+    job = _authorised_job(request, job_id)
     clip=next((c for c in job.clips if c.filename==safe_name),None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -1936,9 +2250,10 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
 
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
-def download_video_only(job_id: str, filename: str) -> FileResponse:
+def download_video_only(request: Request, job_id: str, filename: str) -> FileResponse:
     safe_name = Path(filename).name
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    _authorised_job(request, job_id)
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path,filename=safe_name,media_type="video/mp4")
@@ -2003,9 +2318,16 @@ def fallback_index_html() -> str:
         pass
 
     try:
-        jobs = get_manager().store.all()
-        active = sum(1 for j in jobs if j.status.value in ("queued", "processing"))
-        rows.append(_row("Jobs", f"{len(jobs)} known, {active} active"))
+        # U12: this page is served unauthenticated (it has to be - it is where a login form
+        # would appear), so with auth on it must not report how much work the instance has
+        # done. A job count is not sensitive on a single-tenant box and is somebody's
+        # business on a shared one.
+        if settings.auth_enabled:
+            rows.append(_row("Jobs", "sign in to view"))
+        else:
+            jobs = get_manager().store.all()
+            active = sum(1 for j in jobs if j.status.value in ("queued", "processing"))
+            rows.append(_row("Jobs", f"{len(jobs)} known, {active} active"))
     except Exception:
         rows.append(_row("Jobs", "job store unavailable", ok=False))
 

@@ -28,6 +28,10 @@ os.environ.update(
         # shared JobManager singleton writes into the developer's real storage
         # directory and jobs accumulate across runs.
         "JOBS_DB": str(_TMP / "storage" / "jobs.db"),
+        # U12: accounts and sessions, for the same reason as JOBS_DB. Redirected even
+        # though AUTH_ENABLED defaults off and the store is then never opened - the point
+        # of this block is that no test *can* touch real storage, not that none happens to.
+        "USERS_DB": str(_TMP / "storage" / "users.db"),
         "PUBLISH_POLL_SECONDS": "0.05",
         "PUBLISH_MIN_INTERVAL_FLOOR_SECONDS": "0",
     }

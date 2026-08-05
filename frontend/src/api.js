@@ -273,6 +273,56 @@ export const api = {
 
   updates: (force = false) =>
     apiFetch(`/api/updates${force ? "?force=true" : ""}`).then(jsonOrThrow),
+
+  // --- U12: authentication ---
+  //
+  // The session itself is never touched by this client on purpose. It lives in an httpOnly
+  // cookie the browser attaches automatically, which is what keeps it out of reach of any
+  // XSS bug in this bundle. Putting it in localStorage would make every one of these calls
+  // one line shorter and the token readable by injected script.
+  //
+  // These go through `apiFetch` like everything else, even though a session needs no header.
+  // `apiFetch` adds the *shared secret*, which is a different credential and the one still in
+  // force on an install that has not enabled accounts (see api/security.py). Calling bare
+  // `fetch` here — as this branch originally did, before API_AUTH_TOKEN existed — would make
+  // exactly these routes fail with 401 on any deployment that sets a secret, and the symptom
+  // would be a login screen that cannot log in. The cookie is sent either way: `apiFetch` is
+  // same-origin, and that is the default credentials mode.
+  //
+  // `authConfig` is the one call that must work while signed out: without it the SPA cannot
+  // tell "this deployment has no accounts" from "I am signed out", and a single-tenant
+  // install would show a login form for an account system it does not have.
+  authConfig: () => apiFetch("/api/auth/config").then(jsonOrThrow),
+  authSession: () => apiFetch("/api/auth/session").then(jsonOrThrow),
+  login: (username, password) =>
+    apiFetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    }).then(jsonOrThrow),
+  logout: () => apiFetch("/api/auth/logout", { method: "POST" }).then(jsonOrThrow),
+  changePassword: (currentPassword, newPassword) =>
+    apiFetch("/api/auth/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }).then(jsonOrThrow),
+  listUsers: () => apiFetch("/api/users").then(jsonOrThrow),
+  createUser: (username, password, isAdmin = false) =>
+    apiFetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, is_admin: isAdmin }),
+    }).then(jsonOrThrow),
+  setUserDisabled: (userId, disabled) =>
+    apiFetch(`/api/users/${encodeURIComponent(userId)}/disabled`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ disabled }),
+    }).then(jsonOrThrow),
 };
 
 export function formatBytes(bytes) {

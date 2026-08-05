@@ -71,8 +71,8 @@ because it looks like success.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
-| `npm run test:run` | **141 passed** |
+| `pytest` | **2151 passed, 0 skipped, 0 warnings** |
+| `npm run test:run` | **154 passed** |
 | `ruff check .` | clean |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
@@ -89,7 +89,18 @@ were tried and both are worse than the finding — `npm audit fix --force` *down
 
 ## 3. What is actually left
 
-13 items. Only two are a matter of effort.
+12 items. Only one is a matter of effort.
+
+**`U12` (multi-user auth) is done**, and off by default — `AUTH_ENABLED=false` is the shipped
+single-tenant behaviour. The parts that will surprise you: authentication is **one ASGI
+middleware** (`api/security.py`) rather than route dependencies, because `app.mount("/clips",
+StaticFiles(...))` is not a route and dependencies do not reach it; authorization is one
+function, `may_access_job`, funnelled through `_authorised_job` in `api/main.py`; and
+`tests/test_auth.py` contains a **route-introspection tripwire** that enumerates `app.routes`
+and fails if any path containing `{job_id}` answers 2xx to a non-owner. Add a job-scoped
+endpoint and that test covers it the day you write it — which is the point, since a
+hand-written list cannot fail for the endpoint nobody remembered. It has a self-test, so it
+cannot rot into passing while matching nothing.
 
 **`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
 knowing where the seams ended up, because the next person to touch trimming will meet them:
@@ -104,8 +115,7 @@ second pass.
 
 | Item | What | Why it was left |
 | --- | --- | --- |
-| **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
-| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
+| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this on its own branch, last.** It touches nearly every file and will conflict with anything else open. |
 
 ### Blocked on model weights CI cannot have
 
@@ -224,6 +234,9 @@ caller sees.
 
 ### Small things that will bite
 
+- **A `Mount` at `"/"` matches every path.** The SPA is mounted there, so any route registered
+  *after* it is unreachable and 404s from the static handler. Only relevant if you add a route
+  at runtime (a test did), but it costs an hour to work out.
 - **The transcript cache is keyed on file *content*, not path.** `transcript_cache.hash_source`
   digests the bytes, so two tests that write the same placeholder payload to different `tmp_path`
   files share one cache entry. A test asserting a cache *miss* then passes or fails depending on

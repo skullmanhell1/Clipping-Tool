@@ -150,13 +150,26 @@ class JobStore:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def all(self) -> list[Job]:
-        with self._lock:
-            return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+    def all(self, owner: Optional[str] = None) -> list[Job]:
+        """Every job, or only ``owner``'s when a filter is given (U12).
 
-    def by_batch(self, batch_id: str) -> list[Job]:
+        ``None`` means "no filtering", which is the single-tenant behaviour and what every
+        pre-U12 caller gets by not passing anything. It is deliberately distinct from ``""``:
+        the empty string is a real owner value (a job created while auth was off), so
+        ``all(owner="")`` asks for exactly those, and defaulting to ``""`` would have turned
+        "show me everything" into "show me only the unowned ones".
+        """
+        with self._lock:
+            jobs = list(self._jobs.values())
+        if owner is not None:
+            jobs = [j for j in jobs if getattr(j, "owner", "") == owner]
+        return sorted(jobs, key=lambda j: j.created_at, reverse=True)
+
+    def by_batch(self, batch_id: str, owner: Optional[str] = None) -> list[Job]:
         with self._lock:
             jobs = [j for j in self._jobs.values() if j.batch_id == batch_id]
+        if owner is not None:
+            jobs = [j for j in jobs if getattr(j, "owner", "") == owner]
         return sorted(jobs, key=lambda j: j.created_at)
 
     def update(self, job_id: str, **fields) -> None:
@@ -222,14 +235,20 @@ class JobManager:
         options: ProcessingOptions,
         batch_id: Optional[str] = None,
         title: str = "",
+        owner: str = "",
     ) -> Job:
-        """Create a job, store it as queued, and schedule it for processing."""
+        """Create a job, store it as queued, and schedule it for processing.
+
+        ``owner`` is U12's user id. It defaults to ``""`` - unowned - so every existing
+        caller keeps working and a single-tenant install records exactly what it did before.
+        """
         job = Job(
             input_type=input_type,
             source=source,
             options=options,
             batch_id=batch_id,
             title=title or (Path(source).name if input_type == "file" else source),
+            owner=owner or "",
         )
         self.store.add(job)
         # I4: clear any stale request under this id before the work is scheduled. Ids are short
@@ -268,10 +287,13 @@ class JobManager:
         logger.info("job %s cancelled by request (was %s)", job_id, job.status.value)
         return True
 
-    def submit_batch(self, items: list[dict], options: ProcessingOptions) -> str:
+    def submit_batch(
+        self, items: list[dict], options: ProcessingOptions, owner: str = ""
+    ) -> str:
         """Submit multiple items as one batch; returns the batch id.
 
         Each item is ``{"input_type": "url"|"file", "source": str, "title"?: str}``.
+        Every job in the batch gets the same ``owner`` (U12) - a batch is one user's request.
         """
         batch_id = uuid.uuid4().hex[:12]
         for item in items:
@@ -281,6 +303,7 @@ class JobManager:
                 options=options,
                 batch_id=batch_id,
                 title=item.get("title", ""),
+                owner=owner,
             )
         return batch_id
 

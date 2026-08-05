@@ -135,7 +135,9 @@ def test_whitespace_only_token_counts_as_unset(monkeypatch):
     presents as the application being broken rather than as being misconfigured.
     """
     monkeypatch.setattr(settings, "api_auth_token", "   ")
-    assert settings.auth_enabled is False
+    # `api_token_configured`, not `auth_enabled`: the U12 merge took the latter name for the
+    # accounts field, so the property that answers "is a shared secret set" was renamed.
+    assert settings.api_token_configured is False
     with TestClient(app) as client:
         assert client.get("/api/info").status_code == 200
 

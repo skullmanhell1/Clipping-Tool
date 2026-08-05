@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "U12's frontend half: the gate that decides whether the application is mounted.",
+    "",
+    "None of these mutations produces a broken-looking UI. The two that matter most produce a",
+    "*more convenient* one - the app renders straight away, which is exactly what a developer",
+    "would want and exactly what the backend then refuses. The rest turn a security property",
+    "into a cosmetic one: a masked password field that is not masked, an error message that",
+    "helpfully says which half of the credentials was wrong.",
+    "",
+    "Note the frontend cannot grant access on its own - the API refuses regardless. What it can",
+    "do is show a login form to a single-tenant install that has no accounts, leak a username's",
+    "existence, or mount components that then fire authenticated requests while signed out."
+  ],
+
+  "command": ["npm", "--prefix", "frontend", "run", "test:run"],
+
+  "mutations": [
+    {
+      "name": "config_answer_ignored",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "      if (!config.auth_enabled) {",
+      "new": "      if (false) {",
+      "why": "the order of the two questions is the whole design: without the config check, a single-tenant install - the default - gets a login form for an account system it does not have"
+    },
+    {
+      "name": "session_asked_before_config",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "        setState({ status: \"ready\", enabled: false, user: null });\n        return;",
+      "new": "        setState({ status: \"ready\", enabled: false, user: null });",
+      "why": "falling through to the session request on a deployment with no accounts asks a question whose 401 answer means nothing, and the state it then sets contradicts the one just set"
+    },
+    {
+      "name": "app_mounted_while_signed_out",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "          status: session.user ? \"ready\" : \"signed-out\",",
+      "new": "          status: \"ready\",",
+      "why": "a 200 with `user: null` would mount the app with nobody signed in, and every component below would immediately fire requests the API refuses"
+    },
+    {
+      "name": "signed_out_renders_the_app_anyway",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "        setState({ status: \"signed-out\", enabled: true, user: null });\n      }\n    } catch (configError) {",
+      "new": "        setState({ status: \"ready\", enabled: true, user: null });\n      }\n    } catch (configError) {",
+      "why": "a 401 from the session endpoint is the normal signed-out answer; treating it as success mounts the app for an anonymous visitor"
+    },
+    {
+      "name": "unreachable_server_looks_like_being_signed_out",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "        status: \"error\",\n        enabled: false,",
+      "new": "        status: \"signed-out\",\n        enabled: true,",
+      "why": "the config endpoint needs no credentials, so a failure there is the backend being down - showing a login form blames the user for it and their correct password will not work"
+    },
+    {
+      "name": "sign_out_does_not_sign_out",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "    setState({ status: \"signed-out\", enabled: true, user: null });\n  }, []);",
+      "new": "  }, []);",
+      "why": "the server ends the session and the screen keeps showing the app, which on the shared machine that logging out is for is the whole risk"
+    },
+    {
+      "name": "sign_out_abandoned_when_the_request_fails",
+      "file": "frontend/src/components/AuthGate.jsx",
+      "old": "    try {\n      await api.logout();\n    } catch {",
+      "new": "    await api.logout();\n    if (false) {",
+      "why": "a failed logout must still clear the screen; leaving the app up because the network blipped is the opposite of what was asked for"
+    },
+    {
+      "name": "login_error_replaced_with_our_own_wording",
+      "file": "frontend/src/components/LoginScreen.jsx",
+      "old": "        setError(loginError.message || \"Could not sign in.\");",
+      "new": "        setError(\"That user does not exist or the password was wrong.\");",
+      "why": "the API deliberately answers identically for a wrong password, an unknown username and a disabled account; inventing a message here is where username enumeration comes back"
+    },
+    {
+      "name": "password_not_masked",
+      "file": "frontend/src/components/LoginScreen.jsx",
+      "old": "            type=\"password\"",
+      "new": "            type=\"text\"",
+      "why": "shoulder-surfing is the threat this input type exists for, and the field still works perfectly without it"
+    },
+    {
+      "name": "password_kept_after_a_failed_attempt",
+      "file": "frontend/src/components/LoginScreen.jsx",
+      "old": "        setPassword(\"\");",
+      "new": "        ;",
+      "why": "a failed password left in the field is a password left on screen, and it invites hammering the same wrong value into the rate limit"
+    }
+  ]
+}

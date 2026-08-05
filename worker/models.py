@@ -652,6 +652,13 @@ class Job:
     # clips already on disk might not correspond to any window the second run chose, and the
     # user would get a mix of two different selections.
     planned_clips: list[dict] = field(default_factory=list)
+    # U12: the id of the user this job belongs to, or "" when it belongs to nobody.
+    #
+    # Empty is the single-tenant case *and* the pre-U12 case, which is why it is not
+    # ``None``: every job written before ownership existed reads back as unowned. With
+    # AUTH_ENABLED those are visible to admins only - a deliberate choice between showing a
+    # stranger's library to every new account and hiding it from everyone.
+    owner: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: Optional[str] = None
     status: JobStatus = JobStatus.QUEUED
@@ -682,6 +689,9 @@ class Job:
             "source_path": self.source_path,
             # I5: the selected windows, so an interrupted job can resume the missing ones.
             "planned_clips": self.planned_clips,
+            # U12: who this job belongs to. "" when auth is off, which is every job in a
+            # single-tenant install.
+            "owner": self.owner,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
@@ -719,6 +729,7 @@ class Job:
             options=ProcessingOptions.from_dict(data.get("options")),
             source_path=str(data.get("source_path") or ""),
             planned_clips=list(data.get("planned_clips") or []),
+            owner=str(data.get("owner") or ""),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,

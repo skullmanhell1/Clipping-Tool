@@ -111,6 +111,13 @@ class Job_Persistence:
                 CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs(batch_id);
                 """
             )
+            # U12's `owner` deliberately has **no column of its own**. This schema's rule is
+            # that a field is promoted out of the JSON blob when it is *queried* (see the
+            # module docstring), and nothing queries owner: `JobStore` holds every job in
+            # memory - `load_all` selects all of them at startup and the table is pruned to
+            # MAX_PERSISTED_JOBS - so owner filtering happens there, over a few hundred
+            # objects. A column and index would buy nothing and would put the same fact in
+            # two places, where the copy nothing reads is free to be wrong.
 
     # -- writes ------------------------------------------------------------
 
