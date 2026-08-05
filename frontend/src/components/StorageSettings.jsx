@@ -167,3 +167,9 @@ export default function StorageSettings() {
     </div>
   );
 }
+
+// This panel takes no props. Everything it shows comes from `/api/storage`, which it polls itself,
+// and every change it makes goes straight back there — so there is no boundary here to validate.
+// Declared empty rather than omitted, so "no props" is a statement someone made rather than a
+// block that was forgotten.
+StorageSettings.propTypes = {};

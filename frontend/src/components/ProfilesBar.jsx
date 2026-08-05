@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useState } from "react";
 
 /**
@@ -111,3 +112,28 @@ export default function ProfilesBar({
     </div>
   );
 }
+
+ProfilesBar.propTypes = {
+  // Required: `profiles.find` and `profiles.map` are both unguarded, and "no profiles yet" is
+  // already representable as an empty array — which renders as the placeholder option alone.
+  profiles: PropTypes.arrayOf(
+    PropTypes.shape({
+      id: PropTypes.string.isRequired,
+      // Required because the name is what a save resolves against: an unnamed profile could be
+      // overwritten by a typed name that matches nothing.
+      name: PropTypes.string.isRequired,
+      // The stored payloads. Opaque here — this bar never reads inside them, it only asks the
+      // parent to apply one.
+      settings: PropTypes.object,
+      publishing: PropTypes.object,
+    })
+  ).isRequired,
+  // Null when no profile has been made the default, which is the state of a fresh install.
+  defaultId: PropTypes.string,
+  activeId: PropTypes.string,
+  // All four actions are called unguarded, and each is the only way to perform its action.
+  onApply: PropTypes.func.isRequired,
+  onSave: PropTypes.func.isRequired,
+  onSetDefault: PropTypes.func.isRequired,
+  onDelete: PropTypes.func.isRequired,
+};

@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 
@@ -346,3 +347,10 @@ export default function ScheduleCalendar({ onError }) {
     </section>
   );
 }
+
+ScheduleCalendar.propTypes = {
+  // The calendar loads its own data, so this is its only prop: a channel for the failures it cannot
+  // display itself. Called with `?.`, and not required — a caller that swallows them gets a
+  // calendar that silently shows nothing, which is why `App` does pass it.
+  onError: PropTypes.func,
+};

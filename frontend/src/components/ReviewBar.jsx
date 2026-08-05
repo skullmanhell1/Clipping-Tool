@@ -10,6 +10,8 @@
  * hand is the work the batch action was supposed to remove.
  */
 
+import PropTypes from "prop-types";
+
 const chip =
   "rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300 hover:border-brand-accent disabled:opacity-40";
 
@@ -104,3 +106,23 @@ export default function ReviewBar({
     </div>
   );
 }
+
+ReviewBar.propTypes = {
+  // Every prop has a default, so none is required: the bar renders an empty tally with its buttons
+  // disabled, which is the correct display for a job whose clips have not arrived yet.
+  counts: PropTypes.shape({
+    approved: PropTypes.number,
+    rejected: PropTypes.number,
+    pending: PropTypes.number,
+  }),
+  total: PropTypes.number,
+  selectedCount: PropTypes.number,
+  busy: PropTypes.bool,
+  error: PropTypes.string,
+  onSelectAll: PropTypes.func,
+  onSelectNone: PropTypes.func,
+  onSelectPending: PropTypes.func,
+  onApprove: PropTypes.func,
+  onReject: PropTypes.func,
+  onReset: PropTypes.func,
+};

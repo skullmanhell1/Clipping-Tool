@@ -1,5 +1,7 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
+import { PUBLISH_ATTEMPT_SHAPE } from "./shapes.js";
 const fmt = (t) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const colors = {
   published: "text-emerald-400",
@@ -75,6 +77,15 @@ function AttemptActions({ attempt, onDone }) {
     </div>
   );
 }
+
+AttemptActions.propTypes = {
+  // Required: the attempt's `state` decides which of the two buttons exist at all, and its `id` is
+  // what the approve and retry calls are made against.
+  attempt: PUBLISH_ATTEMPT_SHAPE.isRequired,
+  // Required, and called unguarded: an approve or retry that does not refresh leaves the row
+  // showing the state the user just changed, which reads as the action having failed.
+  onDone: PropTypes.func.isRequired,
+};
 
 export default function HistoryView() {
   const [data, setData] = useState({ clips: [], publish_attempts: [] });
@@ -178,3 +189,7 @@ export default function HistoryView() {
     </section>
   );
 }
+
+// `HistoryView` itself takes no props: it fetches the history, owns the platform filter, and polls.
+// The declaration that matters here is `AttemptActions`', above.
+HistoryView.propTypes = {};

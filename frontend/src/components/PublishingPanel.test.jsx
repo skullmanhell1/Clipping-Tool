@@ -1,9 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import PropTypes from "prop-types";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import PublishingPanel from "./PublishingPanel.jsx";
+import { PUBLISHER_STATUSES_SHAPE, PUBLISHING_SHAPE } from "./shapes.js";
 import { api } from "../api.js";
 
 /**
@@ -60,6 +62,16 @@ function Harness({ initial, onChange, statuses, campaigns, onCampaignSaved }) {
     />
   );
 }
+
+// The harness stands in for App.jsx, so it is declared like it: the same props, with the same
+// tolerances. `statuses` is not required because two tests below deliberately pass `{}` and `null`.
+Harness.propTypes = {
+  initial: PUBLISHING_SHAPE.isRequired,
+  onChange: PropTypes.func.isRequired,
+  statuses: PUBLISHER_STATUSES_SHAPE,
+  campaigns: PropTypes.array.isRequired,
+  onCampaignSaved: PropTypes.func,
+};
 
 /** Render the panel already expanded, which is where every control lives. */
 const setup = async (initial = VALUE, props = {}) => {

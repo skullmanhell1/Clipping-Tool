@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 /**
  * Labelled <select> styled for the dark theme.
  *
@@ -28,3 +30,23 @@ export default function Dropdown({ label, value, onChange, options, disabled }) 
     </label>
   );
 }
+
+Dropdown.propTypes = {
+  label: PropTypes.node.isRequired,
+  // The current value is not required: it is a settings key, and one absent from a saved profile
+  // written before that setting existed arrives as `undefined`, which renders as no selection
+  // rather than as a broken control.
+  value: PropTypes.string,
+  onChange: PropTypes.func.isRequired,
+  // Required, and required in full: the control is nothing but its options, and `options.map`
+  // is unguarded because a select with no list is a bug rather than a state to render.
+  options: PropTypes.arrayOf(
+    PropTypes.shape({
+      value: PropTypes.string.isRequired,
+      label: PropTypes.node.isRequired,
+      // A disabled option stays visible, carrying the reason it cannot be chosen.
+      disabled: PropTypes.bool,
+    })
+  ).isRequired,
+  disabled: PropTypes.bool,
+};

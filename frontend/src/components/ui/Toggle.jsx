@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 /**
  * A labelled checkbox with an optional hint line.
  *
@@ -37,3 +39,16 @@ export default function Toggle({ label, checked, onChange, hint, disabled }) {
     </label>
   );
 }
+
+Toggle.propTypes = {
+  // A node rather than a string: the labels are prose and several carry markup.
+  label: PropTypes.node.isRequired,
+  // Not required, and deliberately `bool` rather than a looser type: callers pass settings values
+  // straight through and a setting absent from an older profile arrives as `undefined`, which the
+  // `!!` above is there to absorb. A *non-boolean* value, though, is a caller that has wired this
+  // control to the wrong key, and that is worth hearing about.
+  checked: PropTypes.bool,
+  onChange: PropTypes.func.isRequired,
+  hint: PropTypes.node,
+  disabled: PropTypes.bool,
+};

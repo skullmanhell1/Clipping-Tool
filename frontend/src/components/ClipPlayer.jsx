@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
@@ -178,3 +179,15 @@ export default function ClipPlayer({ src, poster, className = "", onRegisterCont
     </div>
   );
 }
+
+ClipPlayer.propTypes = {
+  // The one required prop: a player with no source is an empty black box with working buttons.
+  src: PropTypes.string.isRequired,
+  // A clip rendered before its thumbnail was written has none, and the caller passes `undefined`
+  // rather than an empty string, which would be a request for "".
+  poster: PropTypes.string,
+  className: PropTypes.string,
+  // Optional by design: `JobCard` registers controls for the focused clip only, so every other
+  // card is mounted without one and drives itself from its own buttons.
+  onRegisterControls: PropTypes.func,
+};

@@ -211,6 +211,10 @@ export function toOptions(settings, publishing) {
   return wire;
 }
 
+// `App` takes no props — `main.jsx` mounts it as the root and every value it renders comes from its
+// own state or from the API — so there is no boundary here to declare. The shapes it hands down are
+// declared on the components that receive them, and `SETTINGS_SCHEMA` above remains the single
+// authoritative statement of the settings object.
 export default function App() {
   const [activeView, setActiveView] = useState("create");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
