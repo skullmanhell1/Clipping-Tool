@@ -602,6 +602,24 @@ class LoudnessStats:
     target_offset: float
 
 
+def _measured(value: str | float) -> float:
+    """One loudnorm measurement, with the sign stripped off a zero.
+
+    ``loudnorm`` prints its report with two decimals, so a measurement that is zero to that
+    precision arrives as either ``"0.00"`` or ``"-0.00"`` depending on which side of zero the
+    unrounded value fell — and ``float("-0.00")`` is ``-0.0``, which ``format(_, "g")`` renders
+    as ``-0``. The two are the same number and the same argument to ffmpeg, but not the same
+    *string*, so the sign bit leaked into the second-pass filter and from there into
+    ``tests/golden/compositor_commands.json``: the frozen graph said ``offset=-0`` because the
+    ffmpeg that froze it rounded down, and CI's ffmpeg 6.1.1 rounds up and reported ``offset=0``.
+    A one-bit difference in a value that is zero either way failed the build.
+
+    Adding ``0.0`` is the IEEE-754 way to normalise this: ``-0.0 + 0.0`` is ``+0.0``, and every
+    other value is unchanged (adding zero is exact in binary floating point).
+    """
+    return float(value) + 0.0
+
+
 def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
     """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
 
@@ -638,11 +656,11 @@ def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
     try:
         data = json.loads(stderr[start : end + 1])
         return LoudnessStats(
-            input_i=float(data["input_i"]),
-            input_tp=float(data["input_tp"]),
-            input_lra=float(data["input_lra"]),
-            input_thresh=float(data["input_thresh"]),
-            target_offset=float(data["target_offset"]),
+            input_i=_measured(data["input_i"]),
+            input_tp=_measured(data["input_tp"]),
+            input_lra=_measured(data["input_lra"]),
+            input_thresh=_measured(data["input_thresh"]),
+            target_offset=_measured(data["target_offset"]),
         )
     except (ValueError, KeyError, TypeError):
         return None
