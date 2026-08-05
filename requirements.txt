@@ -1,12 +1,24 @@
 # =============================================================================
 # Python dependencies for the AI Video Clipper backend + worker.
-# Pinned to compatible minimum versions; refine/lock in later phases.
+#
+# Every dependency carries an upper bound. This file previously said "refine/lock in
+# later phases" and left three without one, which meant a `pip install` months later
+# could resolve a major version this code has never run against - and the first symptom
+# would be a failed render, not a failed install.
+#
+# `requirements.lock.txt` holds the exact, hash-pinned set that the 1880-test suite is
+# known to pass on. Use the lock for reproducing a working install; use the ranges here
+# when deliberately moving forward.
+#
+# ONE EXCEPTION WORTH KNOWING ABOUT: yt-dlp. See its entry below.
 # =============================================================================
 
 # --- Web API ---
 fastapi>=0.111,<1.0
 uvicorn[standard]>=0.30,<1.0
-python-multipart>=0.0.9          # multipart form / file uploads
+# Upper bound added: this is on the /api/upload path, which streams multi-GB bodies, and
+# it is pre-1.0 - so a minor bump is entitled to change behaviour.
+python-multipart>=0.0.9,<0.1.0   # multipart form / file uploads
 
 # --- Configuration ---
 pydantic>=2.7,<3.0
@@ -18,8 +30,20 @@ redis>=5.0,<6.0
 rq>=1.16,<2.0
 
 # --- Video / media ---
-ffmpeg-python>=0.2.0
-yt-dlp>=2024.7.1
+ffmpeg-python>=0.2.0,<0.3.0
+# yt-dlp is the one dependency that must be bumped ON PURPOSE, and the only one where a
+# pin creates a *different* failure than no pin.
+#
+# It is the URL-ingest path, and YouTube changes its player and signature scheme with no
+# notice. An unpinned yt-dlp therefore breaks unpredictably on upgrade; a pinned one
+# breaks predictably as the site drifts away from it. Neither is avoidable - so the
+# choice made here is the one whose failure is legible: pinned, with an upper bound, and
+# documented as the first thing to bump when `/api/jobs/url` starts failing.
+#
+# Symptom to recognise: `download_video` raising, or yt-dlp reporting a signature
+# extraction failure, while local file upload keeps working. That is this pin, not a bug.
+#   Fix:  pip install -U 'yt-dlp' && python -m pytest tests/ -k download
+yt-dlp>=2024.7.1,<2027.0.0
 
 # --- Transcription ---
 faster-whisper>=1.0,<2.0
@@ -37,7 +61,23 @@ faster-whisper>=1.0,<2.0
 # mismatch between them is what produces two wheels again. `worker/effects/reframe.py` uses only
 # `VideoCapture`, `CascadeClassifier`, `cvtColor` and `cv2.data` - all core OpenCV, present in
 # either build.
-mediapipe>=0.10,<1.0
+#
+# UPPER BOUND NARROWED, and the reason matters if a future change reaches for MediaPipe:
+# the `mediapipe.solutions` namespace - which bundled `face_detection_short_range.tflite`
+# and offered `FaceDetection(model_selection=...)` - HAS BEEN REMOVED. On 0.10.35,
+# `dir(mediapipe)` is exactly `['Image', 'ImageFormat', 'tasks']`, and the wheel contains
+# zero `.tflite`/`.task`/`.binarypb` files. The old range `>=0.10,<1.0` spanned both sides
+# of that removal, so it admitted versions on which any `solutions`-based code cannot run
+# at all, and any model-bundling assumption is false.
+#
+# Consequences for anyone adding a detector:
+#   * use `mediapipe.tasks.python.vision.FaceDetector`, never `mediapipe.solutions`
+#   * there is no `model_selection` argument; near/far range is a property of the model
+#     file you load
+#   * you must supply `base_options.model_asset_path` yourself - vendor the model, the way
+#     `assets/emoji/` is vendored, and verify it offline
+# See .kiro/specs/face-detection-upgrade/ for the worked design.
+mediapipe>=0.10.30,<0.11.0
 numpy>=1.26,<2.0
 Pillow>=10.3,<11.0               # emoji/image compositing
 

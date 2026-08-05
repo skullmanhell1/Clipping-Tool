@@ -2,5 +2,6 @@
   "name": "video-clipper-publisher-bridge",
   "private": true,
   "type": "module",
-  "dependencies": {"@whop/sdk": "latest"}
+  "_comment": "@whop/sdk was pinned to 'latest', the only floating dependency in the repo. 'latest' means an image rebuilt in six months installs an SDK this bridge has never run against, and the failure would surface as a publish error rather than a build error. Pinned to the version package-lock.json already resolves (0.0.42). Note this is a 0.0.x package, so bump it deliberately and re-run the bridge against a real Whop account - the publishers have never been verified live (PB1).",
+  "dependencies": {"@whop/sdk": "0.0.42"}
 }
