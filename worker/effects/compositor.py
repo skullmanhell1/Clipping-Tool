@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 from config import settings
 from worker import branding, caption_contrast
 from worker import captions as cap
-from worker.effects import audio, broll, caption_presets, emoji, overlays
+from worker.effects import audio, broll, caption_presets, emoji, filter_graph, overlays
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
 
@@ -212,7 +212,6 @@ def render_clip(
     engine_input_args = _engine_input_args(
         _input_order_contributions(engine_contributions)
     )
-    engine_input_count = engine_input_args.count("-i")
     base_clip = Path(base_clip)
     dest = Path(dest)
     temp_dir = Path(temp_dir)
@@ -494,22 +493,37 @@ def render_clip(
             broll_cues = []
 
     # ---------------------------------------------------------------------
-    # Input index accounting (Req 10.3), explicit and collision-free:
+    # Input index accounting (Req 10.3), in argv order:
     #     idx 0        : base clip
-    #     idx 1..N     : reserved engine input block (N == engine_input_count,
-    #                    0 on every v0.8.0 / all-off run — Reqs 1.5, 23.3)
+    #     idx 1..N     : reserved engine input block
+    #                    (0 inputs on every v0.8.0 / all-off run — Reqs 1.5, 23.3)
     #     music_index  : music (when present)
     #     broll_offset : b-roll inputs (contiguous)
     #     emoji_offset : emoji inputs (after b-roll)
     #
-    # The engine block sits immediately after the base clip because the host must
-    # publish each engine's ``first_input_index`` BEFORE the engine runs, and it
-    # knows nothing about the music/b-roll/emoji decisions taken here. Everything
-    # downstream of the block is therefore shifted by ``engine_input_count``; with
-    # no contribution that shift is 0 and every index below is unchanged.
+    # The engine block sits immediately after the base clip because the host must publish each
+    # engine's ``first_input_index`` BEFORE the engine runs, and it knows nothing about the
+    # music/b-roll/emoji decisions taken here. Everything downstream of the block is therefore
+    # shifted by however many inputs it contributed; with no contribution that shift is 0 and
+    # every index below is unchanged.
+    #
+    # `FilterGraph` owns registration and hands out the indices, so each offset is read from
+    # what has actually been registered. It used to be arithmetic over two separate
+    # ``.count("-i")`` scans, evaluated here — about 150 lines before the arguments they
+    # describe were appended — which made the accounting depend on an append order stated only
+    # in a comment. An off-by-one that still landed inside the input list was silent: the wrong
+    # asset composited at the right time, with ffmpeg perfectly happy.
+    #
+    # The music input is registered here rather than beside its filter in the audio phase. argv
+    # is unchanged — music has always preceded the b-roll and emoji arguments — and registering
+    # it now is what makes `next_input_index()` correct for b-roll below. The music *filter* is
+    # still added in the audio phase, where it belongs.
     # ---------------------------------------------------------------------
-    music_index = 1 + engine_input_count
-    broll_offset = (2 if music_path is not None else 1) + engine_input_count
+    graph = filter_graph.FilterGraph()
+    graph.add_input(str(base_clip))
+    graph.add_input_args(engine_input_args)
+    music_index = graph.add_input(str(music_path)) if music_path is not None else None
+    broll_offset = graph.next_input_index()
 
     # Build the b-roll overlay graph (below captions). Any failure degrades to
     # a b-roll-disabled render rather than failing the clip (Reqs 10.6, 9.3).
@@ -541,35 +555,28 @@ def render_clip(
                 for c in broll_cues if float(c.end) > float(c.start)
             ]
 
-    num_broll_inputs = broll_input_args.count("-i")
-    emoji_offset = broll_offset + num_broll_inputs
+    graph.add_input_args(broll_input_args)
+    emoji_offset = graph.next_input_index()
 
     # ---------------------------------------------------------------------
     # Assemble the video filter graph (bottom -> top):
     #     look chain -> b-roll overlays -> captions/progress -> emoji
     # ---------------------------------------------------------------------
-    # Base clip first, then the reserved engine block (empty unless an engine
-    # contributed an input), then music / b-roll / emoji below.
-    inputs: list[str] = ["-i", str(base_clip), *engine_input_args]
-    graph_parts: list[str] = []
+    # Inputs were registered above, in argv order. Only the segments are added from here.
     video_label = "0:v"
 
     if broll_graph:
-        # Split so b-roll sits below the caption layer.
-        if look_chain:
-            graph_parts.append(f"[0:v]{','.join(look_chain)}[vlook]")
-        graph_parts.append(broll_graph)
-        video_label = "vbroll"
-        if caption_chain:
-            graph_parts.append(f"[{video_label}]{','.join(caption_chain)}[vbase]")
-            video_label = "vbase"
+        # Split so b-roll sits below the caption layer. `vlook` is created here and consumed by
+        # the b-roll overlay as its base, which is why the name is decided before this block.
+        graph.chain("0:v", look_chain, "vlook")
+        graph.add(broll_graph)
+        video_label = graph.chain("vbroll", caption_chain, "vbase")
     else:
-        # No b-roll: rebuild the single combined look+caption chain exactly as
-        # the compositor always has.
-        full_chain = look_chain + caption_chain
-        if full_chain:
-            graph_parts.append(f"[0:v]{','.join(full_chain)}[vbase]")
-            video_label = "vbase"
+        # No b-roll: one combined look+caption chain, exactly as the compositor always has.
+        # Fused into a single segment rather than two - `[0:v]look,captions[vbase]`, not
+        # `[0:v]look[vlook];[vlook]captions[vbase]` - and that is a byte-identity requirement,
+        # not a preference: the frozen v0.8.0 goldens contain the fused form.
+        video_label = graph.chain("0:v", look_chain + caption_chain, "vbase")
 
     # Emoji overlays sit on top of the caption layer.
     emoji_inputs: list[str] = []
@@ -588,7 +595,7 @@ def render_clip(
             caption_position=options.caption_position or "bottom",
         )
     if emoji_graph:
-        graph_parts.append(emoji_graph)
+        graph.add(emoji_graph)
         video_out = "vout"
         applied.append(f"emoji:{options.emoji}")
         # A13: record the artwork set, and record it *separately* when a glyph came from the
@@ -616,7 +623,7 @@ def render_clip(
         options, width, height, base_label=video_out, out_label="vbrand"
     )
     if logo_graph:
-        graph_parts.append(logo_graph)
+        graph.add(logo_graph)
         video_out = "vbrand"
         applied.append("brand_logo")
 
@@ -641,8 +648,7 @@ def render_clip(
     # threshold any platform normalises against.
     repair = audio.speech_repair_chain()
     if repair and info.has_audio:
-        graph_parts.append(f"[0:a]{','.join(repair)}[aclean]")
-        audio_out = "aclean"
+        audio_out = graph.chain("0:a", repair, "aclean")
         audio_changed = True
         if audio.denoise_filter():
             applied.append("speech_denoise")
@@ -654,8 +660,7 @@ def render_clip(
         # Music follows the engine block and precedes the b-roll/emoji inputs, so
         # its index is 1 on every run without an engine contribution (i.e. the
         # label is byte-identically ``1:a`` for every v0.8.0 caller).
-        inputs += ["-i", str(music_path)]
-        graph_parts.append(
+        graph.add(
             audio.music_mix_filter(speech_label, f"{music_index}:a", "aout",
                                    options.music_volume, duration,
                                    fade=options.fades,
@@ -685,11 +690,11 @@ def render_clip(
             applied.append(f"music_track:{music_bed.track_index}/{music_bed.track_count}")
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
-        graph_parts.append(
-            f"[{speech_label}]afade=t=in:st=0:d=0.400"
-            f",afade=t=out:st={out_start:.3f}:d=0.400[aout]"
+        audio_out = graph.chain(
+            speech_label,
+            ["afade=t=in:st=0:d=0.400", f"afade=t=out:st={out_start:.3f}:d=0.400"],
+            "aout",
         )
-        audio_out = "aout"
         audio_changed = True
 
     # Engine audio contributions chain onto whatever audio label the compositor
@@ -697,8 +702,7 @@ def render_clip(
     # exactly like the music/fade paths above.
     engine_audio = [f for c in contributions for f in c.audio_filters]
     if engine_audio and info.has_audio:
-        graph_parts.append(f"[{audio_out}]{','.join(engine_audio)}[aeng]")
-        audio_out = "aeng"
+        audio_out = graph.chain(audio_out, engine_audio, "aeng")
         audio_changed = True
 
     # --- loudness normalisation (AU1) -------------------------------------
@@ -720,10 +724,9 @@ def render_clip(
             applied.append("loudness_degraded:unmeasurable")
         else:
             target = audio.platform_loudness_target(options.platform)
-            graph_parts.append(
-                f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]"
+            audio_out = graph.chain(
+                audio_out, [audio.loudnorm_filter(stats, target)], "aloud"
             )
-            audio_out = "aloud"
             applied.append(f"loudness:{target:g}lufs")
 
     # --- true-peak limiting (AU3) -----------------------------------------
@@ -733,14 +736,12 @@ def render_clip(
     # +5.5 dBFS). No marker is recorded, deliberately - this is a safety stage that is
     # inaudible when it does not engage, and "applied" markers describe choices, not guards.
     if settings.true_peak_limit_enabled and info.has_audio and audio_changed:
-        graph_parts.append(f"[{audio_out}]{audio.true_peak_limit_filter()}[apeak]")
-        audio_out = "apeak"
+        audio_out = graph.chain(audio_out, [audio.true_peak_limit_filter()], "apeak")
 
     # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
     # the engine block was emitted with the base clip above so its indices are
     # fixed and knowable before any engine ran.
-    inputs += broll_input_args
-    inputs += emoji_inputs
+    graph.add_input_args(emoji_inputs)
 
     video_changed = (
         bool(look_chain) or bool(caption_chain) or bool(broll_graph)
@@ -752,9 +753,9 @@ def render_clip(
     # ---------------------------------------------------------------------
     # Build and run the ffmpeg command.
     # ---------------------------------------------------------------------
-    cmd = [settings.ffmpeg_binary, "-y", *inputs]
-    if graph_parts:
-        cmd += ["-filter_complex", ";".join(graph_parts)]
+    cmd = [settings.ffmpeg_binary, "-y", *graph.inputs()]
+    if graph:
+        cmd += ["-filter_complex", graph.filter_complex()]
 
     # Map video.
     cmd += ["-map", f"[{video_out}]" if video_changed else "0:v"]
