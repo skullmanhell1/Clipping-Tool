@@ -138,7 +138,17 @@ COPY --from=frontend /ui/dist ./frontend/dist
 # writable - the source tree is deliberately left read-only to this user.
 RUN useradd --create-home --shell /usr/sbin/nologin clipper \
     && mkdir -p /app/storage \
-    && chown -R clipper:clipper /app/storage
+    && chown -R clipper:clipper /app/storage \
+    # `/app/assets` is granted to the app user as well, but **not** recursively, and that
+    # distinction is the point: `settings.ensure_local_dirs()` creates `assets/broll` and
+    # `assets/broll_cache` at startup and `emoji.style_assets_dir()` creates
+    # `assets/emoji-<style>` on the first render with a non-default artwork set. None of those
+    # three exist in the image, so with `/app/assets` root-owned the container died during
+    # startup with `PermissionError: [Errno 13] Permission denied: '/app/assets/broll'` — it
+    # never reached the point of serving a request, which is what `scripts/docker_smoke.sh`
+    # catches. Granting the *directory* lets those be created while the vendored fonts and emoji
+    # inside stay root-owned and read-only.
+    && chown clipper:clipper /app/assets
 USER clipper
 
 EXPOSE 8000
