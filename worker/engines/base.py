@@ -511,7 +511,8 @@ class Engine_Context:
         ``random`` module — so repeated calls on an equal context yield equal
         sequences (Reqs 12.1-12.3).
         """
-        return random.Random(self.seed)
+        # S311: engine determinism is a documented requirement, not a weak secret.
+        return random.Random(self.seed)  # noqa: S311
 
     def remaining(self, now: float | None = None) -> float:
         """Seconds left before ``deadline`` (pass to subprocess timeouts).

@@ -45,7 +45,7 @@ class XPublisher(BasePublisher):
             account_id or (settings.x_account_id or ""),
             not approved,
             # PB4: static OAuth user-context token; renewal is a manual step.
-            token_kind="static",
+            token_kind="static",  # noqa: S106 - a credential *kind*, not a credential
         )
 
     def _h(self):

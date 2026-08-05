@@ -41,6 +41,24 @@ requires_ffmpeg = pytest.mark.skipif(
 FFMPEG = settings.ffmpeg_binary
 
 
+@pytest.fixture(autouse=True)
+def _allow_loopback_ingest(monkeypatch):
+    """Let this module fetch from ``127.0.0.1``, which ingest otherwise refuses.
+
+    ``download.validate_public_url`` rejects loopback, link-local and private addresses, because
+    an unauthenticated URL endpoint handed to yt-dlp is otherwise a request forwarder into the
+    deployment's own network. Every URL here is the local ``media_server`` fixture, which is the
+    entire point of the module docstring above: serving locally is what makes this test exercise
+    the real yt-dlp path without depending on the public internet.
+
+    So the loopback address is deliberate here and forbidden everywhere else. Opting in module-wide
+    keeps that explicit in one place; the default-deny rules are covered on their own in
+    ``tests/test_url_guard.py``, which calls the validator directly and so cannot be affected by
+    this fixture.
+    """
+    monkeypatch.setattr(settings, "url_ingest_allow_private", True)
+
+
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_args):  # keep the test output readable
         pass

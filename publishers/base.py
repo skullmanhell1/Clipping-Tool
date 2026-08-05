@@ -40,7 +40,9 @@ class PublisherStatus:
     token_expires_at: float | None = None
     #: ``refreshable`` (exchanged from a refresh token), ``static`` (a long-lived token the
     #: operator pasted in), or ``none`` (no token-based auth).
-    token_kind: str = "static"
+    token_kind: str = (
+        "static"  # noqa: S105 - names a *kind* of credential (static/refreshable/none), not one
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

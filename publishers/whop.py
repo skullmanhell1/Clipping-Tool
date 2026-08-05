@@ -50,7 +50,7 @@ class WhopPublisher(BasePublisher):
             detail,
             account_id or (settings.whop_company_id or ""),
             # PB4: an API key, not a token - there is nothing to expire or refresh.
-            token_kind="none",
+            token_kind="none",  # noqa: S106 - a credential *kind*, not a credential
         )
 
     def publish(self, request):

@@ -174,8 +174,14 @@ def _system_families_for(script: str) -> tuple[str, ...]:
     if not _which("fc-list"):
         return ()
     try:
+        # S607: resolved via PATH on purpose - the binary name is operator-configurable.
         proc = subprocess.run(
-            ["fc-list", f":lang={lang}", "--format", "%{family[0]}\\t%{file}\\n"],
+            [  # noqa: S607
+                "fc-list",
+                f":lang={lang}",
+                "--format",
+                "%{family[0]}\\t%{file}\\n",
+            ],
             capture_output=True,
             text=True,
             timeout=15,

@@ -62,7 +62,15 @@ class Settings(BaseSettings):
     app_name: str = Field(default="AI Video Clipper", description="Display name.")
     environment: str = Field(default="development", description="dev/staging/prod.")
     debug: bool = Field(default=True, description="Enable verbose debug behaviour.")
-    api_host: str = Field(default="0.0.0.0", description="API bind host.")
+    api_host: str = Field(
+        # A suppression has to sit on the line the rule fires on, and black moved that line: it
+        # split this call across three and left the comment on the closing paren, where it
+        # suppressed nothing. The same displacement hit nine other bandit suppressions in this
+        # sweep, and each one only surfaced because `S` is enforced -- a formatter and a
+        # line-scoped suppression comment interact, and nothing warns when they stop lining up.
+        default="0.0.0.0",  # noqa: S104 - a container must bind all interfaces to be reachable
+        description="API bind host.",
+    )
     api_port: int = Field(default=8000, description="API bind port.")
     # Comma-separated list of allowed CORS origins.
     cors_origins: str = Field(default="*", description="Allowed CORS origins.")
@@ -72,6 +80,11 @@ class Settings(BaseSettings):
     # nothing below is consulted, no middleware decision is taken, and every request is
     # served exactly as it was before authentication existed. Defaulting it *on* would
     # make an upgrade a migration for every existing install.
+    #
+    # "As it was before" now means *with the shared secret still in force*, because
+    # API_AUTH_TOKEN landed on main while this branch was being written. The two schemes do
+    # not stack: AUTH_ENABLED on means a session is the credential, and API_AUTH_TOKEN is
+    # not consulted. See the security section below and api/security.py.
     auth_enabled: bool = Field(
         default=False,
         description="Require a login for the API and clip media, and scope jobs to their "
@@ -119,6 +132,66 @@ class Settings(BaseSettings):
     auth_login_window_seconds: float = Field(
         default=900.0,
         description="Window for AUTH_LOGIN_MAX_ATTEMPTS, in seconds.",
+    )
+
+    # ------------------------------------------------------------ security --
+    # These predate U12 and are **not** superseded by it, which is why both sets survive the
+    # merge. AUTH_ENABLED decides *who* a caller is; everything below is about what any caller
+    # may do, and two of the three apply whether or not accounts are in use:
+    #
+    #   api_auth_token      the single-tenant scheme. Consulted only when AUTH_ENABLED is off
+    #                       (see api/security.py) - with accounts on, a session is the
+    #                       credential and a second shared one would just be a bypass.
+    #   rate_limit_*        applies in both modes. Sessions say who you are, not how much CPU
+    #                       you may spend, and the expensive routes are expensive either way.
+    #   url_ingest_allow_private / trust_forwarded_for
+    #                       nothing to do with identity at all.
+    # Every route was unauthenticated, and `render.yaml` deploys this publicly with
+    # `autoDeploy: true`. A single shared secret is the whole scheme on purpose: this is a
+    # single-tenant self-hosted tool, and per-user accounts are plan item U12 (P2/L), a
+    # different and much larger change.
+    #
+    # Unset means "allow everything", because an existing deployment must not lose access on
+    # upgrade - the same reasoning the CORS wildcard default follows. Startup logs a loud
+    # warning in that case, and refuses to boot outright under ENVIRONMENT=production.
+    api_auth_token: str | None = Field(
+        default=None,
+        description="Shared secret required on /api/* and /clips/*. Unset = no auth (a "
+        "startup warning is logged; refused outright in production).",
+    )
+    # Rate limiting is in-process on purpose. `redis` and `rq` are declared dependencies that
+    # nothing imports, and adding a live Redis requirement to make the app safe would turn an
+    # optional dependency into a mandatory one.
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description="Throttle the expensive write routes (jobs, upload, preview, rerender).",
+    )
+    rate_limit_requests: int = Field(
+        default=30,
+        description="Requests allowed per client per window on rate-limited routes.",
+    )
+    rate_limit_window_seconds: float = Field(
+        default=60.0,
+        description="Length of the rate-limit window in seconds.",
+    )
+    # SSRF guard. yt-dlp will fetch whatever it is given, so an unauthenticated URL endpoint is
+    # a request forwarder into the deployment's own network - including cloud metadata at
+    # 169.254.169.254. Self-hosters who genuinely want to ingest from a LAN media server can opt
+    # back in; it is off by default because the safe choice must not require a decision.
+    url_ingest_allow_private: bool = Field(
+        default=False,
+        description="Allow URL ingest from loopback/link-local/private address ranges. "
+        "Leave false unless you are deliberately ingesting from a LAN host.",
+    )
+    # Whether to believe X-Forwarded-For when identifying a client for rate limiting. False by
+    # default because a client can forge the header when the app is directly exposed, and
+    # trusting it then lets one caller present as unlimited distinct clients. Behind a proxy
+    # that sets it (Render, nginx) the opposite is true: without this every request looks like
+    # the proxy, so one bucket is shared by everyone. Set it to match the deployment.
+    trust_forwarded_for: bool = Field(
+        default=False,
+        description="Trust X-Forwarded-For for client identity. Enable only when running "
+        "behind a proxy that sets it.",
     )
 
     # --------------------------------------------------------------- queue --
@@ -1121,6 +1194,48 @@ class Settings(BaseSettings):
         Setting an explicit ``CORS_ORIGINS`` list re-enables credentials.
         """
         return not self.cors_allow_wildcard
+
+    @property
+    def is_local_environment(self) -> bool:
+        """Whether ``environment`` names a developer machine rather than a deployment.
+
+        The same four names were already inlined at the CORS startup check, and the auth and
+        SSRF checks need exactly the same question answered. A third and fourth copy of the
+        tuple is how they drift apart, so it lives here once.
+        """
+        return self.environment.strip().lower() in ("development", "dev", "local", "test")
+
+    @property
+    def api_token_configured(self) -> bool:
+        """Whether a shared secret is configured.
+
+        Treats whitespace as unset: ``API_AUTH_TOKEN=" "`` in an env file is a mistake, and
+        reading it as a real secret would mean requiring a token nobody can guess *and* nobody
+        intended, which presents as the app being broken rather than as being misconfigured.
+
+        **Renamed from ``auth_enabled`` by the U12 merge, which is not a cosmetic rename.** U12
+        introduced a *field* called ``auth_enabled`` meaning "accounts are in use", and this
+        property meant "a shared secret is set" — two different questions one attribute away from
+        each other, on a Pydantic model where a property and a field of the same name cannot
+        coexist at all. Since the field is the one an operator sets in the environment, the
+        property is what moved.
+        """
+        return bool((self.api_auth_token or "").strip())
+
+    @property
+    def any_auth_active(self) -> bool:
+        """Whether *some* credential is required to reach ``/api`` and ``/clips``.
+
+        The question the startup check actually wants. Either scheme closes the deployment, so
+        asking about only one of them would refuse to boot on an install that is authenticated by
+        accounts, and pass an install that has neither.
+        """
+        return bool(self.auth_enabled or self.api_token_configured)
+
+    @property
+    def api_auth_token_value(self) -> str:
+        """The configured secret, stripped. Empty string when auth is disabled."""
+        return (self.api_auth_token or "").strip()
 
 
 @lru_cache

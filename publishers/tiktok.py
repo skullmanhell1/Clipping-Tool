@@ -43,7 +43,7 @@ class TikTokPublisher(BasePublisher):
             not approved,
             # PB4: a long-lived token the operator pasted in. Nothing here can renew it, and
             # its expiry is not visible to us - which is different from "it does not expire".
-            token_kind="static",
+            token_kind="static",  # noqa: S106 - a credential *kind*, not a credential
         )
 
     def publish(self, request):

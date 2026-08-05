@@ -196,7 +196,10 @@ class PublishManager:
         """
         try:
             status = pub.status(account_id)
-            if status.token_kind != "refreshable" or not status.configured:
+            if (
+                status.token_kind != "refreshable"  # noqa: S105 - a credential kind, not a secret
+                or not status.configured
+            ):
                 return
             expires_at = status.token_expires_at
             if expires_at is None:

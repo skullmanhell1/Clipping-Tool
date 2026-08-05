@@ -79,6 +79,36 @@ select = [
     "I",   # import sorting, so import blocks stop churning between contributors
     "UP",  # pyupgrade: py311 idiom (`X | None`, `list[...]`, StrEnum)
     "B",   # bugbear: likely bugs — chiefly `zip()` that silently truncates
+    # `S` is not part of I9. It arrived on the base branch with the security phase while this
+    # sweep was being prepared, and the merge keeps it: this change adds rules, and dropping one
+    # would be a silent narrowing of the gate disguised as a formatting commit. Its three
+    # wholesale ignores and its per-file test exemptions are below, unchanged.
+    "S",   # bandit: security findings. Three rules are ignored below, with reasons.
+]
+
+# Three `S` rules are switched off wholesale rather than annotated ~50 times. Each is a rule that
+# fires on the pattern this project deliberately uses, so leaving them on would mean either a wall
+# of identical `# noqa` comments or a lint step nobody trusts — and the second is what the previous
+# `ruff check . || true` already proved happens.
+#
+# The finding that would have mattered is **S602 (`shell=True`), and there are zero of those.**
+# That is the result worth recording: every subprocess call in this repository passes an argument
+# list, so no caller-supplied string is ever handed to a shell.
+ignore = [
+    # S603 flags *every* subprocess call and asks the reader to confirm the input is trusted. All
+    # 19 outside tests are argv-list invocations of ffmpeg, ffprobe, fc-match or node — which is
+    # the whole architecture of the project, and already the safe form. The genuine risk in this
+    # area is a filter string built from caller input, which `tests/test_output_compat.py` and the
+    # capability probes police far more precisely than a lint rule can.
+    "S603",
+    # S110/S112 (try/except/pass and try/except/continue) are the shape of this project's
+    # degradation contract: an optional feature that cannot run records a marker on
+    # `ClipResult.effects_applied` and the job continues, because a missing effect must never fail
+    # a render. Turning each into a log line is an observability change with real behavioural risk
+    # — Phase 7 is where per-stage instrumentation belongs — and doing it as a lint fix would edit
+    # ~30 degradation paths at once. Deliberately deferred, not overlooked.
+    "S110",
+    "S112",
 ]
 
 [tool.ruff.lint.flake8-bugbear]
@@ -106,4 +136,25 @@ extend-immutable-calls = [
 # tests/* imports after module-level setup on purpose: conftest rewrites environment
 # variables before `config` is imported, and several test modules import their subject
 # only after installing a guard. That ordering is the point, so E402 cannot apply.
-"tests/*" = ["E402"]
+#
+# The `S` (bandit) exemptions are all "this rule describes what a test is". S101 alone accounts
+# for 4,691 of the 4,916 findings in the repository: `assert` is the entire mechanism. The rest
+# follow — fake tokens in fixtures are not leaked secrets, a tmp_path is not an insecure temp
+# file, and running the real ffmpeg is the point of the real-binary tests that exist precisely
+# because every mocked capability probe missed a defect. S102/S307 cover the two deliberate
+# exec/eval call sites in test_kinetic_compositor.py and test_stems_ffmpeg.py, each already
+# carrying a comment explaining that it evaluates this project's own emitted expression.
+"tests/*" = [
+    "E402",
+    "S101",  # assert — what a test is made of
+    "S102",  # exec — two documented sites that compile this repo's own generated source
+    "S105",  # "hardcoded password" — fixture tokens like "test-shared-secret"
+    "S106",  # same, passed as an argument
+    "S107",  # same, as a default
+    "S108",  # "insecure temp file" — pytest tmp_path fixtures
+    "S306",  # mktemp — in test helpers only
+    "S307",  # eval — one documented site evaluating our own emitted expression
+    "S311",  # non-crypto random — generating test data
+    "S603",  # subprocess — running the real ffmpeg is the point
+    "S607",  # partial executable path — ffmpeg/ffprobe resolved via PATH
+]

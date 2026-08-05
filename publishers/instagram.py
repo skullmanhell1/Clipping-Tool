@@ -45,7 +45,7 @@ class InstagramPublisher(BasePublisher):
             account_id or (settings.instagram_account_id or ""),
             not approved,
             # PB4: static long-lived token; renewal is a manual step outside this tool.
-            token_kind="static",
+            token_kind="static",  # noqa: S106 - a credential *kind*, not a credential
         )
 
     def publish(self, request):

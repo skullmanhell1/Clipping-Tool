@@ -206,7 +206,7 @@ class HistoryStore:
             return
         with self._lock, self._connect() as db:
             db.execute(
-                f"UPDATE publish_attempts SET {','.join(f'{k}=?' for k in data)} WHERE id=?",
+                f"UPDATE publish_attempts SET {','.join(f'{k}=?' for k in data)} WHERE id=?",  # noqa: S608 - column names come from the `allowed` set above; values are parameterised
                 (*data.values(), attempt_id),
             )
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 
 import pytest
 
@@ -556,7 +557,12 @@ def test_a17_selection_does_not_use_python_s_salted_hash(tmp_path, monkeypatch):
     outs = set()
     for seed in ("0", "1", "12345"):
         proc = subprocess.run(
-            [".venv/bin/python", "-c", script],
+            # ``sys.executable``, not a hard-coded ``.venv/bin/python``. The subject here is
+            # hash-seed stability, so the interpreter wanted is the one already running the
+            # suite — and requiring a venv at a particular path made this fail anywhere it was
+            # not laid out that way, CI included: the workflow installs via ``setup-python`` and
+            # ``pip install``, creating no ``.venv``, so this raised FileNotFoundError there.
+            [sys.executable, "-c", script],
             capture_output=True,
             text=True,
             check=True,
