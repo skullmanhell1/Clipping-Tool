@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker import cancellation, llm_cost, observability
+from worker import cancellation, llm_cost, observability, webhook
 from worker import download as dl
 from worker.models import (
     CANCELLABLE_JOB_STATUSES,
@@ -627,6 +627,17 @@ class JobManager:
         finally:
             # Best-effort cleanup of per-job scratch space.
             self._cleanup_temp(job_id)
+            # Phase 7: notify once, here, because this is the only point every terminal path
+            # reaches - completed, cancelled and failed all pass through it exactly once. Hooking
+            # the three `store.update` calls instead would be three sites to keep in step, and a
+            # fourth outcome added later would silently send nothing.
+            #
+            # Re-read rather than using `job`: the local was captured before the run and its
+            # status, clips and timings are all stale by now. `notify` never raises, so a
+            # webhook cannot turn a finished render into a failed one.
+            final = self.store.get(job_id)
+            if final is not None:
+                webhook.notify(final)
             # I4: the request has been honoured, so forget it. Left in place it would grow
             # without bound on a long-running instance.
             cancellation.clear(job_id)

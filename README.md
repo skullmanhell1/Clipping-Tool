@@ -115,6 +115,29 @@ instead rather than putting the token in the URL of a connection that stays open
 for a whole render — where it would sit in access and proxy logs for that
 connection's lifetime.
 
+**Job completion webhook** — one `POST` when a job reaches a terminal state, so a
+script does not have to poll either. Set `JOB_WEBHOOK_URL` and every
+`completed`/`failed`/`cancelled` transition delivers a JSON summary: the job id
+and status, the clip filenames and URLs, each clip's `effects_applied` (so an
+integration can see that a clip carries `music_degraded:synthesised`), the stage
+timings and the LLM token usage.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `JOB_WEBHOOK_URL` | *(unset)* | Where to POST. Unset means nothing is ever sent. |
+| `JOB_WEBHOOK_SECRET` | *(unset)* | Signs the exact body as `X-Clipping-Signature: sha256=<hex>`, the form GitHub and Stripe use. Worth setting — the payload carries clip URLs. |
+| `JOB_WEBHOOK_TIMEOUT_SECONDS` | `5.0` | Delivery is synchronous on the worker thread, so this bounds how long an unreachable receiver can delay the *next* job. |
+| `JOB_WEBHOOK_EVENTS` | `completed,failed,cancelled` | Which terminal states to send. Set to `failed` to hear only about problems. |
+
+Three things about it are deliberate. It is fired from the single `finally` every
+terminal path passes through, so there is exactly one delivery per job and a
+future outcome cannot silently skip it. It makes **one attempt** and claims no
+delivery guarantee — a non-2xx or a timeout is logged and dropped, because a real
+guarantee needs durable queue state and an in-process retry loop would block the
+worker for longer and still lose everything on restart. And the URL is **not**
+SSRF-checked, unlike URL ingest: it comes from your own environment, and the
+usual target is a service on the same host or compose network.
+
 **Updates & maintenance** — the running **version** is shown in the UI; an
 **"update available" banner** appears when a newer GitHub release exists;
 [semantic versioning](https://semver.org) via the `VERSION` file; CI builds +

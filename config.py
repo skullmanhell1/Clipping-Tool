@@ -125,6 +125,41 @@ class Settings(BaseSettings):
         default=15.0,
         description="Idle keepalive interval for the GET /api/jobs/events stream.",
     )
+    # --- Job completion webhook (Phase 7) -----------------------------------------------
+    # Every integration has had to poll. One outbound request on a terminal transition makes
+    # the tool scriptable without a loop asking whether anything has happened yet.
+    #
+    # Unset means no webhook is attempted at all, so this costs nothing until configured.
+    # Deliberately *not* SSRF-checked, unlike URL ingest: this comes from the deployment's own
+    # environment and the usual target is a service on the same host (n8n on localhost:5678) or
+    # a container on the same compose network.
+    job_webhook_url: str | None = Field(
+        default=None,
+        description="URL to POST a JSON summary to when a job reaches a terminal state. "
+        "Unset disables the webhook entirely.",
+    )
+    # Optional HMAC-SHA256 over the exact request body, sent as X-Clipping-Signature in the
+    # `sha256=<hex>` form GitHub and Stripe use, so a receiver written against their examples
+    # works unchanged. Without it a receiver on a shared network cannot tell a real delivery
+    # from a forged one - and the payload carries clip URLs.
+    job_webhook_secret: str | None = Field(
+        default=None,
+        description="Shared secret for signing the webhook body. Unset sends no signature.",
+    )
+    # Delivery is synchronous on the worker thread, so this bounds how long a finished job can
+    # delay the next one. Short on purpose: the render is already done and nothing is waiting
+    # on the notification.
+    job_webhook_timeout_seconds: float = Field(
+        default=5.0,
+        description="Timeout for the job webhook request. Bounds how long an unreachable "
+        "receiver can delay the next job.",
+    )
+    # Which terminal states to deliver. All three by default; an operator who only wants to be
+    # told about failures sets `failed`.
+    job_webhook_events: str = Field(
+        default="completed,failed,cancelled",
+        description="Comma-separated terminal job statuses to send the webhook for.",
+    )
     # SSRF guard. yt-dlp will fetch whatever it is given, so an unauthenticated URL endpoint is
     # a request forwarder into the deployment's own network - including cloud metadata at
     # 169.254.169.254. Self-hosters who genuinely want to ingest from a LAN media server can opt
