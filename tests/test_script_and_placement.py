@@ -50,6 +50,30 @@ HEBREW = "\u05e9\u05dc\u05d5\u05dd \u05dc\u05db\u05d5\u05dc\u05dd"
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture
+def no_system_fonts(monkeypatch):
+    """The "nothing on this machine covers the script" case, stated rather than hoped for.
+
+    Whether a script is renderable is a property of the *host's font inventory*, not of this code.
+    Three tests below are about what ``plan_for_text`` does when nothing covers the script - step 4,
+    the point of the whole module - and they used to reach that step only because the machine they
+    were written on happened to have no Arabic font. On a host that has one they failed while the
+    code was doing exactly the right thing: the GitHub Actions runner image ships DejaVu Sans, which
+    covers both Arabic and Hebrew, so ``plan_for_text(ARABIC, "Anton")`` correctly substituted
+    ``DejaVu Sans`` via step 3 and three assertions that expected tofu blew up. A test that depends
+    on which fonts the operating system happens to install is asserting the host, not the feature.
+
+    So the precondition is imposed instead. ``_system_families_for`` is looked up as a module global
+    by both ``plan_for_text`` and ``unsupported_scripts``, so replacing it covers both. Its
+    ``lru_cache`` needs no clearing - the whole function object is swapped out, and the real one's
+    cache is left intact for the tests that want the true host answer.
+
+    The step it disables is not left untested: see
+    ``test_c21_a_system_family_is_used_when_nothing_vendored_covers_the_script``.
+    """
+    monkeypatch.setattr(ss, "_system_families_for", lambda script: ())
+
+
 def test_c21_coverage_is_read_from_the_font_not_asked_of_fontconfig():
     """``fc-match`` is a *best match*, not a coverage test - it always answers.
 
@@ -134,7 +158,26 @@ def test_c21_a_vendored_face_is_preferred_over_a_system_one():
     )
 
 
-def test_c21_an_unrenderable_script_is_reported_rather_than_silently_boxed():
+def test_c21_a_system_family_is_used_when_nothing_vendored_covers_the_script(monkeypatch):
+    """Step 3: a verified system family beats reporting the script as unrenderable.
+
+    This used to be exercised only by accident - on a host with an Arabic font it happened, on one
+    without it did not, and either way nothing asserted it. Now that ``no_system_fonts`` deliberately
+    switches the step off for the step-4 tests, this is what keeps it live: a substitution is
+    strictly better than tofu, so the fallback order must be "system font, *then* give up".
+    """
+    monkeypatch.setattr(ss, "_system_families_for", lambda script: ("Fake Arabic Face",))
+
+    plan = ss.plan_for_text(ARABIC, "Anton")
+    assert plan.font == "Fake Arabic Face"
+    assert plan.marker == "caption_font_substituted:arabic:Fake Arabic Face"
+    assert plan.can_render is True
+    # The script's other properties are unaffected by where the font came from.
+    assert plan.needs_shaping is True
+    assert plan.rtl is True
+
+
+def test_c21_an_unrenderable_script_is_reported_rather_than_silently_boxed(no_system_fonts):
     """The point of the whole module.
 
     Tofu is invisible to every piece of code in the pipeline. Substituting a *different* Latin face
@@ -180,7 +223,12 @@ def test_c21_hebrew_is_rtl_but_not_a_shaping_script():
     assert ss.wrap_style(plan) == 2
 
 
-def test_c21_build_ass_uses_the_planned_font_and_wrap_style(tmp_path):
+def test_c21_build_ass_uses_the_planned_font_and_wrap_style(tmp_path, no_system_fonts):
+    # The ARABIC and HAN cases below assert the *unsupported* outcome, which is only reachable when
+    # no system font covers them - hence `no_system_fonts`. Without it this asserted the runner's
+    # font inventory: DejaVu Sans covers Arabic, so `font` came back as DejaVu Sans rather than the
+    # kept-as-requested Anton. HAN passed on the same runner only because no CJK font was installed,
+    # which is the same accident waiting to happen the day one is.
     from worker.effects.caption_presets import BUILTIN_PRESETS
     from worker.transcribe import Word
 
@@ -232,14 +280,25 @@ def test_c21_punctuation_only_text_is_not_a_script_decision():
     assert plan.marker == ""
 
 
-def test_c21_unsupported_scripts_are_enumerable_without_rendering_a_clip():
+def test_c21_unsupported_scripts_are_enumerable_without_rendering_a_clip(no_system_fonts):
     """"Which scripts can this install caption?" was previously unanswerable.
 
     The only way to find out was to render a clip and look at it.
+
+    Pinned to the *vendored* inventory via ``no_system_fonts``, because the answer is per-machine by
+    design: this repository vendors nothing for Arabic, so a minimal install cannot caption it, while
+    a host with DejaVu Sans installed can - and on the GitHub runner, which has it, the real
+    ``unsupported_scripts()`` correctly returned ``['han', 'hiragana', 'katakana', 'hangul', 'thai']``
+    with Arabic absent. What is being asserted here is that the enumeration reflects coverage at all
+    (Latin never appears, an unvendored script does), not which fonts the CI image happens to ship.
     """
     missing = ss.unsupported_scripts()
     assert "arabic" in missing
     assert "latin" not in missing
+    # Also true of the real host answer, and the invariant that actually matters: every script the
+    # vendored faces do cover is excluded, whatever the system has.
+    report = ss.coverage_report()
+    assert [script for script in missing if report[script]] == []
 
 
 # --------------------------------------------------------------------------- #
