@@ -217,9 +217,25 @@ def test_whop_not_configured(monkeypatch, video_file):
     assert result.state == PublishState.FAILED
 
 
+def _pretend_node_is_installed(monkeypatch, whop_mod) -> None:
+    """Make the Node interpreter check answer yes, instead of asking the host.
+
+    `WhopPublisher.status` gates on `shutil.which(whop_node_binary)`, and `publish` refuses
+    when the status is unavailable. The two tests below fake `subprocess.run`, so they never
+    execute Node — but without this they still passed only on a machine that happened to have
+    it installed, and reported `FAILED` on one that did not. The bridge's JSON contract is what
+    they are about; whether the interpreter check itself works is a different question, and
+    `tests/test_url_ingest.py::test_i7_the_whop_publisher_requires_the_interpreter_not_just_the_script`
+    already asks it from both sides.
+    """
+    monkeypatch.setattr(whop_mod.shutil, "which", lambda binary: f"/usr/bin/{binary}")
+
+
 def test_whop_upload_and_attach(monkeypatch, video_file):
     monkeypatch.setattr(settings, "whop_api_key", "key")
     import publishers.whop as whop_mod
+
+    _pretend_node_is_installed(monkeypatch, whop_mod)
 
     def fake_run(cmd, **kwargs):
         payload = json.loads(kwargs["input"])
@@ -239,6 +255,8 @@ def test_whop_upload_and_attach(monkeypatch, video_file):
 def test_whop_upload_without_target_is_review(monkeypatch, video_file):
     monkeypatch.setattr(settings, "whop_api_key", "key")
     import publishers.whop as whop_mod
+
+    _pretend_node_is_installed(monkeypatch, whop_mod)
 
     def fake_run(cmd, **kwargs):
         out = json.dumps({"success": True, "file_id": "file_2",

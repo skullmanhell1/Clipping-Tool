@@ -473,6 +473,21 @@ def test_p7_visible_text_preserves_every_word_in_order(
 # span contains two `\t` stages whose final scale is `100`, for `slide_up` the event
 # carries a `\move` ending at the resolved caption position, and for `highlight_sweep` the
 # span transitions `colors.highlight` -> `colors.primary`.
+#
+# What this test now proves, and what it no longer has to
+# -------------------------------------------------------
+# The four shared spans used to be spelled out *twice* — once in `captions.build_word_span`
+# and once in `kinetic._style_span` — and this test was the only thing keeping the two
+# copies equal. They are now one function (`ass_style.animation_span`), so the span *shape*
+# can no longer drift and that clause is close to a tautology.
+#
+# The test is kept, and is still worth its runtime, because it never only checked the span
+# shape. It compares the emitter's whole **event text** against a reconstruction built from
+# `build_word_span`, so it still holds the parts the shared function does not cover: that
+# both paths escape the same way, derive `rel_ms` against the *cue* start identically,
+# order words the same, and join them with the same separators and `\N` breaks. Those are
+# four independent implementations either side of one shared span, and they can still
+# disagree.
 @settings(max_examples=100, deadline=None)
 @given(
     timeline=st_word_timeline(),
