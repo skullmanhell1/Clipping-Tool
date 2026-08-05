@@ -602,8 +602,14 @@ class LoudnessStats:
     target_offset: float
 
 
-def _measured(raw: object) -> float:
+def _measured(raw: str | float) -> float:
     """One ``loudnorm`` JSON measurement as a float, with negative zero collapsed.
+
+    Typed ``str | float`` because ffmpeg quotes these values (``"input_i" : "-21.87"``) while a
+    build that emitted them as JSON numbers would still be valid - and because ``object`` does not
+    type-check: ``float()`` accepts ``str | Buffer | SupportsFloat | SupportsIndex``, so the wider
+    annotation fails ``mypy .`` outright. A ``ValueError`` or ``TypeError`` from anything else is
+    caught by the caller, which returns ``None`` and renders without normalisation.
 
     ``float("-0.00")`` is ``-0.0``, and ``f"{-0.0:g}"`` is ``"-0"`` - so a measurement ffmpeg
     reported as ``-0.00`` travelled all the way into the emitted filter as ``offset=-0``. That is
