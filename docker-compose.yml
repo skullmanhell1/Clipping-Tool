@@ -31,7 +31,10 @@ services:
       # rather than as a permission error at boot.
       - ./storage:/app/storage
       - ./assets:/app/assets
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    # No `command:` here on purpose. It used to repeat the Dockerfile's own CMD verbatim, which
+    # meant the start-up line had two definitions: changing it in the Dockerfile left compose
+    # silently running the old one, and the two agreeing was down to whoever edited them last
+    # remembering the other existed. The image knows how to start itself.
 
   # --- Reserved for a later phase (RQ-backed background worker) --------------
   # redis:

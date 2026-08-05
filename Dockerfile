@@ -15,7 +15,11 @@
 FROM node:22-slim AS frontend
 WORKDIR /ui
 COPY frontend/package*.json ./
-RUN npm install
+# `npm ci` rather than `npm install`, matching what CI already does. `npm install` is free to
+# resolve a *newer* version than package-lock.json records and to rewrite the lock while doing it,
+# so the image could ship a dependency tree that no test run ever saw. `npm ci` installs exactly
+# the lock and fails if the lock and package.json have drifted.
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
@@ -33,6 +37,39 @@ RUN apt-get update \
         fonts-liberation \
         fontconfig \
     && rm -rf /var/lib/apt/lists/*
+
+# Assert what this image actually got, rather than pinning an apt version.
+#
+# The exact Debian version is deliberately NOT pinned (`ffmpeg=7:5.1.6-0+deb12u1` or similar).
+# Debian rotates point releases out of the archive as it publishes new ones, so an exact pin makes
+# the image unbuildable a few weeks later — trading the risk of a silent change for the certainty
+# of a broken build, which is a worse trade for something rebuilt on every deploy.
+#
+# What the pin was *for* is caught here instead: a base-image refresh that quietly changes ffmpeg to
+# a build this code cannot use. Two things are checked, both of which have to hold for the product
+# to work at all, and neither of which the app can recover from at runtime:
+#
+#   1. A major version at or above FFMPEG_MIN_MAJOR. The pipeline reads `-filters` output whose
+#      flag column widened in 7.x, and that parser has already been wrong once (124 of 486 filters
+#      were silently invisible).
+#   2. The `subtitles` filter, i.e. ffmpeg was built with libass. Everything else the engines want
+#      is probed at runtime and degrades on purpose, but burned captions are the core feature —
+#      and this chain has already broken silently once (C1), where the only symptom was captions
+#      rendered in a substituted font.
+#
+# Same belt-and-braces style as the `fc-match` assertions below: fail the build rather than ship an
+# image whose output is quietly wrong.
+ARG FFMPEG_MIN_MAJOR=5
+RUN set -eu; \
+    ffmpeg -hide_banner -version | head -1; \
+    major="$(ffmpeg -hide_banner -version | head -1 | sed -E 's/^ffmpeg version n?([0-9]+).*/\1/')"; \
+    if [ -z "$major" ] || [ "$major" -lt "$FFMPEG_MIN_MAJOR" ]; then \
+        echo "ffmpeg major version '$major' is below the required $FFMPEG_MIN_MAJOR" >&2; \
+        exit 1; \
+    fi; \
+    ffmpeg -hide_banner -filters | grep -qE '^\s*\S+\s+subtitles\s' \
+        || { echo "this ffmpeg has no 'subtitles' filter: built without libass" >&2; exit 1; }; \
+    echo "ffmpeg OK (major $major, libass present)"
 
 # Optional: Node, needed *only* to run the Whop publisher bridge (publisher_bridge/whop.mjs)
 # through @whop/sdk (I7).
@@ -74,8 +111,22 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install Python dependencies first for better layer caching.
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+#
+# From `requirements.lock`, with `--require-hashes`. `requirements.txt` states *ranges*, so building
+# the same commit twice a month apart produced two different dependency sets, and the image could
+# ship a version of a library no test run had ever exercised. The lock pins all 73 packages of the
+# transitive closure to an exact version and hash.
+#
+# `--require-hashes` is the part that makes it a supply-chain control rather than just a pin: pip
+# then refuses to install anything whose artifact does not match the recorded digest, so a
+# compromised or substituted wheel on the index fails the build instead of being installed. It also
+# forces the lock to be complete — pip rejects the whole file if any requirement lacks a hash, so a
+# hand-added unhashed line cannot slip in.
+#
+# `requirements.txt` is still the source of truth for what is *wanted*; the lock is generated from
+# it. See its header for the regeneration command.
+COPY requirements.txt requirements.lock ./
+RUN pip install --upgrade pip && pip install --require-hashes -r requirements.lock
 
 # Optional: real source separation for the `stem_inpainting` engine (torch + demucs).
 # Off by default because torch adds several hundred megabytes to the image, and the
@@ -92,10 +143,15 @@ RUN if [ "$INSTALL_ML" = "true" ]; then \
     fi
 
 # Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache. Skipped along with
-# Node itself unless INSTALL_WHOP_BRIDGE=true (I7) - `npm install` needs npm.
+# Node itself unless INSTALL_WHOP_BRIDGE=true (I7) - `npm ci` needs npm.
+#
+# `npm ci` for the same reason as the frontend stage, and it matters more here: this package
+# declared `"@whop/sdk": "latest"`, so `npm install` fetched whatever had been published that
+# morning — an unreviewed third-party version, executing in the same container as the API, chosen
+# by wall-clock time. The dependency is now pinned to an exact version.
 COPY publisher_bridge/package*.json ./publisher_bridge/
 RUN if [ "$INSTALL_WHOP_BRIDGE" = "true" ]; then \
-        cd publisher_bridge && npm install --omit=dev ; \
+        cd publisher_bridge && npm ci --omit=dev ; \
     fi
 
 # Copy the application source.

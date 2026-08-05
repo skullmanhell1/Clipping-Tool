@@ -1,12 +1,40 @@
 # =============================================================================
 # Python dependencies for the AI Video Clipper backend + worker.
-# Pinned to compatible minimum versions; refine/lock in later phases.
+#
+# THIS FILE DECLARES INTENT. `requirements.lock` DECIDES WHAT IS INSTALLED.
+#
+# The ranges here say what an upgrade is allowed to pick. `requirements.lock` pins every package in
+# the transitive closure to an exact version *and hash*, and that is what the Dockerfile and CI
+# install (with `--require-hashes`). Before the lock existed, building the same commit twice a month
+# apart produced two different dependency sets, and a green CI run said nothing about which versions
+# were green.
+#
+# Regenerate both locks after editing this file or requirements-dev.txt:
+#
+#     uv pip compile --universal --generate-hashes --python-version 3.11 \
+#       --output-file requirements.lock requirements.txt
+#     uv pip compile --universal --generate-hashes --python-version 3.11 \
+#       --output-file requirements-dev.lock requirements-dev.txt
+#
+# `uv` is in requirements-dev.txt, so an existing dev environment already has it. CI regenerates both
+# and fails if the result differs from what is committed, so a stale lock cannot merge.
+#
+# Why `uv` and not `pip-compile`: pip-tools imports pip's internals and 7.6.0 is broken against
+# current pip (`ImportError: cannot import name 'stdlib_pkgs'`), so using it would mean also pinning
+# pip in whatever environment regenerates the lock. `uv` has no such coupling, and its output is a
+# plain pip-format requirements file — nothing in CI or the image needs uv to *install* it.
+#
+# `--universal` so the lock carries environment markers and installs on macOS and Linux alike; a
+# platform-specific lock would be unusable for local development on anything but the CI platform.
 # =============================================================================
 
 # --- Web API ---
 fastapi>=0.111,<1.0
 uvicorn[standard]>=0.30,<1.0
-python-multipart>=0.0.9          # multipart form / file uploads
+# Upper bound added in the supply-chain phase. This is pre-1.0 and its own maintainers treat the
+# third component as the only stable digit, so `>=0.0.9` with no ceiling accepted an eventual 0.1
+# or 1.0 with no compatibility promise at all — for the package that parses every upload.
+python-multipart>=0.0.9,<0.1     # multipart form / file uploads
 
 # --- Configuration ---
 pydantic>=2.7,<3.0
@@ -18,7 +46,22 @@ redis>=5.0,<6.0
 rq>=1.16,<2.0
 
 # --- Video / media ---
-ffmpeg-python>=0.2.0
+# ffmpeg-python has been at 0.2.0 since 2019 and is effectively dormant, so the ceiling costs
+# nothing today and is exactly the case an upper bound is for: if it ever does ship a 0.3, it will
+# be after a six-year gap and will not have been tested against this codebase.
+ffmpeg-python>=0.2.0,<0.3
+#
+# yt-dlp is DELIBERATELY left without an upper bound, and that is the one exception here.
+#
+# Every other pin in this file protects against an unreviewed upgrade. For yt-dlp the risk runs the
+# other way: it exists to track sites that change their players without notice, and a version that
+# worked last month is how URL ingest breaks. Capping it would convert "someone must review an
+# upgrade" into "URL ingest silently stops working until someone notices", which is a worse outcome
+# from the same mechanism.
+#
+# Reproducibility is not given up in exchange. `requirements.lock` pins the exact version and hash
+# actually installed, so a build is still byte-reproducible; this line only governs what a
+# deliberate `pip-compile --upgrade` is allowed to pick. Bumping it is expected to be routine.
 yt-dlp>=2024.7.1
 
 # --- Transcription ---
@@ -39,7 +82,24 @@ faster-whisper>=1.0,<2.0
 # either build.
 mediapipe>=0.10,<1.0
 numpy>=1.26,<2.0
-Pillow>=10.3,<11.0               # emoji/image compositing
+#
+# Floor raised from 10.3 to 12.3 in the supply-chain phase, and this one was found by turning the
+# audit into a gate rather than by reading release notes.
+#
+# The old ceiling was `<11.0`, and pip-audit reports **17 vulnerabilities** in the 10.4.0 that
+# resolved to — every one of them fixed in 12.1.1 / 12.2.0 / 12.3.0, i.e. reachable only by crossing
+# the ceiling. So the upper bound intended to prevent an unreviewed upgrade was instead pinning the
+# project to a version with known heap-corruption and out-of-bounds-write defects, and nothing said
+# so because the audit step could not fail.
+#
+# Not theoretical for this codebase: a large share of those advisories are in Pillow's font and
+# image parsers (`FontFile.compile`, `PcfFontFile`, `BdfFontFile`, PSD/GD/FITS loaders), and this
+# app opens media derived from arbitrary downloaded video and ships a directory of font files.
+#
+# Cheap to move, which is why it is done here rather than deferred: the whole Pillow surface used in
+# this repo is `Image.open`, `ImageFilter.FIND_EDGES` and `ImageStat` across two modules. Verified by
+# running the full suite against 12.3 rather than by assuming API stability across two majors.
+Pillow>=12.3,<13.0               # emoji/image compositing
 
 # --- LLM providers (pluggable client) ---
 openai>=1.35,<2.0

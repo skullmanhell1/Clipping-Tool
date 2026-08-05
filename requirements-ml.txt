@@ -32,6 +32,19 @@
 #
 # and look for `capabilities.stem_inpainting`. Until the checkpoint is present the
 # `spectral` repair mode stays disabled in the UI with a "needs local model" hint.
+#
+# Deliberately NOT locked, unlike requirements.txt / requirements-dev.txt.
+#
+# A hash-pinned lock has to be resolved against a specific set of indexes, and the index for these
+# is a *choice made at install time*: the CPU wheels above come from download.pytorch.org and the
+# default CUDA wheels come from PyPI, under the same version numbers. One lock cannot describe both,
+# and generating one would silently commit whichever the person who ran it happened to want — then
+# fail with a hash mismatch for everyone who wanted the other.
+#
+# Both requirements here are bounded, this whole file is opt-in behind
+# `docker build --build-arg INSTALL_ML=true`, and the engine degrades to an ffmpeg approximation
+# without it. So the unlocked surface is a documented, off-by-default extra rather than part of the
+# shipped dependency set.
 # =============================================================================
 -r requirements.txt
 

@@ -478,7 +478,10 @@ capability probe reads the *system* font list, so without the bundled faces inst
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt        # or requirements-dev.txt for tooling
+# The locks are what CI and the Docker image install, so this gives you the same
+# versions they test against. Use requirements.txt / requirements-dev.txt instead
+# only when you are deliberately resolving newer versions.
+pip install --require-hashes -r requirements-dev.lock   # or requirements.lock, runtime only
 cp .env.example .env
 uvicorn api.main:app --reload          # http://localhost:8000
 ```
@@ -516,7 +519,7 @@ in the UI with a "needs local model" hint. In Docker, build with
 
 ```bash
 cd frontend
-npm install
+npm ci                                 # exactly the lockfile; see Dependencies & supply chain
 npm run dev                            # http://localhost:5173 (proxies /api)
 ```
 
@@ -558,6 +561,92 @@ The app checks GitHub for newer releases and shows an **"update available"**
 banner in the UI (and on the **Settings** tab) when your `VERSION` is behind the
 latest release. Set `UPDATE_CHECK_ENABLED=false` to disable the check, or
 `GITHUB_REPO=owner/name` to point it at a fork.
+
+### How a release happens
+
+Releases are cut by the [`release`](./.github/workflows/release.yml) workflow
+when **`VERSION` changes on `main`**. It tags `v<version>`, then publishes a
+GitHub release whose notes are the matching `CHANGELOG.md` section. So the
+process for a release is: update `VERSION`, add the changelog section, merge.
+
+This exists because the update check above could not previously work. The
+repository had **no git tags and no GitHub releases**, while `updates.py` asks
+GitHub for `releases/latest` — which 404s when none exist. The banner, its API
+route and its tests were all in place and permanently inert, and `CHANGELOG.md`
+documented eleven released versions, so the project looked like it had been
+releasing all along.
+
+`VERSION` drives it rather than a hand-pushed tag because `VERSION` is already
+the value the app reports about itself. Two sources for one number is how the
+running version and the version it compares against drift apart, which would
+make the banner lie rather than merely stay quiet. The workflow refuses a
+`VERSION` that is not a bare semver triple, and re-running it on an
+already-tagged version does nothing rather than failing.
+
+---
+
+## Dependencies & supply chain
+
+Every dependency set is pinned, hash-verified, and kept moving by automation.
+
+**Python** — `requirements.txt` declares *intent* (version ranges);
+`requirements.lock` decides what is *installed*. The lock pins all 73 packages of
+the transitive closure to an exact version and hash, and both the Dockerfile and
+CI install it with `pip install --require-hashes`, so a substituted artifact on
+the index fails the build instead of being installed. Regenerate after editing
+either requirements file:
+
+```bash
+uv pip compile --universal --generate-hashes --python-version 3.11 \
+  --output-file requirements.lock requirements.txt
+uv pip compile --universal --generate-hashes --python-version 3.11 \
+  --output-file requirements-dev.lock requirements-dev.txt
+```
+
+`uv` is in `requirements-dev.txt`, so an existing dev environment has it. CI
+regenerates both and fails if the result differs from what is committed, so a
+stale lock cannot merge.
+
+**Node** — both `package.json` files have committed lockfiles and both the
+Dockerfile and CI use `npm ci`, never `npm install`. `npm install` may resolve
+past the lockfile and rewrite it, which meant an image could ship a dependency
+tree that no test run had ever seen.
+
+**`pip-audit` blocks the build**, and audits the lock rather than the ranges —
+"is the version we ship safe?" rather than "could a safe version satisfy this?".
+Turning it from advisory to blocking immediately found something: **17
+vulnerabilities in `pillow` 10.4.0**, every one fixed in 12.x, and therefore
+unreachable while the `<11.0` ceiling stood. An upper bound meant to prevent an
+unreviewed upgrade was instead holding the project on known heap-corruption and
+out-of-bounds-write defects in the image and font parsers that this app feeds
+arbitrary downloaded media through. That floor is now `12.3`.
+
+**One deliberate exception:** `yt-dlp` has no upper bound. It exists to track
+sites that change their players without notice, so a ceiling would turn "someone
+must review an upgrade" into "URL ingest silently stops working". The lock still
+pins its exact version and hash, so builds stay reproducible; the range only
+governs what a deliberate upgrade may pick.
+
+**[Dependabot](./.github/dependabot.yml)** covers all five surfaces — pip, the
+frontend, the publisher bridge, the workflow actions, and the Docker base images.
+Pinning without a way to move the pins is how `pillow` accumulated 17 advisories.
+Note that a Dependabot PR which moves a Python range **will fail** the
+"Locks match their requirements files" check until the locks are regenerated with
+the commands above; that failure is the reminder.
+
+**[CodeQL](./.github/workflows/codeql.yml)** analyses both languages weekly and
+on every PR. It looks for something no other check here can see: a taint path
+through this repo's own code. `ruff` and `mypy` reason about one module at a time,
+and the audit tools only know about other people's published vulnerabilities —
+but this app takes a caller's URL and hands it to yt-dlp, and builds ffmpeg
+filter arguments influenced by request data.
+
+The image also **asserts what it got** rather than pinning an apt version:
+ffmpeg's major version and the presence of the `subtitles` filter (libass) are
+checked at build time, and again in CI alongside `import cv2`. The Debian version
+is deliberately not pinned — Debian rotates point releases out of the archive, so
+an exact pin trades a silent-change risk for a certain-breakage one. Verified by
+building with `--build-arg FFMPEG_MIN_MAJOR=99`, which fails as intended.
 
 ---
 
