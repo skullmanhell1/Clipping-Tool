@@ -17,23 +17,46 @@ export default function ProfilesBar({
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
   const active = profiles.find((p) => p.id === activeId);
 
+  /**
+   * Wrap an action so it reports its own failure.
+   *
+   * The `catch` is the point. This was `try`/`finally` with no `catch`, so a rejected save, delete
+   * or set-default re-enabled the button and told the user nothing — every one of these calls a
+   * parent handler that awaits an API request and none of those catch either, so the rejection
+   * became an unhandled promise rejection in the console. From the outside, clicking "Save current"
+   * on a backend that answered 409 or 500 looked exactly like clicking it on a backend that
+   * succeeded: the spinner cleared and the profile list did not change.
+   */
   const run =
     (fn) =>
     async (...args) => {
       setBusy(true);
+      setError(null);
       try {
         await fn(...args);
+      } catch (failure) {
+        // `api.js` puts the server's own `detail` on the message, which is the sentence worth
+        // showing — "A profile named 'Shorts' already exists" rather than a status code.
+        setError(failure?.message || "That action failed.");
       } finally {
         setBusy(false);
       }
     };
 
+  const handleApply = run((value) => onApply(value));
+
   const handleSave = run(async () => {
     const targetName = name.trim() || active?.name;
-    if (!targetName) return;
+    if (!targetName) {
+      // Also previously silent: with no name typed and no profile selected there is nothing to
+      // save to, and returning without a word is indistinguishable from a save that worked.
+      setError("Type a name for the profile first.");
+      return;
+    }
     // If the typed name matches the active profile, update it; else create new.
     const existing = profiles.find((p) => p.name.toLowerCase() === targetName.toLowerCase());
     await onSave(targetName, existing?.id || "");
@@ -58,7 +81,7 @@ export default function ProfilesBar({
         <select
           value={activeId || ""}
           disabled={busy}
-          onChange={(e) => onApply(e.target.value)}
+          onChange={(e) => handleApply(e.target.value)}
           className="rounded-lg border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100 outline-none focus:border-brand-accent"
         >
           <option value="">Select a profile…</option>
@@ -105,6 +128,11 @@ export default function ProfilesBar({
           </button>
         </div>
       </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-rose-300">
+          {error}
+        </p>
+      )}
       <p className="mt-2 text-xs text-slate-500">
         Save the full current configuration (clip length, aspect, captions, effects, publishing) as
         a named profile. Selecting one pre-fills every setting for the next run.
