@@ -182,3 +182,83 @@ describe("ProfilesBar saving", () => {
     expect(screen.getByText(/clip length, aspect, captions, effects, publishing/i)).toBeVisible();
   });
 });
+
+describe("ProfilesBar failure reporting", () => {
+  // Every action here awaits an API call through a parent handler, and neither this component nor
+  // any of those handlers used to catch. A rejected save re-enabled the button, changed nothing and
+  // said nothing — indistinguishable from a save that worked — while the rejection surfaced only as
+  // an unhandled promise rejection in the console. These pin that each action now reports.
+
+  it("reports a failed save instead of clearing the spinner silently", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error("A profile named 'Shorts' already exists"));
+    setup({ onSave });
+    await userEvent.type(nameField(), "Shorts");
+    await userEvent.click(screen.getByRole("button", { name: /save current/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/i);
+  });
+
+  it("keeps the typed name when the save fails, so the attempt is not lost", async () => {
+    // The name is only cleared after a successful save. Clearing it on failure would make the
+    // retry a retype.
+    const onSave = vi.fn().mockRejectedValue(new Error("nope"));
+    setup({ onSave });
+    await userEvent.type(nameField(), "Podcast cuts");
+    await userEvent.click(screen.getByRole("button", { name: /save current/i }));
+    await screen.findByRole("alert");
+    expect(nameField()).toHaveValue("Podcast cuts");
+  });
+
+  it("reports a failed delete", async () => {
+    const onDelete = vi.fn().mockRejectedValue(new Error("Profile is in use"));
+    setup({ onDelete });
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/in use/i);
+  });
+
+  it("reports a failed set-default", async () => {
+    const onSetDefault = vi.fn().mockRejectedValue(new Error("Could not set the default"));
+    setup({ onSetDefault });
+    await userEvent.click(screen.getByRole("button", { name: /default/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not set the default/i);
+  });
+
+  it("reports a failed apply", async () => {
+    // Selecting a profile was the one action not wrapped at all, so a parent that threw while
+    // applying left the dropdown showing a profile whose settings had not been applied.
+    const onApply = vi.fn().mockRejectedValue(new Error("Profile could not be read"));
+    setup({ onApply });
+    await userEvent.selectOptions(screen.getByRole("combobox"), "p2");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be read/i);
+  });
+
+  it("says what to do when there is nothing to name the profile after", async () => {
+    // Previously a bare `return`: with no name typed and no profile selected, the click did
+    // nothing and explained nothing.
+    const onSave = vi.fn();
+    setup({ onSave, activeId: "" });
+    await userEvent.click(screen.getByRole("button", { name: /save current/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/type a name/i);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("clears a previous failure when the next action starts", async () => {
+    // Otherwise a stale message sits under a control that has since worked, which is worse than
+    // no message: it says the current state is broken when it is not.
+    const onSetDefault = vi.fn().mockRejectedValueOnce(new Error("transient")).mockResolvedValue();
+    setup({ onSetDefault });
+    const button = screen.getByRole("button", { name: /default/i });
+    await userEvent.click(button);
+    await screen.findByRole("alert");
+    await userEvent.click(button);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("re-enables the controls after a failure so the action can be retried", async () => {
+    const onDelete = vi.fn().mockRejectedValue(new Error("boom"));
+    setup({ onDelete });
+    const button = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(button);
+    await screen.findByRole("alert");
+    expect(button).toBeEnabled();
+  });
+});
