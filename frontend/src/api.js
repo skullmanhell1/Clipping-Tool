@@ -35,10 +35,92 @@ function authHeaders() {
   return token ? { "X-API-Token": token } : {};
 }
 
-// Every call goes through here so the header has one definition rather than 38.
-// That single seam is also where Phase 5 adds AbortController and timeouts.
+// --------------------------------------------------------------------------
+// Timeouts and cancellation.
+//
+// Every call goes through `apiFetch`, so the header, the timeout and the abort
+// plumbing each have one definition rather than 38.
+//
+// `fetch` has no timeout of its own. Without one, a request to a backend that
+// has stopped answering — a container being restarted, a laptop that has
+// suspended, a proxy holding the connection open — never settles, so the
+// caller's `await` never returns. Every poll in the app was written to survive
+// a *failure*; none of them survives a promise that simply never resolves,
+// which is the case that presents as the UI freezing rather than erroring.
+// --------------------------------------------------------------------------
+
+//: Default request deadline. Generous, because the slowest ordinary call is a
+//: yt-dlp metadata fetch on `/api/preview` and that legitimately takes seconds
+//: on a cold extractor.
+const DEFAULT_TIMEOUT_MS = 30000;
+
+//: Uploads get no timeout at all.
+//:
+//: A multi-gigabyte file over a slow connection is *supposed* to take minutes,
+//: and there is no duration that distinguishes "still uploading" from "stalled"
+//: without measuring throughput. Cancelling one on a clock would abort exactly
+//: the transfers that were closest to succeeding. Uploads are cancellable
+//: instead — pass a `signal`.
+const NO_TIMEOUT = 0;
+
+/**
+ * A DOMException-compatible error, distinguishable from a network failure.
+ *
+ * `fetch` rejects with a bare `TypeError` when the network is unreachable and
+ * with an `AbortError` when a signal fires, and callers need to tell a timeout
+ * apart from a user-initiated cancellation — one is worth reporting and the
+ * other is not.
+ */
+export class TimeoutError extends Error {
+  constructor(url, ms) {
+    super(`Request to ${url} timed out after ${ms}ms`);
+    this.name = "TimeoutError";
+  }
+}
+
 function apiFetch(url, init = {}) {
-  return fetch(url, { ...init, headers: { ...(init.headers || {}), ...authHeaders() } });
+  const { timeout = DEFAULT_TIMEOUT_MS, signal, ...rest } = init;
+
+  const headers = { ...(rest.headers || {}), ...authHeaders() };
+
+  // No timeout and no caller signal: nothing to wire up, so do not allocate a
+  // controller. This is the upload path.
+  if (!timeout && !signal) {
+    return fetch(url, { ...rest, headers });
+  }
+
+  const controller = new AbortController();
+  let timer = null;
+  let timedOut = false;
+
+  if (timeout) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeout);
+  }
+
+  // A caller's own signal (a component unmounting, a filter changing) is
+  // forwarded rather than replacing ours, so both can abort the same request.
+  const onCallerAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  return fetch(url, { ...rest, headers, signal: controller.signal })
+    .catch((error) => {
+      // Re-label our own abort so a timeout does not look like a cancellation.
+      // A caller's abort keeps its AbortError, which callers check for by name.
+      if (timedOut && error?.name === "AbortError") {
+        throw new TimeoutError(url, timeout);
+      }
+      throw error;
+    })
+    .finally(() => {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onCallerAbort);
+    });
 }
 
 // A URL a *browser* will load directly (<video src>, <a href>) cannot carry a
@@ -83,13 +165,20 @@ export const api = {
       body: JSON.stringify({ urls, options }),
     }).then(jsonOrThrow),
 
-  upload: (files, options) => {
+  upload: (files, options, { signal } = {}) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     Object.entries(options).forEach(([k, v]) => {
       if (v !== null && v !== undefined) fd.append(k, v);
     });
-    return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
+    // No timeout: see NO_TIMEOUT. `signal` is threaded so an upload can still be
+    // cancelled deliberately, which is what makes a slow one recoverable.
+    return apiFetch("/api/upload", {
+      method: "POST",
+      body: fd,
+      timeout: NO_TIMEOUT,
+      signal,
+    }).then(jsonOrThrow);
   },
 
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),

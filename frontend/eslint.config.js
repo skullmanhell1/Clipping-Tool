@@ -57,7 +57,13 @@ export default [
       "react/no-unescaped-entities": ["error", { forbid: [">", "}"] }],
       // The two rules that catch genuine bugs rather than style.
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      // Promoted from "warn" now that the count is zero. It was a warning because there were two
+      // outstanding violations (plan item I11) and both polling effects needed a real fix rather
+      // than a dependency added to silence the rule — depending on `jobs` directly rebuilt the
+      // interval on every poll, and depending on `jobs.length` missed the case that mattered,
+      // because a job going from processing to completed does not change the count. Those are
+      // fixed; a warning nobody has to act on is a warning that stops being read.
+      "react-hooks/exhaustive-deps": "error",
       // An unused variable is usually a leftover or a typo'd identifier. Argument
       // patterns prefixed with _ are conventionally intentional.
       "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],

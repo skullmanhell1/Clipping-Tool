@@ -165,6 +165,16 @@ export const DEFAULT_SETTINGS = Object.fromEntries(
     .map(([key, spec]) => [key, spec.default])
 );
 
+/**
+ * How many consecutive poll failures before the app says the backend is unreachable.
+ *
+ * Three, not one. A single failure is routine — a container restarting, a laptop waking, a proxy
+ * recycling a connection — and a banner that appears on every one of those trains the user to
+ * ignore it. Three consecutive failures at the fast interval is under four seconds, which is
+ * still well inside the window where the answer is useful.
+ */
+export const BACKEND_UNREACHABLE_AFTER = 3;
+
 export const DEFAULT_PUBLISHING = {
   platforms: [],
   campaign_id: "",
@@ -228,6 +238,8 @@ export default function App() {
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
   const [activeProfileId, setActiveProfileId] = useState("");
+  // Consecutive poll failures. See `poll` and BACKEND_UNREACHABLE_AFTER.
+  const [pollFailures, setPollFailures] = useState(0);
   const pollRef = useRef(null);
   const defaultAppliedRef = useRef(false);
 
@@ -349,8 +361,19 @@ export default function App() {
       const [{ jobs: allJobs }, history] = await Promise.all([api.listJobs(), api.history()]);
       setJobs(allJobs);
       setPublishAttempts(history.publish_attempts || []);
+      // Recovered. Reset rather than decrement: the banner is about the backend being
+      // unreachable *now*, and one good answer means it is not.
+      setPollFailures(0);
     } catch {
-      // Keep the last known state through transient API failures.
+      // The last known state is deliberately kept through a transient failure — a job list that
+      // blanks out because one poll missed is worse than a slightly stale one.
+      //
+      // But *only* transient. This `catch` used to be empty, which meant a backend that had
+      // stopped answering entirely was indistinguishable from one with nothing to report: the
+      // job cards simply froze at whatever they last showed, and the user's reasonable reading of
+      // that is "my render is stuck", not "the server is gone". Counting consecutive failures is
+      // what separates the two, and the count is what the banner is gated on.
+      setPollFailures((previous) => previous + 1);
     }
   }, []);
 
@@ -485,6 +508,31 @@ export default function App() {
             ))}
           </nav>
         </header>
+
+        {/* A backend that has stopped answering, said out loud.
+Above the view switch rather than inside the create view, because it applies to every view:
+the schedule, the history and the storage panel all poll the same server, and each of them
+degrades to "nothing to show" when it is gone. Placed beside the update notice because they
+are the same kind of thing — a statement about the installation rather than about a job. */}
+        {pollFailures >= BACKEND_UNREACHABLE_AFTER && (
+          <div
+            role="alert"
+            className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-sm text-rose-200"
+          >
+            <span>
+              ⚠ Cannot reach the backend — {pollFailures} consecutive attempts failed. The figures
+              below are the last known state and are no longer being updated. Any job still shown as
+              running may have finished, failed, or never started.
+            </span>
+            <button
+              type="button"
+              onClick={() => poll()}
+              className="rounded-lg border border-rose-600 px-3 py-1 font-medium hover:bg-rose-900/40"
+            >
+              Retry now
+            </button>
+          </div>
+        )}
 
         {updateInfo?.update_available && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-700/60 bg-amber-950/40 p-3 text-sm text-amber-200">
