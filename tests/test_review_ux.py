@@ -618,6 +618,7 @@ def test_u7_without_explicit_candidates_selection_still_runs(monkeypatch, tmp_pa
 def review_client(monkeypatch):
     from fastapi.testclient import TestClient
 
+    import api.deps as api_deps
     import api.main as main
     from worker.jobs import JobStore
 
@@ -634,8 +635,8 @@ def review_client(monkeypatch):
 
     manager = _Manager()
     manager.store = store
-    monkeypatch.setattr(main, "get_manager", lambda: manager)
-    monkeypatch.setattr(main, "get_history", lambda: _NullHistory())
+    monkeypatch.setattr(api_deps, "get_manager", lambda: manager)
+    monkeypatch.setattr(api_deps, "get_history", lambda: _NullHistory())
     return TestClient(main.app), job
 
 

@@ -746,9 +746,10 @@ def test_pb7_per_day_limit_is_respected():
 def client(monkeypatch, store):
     from fastapi.testclient import TestClient
 
+    import api.deps as api_deps
     import api.main as main
 
-    monkeypatch.setattr(main, "get_history", lambda: store)
+    monkeypatch.setattr(api_deps, "get_history", lambda: store)
     return TestClient(main.app)
 
 

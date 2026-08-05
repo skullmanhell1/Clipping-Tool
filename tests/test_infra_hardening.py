@@ -399,6 +399,7 @@ def test_i5_resume_refuses_an_unknown_job():
 def resume_client(monkeypatch):
     from fastapi.testclient import TestClient
 
+    import api.deps as api_deps
     import api.main as main
     from worker.jobs import JobStore
 
@@ -414,7 +415,7 @@ def resume_client(monkeypatch):
             return True
 
     manager = _Manager()
-    monkeypatch.setattr(main, "get_manager", lambda: manager)
+    monkeypatch.setattr(api_deps, "get_manager", lambda: manager)
     return TestClient(main.app), store, manager
 
 

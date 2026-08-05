@@ -178,7 +178,7 @@ def test_info_retains_existing_effects_keys(client):
 
 def test_options_model_threads_new_fields_into_from_dict():
     """OptionsModel -> to_options carries the new Tier 1 fields into ProcessingOptions."""
-    from api.main import OptionsModel
+    from api.models import OptionsModel
 
     opts = OptionsModel(
         caption_preset="pop",

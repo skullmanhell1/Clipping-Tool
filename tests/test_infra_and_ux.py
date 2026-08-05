@@ -487,9 +487,10 @@ def test_the_fallback_page_can_actually_read_the_engine_list():
 
 def test_the_fallback_page_renders_when_the_job_store_is_broken(monkeypatch):
     """It must render when things are broken, because that is when it is read."""
+    import api.deps as api_deps
     import api.main as main
 
-    monkeypatch.setattr(main, "get_manager", lambda: (_ for _ in ()).throw(RuntimeError("no")))
+    monkeypatch.setattr(api_deps, "get_manager", lambda: (_ for _ in ()).throw(RuntimeError("no")))
     html = main.fallback_index_html()
     assert "job store unavailable" in html
 

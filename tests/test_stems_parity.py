@@ -352,9 +352,16 @@ def test_the_stem_engine_adds_no_new_production_file() -> None:
 
     # No new engine module, and nothing named for this feature: the engine lives entirely
     # in the pre-existing worker/engines/stems.py.
+    #
+    # Matched on a word boundary rather than as a substring. `"stem" in path.lower()` was the
+    # first spelling, and it fires on `api/routers/system.py` -- **sy-stem** -- which this very
+    # commit adds. A guard that fails for a reason unrelated to what it guards is worse than no
+    # guard: the tempting response is to add an exclusion for this one path, and after two rounds
+    # of that nobody trusts the assertion. The word boundary fixes the class, not the instance.
+    stem_pattern = re.compile(r"(?:^|[^a-z])stems?(?:[^a-z]|$)")
     stem_related = [
         path for path in new_production
-        if "stem" in path.lower() or path.startswith("worker/engines/")
+        if stem_pattern.search(path.lower()) or path.startswith("worker/engines/")
     ]
     assert stem_related == [], (
         f"the stem engine should not add production files, but got: {stem_related}"

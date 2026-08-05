@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import api.deps as api_deps
 import api.main as api_main
 from publishers import preflight
 from publishers.base import PublishState
@@ -55,8 +56,8 @@ def resume_env(monkeypatch, history, clip_on_disk):
         ),
     }
     manager = PublishManager(publishers=publishers, history=history, autostart=False)
-    monkeypatch.setattr(api_main, "get_history", lambda: history)
-    monkeypatch.setattr(api_main, "get_publish_manager", lambda: manager)
+    monkeypatch.setattr(api_deps, "get_history", lambda: history)
+    monkeypatch.setattr(api_deps, "get_publish_manager", lambda: manager)
     return manager, history, clip_on_disk
 
 
