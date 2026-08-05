@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -51,25 +50,32 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     clip = manager.store.get_clip(job_id, clip_id)
     if job is None or clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
-    if req.mode not in ("auto","review"):
+    if req.mode not in ("auto", "review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
-    path=Path(settings.clips_dir)/job_id/clip.filename
-    ids=get_publish_manager().submit(job_id=job_id,clip=clip,video_path=path,
-      platforms=req.platforms,campaign_id=req.campaign_id,mode=req.mode,
-      schedule_at=req.schedule_at,route_overrides=req.routes)
+    path = Path(settings.clips_dir) / job_id / clip.filename
+    ids = get_publish_manager().submit(
+        job_id=job_id,
+        clip=clip,
+        video_path=path,
+        platforms=req.platforms,
+        campaign_id=req.campaign_id,
+        mode=req.mode,
+        schedule_at=req.schedule_at,
+        route_overrides=req.routes,
+    )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")
-    return {"attempt_ids":ids,"attempts":[get_history().get_attempt(i) for i in ids]}
+    return {"attempt_ids": ids, "attempts": [get_history().get_attempt(i) for i in ids]}
 
 
 @router.get("/api/history", tags=["publishing"])
-def history(limit: int=200, platform: str="") -> dict:
-    return get_history().history(max(1,min(limit,500)),platform)
+def history(limit: int = 200, platform: str = "") -> dict:
+    return get_history().history(max(1, min(limit, 500)), platform)
 
 
 @router.get("/api/publish-attempts/{attempt_id}", tags=["publishing"])
 def publish_attempt(attempt_id: str) -> dict:
-    item=get_history().get_attempt(attempt_id)
+    item = get_history().get_attempt(attempt_id)
     if not item:
         raise HTTPException(status_code=404, detail="Publish attempt not found")
     return item
@@ -143,9 +149,7 @@ def _resume_attempt(attempt_id: str, *, force_direct: bool) -> dict:
     # now is far better than a "file no longer exists" failure minutes later.
     video_path = Path(str(request.get("video_path") or ""))
     if not video_path.is_file():
-        raise HTTPException(
-            status_code=409, detail=f"Clip file no longer exists: {video_path}"
-        )
+        raise HTTPException(status_code=409, detail=f"Clip file no longer exists: {video_path}")
 
     store.update_attempt(
         attempt_id,
@@ -178,13 +182,11 @@ def approve_publish_attempt(attempt_id: str) -> dict:
 #:
 #: An attempt that is uploading or finished has no future to move. ``failed`` is excluded too:
 #: rescheduling a failure would look like a retry while skipping every check ``/retry`` performs.
-RESCHEDULABLE_PUBLISH_STATES = frozenset(
-    {PublishState.QUEUED.value, PublishState.SCHEDULED.value}
-)
+RESCHEDULABLE_PUBLISH_STATES = frozenset({PublishState.QUEUED.value, PublishState.SCHEDULED.value})
 
 
 @router.get("/api/schedule", tags=["publishing"])
-def schedule_window(start: Optional[float] = None, end: Optional[float] = None) -> dict:
+def schedule_window(start: float | None = None, end: float | None = None) -> dict:
     """Publish attempts scheduled within a window, for the calendar view (PB7).
 
     Defaults to the 30 days around now. Returns every state, not just pending ones: a calendar
@@ -218,12 +220,9 @@ def schedule_suggestions(platform: str = "", days: int = 7, per_day: int = 2) ->
     taken = [
         float(a["scheduled_at"])
         for a in get_history().scheduled_between(now, now + horizon * 86400)
-        if a.get("scheduled_at")
-        and (not platform or a.get("platform") == platform)
+        if a.get("scheduled_at") and (not platform or a.get("platform") == platform)
     ]
-    found = best_times.suggest(
-        platform, days=horizon, per_day=each, now=now, taken=taken
-    )
+    found = best_times.suggest(platform, days=horizon, per_day=each, now=now, taken=taken)
     return {
         "platform": platform,
         "basis": best_times.BASIS,
@@ -247,15 +246,14 @@ def reschedule_publish_attempt(attempt_id: str, req: RescheduleModel) -> dict:
         raise HTTPException(
             status_code=409,
             detail=f"Attempt is {state!r}; only "
-                   f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
+            f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
         )
     when = float(req.schedule_at)
     # A time in the past means "publish now", which is a legitimate request, but it must be
     # recorded as `queued` rather than left `scheduled` in the past - the scheduler treats both as
     # due, and a state that disagrees with the clock is what makes a queue hard to reason about.
     state_now = (
-        PublishState.SCHEDULED.value if when > time.time() + 1
-        else PublishState.QUEUED.value
+        PublishState.SCHEDULED.value if when > time.time() + 1 else PublishState.QUEUED.value
     )
     store.update_attempt(attempt_id, scheduled_at=when, state=state_now)
     return store.get_attempt(attempt_id) or {}

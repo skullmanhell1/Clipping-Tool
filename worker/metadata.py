@@ -17,7 +17,7 @@ regenerated in isolation via :func:`regenerate_field`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
 from worker.models import ProcessingOptions
@@ -37,11 +37,9 @@ class PlatformProfile:
 # Sensible defaults per platform (limits are conservative, not exhaustive).
 PLATFORM_PROFILES: dict[str, PlatformProfile] = {
     "generic": PlatformProfile("generic", 80, 500, 15, "engaging and clear"),
-    "youtube": PlatformProfile("youtube", 100, 1000, 15,
-                               "curiosity-driven, keyword-rich"),
+    "youtube": PlatformProfile("youtube", 100, 1000, 15, "curiosity-driven, keyword-rich"),
     "tiktok": PlatformProfile("tiktok", 80, 300, 8, "punchy, casual, trend-aware"),
-    "instagram": PlatformProfile("instagram", 80, 400, 12,
-                                 "aesthetic, relatable, emoji-friendly"),
+    "instagram": PlatformProfile("instagram", 80, 400, 12, "aesthetic, relatable, emoji-friendly"),
     "x": PlatformProfile("x", 70, 260, 4, "concise and witty"),
     "whop": PlatformProfile("whop", 90, 500, 10, "value-driven, community-focused"),
 }
@@ -75,11 +73,11 @@ class ClipMetadata:
 
 def get_profile(platform: str) -> PlatformProfile:
     """Return the :class:`PlatformProfile` for ``platform`` (falls back generic)."""
-    return PLATFORM_PROFILES.get((platform or "generic").lower(),
-                                 PLATFORM_PROFILES["generic"])
+    return PLATFORM_PROFILES.get((platform or "generic").lower(), PLATFORM_PROFILES["generic"])
 
 
 # --- normalisation helpers --------------------------------------------------
+
 
 def _norm_hashtag(tag: str) -> str:
     """Normalise a single hashtag to ``#word`` form (no spaces/punctuation)."""
@@ -186,9 +184,9 @@ def _parse_metadata(
 def generate_metadata(
     transcript_text: str,
     options: ProcessingOptions,
-    platform: Optional[str] = None,
-    hashtag_count: Optional[int] = None,
-    client: Optional[BaseLLMClient] = None,
+    platform: str | None = None,
+    hashtag_count: int | None = None,
+    client: BaseLLMClient | None = None,
 ) -> ClipMetadata:
     """Generate per-platform metadata for a clip transcript.
 
@@ -230,9 +228,9 @@ def regenerate_field(
     field_name: str,
     transcript_text: str,
     options: ProcessingOptions,
-    platform: Optional[str] = None,
-    hashtag_count: Optional[int] = None,
-    client: Optional[BaseLLMClient] = None,
+    platform: str | None = None,
+    hashtag_count: int | None = None,
+    client: BaseLLMClient | None = None,
 ) -> Any:
     """Regenerate a single metadata field and return just that field's value.
 

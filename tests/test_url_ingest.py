@@ -60,7 +60,7 @@ def _allow_loopback_ingest(monkeypatch):
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *_args):      # keep the test output readable
+    def log_message(self, *_args):  # keep the test output readable
         pass
 
 
@@ -84,11 +84,31 @@ def hosted_video(tmp_path, media_server):
     """A real, probeable mp4 with audio, reachable over HTTP."""
     dest = tmp_path / "sample.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=15:duration=2",
-         "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(dest)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=15:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
     )
     return f"{media_server}/sample.mp4"
 
@@ -115,9 +135,19 @@ def test_i13_a_url_actually_downloads_to_a_playable_file(tmp_path, hosted_video)
     assert path.parent == dest, "the outtmpl did not put the file where it was asked to"
 
     probed = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=nw=1:nk=1", str(path)],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert float(probed) > 1.0
     assert meta.title
@@ -188,10 +218,24 @@ def test_i13_the_height_cap_is_expressed_in_a_selector_yt_dlp_accepts(tmp_path, 
     """
     dest = tmp_path / "tall.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "testsrc2=size=640x480:rate=15:duration=1",
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(dest)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x480:rate=15:duration=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
     )
     path, _meta = download.download_video(
         f"{media_server}/tall.mp4", tmp_path / "out", max_height=240
@@ -200,12 +244,23 @@ def test_i13_the_height_cap_is_expressed_in_a_selector_yt_dlp_accepts(tmp_path, 
     # must fire. The assertion is that it *does* - an unparseable selector raises instead.
     assert path.is_file()
     height = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height",
-         "-of", "default=nw=1:nk=1", str(path)],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=height",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert int(height) == 480, "the fallback rung did not deliver the only rendition available"
-
 
 
 # --------------------------------------------------------------------------- #
@@ -220,11 +275,13 @@ def test_i13_the_height_cap_is_expressed_in_a_selector_yt_dlp_accepts(tmp_path, 
 
 def _dockerfile() -> str:
     from config import BASE_DIR
+
     return (BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
 
 
 def _requirements() -> str:
     from config import BASE_DIR
+
     return (BASE_DIR / "requirements.txt").read_text(encoding="utf-8")
 
 
@@ -238,7 +295,8 @@ def test_i7_opencv_is_not_pinned_alongside_mediapipe_s_own_build():
     """
     requirements = _requirements()
     active = [
-        line.split("#")[0].strip() for line in requirements.splitlines()
+        line.split("#")[0].strip()
+        for line in requirements.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     assert not any(line.startswith("opencv-python") for line in active), (
@@ -290,8 +348,7 @@ def test_i7_the_whop_publisher_requires_the_interpreter_not_just_the_script(monk
     from publishers.whop import WhopPublisher
 
     monkeypatch.setattr(settings, "whop_api_key", "test-key", raising=False)
-    monkeypatch.setattr(settings, "whop_node_binary", "definitely-not-a-real-binary",
-                        raising=False)
+    monkeypatch.setattr(settings, "whop_node_binary", "definitely-not-a-real-binary", raising=False)
     status = WhopPublisher().status()
     assert status.configured is True, "the key is set, so it is configured"
     assert status.available is False, "there is no interpreter to run the bridge with"
@@ -363,7 +420,6 @@ def test_i13_the_alternative_emoji_styles_are_excluded_from_the_image():
     assert not any(
         line.strip() in ("assets/emoji", "assets/emoji/") for line in ignored.splitlines()
     )
-
 
 
 def test_i13_the_merged_extension_is_resolved(tmp_path):

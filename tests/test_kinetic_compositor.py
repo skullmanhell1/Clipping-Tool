@@ -42,6 +42,7 @@ on every run regardless of what the random draws happen to cover, and the ``appl
 examples additionally assert a positive fact (the engine's ASS path is in the graph, one
 ``subtitles=`` filter, one ffmpeg pass).
 """
+
 from __future__ import annotations
 
 import ast
@@ -49,12 +50,13 @@ import dataclasses
 import importlib.util
 import inspect
 import sys
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import Any, Optional, Sequence
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -129,7 +131,7 @@ class Leg:
     build_ass_calls: list = field(default_factory=list)
     words_to_cues_calls: list = field(default_factory=list)
     plan_keywords_calls: list = field(default_factory=list)
-    own_ass: Optional[Path] = None
+    own_ass: Path | None = None
 
     @property
     def passes(self) -> int:
@@ -171,7 +173,7 @@ def _render_leg(
     options: ProcessingOptions,
     words: Sequence[Any],
     hook_text: str,
-    contributions: Optional[Sequence[Compose_Contribution]],
+    contributions: Sequence[Compose_Contribution] | None,
     raise_in_producers: bool = False,
 ) -> Leg:
     """Render one clip offline into ``root/name`` and record what was called.
@@ -206,25 +208,25 @@ def _render_leg(
     def spy_words_to_cues(*args, **kwargs):
         leg.words_to_cues_calls.append((args, kwargs))
         if raise_in_producers:
-            raise AssertionError("captions.words_to_cues must not run when the engine owns captions")
+            raise AssertionError(
+                "captions.words_to_cues must not run when the engine owns captions"
+            )
         return real_words_to_cues(*args, **kwargs)
 
     def spy_plan_keywords(*args, **kwargs):
         leg.plan_keywords_calls.append((args, kwargs))
         if raise_in_producers:
-            raise AssertionError("caption_presets.plan_keywords must not run when the engine owns captions")
+            raise AssertionError(
+                "caption_presets.plan_keywords must not run when the engine owns captions"
+            )
         return real_plan_keywords(*args, **kwargs)
 
     with ExitStack() as stack:
         stack.enter_context(mock.patch.object(compositor, "probe", lambda path: MEDIA_INFO))
         stack.enter_context(mock.patch.object(compositor, "_run", spy_run))
         stack.enter_context(mock.patch.object(compositor.cap, "build_ass", spy_build_ass))
-        stack.enter_context(
-            mock.patch.object(compositor.cap, "words_to_cues", spy_words_to_cues)
-        )
-        stack.enter_context(
-            mock.patch.object(caption_presets, "plan_keywords", spy_plan_keywords)
-        )
+        stack.enter_context(mock.patch.object(compositor.cap, "words_to_cues", spy_words_to_cues))
+        stack.enter_context(mock.patch.object(caption_presets, "plan_keywords", spy_plan_keywords))
         leg.result = compositor.render_clip(
             base,
             work / "out.mp4",
@@ -302,12 +304,10 @@ def st_caption_option_fields(draw):
     return {
         "captions": draw(st.booleans()),
         "hook_title": draw(st.booleans()),
-        "caption_preset": draw(
-            st.sampled_from(sorted(caption_presets.BUILTIN_PRESETS))
-        ),
+        "caption_preset": draw(st.sampled_from(sorted(caption_presets.BUILTIN_PRESETS))),
         "caption_animation": draw(st.sampled_from(["", "none", "pop", "typewriter"])),
         "caption_keyword_highlight": draw(st.booleans()),
-        "caption_keyword_ai": False,          # never call an LLM (Req 15.1)
+        "caption_keyword_ai": False,  # never call an LLM (Req 15.1)
         "caption_emoji": draw(st.booleans()),
         "caption_template": draw(st.sampled_from(["karaoke", "boxed", "minimal"])),
         "caption_position": draw(st.sampled_from(["", "bottom", "center", "top"])),
@@ -332,9 +332,7 @@ def st_kinetic_outcome(draw):
     handed to the compositor carry realistic, sometimes-duplicated marker text.
     ``drop_words`` models the empty rebased Word_Timeline of Req 3.5.
     """
-    payload = draw(
-        st_engine_outcomes(engine_id=ENGINE_ID, allow_exception=False, max_artifacts=0)
-    )
+    payload = draw(st_engine_outcomes(engine_id=ENGINE_ID, allow_exception=False, max_artifacts=0))
     return {
         "kind": draw(st.sampled_from(OUTCOME_KINDS)),
         "markers": payload["markers"],
@@ -400,18 +398,48 @@ def _pinned_outcome(kind: str) -> dict:
     fields=st_caption_option_fields(),
     hook_text=st.sampled_from(["", "   ", "WAIT FOR IT", "watch this 🎬"]),
 )
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("applied"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("skipped"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("degraded"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("failed"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("timeout"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
-@example(timeline=_PINNED_TIMELINE, noise={}, outcome=_pinned_outcome("disabled"),
-         fields=dict(_PINNED_FIELDS), hook_text="WAIT FOR IT")
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("applied"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("skipped"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("degraded"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("failed"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("timeout"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
+@example(
+    timeline=_PINNED_TIMELINE,
+    noise={},
+    outcome=_pinned_outcome("disabled"),
+    fields=dict(_PINNED_FIELDS),
+    hook_text="WAIT FOR IT",
+)
 def test_p3_caption_text_is_rendered_by_exactly_one_producer(
     timeline, noise, outcome, fields, hook_text
 ):
@@ -442,14 +470,12 @@ def test_p3_caption_text_is_rendered_by_exactly_one_producer(
     words, _duration = timeline
     kind = outcome["kind"]
     if kind != "applied" and outcome["drop_words"]:
-        words = []                      # Req 3.5 — an empty rebased Word_Timeline
-    options = _options(
-        noise, fields, captions=True if kind == "applied" else fields["captions"]
-    )
+        words = []  # Req 3.5 — an empty rebased Word_Timeline
+    options = _options(noise, fields, captions=True if kind == "applied" else fields["captions"])
 
     with TemporaryDirectory(prefix="kinetic-p3-") as tmp:
         root = Path(tmp)
-        contributions: Optional[list]
+        contributions: list | None
         if kind == "disabled":
             # Exactly what every v0.8.0 caller and every flag-off run passes.
             contributions = None
@@ -461,23 +487,28 @@ def test_p3_caption_text_is_rendered_by_exactly_one_producer(
                 # Observed, not assumed: the non-applied constructors carry no
                 # contribution at all, which is why one check covers Reqs 3.5/3.6/13.2/14.2.
                 assert result.contribution is None
-            contributions = [
-                r.contribution for r in (result,) if r.contribution is not None
-            ]
+            contributions = [r.contribution for r in (result,) if r.contribution is not None]
 
         supplied = any(
-            c.engine_id == ENGINE_ID and c.subtitle_path is not None
-            for c in (contributions or ())
+            c.engine_id == ENGINE_ID and c.subtitle_path is not None for c in (contributions or ())
         )
         assert supplied == (kind == "applied")
 
         engine_leg = _render_leg(
-            root=root, name="engine", options=options, words=words,
-            hook_text=hook_text, contributions=contributions,
+            root=root,
+            name="engine",
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            contributions=contributions,
         )
         baseline_leg = _render_leg(
-            root=root, name="baseline", options=options, words=words,
-            hook_text=hook_text, contributions=None,
+            root=root,
+            name="baseline",
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            contributions=None,
         )
 
         wanted_caps = bool(options.captions) and bool(words)
@@ -508,7 +539,7 @@ def test_p3_caption_text_is_rendered_by_exactly_one_producer(
 
         # --- non-vacuity: the owned path is positively exercised -------------
         if supplied:
-            assert wanted                       # the applied outcome always wants text
+            assert wanted  # the applied outcome always wants text
             # The suppression really is total: no cue building, no keyword planning
             # (hence no duplicate LLM call), no ASS write (Reqs 3.2, 3.6).
             assert engine_leg.words_to_cues_calls == []
@@ -556,19 +587,22 @@ def test_engine_owned_captions_never_reach_the_v080_producers(tmp_path):
     own ASS is the one document in the graph, in one ffmpeg pass.
     """
     leg = _render_leg(
-        root=tmp_path, name="owned", options=_owned_options(),
-        words=REFERENCE_WORDS, hook_text="WAIT FOR IT",
+        root=tmp_path,
+        name="owned",
+        options=_owned_options(),
+        words=REFERENCE_WORDS,
+        hook_text="WAIT FOR IT",
         contributions=[_kinetic_contribution(tmp_path)],
         raise_in_producers=True,
     )
 
-    assert leg.result is not None                       # the render still succeeded
-    assert leg.build_ass_calls == []                    # proven never called
+    assert leg.result is not None  # the render still succeeded
+    assert leg.build_ass_calls == []  # proven never called
     assert leg.plan_keywords_calls == []
     assert leg.words_to_cues_calls == []
-    assert not leg.own_ass_written                      # no <stem>.ass was produced
-    assert leg.passes == 1                              # Req 2.5
-    assert leg.subtitles_filters == 1                   # Req 2.6
+    assert not leg.own_ass_written  # no <stem>.ass was produced
+    assert leg.passes == 1  # Req 2.5
+    assert leg.subtitles_filters == 1  # Req 2.6
     assert compositor.cap.subtitles_filter(_kinetic_ass(tmp_path)) in leg.graph
 
     # Counterfactual on the same input: with no contribution the raising doubles ARE
@@ -577,8 +611,12 @@ def test_engine_owned_captions_never_reach_the_v080_producers(tmp_path):
     # words: the only difference is the contribution.
     with pytest.raises(AssertionError, match="must not run when the engine owns captions"):
         _render_leg(
-            root=tmp_path, name="legacy", options=_owned_options(),
-            words=REFERENCE_WORDS, hook_text="WAIT FOR IT", contributions=None,
+            root=tmp_path,
+            name="legacy",
+            options=_owned_options(),
+            words=REFERENCE_WORDS,
+            hook_text="WAIT FOR IT",
+            contributions=None,
             raise_in_producers=True,
         )
 
@@ -592,8 +630,11 @@ def test_engine_owned_effects_applied_marker_spellings(tmp_path):
     """
     # ``hormozi`` enables both keyword highlighting and inline emoji.
     both = _render_leg(
-        root=tmp_path, name="hormozi", options=_owned_options(caption_preset="hormozi"),
-        words=REFERENCE_WORDS, hook_text="WAIT FOR IT",
+        root=tmp_path,
+        name="hormozi",
+        options=_owned_options(caption_preset="hormozi"),
+        words=REFERENCE_WORDS,
+        hook_text="WAIT FOR IT",
         contributions=[_kinetic_contribution(tmp_path)],
     )
     assert both.effects_applied == [
@@ -608,8 +649,11 @@ def test_engine_owned_effects_applied_marker_spellings(tmp_path):
     # though both options are on — the engine performs no emphasis/emoji there, and
     # emitting them would over-report versus an identical v0.8.0 run.
     neither = _render_leg(
-        root=tmp_path, name="karaoke", options=_owned_options(caption_preset="karaoke"),
-        words=REFERENCE_WORDS, hook_text="WAIT FOR IT",
+        root=tmp_path,
+        name="karaoke",
+        options=_owned_options(caption_preset="karaoke"),
+        words=REFERENCE_WORDS,
+        hook_text="WAIT FOR IT",
         contributions=[_kinetic_contribution(tmp_path)],
     )
     assert neither.effects_applied == [
@@ -621,9 +665,11 @@ def test_engine_owned_effects_applied_marker_spellings(tmp_path):
     # ``pop`` enables keyword highlighting only, and the emoji option is off: exactly one
     # of the two "as applicable" markers.
     highlight_only = _render_leg(
-        root=tmp_path, name="pop",
+        root=tmp_path,
+        name="pop",
         options=_owned_options(caption_preset="pop", caption_emoji=False),
-        words=REFERENCE_WORDS, hook_text="WAIT FOR IT",
+        words=REFERENCE_WORDS,
+        hook_text="WAIT FOR IT",
         contributions=[_kinetic_contribution(tmp_path)],
     )
     assert highlight_only.effects_applied == [
@@ -635,8 +681,11 @@ def test_engine_owned_effects_applied_marker_spellings(tmp_path):
 
     # The hook marker is gated on the hook, not on ownership: no hook text, no marker.
     no_hook = _render_leg(
-        root=tmp_path, name="nohook", options=_owned_options(caption_preset="hormozi"),
-        words=REFERENCE_WORDS, hook_text="   ",
+        root=tmp_path,
+        name="nohook",
+        options=_owned_options(caption_preset="hormozi"),
+        words=REFERENCE_WORDS,
+        hook_text="   ",
         contributions=[_kinetic_contribution(tmp_path)],
     )
     assert "hook_title" not in no_hook.effects_applied
@@ -659,8 +708,11 @@ def test_engine_markers_are_appended_by_the_host_not_the_compositor(tmp_path):
     )
 
     leg = _render_leg(
-        root=tmp_path, name="owned", options=_owned_options(),
-        words=REFERENCE_WORDS, hook_text="WAIT FOR IT",
+        root=tmp_path,
+        name="owned",
+        options=_owned_options(),
+        words=REFERENCE_WORDS,
+        hook_text="WAIT FOR IT",
         contributions=[contribution],
     )
     assert leg.result is not None
@@ -699,7 +751,6 @@ def test_engine_markers_are_appended_by_the_host_not_the_compositor(tmp_path):
     assert list(outcome.markers) == list(engine_markers)
     assert [c.engine_id for c in outcome.contributions] == [ENGINE_ID]
     assert set(outcome.markers).isdisjoint(leg.effects_applied)
-
 
 
 # =========================================================================== #
@@ -879,7 +930,7 @@ class Render:
         return self.work / "base.ass"
 
     @property
-    def ass_text(self) -> Optional[str]:
+    def ass_text(self) -> str | None:
         path = self.ass_path
         return path.read_text(encoding="utf-8") if path.exists() else None
 
@@ -933,8 +984,8 @@ def _v080_expectation(*, options, words, hook_text, ass_path: Path, oracle_ass: 
     """
     info = MEDIA_INFO
     applied: list = []
-    subtitles: Optional[str] = None
-    ass_text: Optional[str] = None
+    subtitles: str | None = None
+    ass_text: str | None = None
 
     need_caps = bool(options.captions) and bool(words)
     need_hook = bool(options.hook_title) and bool(hook_text.strip())
@@ -960,8 +1011,10 @@ def _v080_expectation(*, options, words, hook_text, ass_path: Path, oracle_ass: 
                 )
             notes: list = []
             cap_module.build_ass(
-                cues, oracle_ass,
-                video_width=info.width, video_height=info.height,
+                cues,
+                oracle_ass,
+                video_width=info.width,
+                video_height=info.height,
                 preset=preset,
                 keyword_indices=keyword_indices,
                 position=options.caption_position or None,
@@ -982,8 +1035,10 @@ def _v080_expectation(*, options, words, hook_text, ass_path: Path, oracle_ass: 
                     applied.append(note)
         else:
             cap_module.build_ass(
-                cues, oracle_ass,
-                video_width=info.width, video_height=info.height,
+                cues,
+                oracle_ass,
+                video_width=info.width,
+                video_height=info.height,
                 template=options.caption_template,
                 position=options.caption_position,
                 hook_text=hook_text if need_hook else "",
@@ -996,18 +1051,22 @@ def _v080_expectation(*, options, words, hook_text, ass_path: Path, oracle_ass: 
         ass_text = oracle_ass.read_text(encoding="utf-8")
 
     look_chain = overlays.build_video_chain(
-        duration=info.duration, fps=info.fps or 30.0,
-        width=info.width, height=info.height,
-        color=options.color, zoom=options.zoom, transitions=options.transitions,
-        fades=options.fades, progress_bar=False, subtitles=None,
+        duration=info.duration,
+        fps=info.fps or 30.0,
+        width=info.width,
+        height=info.height,
+        color=options.color,
+        zoom=options.zoom,
+        transitions=options.transitions,
+        fades=options.fades,
+        progress_bar=False,
+        subtitles=None,
     )
     caption_chain: list = []
     if subtitles:
         caption_chain.append(subtitles)
     if options.progress_bar:
-        caption_chain.append(
-            overlays.progress_bar_filter(info.duration, info.width, info.height)
-        )
+        caption_chain.append(overlays.progress_bar_filter(info.duration, info.width, info.height))
 
     if options.color:
         applied.append(f"color:{options.color}")
@@ -1118,115 +1177,168 @@ def _parity_cases() -> list:
     # captions on/off x hook on/off (legacy default caption path)
     for caps in (True, False):
         for hook in (True, False):
-            cases.append((
-                f"caps{int(caps)}-hook{int(hook)}",
-                _matrix_options(captions=caps, hook_title=hook),
-                MATRIX_WORDS,
-                MATRIX_HOOK,
-            ))
+            cases.append(
+                (
+                    f"caps{int(caps)}-hook{int(hook)}",
+                    _matrix_options(captions=caps, hook_title=hook),
+                    MATRIX_WORDS,
+                    MATRIX_HOOK,
+                )
+            )
 
     # every Caption_Preset x keyword highlight on/off x caption emoji on/off
     for name in sorted(caption_presets.BUILTIN_PRESETS):
         for keyword in (False, True):
             for glyphs in (False, True):
-                cases.append((
-                    f"preset-{name}-kw{int(keyword)}-emoji{int(glyphs)}",
-                    _matrix_options(
-                        hook_title=True, caption_preset=name,
-                        caption_keyword_highlight=keyword, caption_emoji=glyphs,
-                    ),
-                    MATRIX_WORDS,
-                    MATRIX_HOOK,
-                ))
+                cases.append(
+                    (
+                        f"preset-{name}-kw{int(keyword)}-emoji{int(glyphs)}",
+                        _matrix_options(
+                            hook_title=True,
+                            caption_preset=name,
+                            caption_keyword_highlight=keyword,
+                            caption_emoji=glyphs,
+                        ),
+                        MATRIX_WORDS,
+                        MATRIX_HOOK,
+                    )
+                )
 
     # every caption position, on both the legacy and the preset path
     for position in ("", "bottom", "center", "top"):
         label = position or "default"
-        cases.append((
-            f"position-{label}-legacy",
-            _matrix_options(hook_title=True, caption_position=position),
-            MATRIX_WORDS, MATRIX_HOOK,
-        ))
-        cases.append((
-            f"position-{label}-preset",
-            _matrix_options(
-                hook_title=True, caption_preset="hormozi", caption_position=position,
-            ),
-            MATRIX_WORDS, MATRIX_HOOK,
-        ))
+        cases.append(
+            (
+                f"position-{label}-legacy",
+                _matrix_options(hook_title=True, caption_position=position),
+                MATRIX_WORDS,
+                MATRIX_HOOK,
+            )
+        )
+        cases.append(
+            (
+                f"position-{label}-preset",
+                _matrix_options(
+                    hook_title=True,
+                    caption_preset="hormozi",
+                    caption_position=position,
+                ),
+                MATRIX_WORDS,
+                MATRIX_HOOK,
+            )
+        )
 
     # the legacy ``caption_template`` path, every template, hook on/off
     for template in ("karaoke", "boxed", "minimal"):
         for hook in (False, True):
-            cases.append((
-                f"template-{template}-hook{int(hook)}",
-                _matrix_options(caption_template=template, hook_title=hook),
-                MATRIX_WORDS, MATRIX_HOOK,
-            ))
+            cases.append(
+                (
+                    f"template-{template}-hook{int(hook)}",
+                    _matrix_options(caption_template=template, hook_title=hook),
+                    MATRIX_WORDS,
+                    MATRIX_HOOK,
+                )
+            )
 
     # explicit animation overrides (each engages the preset path)
     for animation in ("", "none", "pop", "typewriter", "karaoke_fill"):
-        cases.append((
-            f"animation-{animation or 'default'}",
-            _matrix_options(hook_title=True, caption_animation=animation),
-            MATRIX_WORDS, MATRIX_HOOK,
-        ))
+        cases.append(
+            (
+                f"animation-{animation or 'default'}",
+                _matrix_options(hook_title=True, caption_animation=animation),
+                MATRIX_WORDS,
+                MATRIX_HOOK,
+            )
+        )
 
     # an unknown preset name -> ``caption_preset_substituted``
-    cases.append((
-        "preset-unknown",
-        _matrix_options(
-            hook_title=True, caption_preset="not-a-preset",
-            caption_keyword_highlight=True,
-        ),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
+    cases.append(
+        (
+            "preset-unknown",
+            _matrix_options(
+                hook_title=True,
+                caption_preset="not-a-preset",
+                caption_keyword_highlight=True,
+            ),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
 
     # look-effect combinations, so the caption filter is asserted inside a real chain
-    cases.append((
-        "look-everything",
-        _matrix_options(
-            hook_title=True, caption_preset="hormozi",
-            caption_keyword_highlight=True, caption_emoji=True,
-            color="vivid", zoom=True, transitions=True, fades=True, progress_bar=True,
-        ),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
-    cases.append((
-        "look-audio-fades-only",
-        _matrix_options(captions=False, hook_title=False, fades=True),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
-    cases.append((
-        "look-progress-only",
-        _matrix_options(captions=False, hook_title=False, progress_bar=True),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
-    cases.append((
-        "permissibility-mode",
-        _matrix_options(
-            hook_title=True, caption_preset="hormozi", caption_emoji=True,
-            permissibility_mode=True,
-        ),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
+    cases.append(
+        (
+            "look-everything",
+            _matrix_options(
+                hook_title=True,
+                caption_preset="hormozi",
+                caption_keyword_highlight=True,
+                caption_emoji=True,
+                color="vivid",
+                zoom=True,
+                transitions=True,
+                fades=True,
+                progress_bar=True,
+            ),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
+    cases.append(
+        (
+            "look-audio-fades-only",
+            _matrix_options(captions=False, hook_title=False, fades=True),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
+    cases.append(
+        (
+            "look-progress-only",
+            _matrix_options(captions=False, hook_title=False, progress_bar=True),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
+    cases.append(
+        (
+            "permissibility-mode",
+            _matrix_options(
+                hook_title=True,
+                caption_preset="hormozi",
+                caption_emoji=True,
+                permissibility_mode=True,
+            ),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
 
     # degenerate inputs: an empty timeline, a blank hook, and nothing enabled at all
-    cases.append((
-        "empty-timeline",
-        _matrix_options(hook_title=True, caption_preset="pop"),
-        [], MATRIX_HOOK,
-    ))
-    cases.append((
-        "blank-hook",
-        _matrix_options(captions=False, hook_title=True),
-        MATRIX_WORDS, "   ",
-    ))
-    cases.append((
-        "all-off",
-        _matrix_options(captions=False, hook_title=False),
-        MATRIX_WORDS, MATRIX_HOOK,
-    ))
+    cases.append(
+        (
+            "empty-timeline",
+            _matrix_options(hook_title=True, caption_preset="pop"),
+            [],
+            MATRIX_HOOK,
+        )
+    )
+    cases.append(
+        (
+            "blank-hook",
+            _matrix_options(captions=False, hook_title=True),
+            MATRIX_WORDS,
+            "   ",
+        )
+    )
+    cases.append(
+        (
+            "all-off",
+            _matrix_options(captions=False, hook_title=False),
+            MATRIX_WORDS,
+            MATRIX_HOOK,
+        )
+    )
     return cases
 
 
@@ -1251,7 +1363,7 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monke
     monkeypatch.setattr(app_settings, "true_peak_limit_enabled", False)
     baseline_module = _v080_module()
     cases = _parity_cases()
-    assert len(cases) >= 50                       # a representative matrix, not a token one
+    assert len(cases) >= 50  # a representative matrix, not a token one
     oracle_dir = tmp_path / "oracle"
     oracle_dir.mkdir()
     checked_with_captions = 0
@@ -1263,8 +1375,12 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monke
 
         # --- the shipped compositor, flag off, no contributions ---------------
         shipped = _parity_render(
-            compositor, work, options=options, words=words,
-            hook_text=hook_text, contributions=None,
+            compositor,
+            work,
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            contributions=None,
         )
         shipped_ass = shipped.ass_text
         shipped_argv = shipped.argv
@@ -1274,8 +1390,12 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monke
         if shipped.ass_path.exists():
             shipped.ass_path.unlink()
         empty = _parity_render(
-            compositor, work, options=options, words=words,
-            hook_text=hook_text, contributions=[],
+            compositor,
+            work,
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            contributions=[],
         )
         assert empty.argv == shipped_argv, name
         assert empty.effects_applied == shipped.effects_applied, name
@@ -1285,8 +1405,12 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monke
         if shipped.ass_path.exists():
             shipped.ass_path.unlink()
         baseline = _parity_render(
-            baseline_module, work, options=options, words=words,
-            hook_text=hook_text, contributions=None,
+            baseline_module,
+            work,
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            contributions=None,
         )
         assert baseline.argv == shipped_argv, f"{name}: argv drifted from v0.8.0"
         assert baseline.graph == shipped.graph, name
@@ -1297,8 +1421,11 @@ def test_flag_off_parity_of_effects_applied_and_the_filter_graph(tmp_path, monke
 
         # --- source A: the independent reference oracle -----------------------
         expected = _v080_expectation(
-            options=options, words=words, hook_text=hook_text,
-            ass_path=shipped.ass_path, oracle_ass=oracle_dir / f"{name}.ass",
+            options=options,
+            words=words,
+            hook_text=hook_text,
+            ass_path=shipped.ass_path,
+            oracle_ass=oracle_dir / f"{name}.ass",
         )
         assert shipped.effects_applied == expected["effects_applied"], name
         assert shipped.graph == expected["graph"], name
@@ -1351,31 +1478,61 @@ _V080_GOLDENS: dict = {
     },
     "preset-hormozi-keywords-emoji": {
         "options": dict(
-            hook_title=True, caption_preset="hormozi", caption_position="",
-            caption_keyword_highlight=True, caption_emoji=True,
+            hook_title=True,
+            caption_preset="hormozi",
+            caption_position="",
+            caption_keyword_highlight=True,
+            caption_emoji=True,
         ),
         "effects_applied": [
-            "caption_preset:hormozi", "keyword_highlight", "caption_emoji",
-            "captions", "hook_title",
+            "caption_preset:hormozi",
+            "keyword_highlight",
+            "caption_emoji",
+            "captions",
+            "hook_title",
         ],
         "font_substituted_effects": [
-            "caption_preset:hormozi", "keyword_highlight", "caption_emoji",
-            _SUBSTITUTION_MARKER, "captions", "hook_title",
+            "caption_preset:hormozi",
+            "keyword_highlight",
+            "caption_emoji",
+            _SUBSTITUTION_MARKER,
+            "captions",
+            "hook_title",
         ],
         "graph": "[0:v]subtitles='<ASS>'[vbase]",
     },
     "everything-on": {
         "options": dict(
-            hook_title=True, caption_preset="pop", caption_keyword_highlight=True,
-            color="vivid", zoom=True, transitions=True, fades=True, progress_bar=True,
+            hook_title=True,
+            caption_preset="pop",
+            caption_keyword_highlight=True,
+            color="vivid",
+            zoom=True,
+            transitions=True,
+            fades=True,
+            progress_bar=True,
         ),
         "effects_applied": [
-            "caption_preset:pop", "keyword_highlight", "captions", "hook_title",
-            "color:vivid", "zoom", "transitions", "fades", "progress_bar",
+            "caption_preset:pop",
+            "keyword_highlight",
+            "captions",
+            "hook_title",
+            "color:vivid",
+            "zoom",
+            "transitions",
+            "fades",
+            "progress_bar",
         ],
         "font_substituted_effects": [
-            "caption_preset:pop", "keyword_highlight", _SUBSTITUTION_MARKER,
-            "captions", "hook_title", "color:vivid", "zoom", "transitions", "fades",
+            "caption_preset:pop",
+            "keyword_highlight",
+            _SUBSTITUTION_MARKER,
+            "captions",
+            "hook_title",
+            "color:vivid",
+            "zoom",
+            "transitions",
+            "fades",
             "progress_bar",
         ],
         "graph": (
@@ -1410,10 +1567,17 @@ def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path, monkeypatch):
         options = _matrix_options(**golden["options"])
         for available, key in ((True, "effects_applied"), (False, "font_substituted_effects")):
             work = tmp_path / f"{name}-font{int(available)}"
-            with mock.patch.object(cap_module, "font_available", lambda _n: available):
+            # `_a=available` binds the loop variable at definition time. Harmless as it was,
+            # because the lambda is called inside this same iteration - but bound explicitly so
+            # the pattern does not read as the late-binding bug it resembles.
+            with mock.patch.object(cap_module, "font_available", lambda _n, _a=available: _a):
                 record = _parity_render(
-                    compositor, work, options=options, words=MATRIX_WORDS,
-                    hook_text=MATRIX_HOOK, contributions=None,
+                    compositor,
+                    work,
+                    options=options,
+                    words=MATRIX_WORDS,
+                    hook_text=MATRIX_HOOK,
+                    contributions=None,
                 )
             assert record.effects_applied == golden[key], name
             assert _normalised_graph(record.graph, record.ass_path) == golden["graph"], name
@@ -1435,17 +1599,25 @@ def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
     contribution = [_kinetic_contribution(tmp_path)]
 
     baseline = _parity_render(
-        baseline_module, tmp_path / "v080", options=options, words=MATRIX_WORDS,
-        hook_text=MATRIX_HOOK, contributions=contribution,
+        baseline_module,
+        tmp_path / "v080",
+        options=options,
+        words=MATRIX_WORDS,
+        hook_text=MATRIX_HOOK,
+        contributions=contribution,
     )
     shipped = _parity_render(
-        compositor, tmp_path / "shipped", options=options, words=MATRIX_WORDS,
-        hook_text=MATRIX_HOOK, contributions=contribution,
+        compositor,
+        tmp_path / "shipped",
+        options=options,
+        words=MATRIX_WORDS,
+        hook_text=MATRIX_HOOK,
+        contributions=contribution,
     )
 
     # The v0.8.0-shaped module knows nothing about caption ownership.
     assert baseline.ass_text is not None
-    assert baseline.graph.count("subtitles=") == 2       # its own ASS + the contribution's
+    assert baseline.graph.count("subtitles=") == 2  # its own ASS + the contribution's
     assert "captions" in baseline.effects_applied
     # The shipped module stands down for the same contribution (task 12.1's branch).
     assert shipped.ass_text is None
@@ -1453,7 +1625,6 @@ def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
     # ...and the two therefore differ, which is what makes the flag-off parity above a
     # statement about behaviour rather than about two copies of the same code.
     assert baseline.graph != shipped.graph
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1470,15 +1641,32 @@ def test_the_reconstructed_v080_baseline_really_lacks_the_engine(tmp_path):
 #: Every built-in preset, field by field (``CaptionPreset.to_dict()`` output).
 _EXPECTED_BUILTIN_PRESETS: dict = {
     "boxed": {
-        "name": "boxed", "animation": "none", "font": "Archivo Black", "font_weight": 900, "font_size": 96,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
-        "emoji_inline": False, "border_style": 3,
-        "uppercase": False, "outline": 0, "shadow": 0,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "boxed",
+        "animation": "none",
+        "font": "Archivo Black",
+        "font_weight": 900,
+        "font_size": 96,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "bottom",
+        "highlight_keywords": False,
+        "highlight_scale": 1.18,
+        "emoji_inline": False,
+        "border_style": 3,
+        "uppercase": False,
+        "outline": 0,
+        "shadow": 0,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1486,15 +1674,32 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "outline2_color": "&H00000000",
     },
     "hormozi": {
-        "name": "hormozi", "animation": "pop", "font": "Anton", "font_weight": 800, "font_size": 104,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "center", "highlight_keywords": True, "highlight_scale": 1.18,
-        "emoji_inline": True, "border_style": 1,
-        "uppercase": True, "outline": 10, "shadow": 5,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "hormozi",
+        "animation": "pop",
+        "font": "Anton",
+        "font_weight": 800,
+        "font_size": 104,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "center",
+        "highlight_keywords": True,
+        "highlight_scale": 1.18,
+        "emoji_inline": True,
+        "border_style": 1,
+        "uppercase": True,
+        "outline": 10,
+        "shadow": 5,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1502,15 +1707,32 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "outline2_color": "&H00000000",
     },
     "karaoke": {
-        "name": "karaoke", "animation": "karaoke_fill", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
-        "emoji_inline": False, "border_style": 1,
-        "uppercase": False, "outline": 8, "shadow": 4,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "karaoke",
+        "animation": "karaoke_fill",
+        "font": "Poppins ExtraBold",
+        "font_weight": 800,
+        "font_size": 96,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "bottom",
+        "highlight_keywords": False,
+        "highlight_scale": 1.18,
+        "emoji_inline": False,
+        "border_style": 1,
+        "uppercase": False,
+        "outline": 8,
+        "shadow": 4,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1518,15 +1740,32 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "outline2_color": "&H00000000",
     },
     "minimal": {
-        "name": "minimal", "animation": "none", "font": "Poppins", "font_weight": 700, "font_size": 84,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
-        "emoji_inline": False, "border_style": 1,
-        "uppercase": False, "outline": 6, "shadow": 3,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "minimal",
+        "animation": "none",
+        "font": "Poppins",
+        "font_weight": 700,
+        "font_size": 84,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "bottom",
+        "highlight_keywords": False,
+        "highlight_scale": 1.18,
+        "emoji_inline": False,
+        "border_style": 1,
+        "uppercase": False,
+        "outline": 6,
+        "shadow": 3,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1534,15 +1773,32 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "outline2_color": "&H00000000",
     },
     "pop": {
-        "name": "pop", "animation": "pop", "font": "Poppins ExtraBold", "font_weight": 800, "font_size": 96,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "bottom", "highlight_keywords": True, "highlight_scale": 1.18,
-        "emoji_inline": False, "border_style": 1,
-        "uppercase": False, "outline": 8, "shadow": 4,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "pop",
+        "animation": "pop",
+        "font": "Poppins ExtraBold",
+        "font_weight": 800,
+        "font_size": 96,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "bottom",
+        "highlight_keywords": True,
+        "highlight_scale": 1.18,
+        "emoji_inline": False,
+        "border_style": 1,
+        "uppercase": False,
+        "outline": 8,
+        "shadow": 4,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1550,15 +1806,32 @@ _EXPECTED_BUILTIN_PRESETS: dict = {
         "outline2_color": "&H00000000",
     },
     "typewriter": {
-        "name": "typewriter", "animation": "typewriter", "font": "Poppins", "font_weight": 700, "font_size": 96,
-        "colors": {"primary": "&H00FFFFFF", "highlight": "&H0000E5FF",
-                   "outline": "&H00000000", "box": "&H80000000"},
-        "position": "bottom", "highlight_keywords": False, "highlight_scale": 1.18,
-        "emoji_inline": False, "border_style": 1,
-        "uppercase": False, "outline": 8, "shadow": 4,
-        "low_confidence_threshold": 0.0, "low_confidence_alpha": 0.55,
-        "punch_scale": 0.0, "punch_ms": 110,
-        "spacing": 0, "scale_x": 100, "scale_y": 100,
+        "name": "typewriter",
+        "animation": "typewriter",
+        "font": "Poppins",
+        "font_weight": 700,
+        "font_size": 96,
+        "colors": {
+            "primary": "&H00FFFFFF",
+            "highlight": "&H0000E5FF",
+            "outline": "&H00000000",
+            "box": "&H80000000",
+        },
+        "position": "bottom",
+        "highlight_keywords": False,
+        "highlight_scale": 1.18,
+        "emoji_inline": False,
+        "border_style": 1,
+        "uppercase": False,
+        "outline": 8,
+        "shadow": 4,
+        "low_confidence_threshold": 0.0,
+        "low_confidence_alpha": 0.55,
+        "punch_scale": 0.0,
+        "punch_ms": 110,
+        "spacing": 0,
+        "scale_x": 100,
+        "scale_y": 100,
         "max_lines": 2,
         "word_pill": 0.0,
         "word_pill_color": "",
@@ -1579,8 +1852,7 @@ _PIN_WORDS = [
 _EXPECTED_WORD_SPANS: dict = {
     ("none", False): "changed",
     ("none", True): (
-        "{\\c&H0000E5FF&\\fscx118\\fscy118}changed"
-        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}changed" "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
     ),
     ("pop", False): "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}changed",
     ("pop", True): (
@@ -1596,8 +1868,7 @@ _EXPECTED_WORD_SPANS: dict = {
     ),
     ("karaoke_fill", False): "{\\kf40}changed",
     ("karaoke_fill", True): (
-        "{\\c&H0000E5FF&\\fscx118\\fscy118}{\\kf40}changed"
-        "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
+        "{\\c&H0000E5FF&\\fscx118\\fscy118}{\\kf40}changed" "{\\c&H00FFFFFF&\\fscx100\\fscy100}"
     ),
 }
 
@@ -1635,6 +1906,8 @@ def _ass_hook_style(font: str, bold: int = -1) -> str:
         f"Style: Hook,{font},110,&H0000E5FF,&H0000E5FF,&H00000000,&H64000000,"
         f"{bold},0,0,0,100,100,0,0,1,5,2,8,60,60,160,1\n"
     )
+
+
 _ASS_EVENTS_HEADER = (
     "\n"
     "[Events]\n"
@@ -1651,18 +1924,18 @@ _EXPECTED_LEGACY_DOCUMENTS: dict = {
         # &H0000FF00. Green reads as dated - it is the ASS default rather than a choice -
         # and it disagreed with the preset path, which has always swept to amber.
         + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
-          "&H00000000,&H64000000,"
-          "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
+        "&H00000000,&H64000000,"
+        "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
         + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
-          "{\\kf40}THIS {\\kf40}changed {\\kf50}money\n"
+        "{\\kf40}THIS {\\kf40}changed {\\kf50}money\n"
     ),
     "boxed": (
         _ASS_HEADER
         + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H00FFFFFF,&H80000000,&H80000000,"
-          "-1,0,0,0,100,100,0,0,3,0,0,2,80,80,220,1\n"
+        "-1,0,0,0,100,100,0,0,3,0,0,2,80,80,220,1\n"
         + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
@@ -1670,7 +1943,7 @@ _EXPECTED_LEGACY_DOCUMENTS: dict = {
     "minimal": (
         _ASS_HEADER
         + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,"
-          "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1\n"
+        "-1,0,0,0,100,100,0,0,1,2,1,2,80,80,220,1\n"
         + _ass_hook_style(_LEGACY_FONT)
         + _ASS_EVENTS_HEADER
         + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,THIS changed money\n"
@@ -1690,16 +1963,16 @@ _EXPECTED_HORMOZI_DOCUMENT = (
     #   C8 - outline 10 and shadow 5, from the preset, replacing the 2/1 that was inferred
     #        from the animation style and was effectively invisible at PlayRes 1920.
     + f"Style: Default,{_HORMOZI_FONT},104,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,"
-      "0,0,0,0,100,100,0,0,1,10,5,5,80,80,0,1\n"
+    "0,0,0,0,100,100,0,0,1,10,5,5,80,80,0,1\n"
     + _ass_hook_style(_HORMOZI_FONT, bold=0)
     + _ASS_EVENTS_HEADER
     + "Dialogue: 1,0:00:00.00,0:00:02.50,Hook,,0,0,0,,{\\fad(250,350)}WATCH THIS\n"
     + "Dialogue: 0,0:00:00.20,0:00:01.70,Default,,0,0,0,,"
-      "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}THIS "
-      "{\\c&H0000E5FF&\\fscx118\\fscy118}"
-      "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}CHANGED"
-      "{\\c&H00FFFFFF&\\fscx100\\fscy100} "
-      "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}MONEY \U0001f4b0\n"
+    "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}THIS "
+    "{\\c&H0000E5FF&\\fscx118\\fscy118}"
+    "{\\fscx60\\fscy60\\t(500,620,\\fscx100\\fscy100)}CHANGED"
+    "{\\c&H00FFFFFF&\\fscx100\\fscy100} "
+    "{\\fscx60\\fscy60\\t(1000,1120,\\fscx100\\fscy100)}MONEY \U0001f4b0\n"
 )
 
 
@@ -1716,8 +1989,20 @@ def test_caption_preset_values_are_unchanged():
     # So the six v0.8.0 presets are still pinned field-for-field, and the additions are required to
     # be additions rather than replacements.
     assert sorted(caption_presets.BUILTIN_PRESETS) == [
-        "boxed", "comic", "headline", "hormozi", "karaoke", "karaoke_bold", "minimal", "pill",
-        "pill_green", "pop", "spotlight", "sticker", "subtitle", "typewriter",
+        "boxed",
+        "comic",
+        "headline",
+        "hormozi",
+        "karaoke",
+        "karaoke_bold",
+        "minimal",
+        "pill",
+        "pill_green",
+        "pop",
+        "spotlight",
+        "sticker",
+        "subtitle",
+        "typewriter",
     ]
     for name, expected in sorted(_EXPECTED_BUILTIN_PRESETS.items()):
         preset = caption_presets.BUILTIN_PRESETS[name]
@@ -1751,11 +2036,32 @@ def test_caption_preset_values_are_unchanged():
     # default to off - 0.0 and 0 respectively - so every one of the six presets pinned below emits
     # exactly the tags it did before. The new C14 presets are the only ones that set them.
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionPreset)) == [
-        "animation", "border_style", "colors", "emoji_inline", "font", "font_size",
-        "font_weight", "highlight_keywords", "highlight_scale", "low_confidence_alpha",
-        "low_confidence_threshold", "max_lines", "name", "outline", "outline2", "outline2_color",
-        "position", "punch_ms", "punch_scale", "scale_x", "scale_y", "shadow", "spacing",
-        "uppercase", "word_pill", "word_pill_color",
+        "animation",
+        "border_style",
+        "colors",
+        "emoji_inline",
+        "font",
+        "font_size",
+        "font_weight",
+        "highlight_keywords",
+        "highlight_scale",
+        "low_confidence_alpha",
+        "low_confidence_threshold",
+        "max_lines",
+        "name",
+        "outline",
+        "outline2",
+        "outline2_color",
+        "position",
+        "punch_ms",
+        "punch_scale",
+        "scale_x",
+        "scale_y",
+        "shadow",
+        "spacing",
+        "uppercase",
+        "word_pill",
+        "word_pill_color",
     ], (
         "A CaptionPreset field was added or removed. That is allowed, but this pin needs THREE "
         "updates and missing any one of them leaves the guard half-working:\n"
@@ -1769,14 +2075,18 @@ def test_caption_preset_values_are_unchanged():
         "an accidental change, which is the only thing it is for."
     )
     assert sorted(f.name for f in dataclasses.fields(caption_presets.CaptionColors)) == [
-        "box", "highlight", "outline", "primary",
+        "box",
+        "highlight",
+        "outline",
+        "primary",
     ]
 
     # Resolution is unchanged for callers that do not use this engine: a known name is
     # returned as-is, anything else falls back to ``karaoke`` and reports it.
     for name in sorted(_EXPECTED_BUILTIN_PRESETS):
         assert caption_presets.resolve_preset(name) == (
-            caption_presets.BUILTIN_PRESETS[name], False
+            caption_presets.BUILTIN_PRESETS[name],
+            False,
         )
     for bad in ("", "not-a-preset", "KARAOKE", None, 3, [], {}):
         preset, substituted = caption_presets.resolve_preset(bad)
@@ -1798,18 +2108,21 @@ def test_build_word_span_behaviour_is_unchanged():
         assert span == expected, (animation, highlighted)
 
     # An unrecognised animation is the plain escaped word (the ``none`` branch).
-    assert cap_module.build_word_span(
-        word, replace(karaoke, animation="wobble"), False, cue_start=0.2
-    ) == "changed"
+    assert (
+        cap_module.build_word_span(word, replace(karaoke, animation="wobble"), False, cue_start=0.2)
+        == "changed"
+    )
     # Braces/backslashes in word text are neutralised, and a zero-length word still gets
     # a one-centisecond fill.
-    assert cap_module.build_word_span(
-        FakeWord(1.0, 1.0, "a{b}c\\d"), karaoke, False, cue_start=1.0
-    ) == "{\\kf1}a(b)c\\\\d"
+    assert (
+        cap_module.build_word_span(FakeWord(1.0, 1.0, "a{b}c\\d"), karaoke, False, cue_start=1.0)
+        == "{\\kf1}a(b)c\\\\d"
+    )
     # ``cue_start`` past the word clamps the offset at zero rather than going negative.
-    assert cap_module.build_word_span(
-        word, replace(karaoke, animation="pop"), False, cue_start=5.0
-    ) == "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}changed"
+    assert (
+        cap_module.build_word_span(word, replace(karaoke, animation="pop"), False, cue_start=5.0)
+        == "{\\fscx60\\fscy60\\t(0,120,\\fscx100\\fscy100)}changed"
+    )
 
 
 def test_words_to_cues_grouping_is_unchanged():
@@ -1824,17 +2137,19 @@ def test_words_to_cues_grouping_is_unchanged():
     grouping below is re-pinned rather than relaxed so a further change stays deliberate.
     """
     timeline = [
-        FakeWord(0.00, 0.30, "one"), FakeWord(0.35, 0.60, "two"),
-        FakeWord(0.65, 0.90, ""),                 # empty text: skipped entirely
-        FakeWord(0.95, 1.20, "three"), FakeWord(1.25, 1.50, "four"),
+        FakeWord(0.00, 0.30, "one"),
+        FakeWord(0.35, 0.60, "two"),
+        FakeWord(0.65, 0.90, ""),  # empty text: skipped entirely
+        FakeWord(0.95, 1.20, "three"),
+        FakeWord(1.25, 1.50, "four"),
         FakeWord(1.55, 1.80, "five"),
-        FakeWord(1.85, 2.10, "six"),              # 6th survivor (2 cues of 3)
-        FakeWord(3.00, 3.40, "gap"),              # 0.90 s gap: max_gap split
-        FakeWord(3.45, 6.90, "loooong"),          # span > 3.0 s: max_duration split
+        FakeWord(1.85, 2.10, "six"),  # 6th survivor (2 cues of 3)
+        FakeWord(3.00, 3.40, "gap"),  # 0.90 s gap: max_gap split
+        FakeWord(3.45, 6.90, "loooong"),  # span > 3.0 s: max_duration split
         FakeWord(6.95, 7.20, "tail"),
     ]
     expected = [
-        (0.00, 1.20, ["one", "two", "three"]),      # max_words split at 3
+        (0.00, 1.20, ["one", "two", "three"]),  # max_words split at 3
         (1.25, 2.10, ["four", "five", "six"]),
         (3.00, 3.40, ["gap"]),
         (3.45, 6.90, ["loooong"]),
@@ -1862,15 +2177,19 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     """
     cues = [cap_module.Cue(0.20, 1.70, list(_PIN_WORDS))]
 
-    def _explode(_name):                    # pragma: no cover - must never be reached
+    def _explode(_name):  # pragma: no cover - must never be reached
         raise AssertionError("the legacy caption path must not probe host fonts")
 
     for template, expected in sorted(_EXPECTED_LEGACY_DOCUMENTS.items()):
         dest = tmp_path / f"legacy-{template}.ass"
         with mock.patch.object(cap_module, "font_available", _explode):
             cap_module.build_ass(
-                cues, dest, video_width=1080, video_height=1920,
-                template=template, position="bottom",
+                cues,
+                dest,
+                video_width=1080,
+                video_height=1920,
+                template=template,
+                position="bottom",
                 hook_text="  watch this  " if template == "karaoke" else "",
             )
         assert dest.read_text(encoding="utf-8") == expected, template
@@ -1880,10 +2199,16 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     dest = tmp_path / "hormozi.ass"
     with mock.patch.object(cap_module, "font_available", lambda _n: True):
         cap_module.build_ass(
-            cues, dest, video_width=1080, video_height=1920,
+            cues,
+            dest,
+            video_width=1080,
+            video_height=1920,
             preset=caption_presets.BUILTIN_PRESETS["hormozi"],
-            keyword_indices={1}, position=None, hook_text="watch this",
-            clip_duration=3.0, notes=notes,
+            keyword_indices={1},
+            position=None,
+            hook_text="watch this",
+            clip_duration=3.0,
+            notes=notes,
         )
     assert dest.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT
     assert notes == []
@@ -1896,10 +2221,16 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     substituted = tmp_path / "hormozi-substituted.ass"
     with mock.patch.object(cap_module, "font_available", lambda _n: False):
         cap_module.build_ass(
-            cues, substituted, video_width=1080, video_height=1920,
+            cues,
+            substituted,
+            video_width=1080,
+            video_height=1920,
             preset=caption_presets.BUILTIN_PRESETS["hormozi"],
-            keyword_indices={1}, position=None, hook_text="watch this",
-            clip_duration=3.0, notes=notes,
+            keyword_indices={1},
+            position=None,
+            hook_text="watch this",
+            clip_duration=3.0,
+            notes=notes,
         )
     assert notes == [f"font_substituted:{_LADDER_FALLBACK}"]
     assert substituted.read_text(encoding="utf-8") == _EXPECTED_HORMOZI_DOCUMENT.replace(
@@ -1911,9 +2242,13 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     overridden = tmp_path / "hormozi-bottom.ass"
     with mock.patch.object(cap_module, "font_available", lambda _n: True):
         cap_module.build_ass(
-            cues, overridden, video_width=1080, video_height=1920,
+            cues,
+            overridden,
+            video_width=1080,
+            video_height=1920,
             preset=caption_presets.BUILTIN_PRESETS["hormozi"],
-            position="bottom", clip_duration=3.0,
+            position="bottom",
+            clip_duration=3.0,
         )
     text = overridden.read_text(encoding="utf-8")
     assert (
@@ -1923,11 +2258,9 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     empty = tmp_path / "empty.ass"
     cap_module.build_ass([], empty, video_width=1080, video_height=1920)
     assert empty.read_text(encoding="utf-8") == (
-        _ASS_HEADER
-        + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
-          "&H00000000,&H64000000,"
-          "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n"
-        + _ass_hook_style(_LEGACY_FONT)
+        _ASS_HEADER + f"Style: Default,{_LEGACY_FONT},84,&H00FFFFFF,{cap_module.HIGHLIGHT_COLOUR},"
+        "&H00000000,&H64000000,"
+        "-1,0,0,0,100,100,0,0,1,4,2,2,80,80,220,1\n" + _ass_hook_style(_LEGACY_FONT)
         # No events at all: the document is exactly the header plus ``build_ass``'s own
         # trailing newline (the blank line before the first ``Dialogue:`` is v0.8.0's).
         + _ASS_EVENTS_HEADER
@@ -1948,9 +2281,7 @@ def test_subtitles_filter_escaping_is_unchanged():
     fonts_dir = Path(app_settings.font_assets_dir)
     suffix = f":fontsdir='{fonts_dir.resolve()}'" if fonts_dir.is_dir() else ""
 
-    assert cap_module.subtitles_filter("/tmp/plain.ass") == (
-        f"subtitles='/tmp/plain.ass'{suffix}"
-    )
+    assert cap_module.subtitles_filter("/tmp/plain.ass") == (f"subtitles='/tmp/plain.ass'{suffix}")
     # ``:`` and ``'`` are the two characters ffmpeg's filter syntax needs escaped.
     assert cap_module.subtitles_filter("/tmp/a:b/it's.ass") == (
         f"subtitles='/tmp/a\\:b/it\\'s.ass'{suffix}"
@@ -1966,7 +2297,6 @@ def test_subtitles_filter_escaping_is_unchanged():
     # filter must degrade to the bare form rather than naming a missing directory.
     assert fonts_dir.is_dir(), "assets/fonts is vendored (A1) and must be present"
     assert suffix and suffix in cap_module.subtitles_filter("/tmp/plain.ass")
-
 
 
 # --------------------------------------------------------------------------- #
@@ -2064,6 +2394,6 @@ def test_end_to_end_single_pass_render_with_a_kinetic_contribution(
     # --- geometry and duration conserved (Req 18.5) ---------------------------
     assert probe_size(dest) == probe_size(base) == (240, 240)
     source_duration = probe_duration(base)
-    assert abs(probe_duration(dest) - source_duration) <= 0.15, (
-        f"duration changed: {probe_duration(dest)} vs {source_duration}"
-    )
+    assert (
+        abs(probe_duration(dest) - source_duration) <= 0.15
+    ), f"duration changed: {probe_duration(dest)} vs {source_duration}"

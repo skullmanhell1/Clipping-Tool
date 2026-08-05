@@ -97,8 +97,7 @@ export const api = {
 
   // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
   // which jsonOrThrow surfaces as an error carrying the API's own explanation.
-  cancelJob: (id) =>
-    apiFetch(`/api/jobs/${id}/cancel`, { method: "POST" }).then(jsonOrThrow),
+  cancelJob: (id) => apiFetch(`/api/jobs/${id}/cancel`, { method: "POST" }).then(jsonOrThrow),
 
   // M5: per-stage render timings for a finished (or running) job.
   jobTimings: (id) => apiFetch(`/api/jobs/${id}/timings`).then(jsonOrThrow),
@@ -132,21 +131,27 @@ export const api = {
     if (/^https?:\/\//i.test(relativeUrl)) return relativeUrl;
     return withToken(relativeUrl.startsWith("/") ? relativeUrl : `/${relativeUrl}`);
   },
-  downloadUrl: (jobId, filename) =>
-    withToken(`/api/clips/${jobId}/${filename}/download`),
-  videoDownloadUrl: (jobId, filename) =>
-    withToken(`/api/clips/${jobId}/${filename}/video`),
+  downloadUrl: (jobId, filename) => withToken(`/api/clips/${jobId}/${filename}/download`),
+  videoDownloadUrl: (jobId, filename) => withToken(`/api/clips/${jobId}/${filename}/video`),
 
   publisherStatuses: () => apiFetch("/api/publishers").then(jsonOrThrow),
   campaigns: () => apiFetch("/api/campaigns").then(jsonOrThrow),
   saveCampaign: (name, routes, id = "") =>
-    apiFetch("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, routes, id }) }).then(jsonOrThrow),
+    apiFetch("/api/campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, routes, id }),
+    }).then(jsonOrThrow),
   publishClip: (jobId, clipId, payload) =>
-    apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
+    apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(jsonOrThrow),
   history: (platform = "") =>
-    apiFetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
+    apiFetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(
+      jsonOrThrow
+    ),
 
   // PB2: the approve/retry endpoints existed but nothing in the UI referenced them, so an
   // attempt that came back `review_required` stopped permanently — three of the five
@@ -175,7 +180,7 @@ export const api = {
   scheduleSuggestions: (platform = "", days = 7, perDay = 2) =>
     apiFetch(
       `/api/schedule/suggestions?platform=${encodeURIComponent(platform)}` +
-        `&days=${days}&per_day=${perDay}`,
+        `&days=${days}&per_day=${perDay}`
     ).then(jsonOrThrow),
   reschedulePublishAttempt: (attemptId, scheduleAt) =>
     apiFetch(`/api/publish-attempts/${attemptId}/schedule`, {
@@ -188,8 +193,7 @@ export const api = {
   // I5: render a failed job's unfinished clips, keeping the ones it already produced. An
   // interrupted job used to be marked failed wholesale, so the only way forward was to re-submit
   // the source and pay for every clip again — including the ones that had succeeded.
-  resumeJob: (jobId) =>
-    apiFetch(`/api/jobs/${jobId}/resume`, { method: "POST" }).then(jsonOrThrow),
+  resumeJob: (jobId) => apiFetch(`/api/jobs/${jobId}/resume`, { method: "POST" }).then(jsonOrThrow),
 
   // U7: re-render one clip with changed settings, instead of resubmitting the whole source.
   // Resubmitting re-downloads, re-transcribes, re-selects and re-renders every other clip — and
@@ -268,8 +272,7 @@ export const api = {
     }).then(jsonOrThrow),
   setDefaultProfile: (id) =>
     apiFetch(`/api/profiles/${id}/default`, { method: "POST" }).then(jsonOrThrow),
-  deleteProfile: (id) =>
-    apiFetch(`/api/profiles/${id}`, { method: "DELETE" }).then(jsonOrThrow),
+  deleteProfile: (id) => apiFetch(`/api/profiles/${id}`, { method: "DELETE" }).then(jsonOrThrow),
 
   updates: (force = false) =>
     apiFetch(`/api/updates${force ? "?force=true" : ""}`).then(jsonOrThrow),

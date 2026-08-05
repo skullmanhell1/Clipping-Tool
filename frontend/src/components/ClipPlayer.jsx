@@ -62,7 +62,7 @@ export default function ClipPlayer({ src, poster, className = "", onRegisterCont
       video.pause();
       seekTo(video.currentTime + frames * FRAME_SECONDS);
     },
-    [seekTo],
+    [seekTo]
   );
 
   const skip = useCallback(
@@ -71,7 +71,7 @@ export default function ClipPlayer({ src, poster, className = "", onRegisterCont
       if (!video) return;
       seekTo(video.currentTime + seconds);
     },
-    [seekTo],
+    [seekTo]
   );
 
   // Published upward so a parent can drive the player from its own keyboard handler (U11)

@@ -42,9 +42,7 @@ function Field({ label, children, onRegenerate, busy }) {
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-          {label}
-        </span>
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
         {onRegenerate && (
           <button
             type="button"
@@ -93,9 +91,7 @@ export default function ClipCard({
     cta: clip.cta || "",
     thumbnail_text: clip.thumbnail_text || "",
   });
-  const [selectedPlatforms, setSelectedPlatforms] = useState(
-    publishing?.platforms || []
-  );
+  const [selectedPlatforms, setSelectedPlatforms] = useState(publishing?.platforms || []);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [publishingNow, setPublishingNow] = useState(false);
@@ -226,7 +222,7 @@ export default function ClipCard({
         setReviewing(false);
       }
     },
-    [clip.id, clip.review_state, jobId, onUpdated],
+    [clip.id, clip.review_state, jobId, onUpdated]
   );
 
   // U7: re-render this clip with the settings currently in the panel. Resubmitting the source
@@ -249,7 +245,7 @@ export default function ClipCard({
         setRerendering(false);
       }
     },
-    [clip.id, jobId, onUpdated, settings],
+    [clip.id, jobId, onUpdated, settings]
   );
 
   // U4: the transcript editor is a panel rather than a separate view, so the player stays
@@ -449,11 +445,7 @@ export default function ClipCard({
             onRegenerate={llmAvailable ? regenerate("hook_text") : null}
             busy={busyField === "hook_text"}
           >
-            <input
-              className={inputClass}
-              value={form.hook_text}
-              onChange={update("hook_text")}
-            />
+            <input className={inputClass} value={form.hook_text} onChange={update("hook_text")} />
           </Field>
           <Field
             label="Thumbnail text"
@@ -477,9 +469,7 @@ export default function ClipCard({
         </Field>
 
         {clip.mentions?.length > 0 && (
-          <div className="text-xs text-slate-400">
-            Mentions: {clip.mentions.join(" ")}
-          </div>
+          <div className="text-xs text-slate-400">Mentions: {clip.mentions.join(" ")}</div>
         )}
 
         <div className="flex items-center gap-3">
@@ -492,9 +482,7 @@ export default function ClipCard({
             {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
           </button>
           {!llmAvailable && (
-            <span className="text-xs text-slate-500">
-              Set an LLM key to enable regenerate
-            </span>
+            <span className="text-xs text-slate-500">Set an LLM key to enable regenerate</span>
           )}
         </div>
 

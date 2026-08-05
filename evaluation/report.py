@@ -12,8 +12,8 @@ that is the only figure that answers "did this change do anything".
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from evaluation.metrics import IOU_THRESHOLDS, PRIMARY_IOU, AggregateScore
 
@@ -78,8 +78,10 @@ def render_text(report: Report) -> str:
     selector = report.selector
 
     lines.append("")
-    lines.append(f"Selection evaluation  ·  k={selector.k}  ·  "
-                 f"{report.dataset_size} sources, {report.moment_count} labelled moments")
+    lines.append(
+        f"Selection evaluation  ·  k={selector.k}  ·  "
+        f"{report.dataset_size} sources, {report.moment_count} labelled moments"
+    )
     lines.append("=" * 78)
 
     # --- the table ---------------------------------------------------------
@@ -88,8 +90,9 @@ def render_text(report: Report) -> str:
         header += f"{'IoU ' + format(threshold, '.1f'):>13}"
     header += f"{'mean best':>11}"
     lines.append(header)
-    lines.append(f"{'':<22}" + "".join(f"{'prec':>7}{'rec':>6}" for _ in IOU_THRESHOLDS)
-                 + f"{'IoU':>11}")
+    lines.append(
+        f"{'':<22}" + "".join(f"{'prec':>7}{'rec':>6}" for _ in IOU_THRESHOLDS) + f"{'IoU':>11}"
+    )
     lines.append("-" * 78)
     lines.append(_row(selector.label, selector))
     for baseline in report.baselines:
@@ -132,7 +135,8 @@ def render_text(report: Report) -> str:
 
     # --- diagnostics -------------------------------------------------------
     near_misses = [
-        source.name for source in selector.sources
+        source.name
+        for source in selector.sources
         if source.at(PRIMARY_IOU).matched == 0 and source.mean_best_iou >= 0.25
     ]
     if near_misses:
@@ -187,6 +191,5 @@ def render_comparison(before: Report, after: Report) -> str:
 def sequence_summary(scores: Sequence[AggregateScore]) -> str:
     """One line per score, for a quick multi-selector comparison."""
     return "\n".join(
-        f"{score.label:<24} F1@{PRIMARY_IOU} {score.at(PRIMARY_IOU).f1:.3f}"
-        for score in scores
+        f"{score.label:<24} F1@{PRIMARY_IOU} {score.at(PRIMARY_IOU).f1:.3f}" for score in scores
     )

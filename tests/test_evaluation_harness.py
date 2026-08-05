@@ -43,10 +43,12 @@ def _write_labels(directory, name, moments, source="video.mp4"):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{name}.json"
     path.write_text(
-        json.dumps({
-            "source": source,
-            "moments": [{"start": s, "end": e, "note": ""} for s, e in moments],
-        }),
+        json.dumps(
+            {
+                "source": source,
+                "moments": [{"start": s, "end": e, "note": ""} for s, e in moments],
+            }
+        ),
         encoding="utf-8",
     )
     return path
@@ -113,7 +115,7 @@ def test_each_prediction_matches_at_most_one_label():
 def test_matching_prefers_the_better_overlap():
     """When two predictions compete for one label, the closer one wins it."""
     label = Span(100, 130)
-    predictions = [Span(105, 140), Span(100, 130)]   # second is exact
+    predictions = [Span(105, 140), Span(100, 130)]  # second is exact
     matches = match_predictions(predictions, [label], PRIMARY_IOU)
     assert [m.prediction_index for m in matches] == [1]
 
@@ -129,7 +131,7 @@ def test_matching_is_deterministic_for_equally_good_pairs():
 
 def test_threshold_is_respected():
     label = Span(0, 100)
-    half = Span(50, 150)      # IoU = 50/150 = 0.333
+    half = Span(50, 150)  # IoU = 50/150 = 0.333
     assert match_predictions([half], [label], 0.3)
     assert not match_predictions([half], [label], 0.5)
 
@@ -191,8 +193,12 @@ def test_aggregate_pools_rather_than_averaging_per_source():
 
     Averaging per-source rates would let one sparsely-labelled video swing the headline figure.
     """
-    dense = score_source("dense", [Span(i * 100, i * 100 + 30) for i in range(8)],
-                         [Span(i * 100, i * 100 + 30) for i in range(8)], k=8)
+    dense = score_source(
+        "dense",
+        [Span(i * 100, i * 100 + 30) for i in range(8)],
+        [Span(i * 100, i * 100 + 30) for i in range(8)],
+        k=8,
+    )
     sparse = score_source("sparse", [Span(0, 30)], [Span(500, 530)], k=8)
 
     aggregate = AggregateScore(label="x", k=8, sources=[dense, sparse])
@@ -218,7 +224,7 @@ def test_baselines_use_the_labelled_clip_length():
     Giving the naive methods the same target length a human chose leaves *placement* as the
     only thing being compared.
     """
-    labels = [Span(0, 60), Span(200, 260)]     # median duration 60
+    labels = [Span(0, 60), Span(200, 260)]  # median duration 60
     for prediction in baselines.uniform_baseline(600.0, labels, 5):
         assert prediction.duration == pytest.approx(60.0, abs=0.1)
 
@@ -344,8 +350,12 @@ def test_run_selector_scores_every_source(tmp_path):
         return [Span(10, 40)]
 
     score, runs = harness.run_selector(
-        dataset, selector, k=5, label="test",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        selector,
+        k=5,
+        label="test",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     assert len(score.sources) == 2
     assert len(runs) == 2
@@ -363,13 +373,17 @@ def test_a_failing_source_is_recorded_and_the_run_continues(tmp_path):
         return [Span(10, 40)]
 
     score, runs = harness.run_selector(
-        dataset, selector, k=5, label="test",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        selector,
+        k=5,
+        label="test",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     errors = [run for run in runs if run.error]
     assert len(errors) == 1
     assert "whisper exploded" in errors[0].error
-    assert score.at(PRIMARY_IOU).matched == 1        # the healthy source still scored
+    assert score.at(PRIMARY_IOU).matched == 1  # the healthy source still scored
 
 
 def test_baselines_run_over_the_same_dataset(tmp_path):
@@ -387,8 +401,12 @@ def test_report_names_the_best_baseline_and_whether_it_was_beaten(tmp_path):
         return [Span(10, 40), Span(100, 140)]
 
     score, runs = harness.run_selector(
-        dataset, perfect, k=5, label="selector:ai",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        perfect,
+        k=5,
+        label="selector:ai",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     bases = harness.run_baselines(dataset, k=5, duration_of=lambda _p: 600.0)
     report = harness.build_report(dataset, score, bases, runs)
@@ -408,8 +426,12 @@ def test_a_selector_no_better_than_guessing_is_called_out(tmp_path):
         return [Span(500, 530)]
 
     score, runs = harness.run_selector(
-        dataset, useless, k=5, label="selector:ai",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        useless,
+        k=5,
+        label="selector:ai",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     bases = harness.run_baselines(dataset, k=5, duration_of=lambda _p: 600.0)
     report = harness.build_report(dataset, score, bases, runs)
@@ -421,8 +443,12 @@ def test_a_selector_no_better_than_guessing_is_called_out(tmp_path):
 def test_a_report_without_baselines_says_it_cannot_be_interpreted(tmp_path):
     dataset = _dataset(tmp_path, {"ep1": [(10, 40)]})
     score, runs = harness.run_selector(
-        dataset, lambda *a: [Span(10, 40)], k=5, label="selector:ai",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        lambda *a: [Span(10, 40)],
+        k=5,
+        label="selector:ai",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     report = harness.build_report(dataset, score, [], runs)
     assert "cannot be interpreted" in render_text(report)
@@ -431,8 +457,12 @@ def test_a_report_without_baselines_says_it_cannot_be_interpreted(tmp_path):
 def test_report_round_trips_through_json(tmp_path):
     dataset = _dataset(tmp_path, {"ep1": [(10, 40)]})
     score, runs = harness.run_selector(
-        dataset, lambda *a: [Span(10, 40)], k=5, label="selector:ai",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        lambda *a: [Span(10, 40)],
+        k=5,
+        label="selector:ai",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     report = harness.build_report(dataset, score, [], runs)
     payload = json.loads(report.to_json())
@@ -445,8 +475,12 @@ def test_comparison_warns_when_the_datasets_differ(tmp_path):
     """Comparing runs over different footage is meaningless, and easy to do by accident."""
     dataset = _dataset(tmp_path, {"ep1": [(10, 40)]})
     score, runs = harness.run_selector(
-        dataset, lambda *a: [Span(10, 40)], k=5, label="s",
-        duration_of=lambda _p: 600.0, transcript_of=lambda _p: None,
+        dataset,
+        lambda *a: [Span(10, 40)],
+        k=5,
+        label="s",
+        duration_of=lambda _p: 600.0,
+        transcript_of=lambda _p: None,
     )
     before = harness.build_report(dataset, score, [], runs)
     after = harness.build_report(dataset, score, [], runs)
@@ -471,9 +505,14 @@ def test_transcript_cache_round_trips(tmp_path):
     media.write_bytes(b"pretend video")
     transcript = Transcript(
         language="en",
-        segments=[TranscriptSegment(0.0, 2.0, "hello there",
-                                   words=[Word(0.0, 1.0, "hello", 0.9),
-                                          Word(1.0, 2.0, "there", 0.8)])],
+        segments=[
+            TranscriptSegment(
+                0.0,
+                2.0,
+                "hello there",
+                words=[Word(0.0, 1.0, "hello", 0.9), Word(1.0, 2.0, "there", 0.8)],
+            )
+        ],
     )
 
     assert harness.save_cached_transcript(tmp_path / "cache", media, transcript)
@@ -491,7 +530,8 @@ def test_changing_the_media_invalidates_the_cache(tmp_path):
     media = tmp_path / "ep1.mp4"
     media.write_bytes(b"first version")
     harness.save_cached_transcript(
-        tmp_path / "cache", media,
+        tmp_path / "cache",
+        media,
         Transcript(language="en", segments=[TranscriptSegment(0.0, 1.0, "first")]),
     )
     assert harness.load_cached_transcript(tmp_path / "cache", media) is not None

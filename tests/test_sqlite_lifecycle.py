@@ -42,9 +42,7 @@ def _open_descriptors() -> int:
 
 def _job() -> Job:
     job = Job(input_type="file", source="/tmp/source.mp4", options=ProcessingOptions())
-    job.clips = [
-        ClipResult(id="c1", filename="c1.mp4", start=0.0, end=5.0, duration=5.0)
-    ]
+    job.clips = [ClipResult(id="c1", filename="c1.mp4", start=0.0, end=5.0, duration=5.0)]
     return job
 
 
@@ -59,9 +57,9 @@ def test_repeated_saves_do_not_leak_descriptors(tmp_path: Path):
         store.save(job)
     growth = _open_descriptors() - before
 
-    assert growth <= ALLOWED_GROWTH, (
-        f"{ITERATIONS} saves leaked {growth} descriptors; connections are not being closed"
-    )
+    assert (
+        growth <= ALLOWED_GROWTH
+    ), f"{ITERATIONS} saves leaked {growth} descriptors; connections are not being closed"
 
 
 def test_repeated_loads_do_not_leak_descriptors(tmp_path: Path):

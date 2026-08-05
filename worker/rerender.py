@@ -33,7 +33,7 @@ import shutil
 import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 from worker.models import ClipResult, Job, ProcessingOptions
@@ -90,7 +90,7 @@ def resolve_source(job: Job) -> Path:
     )
 
 
-def merge_options(base: ProcessingOptions, overrides: Optional[dict[str, Any]]) -> ProcessingOptions:
+def merge_options(base: ProcessingOptions, overrides: dict[str, Any] | None) -> ProcessingOptions:
     """``base`` with ``overrides`` applied, ignoring unknown keys.
 
     Unknown keys are dropped rather than raising: the caller is a UI sending a settings blob,
@@ -111,10 +111,10 @@ def rerender_clip(
     job: Job,
     clip: ClipResult,
     *,
-    option_overrides: Optional[dict[str, Any]] = None,
-    cuts: Optional[list] = None,
-    clips_dir: Optional[Path] = None,
-    temp_dir: Optional[Path] = None,
+    option_overrides: dict[str, Any] | None = None,
+    cuts: list | None = None,
+    clips_dir: Path | None = None,
+    temp_dir: Path | None = None,
     progress_cb=None,
 ) -> ClipResult:
     """Re-render ``clip`` in place and return the updated :class:`ClipResult`.
@@ -171,7 +171,9 @@ def rerender_clip(
 
         new_thumb = staging / Path(fresh.filename).with_suffix(".jpg").name
         if new_thumb.is_file():
-            shutil.move(str(new_thumb), str(clips_dir / Path(clip.filename).with_suffix(".jpg").name))
+            shutil.move(
+                str(new_thumb), str(clips_dir / Path(clip.filename).with_suffix(".jpg").name)
+            )
 
         # Sidecars (O11) are named from the clip stem, so they follow the same rule.
         for extra in staging.glob(f"{Path(fresh.filename).stem}.*"):

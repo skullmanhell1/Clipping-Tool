@@ -49,11 +49,11 @@ describe("CaptionStylePicker", () => {
     render(<CaptionStylePicker presets={PRESETS} value="hormozi" onChange={vi.fn()} />);
     expect(screen.getByRole("button", { name: /caption style hormozi/i })).toHaveAttribute(
       "aria-pressed",
-      "true",
+      "true"
     );
     expect(screen.getByRole("button", { name: /caption style karaoke/i })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "false"
     );
   });
 
@@ -68,10 +68,10 @@ describe("CaptionStylePicker", () => {
     render(<CaptionStylePicker presets={PRESETS} value="karaoke" onChange={vi.fn()} />);
     // hormozi uppercases; karaoke does not. Both samples are present, differing only in case.
     expect(screen.getByRole("button", { name: /caption style hormozi/i })).toHaveTextContent(
-      "THIS CHANGED EVERYTHING",
+      "THIS CHANGED EVERYTHING"
     );
     expect(screen.getByRole("button", { name: /caption style karaoke/i })).toHaveTextContent(
-      "This changed everything",
+      "This changed everything"
     );
   });
 
@@ -84,7 +84,7 @@ describe("CaptionStylePicker", () => {
         value="karaoke"
         onChange={vi.fn()}
         brand={{ brand_font: "Bangers" }}
-      />,
+      />
     );
     const styled = container.querySelectorAll('[style*="Bangers"]');
     expect(styled.length).toBe(PRESETS.length);
@@ -97,7 +97,7 @@ describe("CaptionStylePicker", () => {
         value="karaoke"
         onChange={vi.fn()}
         brand={{ brand_primary_color: "#ff0000" }}
-      />,
+      />
     );
     expect(container.innerHTML).toContain("rgb(255, 0, 0)");
   });

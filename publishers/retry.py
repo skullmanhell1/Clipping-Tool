@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import random
 import re
-from typing import Optional
 
 from config import settings
 
@@ -101,7 +100,7 @@ _PERMANENT_PATTERNS: tuple[str, ...] = (
 _STATUS_RE = re.compile(r"\b([1-5]\d{2})\b")
 
 
-def classify(error: str, status_code: Optional[int] = None) -> bool:
+def classify(error: str, status_code: int | None = None) -> bool:
     """Whether ``error`` looks worth retrying unchanged.
 
     ``status_code`` wins when supplied, since it is unambiguous. Otherwise the text is checked
@@ -133,7 +132,7 @@ def max_attempts() -> int:
     return max(1, int(getattr(settings, "publish_max_retries", 3)) + 1)
 
 
-def backoff_seconds(retry_count: int, *, jitter: Optional[float] = None) -> float:
+def backoff_seconds(retry_count: int, *, jitter: float | None = None) -> float:
     """Seconds to wait before retry number ``retry_count`` (1-based).
 
     Exponential from a configurable base, capped, with jitter added rather than subtracted so a
@@ -152,11 +151,14 @@ def backoff_seconds(retry_count: int, *, jitter: Optional[float] = None) -> floa
 
     delay = base * (2 ** (step - 1))
     delay = min(delay, ceiling)
-    fraction = random.random() if jitter is None else max(0.0, min(1.0, float(jitter)))  # noqa: S311 - retry jitter; spreading retries needs no cryptographic randomness
+    # Retry jitter; spreading retries needs no cryptographic randomness.
+    fraction = (
+        random.random() if jitter is None else max(0.0, min(1.0, float(jitter)))  # noqa: S311
+    )
     return delay + delay * 0.25 * fraction
 
 
-def should_retry(retry_count: int, error: str, status_code: Optional[int] = None) -> bool:
+def should_retry(retry_count: int, error: str, status_code: int | None = None) -> bool:
     """Whether an attempt that has already retried ``retry_count`` times should go again."""
     if retry_count + 1 >= max_attempts():
         return False

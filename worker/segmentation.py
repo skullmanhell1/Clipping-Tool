@@ -16,7 +16,6 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 from worker.ffmpeg_utils import FFmpegError
@@ -37,7 +36,7 @@ class Segment:
 # UI "Clip Length" option -> (min_seconds, max_seconds, target_seconds).
 # ``target`` drives fixed-length chunking; ``min``/``max`` bound silence splits.
 CLIP_LENGTH_PRESETS: dict[str, tuple[float, float, float]] = {
-    "auto": (10.0, 90.0, 45.0),      # Auto (<90s)
+    "auto": (10.0, 90.0, 45.0),  # Auto (<90s)
     "<30s": (5.0, 30.0, 20.0),
     "30-60s": (30.0, 60.0, 45.0),
     "60-90s": (60.0, 90.0, 75.0),
@@ -45,7 +44,7 @@ CLIP_LENGTH_PRESETS: dict[str, tuple[float, float, float]] = {
 }
 
 # UI "Number of Clips" option -> max clips (None = unbounded / "Max").
-CLIP_COUNT_PRESETS: dict[str, Optional[int]] = {
+CLIP_COUNT_PRESETS: dict[str, int | None] = {
     "auto": None,
     "1": 1,
     "3": 3,
@@ -79,7 +78,7 @@ def resolve_length_range(option: str) -> tuple[float, float, float]:
     return min_len, max_len, target
 
 
-def resolve_max_clips(option: str) -> Optional[int]:
+def resolve_max_clips(option: str) -> int | None:
     """Return the max clip count for a Number of Clips UI option (None = all)."""
     key = (option or "auto").lower()
     return CLIP_COUNT_PRESETS.get(key, None)
@@ -120,9 +119,14 @@ def detect_silences(
     Uses the ``silencedetect`` audio filter and parses its stderr log.
     """
     cmd = [
-        settings.ffmpeg_binary, "-i", str(path),
-        "-af", f"silencedetect=noise={noise_db}dB:d={min_silence}",
-        "-f", "null", "-",
+        settings.ffmpeg_binary,
+        "-i",
+        str(path),
+        "-af",
+        f"silencedetect=noise={noise_db}dB:d={min_silence}",
+        "-f",
+        "null",
+        "-",
     ]
     # silencedetect writes to stderr; this command is expected to "succeed".
     # The stderr text is bound in each branch rather than rebinding `proc` to the exception. A
@@ -157,9 +161,7 @@ def silence_based_segments(
     usable silences are found.
     """
     silences = detect_silences(path, noise_db=noise_db, min_silence=min_silence)
-    cut_points = sorted(
-        p for s, e in silences if 0 < (p := (s + e) / 2) < total_duration
-    )
+    cut_points = sorted(p for s, e in silences if 0 < (p := (s + e) / 2) < total_duration)
 
     if not cut_points:
         return fixed_length_segments(total_duration, target=max_len, min_len=min_len)
@@ -198,7 +200,7 @@ def segment_video(
     total_duration: float,
     clip_length: str = "auto",
     strategy: str = "silence",
-    max_clips: Optional[int] = None,
+    max_clips: int | None = None,
 ) -> list[Segment]:
     """Produce clip segments for a video.
 
@@ -240,7 +242,6 @@ def segment_video(
         segments = sorted(segments, key=lambda s: s.start)
 
     return segments
-
 
 
 # --------------------------------------------------------------------------- #

@@ -19,10 +19,11 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from config import settings
 from worker import ass_spans, ass_style, script_support, text_metrics
@@ -82,16 +83,24 @@ class TextFit:
 
     def fits(self, text: str) -> bool:
         return text_metrics.fits_in_lines(
-            text, font=self.font, font_size=self.font_size,
-            max_width_px=self.max_width_px, max_lines=self.max_lines,
-            spacing=self.spacing, scale_x=self.scale_x,
+            text,
+            font=self.font,
+            font_size=self.font_size,
+            max_width_px=self.max_width_px,
+            max_lines=self.max_lines,
+            spacing=self.spacing,
+            scale_x=self.scale_x,
         )
 
     def wrap(self, text: str) -> list[str]:
         return text_metrics.wrap_text(
-            text, font=self.font, font_size=self.font_size,
-            max_width_px=self.max_width_px, max_lines=self.max_lines,
-            spacing=self.spacing, scale_x=self.scale_x,
+            text,
+            font=self.font,
+            font_size=self.font_size,
+            max_width_px=self.max_width_px,
+            max_lines=self.max_lines,
+            spacing=self.spacing,
+            scale_x=self.scale_x,
         )
 
     @classmethod
@@ -101,7 +110,7 @@ class TextFit:
         *,
         video_width: int,
         fraction: float = text_metrics.DEFAULT_LINE_WIDTH_FRACTION,
-    ) -> "TextFit":
+    ) -> TextFit:
         """Build a fit from a :class:`CaptionPreset` and the output width."""
         return cls(
             font=str(getattr(preset, "font", "") or ""),
@@ -122,7 +131,7 @@ def words_to_cues(
     max_gap: float = 0.6,
     max_duration: float = 3.0,
     *,
-    fit: Optional["TextFit"] = None,
+    fit: TextFit | None = None,
 ) -> list[Cue]:
     """Group ``words`` into readable cues.
 
@@ -161,6 +170,7 @@ def words_to_cues(
 
 
 # --- ASS rendering ----------------------------------------------------------
+
 
 def _ass_timestamp(seconds: float) -> str:
     """Format ``seconds`` as an ASS timestamp ``H:MM:SS.cs`` (centiseconds)."""
@@ -398,10 +408,10 @@ FALLBACK_FONTS: tuple[str, ...] = (
 _FALLBACK_FONT = FALLBACK_FONTS[-1]
 
 # Cached, best-effort lower-cased set of locally available font family names.
-_FONT_CACHE: dict[str, Optional[frozenset[str]]] = {}
+_FONT_CACHE: dict[str, frozenset[str] | None] = {}
 
 
-def _enumerate_system_fonts() -> Optional[frozenset[str]]:
+def _enumerate_system_fonts() -> frozenset[str] | None:
     """Best-effort enumeration of local font families (lower-cased).
 
     Uses ``fc-list`` when available. Returns ``None`` when enumeration is not
@@ -411,7 +421,7 @@ def _enumerate_system_fonts() -> Optional[frozenset[str]]:
     if "fonts" in _FONT_CACHE:
         return _FONT_CACHE["fonts"]
 
-    fonts: Optional[frozenset[str]] = None
+    fonts: frozenset[str] | None = None
     fc = shutil.which("fc-list")
     if fc:
         try:
@@ -516,7 +526,7 @@ def font_available(name: str) -> bool:
 def resolve_font(
     requested: str,
     *,
-    available: Optional[Any] = None,
+    available: Any | None = None,
 ) -> tuple[str, bool]:
     """Resolve ``requested`` to a font that is actually installed (C1).
 
@@ -683,7 +693,7 @@ def build_word_span(
     return span
 
 
-def _word_pill_span(preset: CaptionPreset) -> Optional[tuple[str, str]]:
+def _word_pill_span(preset: CaptionPreset) -> tuple[str, str] | None:
     """The ``(open, close)`` override pair drawing a pill behind one word (C9), or ``None``.
 
     A thick border in a solid colour, not a drawn rectangle. ASS has no per-word background, and a
@@ -726,12 +736,31 @@ def _word_pill_span(preset: CaptionPreset) -> Optional[tuple[str, str]]:
 # The list is deliberately short and covers the words platforms actually act on. A long list
 # starts catching the Scunthorpe problem, and the cost of a false positive here is a masked
 # word the speaker did say innocently, which reads as a rendering fault rather than a policy.
-_PROFANITY: frozenset[str] = frozenset({
-    "fuck", "fucking", "fucked", "fucker", "motherfucker",
-    "shit", "shitty", "bullshit", "cunt", "cock", "dick",
-    "bitch", "bastard", "asshole", "arsehole", "whore", "slut",
-    "nigger", "faggot", "retard", "retarded",
-})
+_PROFANITY: frozenset[str] = frozenset(
+    {
+        "fuck",
+        "fucking",
+        "fucked",
+        "fucker",
+        "motherfucker",
+        "shit",
+        "shitty",
+        "bullshit",
+        "cunt",
+        "cock",
+        "dick",
+        "bitch",
+        "bastard",
+        "asshole",
+        "arsehole",
+        "whore",
+        "slut",
+        "nigger",
+        "faggot",
+        "retard",
+        "retarded",
+    }
+)
 
 #: What a masked character becomes.
 MASK_CHARACTER = "*"
@@ -791,8 +820,18 @@ _FONT_SUFFIXES: tuple[str, ...] = (".ttf", ".otf", ".ttc")
 #: field the manifest populates would make a user-supplied regular face (400) look nearly twice as
 #: heavy as a vendored black one (210). Values follow fontconfig's own ``fcweight.c`` table.
 _FC_WEIGHTS: tuple[tuple[int, int], ...] = (
-    (100, 0), (200, 40), (300, 50), (350, 55), (380, 75), (400, 80),
-    (500, 100), (600, 180), (700, 200), (800, 205), (900, 210), (1000, 215),
+    (100, 0),
+    (200, 40),
+    (300, 50),
+    (350, 55),
+    (380, 75),
+    (400, 80),
+    (500, 100),
+    (600, 180),
+    (700, 200),
+    (800, 205),
+    (900, 210),
+    (1000, 215),
 )
 
 #: The fontconfig weight at and above which a face is a heavy display face.
@@ -817,7 +856,7 @@ def _fc_weight(os2_weight: int) -> int:
     return _FC_WEIGHTS[-1][1]
 
 
-def _font_identity(path: Path) -> Optional[dict]:
+def _font_identity(path: Path) -> dict | None:
     """The family name, style and weight recorded *inside* the font file (A5).
 
     Read from the file rather than derived from its filename, and that distinction is the whole
@@ -906,24 +945,26 @@ def discovered_fonts(manifest_files: frozenset[str] = frozenset()) -> list[dict]
         identity = _font_identity(path)
         if identity is None:
             continue
-        found.append({
-            **identity,
-            # Read from the file's own weight class rather than guessed from its name, because
-            # "Black" and "Heavy" appear in family names that are not.
-            #
-            # Stated limitation: a *display* face often declares OS/2 weight 400 even though it
-            # draws as heavy - Anton does exactly this, which is why the vendored manifest marks
-            # it heavy by hand. A dropped-in display face will therefore read as not-heavy, and
-            # only affects picker ordering. Guessing from the filename instead would be wrong in
-            # a way that is harder to notice.
-            "heavy": identity["weight"] >= _HEAVY_FC_WEIGHT,
-            # Blank rather than invented: the operator supplied this file, so its licence is
-            # theirs to know. A vendored face carries a verified SPDX id; claiming one here
-            # would be a claim this code cannot check.
-            "license": "",
-            "use": "user-supplied",
-            "source": "user",
-        })
+        found.append(
+            {
+                **identity,
+                # Read from the file's own weight class rather than guessed from its name, because
+                # "Black" and "Heavy" appear in family names that are not.
+                #
+                # Stated limitation: a *display* face often declares OS/2 weight 400 even though it
+                # draws as heavy - Anton does exactly this, which is why the vendored manifest marks
+                # it heavy by hand. A dropped-in display face will therefore read as not-heavy, and
+                # only affects picker ordering. Guessing from the filename instead would be wrong in
+                # a way that is harder to notice.
+                "heavy": identity["weight"] >= _HEAVY_FC_WEIGHT,
+                # Blank rather than invented: the operator supplied this file, so its licence is
+                # theirs to know. A vendored face carries a verified SPDX id; claiming one here
+                # would be a claim this code cannot check.
+                "license": "",
+                "use": "user-supplied",
+                "source": "user",
+            }
+        )
     return found
 
 
@@ -966,7 +1007,10 @@ def refresh_font_cache() -> bool:
     try:
         subprocess.run(
             [fc, "-f", str(directory)],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         logger.debug("A5: fc-cache refresh failed for %s", directory, exc_info=True)
@@ -1020,16 +1064,18 @@ def available_fonts() -> list[dict]:
         # exists precisely because the two once disagreed.
         if not (FONT_MANIFEST.parent / "fonts" / filename).is_file():
             continue
-        fonts.append({
-            "name": name,
-            "family": str(entry.get("family") or name),
-            "style": str(entry.get("style") or ""),
-            "weight": int(entry.get("weight") or 0),
-            "heavy": bool(entry.get("heavy_face")),
-            "license": str(entry.get("license") or ""),
-            "use": str(entry.get("use") or ""),
-            "source": "bundled",
-        })
+        fonts.append(
+            {
+                "name": name,
+                "family": str(entry.get("family") or name),
+                "style": str(entry.get("style") or ""),
+                "weight": int(entry.get("weight") or 0),
+                "heavy": bool(entry.get("heavy_face")),
+                "license": str(entry.get("license") or ""),
+                "use": str(entry.get("use") or ""),
+                "source": "bundled",
+            }
+        )
 
     # A5: the manifest wins on a name collision. It carries a verified licence and a `use` note,
     # and the vendored file is the one CI checks resolves to itself under both providers - so a
@@ -1065,10 +1111,7 @@ def _punch_span(preset: CaptionPreset, rel_ms: int) -> str:
     except (TypeError, ValueError):
         length = 110
     peak = int(round((1.0 + amount) * 100))
-    return (
-        f"{{\\fscx{peak}\\fscy{peak}"
-        f"\\t({rel_ms},{rel_ms + length},\\fscx100\\fscy100)}}"
-    )
+    return f"{{\\fscx{peak}\\fscy{peak}" f"\\t({rel_ms},{rel_ms + length},\\fscx100\\fscy100)}}"
 
 
 def _is_doubted(word: Any, preset: CaptionPreset) -> bool:
@@ -1089,7 +1132,7 @@ def _is_doubted(word: Any, preset: CaptionPreset) -> bool:
         probability = float(getattr(word, "probability", 1.0))
     except (AttributeError, TypeError, ValueError):
         return False
-    if probability != probability:   # NaN
+    if probability != probability:  # NaN
         return False
     return probability < threshold
 
@@ -1115,17 +1158,40 @@ def _dim_alpha_tag(preset: CaptionPreset) -> str:
 # A compact keyword -> emoji glyph map for inline caption emoji. Kept local so
 # in-caption emoji stays functionally independent of the overlay emoji effect.
 _CAPTION_EMOJI: dict[str, str] = {
-    "love": "\u2764\ufe0f", "heart": "\u2764\ufe0f", "amazing": "\U0001f929",
-    "wow": "\U0001f62e", "money": "\U0001f4b0", "cash": "\U0001f4b5",
-    "rich": "\U0001f911", "fire": "\U0001f525", "hot": "\U0001f525",
-    "best": "\U0001f3c6", "win": "\U0001f3c6", "winner": "\U0001f3c6",
-    "success": "\U0001f4c8", "growth": "\U0001f4c8", "idea": "\U0001f4a1",
-    "smart": "\U0001f9e0", "brain": "\U0001f9e0", "crazy": "\U0001f92f",
-    "insane": "\U0001f92f", "mind": "\U0001f9e0", "laugh": "\U0001f602",
-    "funny": "\U0001f602", "happy": "\U0001f604", "sad": "\U0001f622",
-    "boom": "\U0001f4a5", "rocket": "\U0001f680", "power": "\U0001f4aa",
-    "goal": "\U0001f3af", "target": "\U0001f3af", "secret": "\U0001f92b",
-    "yes": "\u2705", "no": "\u274c", "star": "\u2b50", "party": "\U0001f389",
+    "love": "\u2764\ufe0f",
+    "heart": "\u2764\ufe0f",
+    "amazing": "\U0001f929",
+    "wow": "\U0001f62e",
+    "money": "\U0001f4b0",
+    "cash": "\U0001f4b5",
+    "rich": "\U0001f911",
+    "fire": "\U0001f525",
+    "hot": "\U0001f525",
+    "best": "\U0001f3c6",
+    "win": "\U0001f3c6",
+    "winner": "\U0001f3c6",
+    "success": "\U0001f4c8",
+    "growth": "\U0001f4c8",
+    "idea": "\U0001f4a1",
+    "smart": "\U0001f9e0",
+    "brain": "\U0001f9e0",
+    "crazy": "\U0001f92f",
+    "insane": "\U0001f92f",
+    "mind": "\U0001f9e0",
+    "laugh": "\U0001f602",
+    "funny": "\U0001f602",
+    "happy": "\U0001f604",
+    "sad": "\U0001f622",
+    "boom": "\U0001f4a5",
+    "rocket": "\U0001f680",
+    "power": "\U0001f4aa",
+    "goal": "\U0001f3af",
+    "target": "\U0001f3af",
+    "secret": "\U0001f92b",
+    "yes": "\u2705",
+    "no": "\u274c",
+    "star": "\u2b50",
+    "party": "\U0001f389",
 }
 
 _EMOJI_KEY_RE = re.compile(r"[a-z']+")
@@ -1142,8 +1208,8 @@ def caption_emoji_glyph(
     preset: CaptionPreset,
     *,
     permissible: bool = False,
-    glyph_available: Optional[Any] = None,
-    downloader: Optional[Any] = None,
+    glyph_available: Any | None = None,
+    downloader: Any | None = None,
 ) -> str:
     """Return an inline emoji glyph for ``word``'s keyword, or ``""`` to drop.
 
@@ -1221,7 +1287,7 @@ _HOOK_ALIGNMENT = 8
 _HOOK_MARGINS = (60, 60, 160)
 
 
-def hook_style(font: str, hook_font_size: int, bold: int = -1) -> "ass_style.AssStyle":
+def hook_style(font: str, hook_font_size: int, bold: int = -1) -> ass_style.AssStyle:
     """The ``Style: Hook`` row for the hook title (A14).
 
     **One definition, previously three.** This style was spelled out as a 23-field f-string in
@@ -1278,9 +1344,7 @@ def _preset_style_line(
     because ``engines.kinetic`` needs the object in order to replace three margins by name, while
     every other caller — and several tests — want the rendered line.
     """
-    return _preset_style(
-        preset, font, font_size, align, margin_v, margin_h
-    ).render()
+    return _preset_style(preset, font, font_size, align, margin_v, margin_h).render()
 
 
 def _preset_style(
@@ -1290,7 +1354,7 @@ def _preset_style(
     align: int,
     margin_v: int,
     margin_h: int = 80,
-) -> "ass_style.AssStyle":
+) -> ass_style.AssStyle:
     """The :class:`~worker.ass_style.AssStyle` behind :func:`_preset_style_line`.
 
     Split out so ``engines.kinetic._style_line`` can take the style *object* and replace three
@@ -1372,14 +1436,14 @@ def build_ass(
     hook_text: str = "",
     hook_duration: float = 2.5,
     hook_font_size: int = 110,
-    karaoke: Optional[bool] = None,
+    karaoke: bool | None = None,
     *,
     preset: CaptionPreset | None = None,
     keyword_indices: set[int] | None = None,
     clip_duration: float | None = None,
     permissibility: bool = False,
-    emoji_glyph_available: Optional[Any] = None,
-    emoji_downloader: Optional[Any] = None,
+    emoji_glyph_available: Any | None = None,
+    emoji_downloader: Any | None = None,
     notes: list[str] | None = None,
 ) -> Path:
     """Render ``cues`` (and an optional hook title) to an ASS file at ``dest``.
@@ -1431,8 +1495,12 @@ def build_ass(
 
     if preset is not None:
         style_line, hook_style_line = _preset_header_styles(
-            preset, position, hook_font_size, notes,
-            video_width=video_width, video_height=video_height,
+            preset,
+            position,
+            hook_font_size,
+            notes,
+            video_width=video_width,
+            video_height=video_height,
             # C12/C13: both inert unless configured, so an unconfigured render is byte-identical.
             safe_area=(getattr(settings, "caption_safe_area", "") or "") or None,
             caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
@@ -1485,9 +1553,7 @@ ScaledBorderAndShadow: yes
         h_start = _ass_timestamp(0.0)
         h_end = _ass_timestamp(max(0.5, hook_duration))
         hook = _escape(hook_text.strip().upper())
-        lines.append(
-            f"Dialogue: 1,{h_start},{h_end},Hook,,0,0,0,,{{\\fad(250,350)}}{hook}"
-        )
+        lines.append(f"Dialogue: 1,{h_start},{h_end},Hook,,0,0,0,,{{\\fad(250,350)}}{hook}")
 
     lines.extend(body)
 
@@ -1508,8 +1574,8 @@ def end_card_dialogue(
     *,
     video_width: int = 1080,
     video_height: int = 1920,
-    text: Optional[str] = None,
-    seconds: Optional[float] = None,
+    text: str | None = None,
+    seconds: float | None = None,
 ) -> str:
     """One ASS dialogue line for the closing call-to-action, or ``""`` (V14).
 
@@ -1564,9 +1630,9 @@ def write_end_card_ass(
     video_height: int = 1920,
     font: str = "Poppins ExtraBold",
     font_size: int = 96,
-    text: Optional[str] = None,
-    seconds: Optional[float] = None,
-) -> Optional[Path]:
+    text: str | None = None,
+    seconds: float | None = None,
+) -> Path | None:
     """Write a standalone ASS holding just the end card, or return ``None`` (V14).
 
     Standalone rather than a line inside the caption ASS, for one reason: the card must not
@@ -1666,17 +1732,18 @@ def _preset_header_styles(
     existing caller - and the v0.8.0 parity gate - produces a byte-identical style line.
     """
     resolved_position = position if position is not None else preset.position
-    align, margin_v = _POSITION_ALIGN.get(
-        resolved_position, _POSITION_ALIGN["bottom"]
-    )
+    align, margin_v = _POSITION_ALIGN.get(resolved_position, _POSITION_ALIGN["bottom"])
     margin_h = 80
     if safe_area or caption_offset:
         # C12/C13: only when asked for. Computing margins unconditionally would change the
         # numbers on every existing render, because the safe-area figures are fractions of the
         # frame and would not land on exactly 220/200/80 at every resolution.
         margin_h, _margin_r, resolved_v = resolve_margins(
-            resolved_position, video_width, video_height,
-            platform=safe_area, offset=caption_offset,
+            resolved_position,
+            video_width,
+            video_height,
+            platform=safe_area,
+            offset=caption_offset,
         )
         if align not in (4, 5, 6):
             margin_v = resolved_v
@@ -1692,9 +1759,7 @@ def _preset_header_styles(
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v, margin_h
     )
-    hook_style_line = hook_style(
-        resolved_font, hook_font_size, ass_bold_flag(preset)
-    ).render()
+    hook_style_line = hook_style(resolved_font, hook_font_size, ass_bold_flag(preset)).render()
     return style_line, hook_style_line
 
 
@@ -1705,9 +1770,9 @@ def _preset_dialogue_lines(
     keyword_indices: set[int],
     clip_duration: float | None,
     permissibility: bool,
-    emoji_glyph_available: Optional[Any],
-    emoji_downloader: Optional[Any],
-    fit: Optional["TextFit"] = None,
+    emoji_glyph_available: Any | None,
+    emoji_downloader: Any | None,
+    fit: TextFit | None = None,
 ) -> list[str]:
     """Render preset-driven dialogue lines (one event per cue).
 
@@ -1773,9 +1838,13 @@ def _preset_dialogue_lines(
         # letters, and one tag is longer than the word it decorates.
         if fit is not None and len(parts) > 1:
             groups = text_metrics.wrap_word_groups(
-                plain, font=fit.font, font_size=fit.font_size,
-                max_width_px=fit.max_width_px, max_lines=fit.max_lines,
-                spacing=fit.spacing, scale_x=fit.scale_x,
+                plain,
+                font=fit.font,
+                font_size=fit.font_size,
+                max_width_px=fit.max_width_px,
+                max_lines=fit.max_lines,
+                spacing=fit.spacing,
+                scale_x=fit.scale_x,
             )
             text = "\\N".join(
                 " ".join(parts[index] for index in group) for group in groups if group
@@ -1821,11 +1890,17 @@ def burn_captions(video: str | Path, ass: str | Path, dest: str | Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", subtitles_filter(ass),
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        subtitles_filter(ass),
         *h264_args(normalise_fps=True),
-        "-c:a", "copy",
-        "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     _run(cmd)

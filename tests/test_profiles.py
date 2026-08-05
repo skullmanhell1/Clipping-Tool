@@ -1,4 +1,5 @@
 """Tests for saved settings profiles."""
+
 from __future__ import annotations
 
 from profiles import ProfileStore

@@ -50,9 +50,7 @@ describe("Dropdown", () => {
 
   it("marks an unavailable option as disabled rather than hiding it", () => {
     renderDropdown();
-    expect(
-      screen.getByRole("option", { name: "Spectral (needs local model)" })
-    ).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Spectral (needs local model)" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Crossfade" })).not.toBeDisabled();
   });
 

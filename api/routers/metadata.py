@@ -124,9 +124,7 @@ def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list
         else:
             updated.append(clip.to_dict())
     if missing and not updated:
-        raise HTTPException(
-            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=404, detail=f"No such clip(s): {', '.join(missing)}")
     # A partial result is reported rather than raised: the point of a batch action is to get
     # through a list, and failing the whole call because one clip has since been deleted would
     # discard the decisions the user made about all the others.
@@ -273,12 +271,14 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
         raise HTTPException(
             status_code=422,
             detail=f"Too many cuts: {len(req.cuts)} (limit {trim.MAX_CUTS}). Each cut adds a "
-                   "pair of filters to the render graph.",
+            "pair of filters to the render graph.",
         )
 
     try:
         updated = rerender_module.rerender_clip(
-            job, clip, option_overrides=req.settings or None,
+            job,
+            clip,
+            option_overrides=req.settings or None,
             cuts=[(c.start, c.end) for c in req.cuts],
         )
     except rerender_module.RerenderError as exc:
@@ -297,7 +297,11 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     return (stored or updated).to_dict()
 
 
-@router.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"], dependencies=[Depends(rate_limit)])
+@router.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/regenerate",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
 def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> dict:
     """Regenerate a single metadata field for a clip via the LLM.
 

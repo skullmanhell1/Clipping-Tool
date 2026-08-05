@@ -57,7 +57,7 @@ describe("TranscriptEditor (U4)", () => {
     await userEvent.click(word);
     expect(screen.getByRole("button", { name: /Restore “um”/ })).toHaveAttribute(
       "aria-pressed",
-      "true",
+      "true"
     );
   });
 
@@ -140,14 +140,10 @@ describe("TranscriptEditor (U4)", () => {
 
   it("does not carry a selection across to a different clip", async () => {
     // Struck indices are meaningless against another clip's words.
-    const { rerender } = render(
-      <TranscriptEditor jobId="job1" clipId="c1" onApply={vi.fn()} />,
-    );
+    const { rerender } = render(<TranscriptEditor jobId="job1" clipId="c1" onApply={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
     rerender(<TranscriptEditor jobId="job1" clipId="c2" onApply={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /apply cuts/i })).toBeDisabled(),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /apply cuts/i })).toBeDisabled());
   });
 
   it("blocks the apply button while a re-render is running", async () => {

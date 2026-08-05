@@ -7,9 +7,22 @@ behind each rule is a defect this repository actually shipped.
 
 ```bash
 ruff check .                       # blocking; rule set pinned in pyproject.toml
+black --check .                    # blocking; line length 100, matching ruff
+mypy .                             # blocking; config and per-module overrides in pyproject.toml
 python -m pytest                   # warnings are errors, --strict-markers, --strict-config
-cd frontend && npm run lint && npm run test:run && npm run build
+cd frontend && npm run lint && npm run format:check && npm run test:run && npm run build
 ```
+
+`black`, `mypy` and `prettier` are recent additions and all three were adopted the same way: one
+commit each, nothing else in flight, and a written reason for every rule that is switched off.
+`black` reformatted 180 of 204 files, so a change that predates it will conflict — rebase and run
+`black .` rather than resolving the formatting by hand.
+
+**Two rules are deliberately off, and both are behavioural rather than cosmetic**, which is why
+they were not swept along with the rest. `UP042` would rewrite `class X(str, Enum)` as `StrEnum`,
+which changes what `str(X.member)` returns on eight enums that cross a serialisation boundary.
+`B905` would put an explicit `strict=` on 33 `zip()` calls, and whether unequal lengths are an
+error is a decision per site. Both are worth doing; neither belongs in a formatting pass.
 
 Three rules that follow from `SESSION_HANDOFF.md` §2 and are easy to violate accidentally:
 

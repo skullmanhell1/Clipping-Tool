@@ -21,6 +21,7 @@ planner, in spec epic 6 (tasks 6.6-6.9); see the section header below for the on
 clause of P12 that is asserted at plan level because ``emit_ass`` only arrives in
 task 8.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -207,7 +208,7 @@ def test_p18_options_and_plans_round_trip_and_resolution_is_idempotent(
        JSON-encodable (Reqs 11.2, 11.10).
     """
     # --- 1. parse is total and ignores non-field keys (Reqs 10.5, 10.6) ----
-    parsed = Kinetic_Options.parse(hostile)          # must not raise
+    parsed = Kinetic_Options.parse(hostile)  # must not raise
     assert isinstance(parsed, Kinetic_Options)
     # Unknown keys are invisible: dropping them cannot change the result.
     fields_only = {key: hostile[key] for key in hostile if key in _FIELD_NAMES}
@@ -226,7 +227,7 @@ def test_p18_options_and_plans_round_trip_and_resolution_is_idempotent(
     assert Kinetic_Options.parse(record).to_dict() == record
     assert Kinetic_Options.parse(record) == options
     assert list(record) == sorted(record)
-    json.dumps(record)                               # JSON-native leaves only
+    json.dumps(record)  # JSON-native leaves only
     # Every drawn value is in range, so parse is the identity on the mapping.
     for key, value in valid.items():
         assert record[key] == value
@@ -259,7 +260,7 @@ def test_p18_options_and_plans_round_trip_and_resolution_is_idempotent(
     plan = _plan_from_timeline(words, duration, resolved)
     mapping = plan.to_dict()
     assert list(mapping) == sorted(mapping)
-    json.dumps(mapping)                              # JSON-encodable (Req 11.2)
+    json.dumps(mapping)  # JSON-encodable (Req 11.2)
     rebuilt = Kinetic_Plan.from_dict(mapping)
     assert rebuilt == plan
     assert rebuilt.to_dict() == mapping
@@ -272,7 +273,6 @@ def test_p18_options_and_plans_round_trip_and_resolution_is_idempotent(
     assert isinstance(Kinetic_Plan.from_dict(hostile), Kinetic_Plan)
     assert Kinetic_Plan.from_dict(None).style == DEFAULT_STYLE
     assert Kinetic_Plan.from_dict(None).reveal == DEFAULT_REVEAL
-
 
 
 # --------------------------------------------------------------------------- #
@@ -310,12 +310,12 @@ def _reference_timeline():
 def _assert_cue_timeline(plan, base, duration):
     """The Property 11 clause set, asserted over one planned ``Kinetic_Plan``."""
     for previous, following in zip(plan.cues, plan.cues[1:]):
-        assert previous.start <= following.start          # sorted by start
-        assert previous.end <= following.start + _TOL     # pairwise disjoint
+        assert previous.start <= following.start  # sorted by start
+        assert previous.end <= following.start + _TOL  # pairwise disjoint
 
     for cue in plan.cues:
         assert cue.start <= cue.end
-        assert 0.0 <= cue.start <= duration + _TOL        # inside [0, duration]
+        assert 0.0 <= cue.start <= duration + _TOL  # inside [0, duration]
         assert 0.0 <= cue.end <= duration + _TOL
         # Both bounds sit exactly on the frame grid (``snap`` is idempotent, so
         # an already-snapped value is a fixed point).
@@ -398,13 +398,13 @@ def _fully_broken_timeline():
     del missing_end.end
     return (
         [
-            FakeWord(None, None, "missing"),        # non-numeric both bounds
-            missing_end,                            # ``end`` attribute absent
-            FakeWord("abc", 1.0, "junkstart"),      # non-numeric start
+            FakeWord(None, None, "missing"),  # non-numeric both bounds
+            missing_end,  # ``end`` attribute absent
+            FakeWord("abc", 1.0, "junkstart"),  # non-numeric start
             FakeWord(1.0, float("nan"), "nanend"),  # non-finite end
-            FakeWord(2.0, 1.0, "inverted"),         # inverted pair
-            FakeWord(2.5, 2.5, "zerolength"),       # zero-length
-            FakeWord(2.6, 2.9, "   "),              # whitespace-only: dropped
+            FakeWord(2.0, 1.0, "inverted"),  # inverted pair
+            FakeWord(2.5, 2.5, "zerolength"),  # zero-length
+            FakeWord(2.6, 2.9, "   "),  # whitespace-only: dropped
         ],
         4.0,
     )
@@ -471,7 +471,7 @@ def test_p12_malformed_timings_degrade_instead_of_raising(timeline, option_map, 
     words, duration = timeline
     options = _plan_options(option_map)
 
-    plan = plan_kinetic(                     # must not raise (Req 6.7)
+    plan = plan_kinetic(  # must not raise (Req 6.7)
         words,
         duration,
         base,
@@ -610,9 +610,7 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     # candidates (C11's ranked budget) and the floor vetoes the ones we did not hear
     # clearly enough. The floor's half is fully pinned by the two clauses together — it may
     # only ever remove emphasis, and never from a word that clears it.
-    base_emphasised = {
-        word.text for cue in base_plan.cues for word in cue.words if word.emphasis
-    }
+    base_emphasised = {word.text for cue in base_plan.cues for word in cue.words if word.emphasis}
     for cue in floor_plan.cues:
         for word in cue.words:
             if word.emphasis:
@@ -641,8 +639,7 @@ def _assert_floor_semantics(words, duration, base, option_map, floor):
     timeline=st_word_timeline(min_words=2, max_words=6),
     option_map=st_kinetic_options(),
     base=st_time_base(),
-    floor=st.floats(min_value=0.05, max_value=1.0, allow_nan=False,
-                    allow_infinity=False),
+    floor=st.floats(min_value=0.05, max_value=1.0, allow_nan=False, allow_infinity=False),
 )
 def test_p13_low_confidence_words_lose_emphasis_but_keep_text_and_timing(
     timeline, option_map, base, floor
@@ -678,7 +675,7 @@ def test_p13_low_confidence_words_lose_emphasis_but_keep_text_and_timing(
         ref_words, ref_duration, _REFERENCE_BASE, option_map, floor
     )
     assert reference_words, "a clean timeline must plan at least one word"
-    assert planned_words >= 0        # the drawn run may legitimately be empty
+    assert planned_words >= 0  # the drawn run may legitimately be empty
 
 
 #: Tokens 15 Display_Width units wide — wider than the *largest* legal
@@ -690,9 +687,7 @@ _SPLIT_TOKENS = tuple(f"overflow{index:02d}token" for index in range(8))
 #: The word count at which ``captions.words_to_cues`` starts a new cue, read from the
 #: function's own default so a change to it (C5 took it from 5 to 3) cannot quietly
 #: invalidate the single-cue premise of the strategy below.
-_GROUPING_MAX_WORDS = int(
-    inspect.signature(captions.words_to_cues).parameters["max_words"].default
-)
+_GROUPING_MAX_WORDS = int(inspect.signature(captions.words_to_cues).parameters["max_words"].default)
 
 
 @st.composite
@@ -711,20 +706,22 @@ def _st_single_cue_overflow_timeline(draw):
     the behaviour it tests.
     """
     count = draw(st.integers(min_value=2, max_value=_GROUPING_MAX_WORDS))
-    cursor = draw(st.floats(min_value=0.0, max_value=0.5,
-                            allow_nan=False, allow_infinity=False))
+    cursor = draw(st.floats(min_value=0.0, max_value=0.5, allow_nan=False, allow_infinity=False))
     words = []
     for index in range(count):
-        gap = draw(st.floats(min_value=0.0, max_value=0.05,
-                             allow_nan=False, allow_infinity=False)) if index else 0.0
-        length = draw(st.floats(min_value=0.25, max_value=0.6,
-                                allow_nan=False, allow_infinity=False))
+        gap = (
+            draw(st.floats(min_value=0.0, max_value=0.05, allow_nan=False, allow_infinity=False))
+            if index
+            else 0.0
+        )
+        length = draw(
+            st.floats(min_value=0.25, max_value=0.6, allow_nan=False, allow_infinity=False)
+        )
         start = round(cursor + gap, 3)
         end = round(start + length, 3)
         words.append(FakeWord(start, end, _SPLIT_TOKENS[index]))
         cursor = end
-    tail = draw(st.floats(min_value=0.5, max_value=1.0,
-                          allow_nan=False, allow_infinity=False))
+    tail = draw(st.floats(min_value=0.5, max_value=1.0, allow_nan=False, allow_infinity=False))
     return words, round(cursor + tail, 3)
 
 
@@ -739,9 +736,7 @@ def _st_single_cue_overflow_timeline(draw):
     option_map=st_kinetic_options(),
     base=st_time_base().filter(lambda value: value.fps >= 24.0),
 )
-def test_p15_cue_re_splitting_conserves_the_interval_proportionally(
-    timeline, option_map, base
-):
+def test_p15_cue_re_splitting_conserves_the_interval_proportionally(timeline, option_map, base):
     """Validates: Requirements 7.7
 
     The overflow is *forced*, not hoped for: ``max_lines=1`` and
@@ -786,7 +781,7 @@ def test_p15_cue_re_splitting_conserves_the_interval_proportionally(
     assert [len(group) for group in parts] == [1] * len(cues)
     for index in range(len(cues) - 1):
         head = parts[index]
-        tail = [word for group in parts[index + 1:] for word in group]
+        tail = [word for group in parts[index + 1 :] for word in group]
         head_span = head[-1].end - head[0].start
         tail_span = tail[-1].end - tail[0].start
         total = head_span + tail_span

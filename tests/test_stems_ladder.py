@@ -49,8 +49,14 @@ from worker.engines.timebase import Time_Base
 # happy path is reachable without a real remux.
 _MEDIA_JSON = {
     "streams": [
-        {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
-         "codec_name": "aac", "start_time": "0.0", "duration": "3.0"},
+        {
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "codec_name": "aac",
+            "start_time": "0.0",
+            "duration": "3.0",
+        },
         {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
     ],
     "format": {"duration": "3.0"},
@@ -109,9 +115,7 @@ def _ctx(
     clip = tmp_path / "clip.mp4"
     clip.parent.mkdir(parents=True, exist_ok=True)
     clip.write_bytes(b"\x00" * 64)
-    workspace = allocate_workspace(
-        tmp_path / "ws", "job", "clip_a", stems.ENGINE_ID, "digest00"
-    )
+    workspace = allocate_workspace(tmp_path / "ws", "job", "clip_a", stems.ENGINE_ID, "digest00")
     return Engine_Context(
         job_id="job",
         clip_id="clip_a",
@@ -148,7 +152,7 @@ def _details(result) -> list[str]:
     prefix = f"engine:{stems.ENGINE_ID}:"
     for item in result.markers:
         assert item.startswith(prefix), f"un-namespaced marker: {item!r}"
-    return [item[len(prefix):] for item in result.markers]
+    return [item[len(prefix) :] for item in result.markers]
 
 
 def _engine(**kwargs) -> stems.Stem_Inpainting_Engine:
@@ -157,12 +161,8 @@ def _engine(**kwargs) -> stems.Stem_Inpainting_Engine:
 
 def _run(tmp_path, *, engine=None, runner=None, **ctx_kwargs):
     """Run the ladder, returning ``(result, details, runner)``."""
-    runner = runner if runner is not None else Recording_Command_Runner(
-        probe_json=_MEDIA_JSON
-    )
-    engine = engine if engine is not None else _engine(
-        backend=_Backend(), runner=runner
-    )
+    runner = runner if runner is not None else Recording_Command_Runner(probe_json=_MEDIA_JSON)
+    engine = engine if engine is not None else _engine(backend=_Backend(), runner=runner)
     ctx = _ctx(tmp_path, deps={"runner": runner}, **ctx_kwargs)
     result = engine.run(ctx)
     return result, _details(result), runner
@@ -231,7 +231,10 @@ def test_the_engine_is_registered_at_import_of_the_loader() -> None:
     )
     out = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(root), timeout=60,
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        timeout=60,
         env={**os.environ, "PYTHONPATH": str(root)},
     )
     assert out.returncode == 0, out.stderr
@@ -249,9 +252,9 @@ def test_resolve_options_and_plan_stay_pure(tmp_path) -> None:
 
     planned = engine.plan(ctx)
 
-    assert runner.calls == []                       # nothing was probed
+    assert runner.calls == []  # nothing was probed
     assert planned == stems.plan_stems_from_context(ctx).to_dict()
-    assert engine.resolve_options(ctx.options) == ctx.options   # idempotent
+    assert engine.resolve_options(ctx.options) == ctx.options  # idempotent
 
 
 # --------------------------------------------------------------------------- #
@@ -263,9 +266,7 @@ def test_rung3_the_noop_configuration_costs_nothing(tmp_path) -> None:
     "Costs nothing" is asserted as *zero runner calls* rather than as a fast return, which is
     the only way to see that no probe and no workspace write happened (Req 5.6, 15.8).
     """
-    result, details, runner = _run(
-        tmp_path, options=_opts(repair_mode="off")     # gains all default
-    )
+    result, details, runner = _run(tmp_path, options=_opts(repair_mode="off"))  # gains all default
 
     assert result.status is Engine_Status.SKIPPED
     assert details == []
@@ -276,24 +277,18 @@ def test_rung3_the_noop_configuration_costs_nothing(tmp_path) -> None:
 def test_rung4_no_audio_stream_is_skipped_without_a_marker(tmp_path) -> None:
     """Nothing to repair is not a degradation, so it is not reported (Req 4.8)."""
     runner = Recording_Command_Runner(has_audio=False)
-    result, details, runner = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade")
-    )
+    result, details, runner = _run(tmp_path, runner=runner, options=_opts(repair_mode="crossfade"))
 
     assert result.status is Engine_Status.SKIPPED
     assert details == []
     assert result.media is None
-    assert runner.ffmpeg_calls == []                  # probed, but no media pass
+    assert runner.ffmpeg_calls == []  # probed, but no media pass
 
 
 def test_rung5_an_unusable_audio_format_degrades(tmp_path) -> None:
     """A present-but-broken format is reported, unlike an absent stream (Req 17.5)."""
-    runner = Recording_Command_Runner(
-        probe_json={"streams": [{"sample_rate": "0", "channels": 0}]}
-    )
-    result, details, runner = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade")
-    )
+    runner = Recording_Command_Runner(probe_json={"streams": [{"sample_rate": "0", "channels": 0}]})
+    result, details, runner = _run(tmp_path, runner=runner, options=_opts(repair_mode="crossfade"))
 
     assert result.status is Engine_Status.DEGRADED
     assert details == ["degraded:audio_format"]
@@ -310,14 +305,16 @@ def test_rung2_permissibility_blocks_a_networked_backend(tmp_path) -> None:
     """
     engine = _engine(backend=_Backend(requires_network=True))
     result, details, runner = _run(
-        tmp_path, engine=engine, permissibility=True,
+        tmp_path,
+        engine=engine,
+        permissibility=True,
         options=_opts(repair_mode="crossfade"),
     )
 
     assert result.status is Engine_Status.DEGRADED
     assert details == ["permissibility_blocked"]
     assert result.media is None
-    assert runner.calls == []                         # body never entered
+    assert runner.calls == []  # body never entered
 
 
 def test_rung6_too_little_budget_to_finish_at_all(tmp_path) -> None:
@@ -380,7 +377,7 @@ def test_rung7_unaffordable_separation_falls_back_to_repair_only(tmp_path) -> No
     )
 
     assert result.status is Engine_Status.DEGRADED
-    assert result.media is not None                   # Degraded_With_Media
+    assert result.media is not None  # Degraded_With_Media
     assert "degraded:budget" in details
     assert "repair:crossfade:1" in details
     # No separation was attempted, so no stem files and no backend call.
@@ -414,8 +411,7 @@ def test_rung9_spectral_downgrades_to_crossfade_off_the_ml_backend(tmp_path) -> 
     result, details, _ = _run(
         tmp_path,
         engine=engine,
-        options=_opts(backend="ffmpeg", repair_mode="spectral",
-                      mix_preset="speech_focus"),
+        options=_opts(backend="ffmpeg", repair_mode="spectral", mix_preset="speech_focus"),
         notes=("filler_seam:1.500",),
     )
 
@@ -453,7 +449,9 @@ def test_rung11_a_timeout_abandons_the_contribution_not_the_clip(tmp_path) -> No
     """
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON, timeout_at=1)
     result, details, _ = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
+        tmp_path,
+        runner=runner,
+        options=_opts(repair_mode="crossfade"),
         notes=("filler_seam:1.500",),
     )
 
@@ -466,7 +464,8 @@ def test_rung12_a_raising_backend_fails_without_media(tmp_path) -> None:
     """Nothing usable was produced, so the clip keeps the preceding stage's media."""
     engine = _engine(backend=_Backend(raises=stems.Stem_Error("backend exploded")))
     result, details, _ = _run(
-        tmp_path, engine=engine,
+        tmp_path,
+        engine=engine,
         options=_opts(mix_preset="speech_focus", repair_mode="crossfade"),
     )
 
@@ -480,7 +479,9 @@ def test_rung13_a_failed_ffmpeg_invocation_fails_without_media(tmp_path) -> None
     """Every ffmpeg failure arrives as one ``FFmpegError`` and one ``failed`` marker."""
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON, fail_at=1)
     result, details, _ = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
+        tmp_path,
+        runner=runner,
+        options=_opts(repair_mode="crossfade"),
         notes=("filler_seam:1.500",),
     )
 
@@ -494,8 +495,14 @@ def test_rung14_a_failed_integrity_check_fails_and_deletes_the_candidate(tmp_pat
     # The candidate probe reports two audio streams; the clip probe is well-formed.
     broken = {
         "streams": [
-            {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
-             "codec_name": "aac", "duration": "3.0", "start_time": "0.0"},
+            {
+                "codec_type": "audio",
+                "sample_rate": "48000",
+                "channels": 2,
+                "codec_name": "aac",
+                "duration": "3.0",
+                "start_time": "0.0",
+            },
             {"codec_type": "audio", "sample_rate": "48000", "channels": 2},
             {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
         ],
@@ -505,7 +512,9 @@ def test_rung14_a_failed_integrity_check_fails_and_deletes_the_candidate(tmp_pat
     # baseline, then probe_media(candidate) — so the broken payload belongs third.
     runner = Recording_Command_Runner(probe_json=[_MEDIA_JSON, _MEDIA_JSON, broken])
     result, details, _ = _run(
-        tmp_path, runner=runner, options=_opts(repair_mode="crossfade"),
+        tmp_path,
+        runner=runner,
+        options=_opts(repair_mode="crossfade"),
         notes=("filler_seam:1.500",),
     )
 
@@ -540,7 +549,7 @@ def test_no_repair_marker_when_there_is_nothing_to_repair(tmp_path) -> None:
     result, details, _ = _run(
         tmp_path,
         options=_opts(mix_preset="speech_focus", repair_mode="crossfade"),
-        notes=(),                                    # no seams published
+        notes=(),  # no seams published
     )
 
     assert result.status is Engine_Status.APPLIED
@@ -557,8 +566,7 @@ def test_no_repair_marker_when_there_is_nothing_to_repair(tmp_path) -> None:
 @given(
     availability=st_availability_map(),
     option_map=st_stem_options(),
-    remaining=st.floats(min_value=0.0, max_value=200.0,
-                        allow_nan=False, allow_infinity=False),
+    remaining=st.floats(min_value=0.0, max_value=200.0, allow_nan=False, allow_infinity=False),
     permissibility=st.booleans(),
     network_backend=st.booleans(),
     backend_id=st.sampled_from(["ml", "ffmpeg"]),
@@ -592,8 +600,11 @@ def test_p15_the_ladder_is_a_total_function_to_status_and_markers(
         backend=_Backend(
             backend_id,
             requires_network=network_backend,
-            stems_out=("vocals", "music") if backend_id == "ffmpeg"
-            else ("vocals", "drums", "bass", "other"),
+            stems_out=(
+                ("vocals", "music")
+                if backend_id == "ffmpeg"
+                else ("vocals", "drums", "bass", "other")
+            ),
         ),
         runner=runner,
     )
@@ -607,7 +618,7 @@ def test_p15_the_ladder_is_a_total_function_to_status_and_markers(
         deps={"runner": runner},
     )
 
-    result = engine.run(ctx)                          # must not raise
+    result = engine.run(ctx)  # must not raise
     details = _details(result)
 
     assert result.status in tuple(Engine_Status)
@@ -665,11 +676,14 @@ def test_p16_every_failure_is_isolated_and_leaves_nothing_behind(
     )
     engine = _engine(backend=_Backend(), runner=runner)
     ctx = _ctx(
-        root, options=options, availability={}, notes=("filler_seam:1.500",),
+        root,
+        options=options,
+        availability={},
+        notes=("filler_seam:1.500",),
         deps={"runner": runner},
     )
 
-    result = engine.run(ctx)                          # must not raise
+    result = engine.run(ctx)  # must not raise
     assert result.status in tuple(Engine_Status)
 
     # ``failure_index`` may be past the end of a short run (a rung returned before that
@@ -699,8 +713,12 @@ def test_p16_every_failure_is_isolated_and_leaves_nothing_behind(
 def test_a_failure_does_not_touch_the_incoming_clip(tmp_path) -> None:
     """Failure isolation includes the input: the engine works on copies (Req 17.6)."""
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON, fail_at=1)
-    ctx = _ctx(tmp_path, options=_opts(repair_mode="crossfade"),
-               notes=("filler_seam:1.500",), deps={"runner": runner})
+    ctx = _ctx(
+        tmp_path,
+        options=_opts(repair_mode="crossfade"),
+        notes=("filler_seam:1.500",),
+        deps={"runner": runner},
+    )
     before = Path(ctx.clip_path).read_bytes()
 
     result = _engine(backend=_Backend(), runner=runner).run(ctx)
@@ -717,14 +735,10 @@ def test_an_unexpected_exception_is_left_to_the_host(tmp_path) -> None:
     """
     engine = _engine(backend=_Backend(raises=ZeroDivisionError("not a stem error")))
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON)
-    ctx = _ctx(tmp_path, options=_opts(mix_preset="speech_focus"),
-               deps={"runner": runner})
+    ctx = _ctx(tmp_path, options=_opts(mix_preset="speech_focus"), deps={"runner": runner})
 
     with pytest.raises(ZeroDivisionError):
         engine.run(ctx)
-
-
-
 
 
 # =========================================================================== #
@@ -779,9 +793,7 @@ def _materialising(runner):
 def _workspace_files(ctx) -> list[str]:
     """Every file surviving in the Engine_Workspace, workspace-relative."""
     root = ctx.workspace.root
-    return sorted(
-        str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()
-    )
+    return sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
 
 
 def _lifecycle_run(tmp_path, **option_overrides):
@@ -789,11 +801,11 @@ def _lifecycle_run(tmp_path, **option_overrides):
     base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
     runner = _materialising(base)
     engine = _engine(backend=_WritingBackend(), runner=runner)
-    options = _opts(
-        mix_preset="speech_focus", repair_mode="crossfade", **option_overrides
-    )
+    options = _opts(mix_preset="speech_focus", repair_mode="crossfade", **option_overrides)
     ctx = _ctx(
-        tmp_path, options=options, notes=("filler_seam:1.500",),
+        tmp_path,
+        options=options,
+        notes=("filler_seam:1.500",),
         deps={"runner": runner},
     )
     return engine.run(ctx), ctx, base
@@ -807,7 +819,8 @@ def test_the_workspace_layout_is_the_documented_one(tmp_path) -> None:
 
     root = str(ctx.workspace.root)
     written = [
-        call.argv[-1] for call in runner.ffmpeg_calls
+        call.argv[-1]
+        for call in runner.ffmpeg_calls
         if Path(call.argv[-1]).suffix in (".wav", ".mp4")
     ]
     assert written
@@ -817,19 +830,21 @@ def test_the_workspace_layout_is_the_documented_one(tmp_path) -> None:
     names = {Path(p).name for p in written}
     assert "in.wav" in names
     assert "mixed.wav" in names
-    assert "clip_repaired.mp4" in names        # matches the incoming clip's extension
+    assert "clip_repaired.mp4" in names  # matches the incoming clip's extension
 
 
 def test_the_replacement_extension_follows_the_incoming_clip() -> None:
     """ffmpeg picks its muxer from the extension, so it must match the container."""
     engine = _engine()
 
-    assert engine._replacement_name(
-        type("C", (), {"clip_path": Path("/tmp/clip_a.mkv")})()
-    ) == "clip_repaired.mkv"
-    assert engine._replacement_name(
-        type("C", (), {"clip_path": Path("/tmp/clip_a")})()
-    ) == "clip_repaired.mp4"
+    assert (
+        engine._replacement_name(type("C", (), {"clip_path": Path("/tmp/clip_a.mkv")})())
+        == "clip_repaired.mkv"
+    )
+    assert (
+        engine._replacement_name(type("C", (), {"clip_path": Path("/tmp/clip_a")})())
+        == "clip_repaired.mp4"
+    )
     assert engine._replacement_name(object()) == "clip_repaired.mp4"
 
 
@@ -847,14 +862,12 @@ def test_retained_stems_are_declared_durable_and_survive(tmp_path) -> None:
     result, ctx, _runner = _lifecycle_run(tmp_path, retain_stems=True)
 
     durable = [item for item in result.artifacts if item.durable]
-    assert {item.name for item in durable} == {
-        f"stems/{name}.wav" for name in stems.STEM_NAMES
-    }
+    assert {item.name for item in durable} == {f"stems/{name}.wav" for name in stems.STEM_NAMES}
     assert all(item.media_type == "audio" for item in durable)
 
     survivors = _workspace_files(ctx)
     assert "clip_repaired.mp4" in survivors
-    assert "in.wav" not in survivors           # intermediates still reclaimed
+    assert "in.wav" not in survivors  # intermediates still reclaimed
     assert "mixed.wav" not in survivors
     for name in stems.STEM_NAMES:
         assert f"stems/{name}.wav" in survivors
@@ -869,9 +882,7 @@ def test_without_retain_stems_nothing_is_durable(tmp_path) -> None:
     assert _workspace_files(ctx) == ["clip_repaired.mp4"]
 
 
-def test_a_cleanup_failure_is_recorded_and_does_not_fail_the_clip(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_cleanup_failure_is_recorded_and_does_not_fail_the_clip(tmp_path, monkeypatch) -> None:
     """Failing to reclaim space must not turn a good clip into a failure (Req 11.4).
 
     The guard is **per file**, so one refusal records its detail and the loop continues to the
@@ -895,8 +906,8 @@ def test_a_cleanup_failure_is_recorded_and_does_not_fail_the_clip(
 
     assert details == ["cleanup_failed:stubborn.wav"]
     monkeypatch.undo()
-    assert first.exists()                       # the refusal really happened
-    assert not second.exists()                  # and the loop carried on
+    assert first.exists()  # the refusal really happened
+    assert not second.exists()  # and the loop carried on
 
 
 def test_reclaim_never_deletes_what_it_was_told_to_keep(tmp_path) -> None:
@@ -952,8 +963,11 @@ def test_p18_cost_and_disk_stay_bounded_regardless_of_seams_and_gains(
     )
     engine = _engine(backend=_WritingBackend(), runner=runner)
     ctx = _ctx(
-        root, options=options, duration=_DURATION,
-        notes=tuple(seam_case["notes"]), deps={"runner": runner},
+        root,
+        options=options,
+        duration=_DURATION,
+        notes=tuple(seam_case["notes"]),
+        deps={"runner": runner},
     )
 
     result = engine.run(ctx)
@@ -973,9 +987,9 @@ def test_p18_cost_and_disk_stay_bounded_regardless_of_seams_and_gains(
     allowed = {Path(str(result.media)).name} if result.media else set()
     durable = {item.name for item in result.artifacts if item.durable}
     for name in _workspace_files(ctx):
-        assert name in allowed or name in durable, (
-            f"unexpected survivor {name!r} (allowed={allowed}, durable={durable})"
-        )
+        assert (
+            name in allowed or name in durable
+        ), f"unexpected survivor {name!r} (allowed={allowed}, durable={durable})"
 
 
 # --------------------------------------------------------------------------- #
@@ -993,15 +1007,14 @@ def test_a_second_run_with_no_seams_is_skipped(tmp_path) -> None:
     runner = Recording_Command_Runner(probe_json=_MEDIA_JSON)
     engine = _engine(backend=_Backend(), runner=runner)
     # Unity gains and ``crossfade`` requested, but the clip published no Seams.
-    ctx = _ctx(tmp_path, options=_opts(repair_mode="crossfade"), notes=(),
-               deps={"runner": runner})
+    ctx = _ctx(tmp_path, options=_opts(repair_mode="crossfade"), notes=(), deps={"runner": runner})
 
     result = engine.run(ctx)
 
     assert result.status is Engine_Status.SKIPPED
     assert result.media is None
     assert _details(result) == []
-    assert runner.ffmpeg_calls == []             # and it cost no media pass
+    assert runner.ffmpeg_calls == []  # and it cost no media pass
 
 
 def test_a_no_seam_clip_with_real_gains_still_runs(tmp_path) -> None:
@@ -1032,7 +1045,6 @@ def test_plan_has_work_is_total() -> None:
     """A malformed value must never silently skip the engine."""
     for hostile in (None, object(), 42, "plan"):
         assert stems.plan_has_work(hostile) is True
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1173,20 +1185,23 @@ def test_the_engine_is_inert_when_its_flag_is_off(tmp_path) -> None:
     from worker.models import ProcessingOptions
 
     base = Recording_Command_Runner(probe_json=_MEDIA_JSON)
-    engine = stems.Stem_Inpainting_Engine(
-        backend=_WritingBackend(), runner=_materialising(base)
-    )
+    engine = stems.Stem_Inpainting_Engine(backend=_WritingBackend(), runner=_materialising(base))
     registry = Engine_Registry()
     registry.register(engine)
-    host = stems_host(ProcessingOptions(), tmp_path, registry)   # flag defaults off
+    host = stems_host(ProcessingOptions(), tmp_path, registry)  # flag defaults off
 
     assert host.active is False
 
     clip = tmp_path / "clip_a.mp4"
     clip.write_bytes(b"\x00" * 64)
     outcome = host.run_stage(
-        Stage.AUDIO, clip_id="clip_a", source=str(clip), clip_path=clip,
-        clip_start=0.0, clip_end=_DURATION, duration=_DURATION,
+        Stage.AUDIO,
+        clip_id="clip_a",
+        source=str(clip),
+        clip_path=clip,
+        clip_start=0.0,
+        clip_end=_DURATION,
+        duration=_DURATION,
     )
 
     assert outcome.media is None
