@@ -28,9 +28,9 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
 
 from config import settings
 from worker.ffmpeg_utils import _run, escape_filter_path
@@ -39,11 +39,11 @@ from worker.ffmpeg_utils import _run, escape_filter_path
 # Frequencies are chosen to be pleasant and unobtrusive; this is a mood *bed*,
 # not a melody, so it never competes with speech.
 _MOOD_SYNTH: dict[str, dict[str, float]] = {
-    "upbeat":    {"root": 293.66, "fifth": 440.00, "tremolo": 5.0, "cutoff": 3200},
-    "chill":     {"root": 220.00, "fifth": 329.63, "tremolo": 2.0, "cutoff": 2200},
-    "dramatic":  {"root": 130.81, "fifth": 196.00, "tremolo": 1.2, "cutoff": 1800},
+    "upbeat": {"root": 293.66, "fifth": 440.00, "tremolo": 5.0, "cutoff": 3200},
+    "chill": {"root": 220.00, "fifth": 329.63, "tremolo": 2.0, "cutoff": 2200},
+    "dramatic": {"root": 130.81, "fifth": 196.00, "tremolo": 1.2, "cutoff": 1800},
     "corporate": {"root": 261.63, "fifth": 392.00, "tremolo": 3.0, "cutoff": 2600},
-    "suspense":  {"root": 110.00, "fifth": 164.81, "tremolo": 0.8, "cutoff": 1400},
+    "suspense": {"root": 110.00, "fifth": 164.81, "tremolo": 0.8, "cutoff": 1400},
 }
 
 _AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac")
@@ -86,7 +86,8 @@ def find_user_tracks(mood: str) -> list[Path]:
     mood_dir = base / mood
     if mood_dir.is_dir():
         variants += [
-            path for path in mood_dir.iterdir()
+            path
+            for path in mood_dir.iterdir()
             if path.is_file() and path.suffix.lower() in _AUDIO_EXTS
         ]
     for path in base.iterdir():
@@ -103,7 +104,7 @@ def find_user_tracks(mood: str) -> list[Path]:
     return exact + sorted(variants, key=lambda p: (p.name, str(p)))
 
 
-def find_user_track(mood: str) -> Optional[Path]:
+def find_user_track(mood: str) -> Path | None:
     """The first user-supplied track for ``mood``, or ``None``.
 
     Retained because it is the published single-track entry point; :func:`find_user_tracks` is
@@ -113,7 +114,7 @@ def find_user_track(mood: str) -> Optional[Path]:
     return tracks[0] if tracks else None
 
 
-def choose_track(tracks: Sequence[Path], select_key: str) -> Optional[Path]:
+def choose_track(tracks: Sequence[Path], select_key: str) -> Path | None:
     """Pick one of ``tracks`` deterministically from ``select_key`` (A17).
 
     **Deterministic, not random.** A batch wants variety *between* clips, and re-running the same
@@ -163,13 +164,22 @@ def synthesize_bed(mood: str, duration: float, dest: str | Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     graph = synth_bed_filter(mood)
     cmd = [
-        settings.ffmpeg_binary, "-y",
-        "-filter_complex", graph,
-        "-map", "[bed]",
-        "-t", f"{max(0.1, duration):.3f}",
-        "-c:a", "aac", "-b:a", "128k",
-        "-ar", str(int(settings.output_sample_rate)),
-        "-ac", str(int(settings.output_channels)),
+        settings.ffmpeg_binary,
+        "-y",
+        "-filter_complex",
+        graph,
+        "-map",
+        "[bed]",
+        "-t",
+        f"{max(0.1, duration):.3f}",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        str(int(settings.output_sample_rate)),
+        "-ac",
+        str(int(settings.output_channels)),
         str(dest),
     ]
     _run(cmd)
@@ -212,7 +222,7 @@ class MusicBed:
 
 def resolve_music_bed(
     mood: str, duration: float, temp_dir: str | Path, *, select_key: str = ""
-) -> Optional[MusicBed]:
+) -> MusicBed | None:
     """Resolve a bed for ``mood``, reporting whether it is a real track (A15) and which (A17).
 
     Returns ``None`` when ``mood`` is empty or unknown, or when synthesis is the only
@@ -229,8 +239,11 @@ def resolve_music_bed(
     user = choose_track(tracks, select_key)
     if user is not None:
         return MusicBed(
-            path=user, mood=mood, source=SOURCE_USER_TRACK,
-            track_index=tracks.index(user) + 1, track_count=len(tracks),
+            path=user,
+            mood=mood,
+            source=SOURCE_USER_TRACK,
+            track_index=tracks.index(user) + 1,
+            track_count=len(tracks),
         )
     # A16 note: a user track is returned as-is here and fitted to the clip by
     # :func:`bed_fit_filter` inside the mix, rather than being pre-rendered to length. Cutting a
@@ -246,7 +259,7 @@ def resolve_music_bed(
     return MusicBed(path=dest, mood=mood, source=SOURCE_SYNTHESISED)
 
 
-def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Optional[Path]:
+def resolve_music(mood: str, duration: float, temp_dir: str | Path) -> Path | None:
     """The path-only view of :func:`resolve_music_bed`.
 
     Kept for callers that only need somewhere to read audio from. Anything that reports
@@ -367,8 +380,7 @@ def broll_duck_filter(
         if fall_start > rise_end:
             terms.append(f"between(t,{rise_end:.3f},{fall_start:.3f})*{1.0 - floor:.3f}")
         terms.append(
-            f"between(t,{fall_start:.3f},{end:.3f})*{1.0 - floor:.3f}"
-            f"*({end:.3f}-t)/{ramp:.3f}"
+            f"between(t,{fall_start:.3f},{end:.3f})*{1.0 - floor:.3f}" f"*({end:.3f}-t)/{ramp:.3f}"
         )
 
     # max() over the terms, so overlapping windows take the deepest dip instead of compounding.
@@ -430,9 +442,7 @@ def music_mix_filter(
     parts.append(f"[bedfit]volume={vol:.3f}[bedlvl]")
     # A22: dip the bed under each b-roll window. Before the AU2 speech duck, so the two compose -
     # a b-roll insert over speech puts the bed under both rather than under whichever ran last.
-    parts.append(
-        broll_duck_filter("bedlvl", "bedv", broll_windows, amount=broll_duck)
-    )
+    parts.append(broll_duck_filter("bedlvl", "bedv", broll_windows, amount=broll_duck))
 
     # --- the speech: optional fades, then a split when ducking -------------
     speech_chain = f"[{original_label}]"
@@ -444,9 +454,7 @@ def music_mix_filter(
         speech_chain = "[orig]"
 
     if not ducking:
-        parts.append(
-            f"{speech_chain}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]"
-        )
+        parts.append(f"{speech_chain}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]")
         return ";".join(parts)
 
     parts.append(f"{speech_chain}asplit=2[sckey][spmix]")
@@ -458,9 +466,7 @@ def music_mix_filter(
         f"[bedv][sckey]sidechaincompress="
         f"threshold=0.03:ratio={ratio:g}:attack=20:release=350:makeup=1[bedduck]"
     )
-    parts.append(
-        f"[spmix][bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]"
-    )
+    parts.append(f"[spmix][bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]")
     return ";".join(parts)
 
 
@@ -483,9 +489,9 @@ def music_mix_filter(
 #: reduction: set it too high and the filter treats quiet speech as noise and gates it. These
 #: pair a modest reduction with a floor low enough to sit under real room tone.
 DENOISE_LEVELS: dict[str, tuple[float, float]] = {
-    "light":    (6.0, -30.0),
+    "light": (6.0, -30.0),
     "standard": (12.0, -25.0),
-    "strong":   (20.0, -20.0),
+    "strong": (20.0, -20.0),
 }
 
 #: ``deesser`` intensity per strength (its ``i`` parameter, 0..1).
@@ -493,15 +499,13 @@ DENOISE_LEVELS: dict[str, tuple[float, float]] = {
 #: Even "strong" is 0.6 rather than 1.0. At full intensity the filter removes so much of the
 #: 4-8 kHz band that consonants lose definition, which is a different defect, not a fix.
 DEESSER_LEVELS: dict[str, float] = {
-    "light":    0.2,
+    "light": 0.2,
     "standard": 0.4,
-    "strong":   0.6,
+    "strong": 0.6,
 }
 
 
-def denoise_filter(
-    strength: Optional[str] = None, model_path: Optional[str] = None
-) -> Optional[str]:
+def denoise_filter(strength: str | None = None, model_path: str | None = None) -> str | None:
     """Speech de-noise, or ``None`` when disabled (AU4).
 
     Uses ``afftdn`` (spectral gating) by default. ``arnndn`` is the better filter and *is*
@@ -531,7 +535,7 @@ def denoise_filter(
     return f"afftdn=nr={nr:g}:nf={nf:g}"
 
 
-def deesser_filter(strength: Optional[str] = None) -> Optional[str]:
+def deesser_filter(strength: str | None = None) -> str | None:
     """Sibilance reduction, or ``None`` when disabled (AU5).
 
     **This is the de-esser half of AU5 only.** AU5 also asks for de-reverb, and ffmpeg has no
@@ -550,9 +554,7 @@ def deesser_filter(strength: Optional[str] = None) -> Optional[str]:
     return f"deesser=i={intensity:g}"
 
 
-def speech_repair_chain(
-    *, denoise: Optional[str] = None, deess: Optional[str] = None
-) -> list[str]:
+def speech_repair_chain(*, denoise: str | None = None, deess: str | None = None) -> list[str]:
     """The ordered speech-cleanup filters: de-noise then de-ess (AU4, AU5).
 
     That order is not arbitrary. De-noising changes the spectrum in exactly the band a de-esser
@@ -602,7 +604,7 @@ class LoudnessStats:
     target_offset: float
 
 
-def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
+def measure_loudness(source: str | Path) -> LoudnessStats | None:
     """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
 
     This is the first of the two passes. Single-pass ``loudnorm`` has to guess as it goes,
@@ -615,10 +617,17 @@ def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
     normalisation instead of failing the clip.
     """
     cmd = [
-        settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-i", str(source),
-        "-af", f"loudnorm=I={settings.loudness_target_lufs}:"
-               f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json",
-        "-f", "null", "-",
+        settings.ffmpeg_binary,
+        "-nostdin",
+        "-hide_banner",
+        "-i",
+        str(source),
+        "-af",
+        f"loudnorm=I={settings.loudness_target_lufs}:"
+        f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -648,7 +657,7 @@ def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
         return None
 
 
-def true_peak_limit_filter(ceiling_db: Optional[float] = None) -> str:
+def true_peak_limit_filter(ceiling_db: float | None = None) -> str:
     """A true-peak limiter for the end of the audio chain (AU3).
 
     ``loudnorm`` *targets* a true-peak ceiling, and in linear mode it reduces its gain to

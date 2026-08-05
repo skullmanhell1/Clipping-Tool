@@ -26,8 +26,8 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
     from worker.ffmpeg_utils import MediaInfo
@@ -69,7 +69,7 @@ MAX_FPS = 240.0
 _ROUND_TOLERANCE = 1e-9
 
 
-class Rounding(str, Enum):
+class Rounding(StrEnum):
     """How seconds are quantised to frame/sample indices (Req 13.1)."""
 
     NEAREST = "nearest"
@@ -81,7 +81,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _coerce_seconds(value: Any) -> Optional[float]:
+def _coerce_seconds(value: Any) -> float | None:
     """Return ``value`` as a finite float, or ``None`` when it is not usable."""
     if not _is_number(value):
         return None
@@ -114,7 +114,7 @@ def _coerce_sample_rate(value: Any) -> int:
     return int(number)
 
 
-def _coerce_rounding(value: Any) -> "Rounding":
+def _coerce_rounding(value: Any) -> Rounding:
     """Return a :class:`Rounding` member, defaulting to ``NEAREST``."""
     if isinstance(value, Rounding):
         return value
@@ -168,20 +168,18 @@ class Time_Base:
         object.__setattr__(self, "fps", fps)
         object.__setattr__(self, "sample_rate", _coerce_sample_rate(self.sample_rate))
         object.__setattr__(self, "rounding", _coerce_rounding(self.rounding))
-        object.__setattr__(
-            self, "fps_substituted", bool(self.fps_substituted) or substituted
-        )
+        object.__setattr__(self, "fps_substituted", bool(self.fps_substituted) or substituted)
 
     # ------------------------------------------------------------------ build
 
     @classmethod
     def from_media_info(
         cls,
-        info: "MediaInfo",
+        info: MediaInfo,
         *,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         rounding: Rounding = Rounding.NEAREST,
-    ) -> "Time_Base":
+    ) -> Time_Base:
         """Build from ``worker.ffmpeg_utils.probe`` output (Req 13.2).
 
         Only ``info.fps`` is read, so any object exposing that attribute works
@@ -267,7 +265,7 @@ class Time_Base:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Time_Base":
+    def from_dict(cls, data: Mapping[str, Any]) -> Time_Base:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls()
@@ -304,7 +302,7 @@ class Timeline_Segment:
         """Length of the interval in seconds (``end - start``)."""
         return float(self.end) - float(self.start)
 
-    def overlaps(self, other: "Timeline_Segment") -> bool:
+    def overlaps(self, other: Timeline_Segment) -> bool:
         """True when the two half-open intervals share any time.
 
         Touching intervals (``a.end == b.start``) do **not** overlap; they are
@@ -325,7 +323,7 @@ class Timeline_Segment:
         return {"start": float(self.start), "end": float(self.end)}
 
     @classmethod
-    def from_dict(cls, data: Any) -> Optional["Timeline_Segment"]:
+    def from_dict(cls, data: Any) -> Timeline_Segment | None:
         """Parse one record; returns ``None`` for malformed or inverted input (Req 14.7).
 
         Accepted inputs are a mapping carrying numeric ``start``/``end`` keys and
@@ -373,7 +371,7 @@ def normalize_segments(
     segments: Iterable[Any],
     duration: float,
     *,
-    time_base: Optional[Time_Base] = None,
+    time_base: Time_Base | None = None,
     min_duration: float = 0.0,
 ) -> list[Timeline_Segment]:
     """Return a canonical Segment_List (Req 14.2).

@@ -164,6 +164,7 @@ def test_disabling_an_account_ends_its_sessions(store):
 # disabled by any route that is not `set_disabled` (an operator editing the row by hand, most
 # obviously). So each layer gets its own test that the other cannot satisfy.
 
+
 def test_disabling_deletes_the_session_rows(store):
     """Layer one, asserted at the database rather than through resolve_session."""
     user = store.create_user("bob", GOOD_PASSWORD)
@@ -279,14 +280,12 @@ def test_a_weak_stored_hash_is_upgraded_on_successful_login(store):
     user = store.create_user("bob", GOOD_PASSWORD)
     store_weak = hash_password(GOOD_PASSWORD, n=2**12)
     with sqlite3.connect(store.path) as conn:
-        conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?", (store_weak, user.id)
-        )
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (store_weak, user.id))
     assert store.authenticate("bob", GOOD_PASSWORD) is not None
     with sqlite3.connect(store.path) as conn:
-        after = conn.execute(
-            "SELECT password_hash FROM users WHERE id = ?", (user.id,)
-        ).fetchone()[0]
+        after = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,)).fetchone()[
+            0
+        ]
     assert needs_rehash(after) is False
 
 
@@ -427,12 +426,8 @@ def auth_on(tmp_path, monkeypatch):
 
 
 def _job_for(owner: str) -> tuple[Job, ClipResult]:
-    clip = ClipResult(
-        id="clipA", filename="clipA.mp4", start=0.0, end=5.0, duration=5.0, title="t"
-    )
-    job = Job(
-        input_type="file", source="s.mp4", options=ProcessingOptions(), owner=owner
-    )
+    clip = ClipResult(id="clipA", filename="clipA.mp4", start=0.0, end=5.0, duration=5.0, title="t")
+    job = Job(input_type="file", source="s.mp4", options=ProcessingOptions(), owner=owner)
     job.clips = [clip]
     job.status = JobStatus.COMPLETED
     get_manager().store.add(job)
@@ -523,9 +518,10 @@ def test_logging_out_revokes_the_token_itself_not_just_the_cookie(auth_on):
 
     # Replayed as a bearer token, so the cleared cookie cannot be what refuses it.
     replay = TestClient(app)
-    assert replay.get(
-        "/api/jobs", headers={"Authorization": f"Bearer {session.token}"}
-    ).status_code == 401
+    assert (
+        replay.get("/api/jobs", headers={"Authorization": f"Bearer {session.token}"}).status_code
+        == 401
+    )
     assert auth_on.resolve_session(session.token) is None
 
 
@@ -533,9 +529,7 @@ def test_the_session_cookie_is_httponly_and_lax(auth_on):
     """httponly so an XSS bug cannot read the token; lax is the CSRF defence."""
     auth_on.create_user("alice", GOOD_PASSWORD)
     client = TestClient(app)
-    resp = client.post(
-        "/api/auth/login", json={"username": "alice", "password": GOOD_PASSWORD}
-    )
+    resp = client.post("/api/auth/login", json={"username": "alice", "password": GOOD_PASSWORD})
     header = resp.headers["set-cookie"].lower()
     assert "httponly" in header
     assert "samesite=lax" in header
@@ -575,9 +569,7 @@ def test_a_wrong_password_and_a_missing_user_are_indistinguishable(auth_on):
     """Different wording would confirm which usernames exist."""
     auth_on.create_user("alice", GOOD_PASSWORD)
     client = TestClient(app)
-    wrong = client.post(
-        "/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD}
-    )
+    wrong = client.post("/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD})
     missing = client.post(
         "/api/auth/login", json={"username": "nobody", "password": OTHER_PASSWORD}
     )
@@ -600,12 +592,13 @@ def test_repeated_failures_are_rate_limited(auth_on, monkeypatch):
     auth_on.create_user("alice", GOOD_PASSWORD)
     client = TestClient(app)
     for _ in range(3):
-        assert client.post(
-            "/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD}
-        ).status_code == 401
-    blocked = client.post(
-        "/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD}
-    )
+        assert (
+            client.post(
+                "/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD}
+            ).status_code
+            == 401
+        )
+    blocked = client.post("/api/auth/login", json={"username": "alice", "password": OTHER_PASSWORD})
     assert blocked.status_code == 429
 
 
@@ -616,9 +609,7 @@ def test_the_rate_limit_blocks_the_right_password_too(auth_on, monkeypatch):
     client = TestClient(app)
     for _ in range(2):
         client.post("/api/auth/login", json={"username": "alice", "password": "wrong-pass"})
-    resp = client.post(
-        "/api/auth/login", json={"username": "alice", "password": GOOD_PASSWORD}
-    )
+    resp = client.post("/api/auth/login", json={"username": "alice", "password": GOOD_PASSWORD})
     assert resp.status_code == 429
 
 
@@ -629,9 +620,12 @@ def test_a_successful_login_clears_the_failure_count(auth_on, monkeypatch):
     client.post("/api/auth/login", json={"username": "alice", "password": "wrong-pass"})
     client.post("/api/auth/login", json={"username": "alice", "password": GOOD_PASSWORD})
     for _ in range(3):
-        assert client.post(
-            "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
-        ).status_code == 401
+        assert (
+            client.post(
+                "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
+            ).status_code
+            == 401
+        )
 
 
 def test_the_rate_limit_window_expires(auth_on, monkeypatch):
@@ -640,13 +634,19 @@ def test_the_rate_limit_window_expires(auth_on, monkeypatch):
     auth_on.create_user("alice", GOOD_PASSWORD)
     client = TestClient(app)
     client.post("/api/auth/login", json={"username": "alice", "password": "wrong-pass"})
-    assert client.post(
-        "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
-    ).status_code == 429
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
+        ).status_code
+        == 429
+    )
     time.sleep(1.1)
-    assert client.post(
-        "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
-    ).status_code == 401
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
+        ).status_code
+        == 401
+    )
 
 
 def test_the_rate_limit_can_be_disabled(auth_on, monkeypatch):
@@ -654,9 +654,12 @@ def test_the_rate_limit_can_be_disabled(auth_on, monkeypatch):
     auth_on.create_user("alice", GOOD_PASSWORD)
     client = TestClient(app)
     for _ in range(5):
-        assert client.post(
-            "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
-        ).status_code == 401
+        assert (
+            client.post(
+                "/api/auth/login", json={"username": "alice", "password": "wrong-pass"}
+            ).status_code
+            == 401
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -735,9 +738,7 @@ def test_downloading_someone_elses_clip_is_refused(auth_on):
     alice, _ = _signed_in(auth_on, "alice")
     _bob, bob_client = _signed_in(auth_on, "bob")
     job, clip = _job_for(alice.id)
-    assert bob_client.get(
-        f"/api/clips/{job.id}/{clip.filename}/download"
-    ).status_code == 404
+    assert bob_client.get(f"/api/clips/{job.id}/{clip.filename}/download").status_code == 404
     assert bob_client.get(f"/api/clips/{job.id}/{clip.filename}/video").status_code == 404
 
 
@@ -756,9 +757,7 @@ def test_editing_someone_elses_clip_is_refused(auth_on):
     alice, _ = _signed_in(auth_on, "alice")
     _bob, bob_client = _signed_in(auth_on, "bob")
     job, clip = _job_for(alice.id)
-    resp = bob_client.patch(
-        f"/api/jobs/{job.id}/clips/{clip.id}", json={"title": "hijacked"}
-    )
+    resp = bob_client.patch(f"/api/jobs/{job.id}/clips/{clip.id}", json={"title": "hijacked"})
     assert resp.status_code == 404
     # And the title is untouched.
     assert get_manager().store.get_clip(job.id, clip.id).title == "t"
@@ -785,9 +784,7 @@ def test_deleting_someone_elses_source_is_refused(auth_on):
     alice, _ = _signed_in(auth_on, "alice")
     _bob, bob_client = _signed_in(auth_on, "bob")
     job, _clip = _job_for(alice.id)
-    resp = bob_client.request(
-        "DELETE", f"/api/jobs/{job.id}/source", params={"confirm": "true"}
-    )
+    resp = bob_client.request("DELETE", f"/api/jobs/{job.id}/source", params={"confirm": "true"})
     assert resp.status_code == 404
 
 
@@ -808,9 +805,7 @@ def test_ownership_survives_a_restart(tmp_path):
     from worker.job_persistence import Job_Persistence
 
     store = Job_Persistence(tmp_path / "jobs.db")
-    job = Job(
-        input_type="file", source="s.mp4", options=ProcessingOptions(), owner="user-42"
-    )
+    job = Job(input_type="file", source="s.mp4", options=ProcessingOptions(), owner="user-42")
     store.save(job)
     reloaded = Job_Persistence(tmp_path / "jobs.db").load_all()
     assert [j.owner for j in reloaded if j.id == job.id] == ["user-42"]
@@ -865,9 +860,9 @@ def _assert_no_job_route_serves(client, job, clip) -> int:
             raise AssertionError(f"unhandled path parameter in {path}")
         for method in sorted(set(methods) - {"HEAD", "OPTIONS"}):
             resp = client.request(method, url, json={})
-            assert not (200 <= resp.status_code < 300), (
-                f"{method} {path} answered {resp.status_code} to a non-owner"
-            )
+            assert not (
+                200 <= resp.status_code < 300
+            ), f"{method} {path} answered {resp.status_code} to a non-owner"
             checked += 1
     return checked
 
@@ -906,15 +901,13 @@ def test_the_route_scan_would_notice_an_unprotected_endpoint(auth_on):
     app.router.routes.insert(0, app.router.routes.pop())
 
     try:
-        assert bob_client.get(
-            f"/api/jobs/{job.id}/deliberately-unguarded"
-        ).status_code == 200, "the leaky route is unreachable, so this proves nothing"
+        assert (
+            bob_client.get(f"/api/jobs/{job.id}/deliberately-unguarded").status_code == 200
+        ), "the leaky route is unreachable, so this proves nothing"
         with pytest.raises(AssertionError, match="answered 200 to a non-owner"):
             _assert_no_job_route_serves(bob_client, job, clip)
     finally:
-        app.router.routes = [
-            r for r in app.router.routes if getattr(r, "path", "") != leaky_path
-        ]
+        app.router.routes = [r for r in app.router.routes if getattr(r, "path", "") != leaky_path]
     # And the scan is clean again once the leak is removed.
     assert _assert_no_job_route_serves(bob_client, job, clip) >= 10
 
@@ -931,9 +924,7 @@ def test_only_an_admin_can_list_users(auth_on):
 
 def test_an_admin_can_create_a_user(auth_on):
     _admin, admin_client = _signed_in(auth_on, "root", is_admin=True)
-    resp = admin_client.post(
-        "/api/users", json={"username": "carol", "password": GOOD_PASSWORD}
-    )
+    resp = admin_client.post("/api/users", json={"username": "carol", "password": GOOD_PASSWORD})
     assert resp.status_code == 200
     assert resp.json()["user"]["username"] == "carol"
     assert "password" not in resp.text.lower() or "password_hash" not in resp.text
@@ -943,9 +934,7 @@ def test_a_non_admin_cannot_create_a_user(auth_on):
     """There is no self-service registration: an open sign-up on a tool that spends GPU
     minutes per request is an invitation."""
     _alice, alice_client = _signed_in(auth_on, "alice")
-    resp = alice_client.post(
-        "/api/users", json={"username": "carol", "password": GOOD_PASSWORD}
-    )
+    resp = alice_client.post("/api/users", json={"username": "carol", "password": GOOD_PASSWORD})
     assert resp.status_code == 403
     assert auth_on.get_user_by_name("carol") is None
 
@@ -953,9 +942,7 @@ def test_a_non_admin_cannot_create_a_user(auth_on):
 def test_creating_a_duplicate_user_is_a_conflict(auth_on):
     _admin, admin_client = _signed_in(auth_on, "root", is_admin=True)
     admin_client.post("/api/users", json={"username": "carol", "password": GOOD_PASSWORD})
-    resp = admin_client.post(
-        "/api/users", json={"username": "carol", "password": GOOD_PASSWORD}
-    )
+    resp = admin_client.post("/api/users", json={"username": "carol", "password": GOOD_PASSWORD})
     assert resp.status_code == 409
 
 
@@ -969,9 +956,10 @@ def test_an_admin_can_disable_an_account_and_its_sessions_stop(auth_on):
     alice, alice_client = _signed_in(auth_on, "alice")
     _admin, admin_client = _signed_in(auth_on, "root", is_admin=True)
     assert alice_client.get("/api/jobs").status_code == 200
-    assert admin_client.post(
-        f"/api/users/{alice.id}/disabled", json={"disabled": True}
-    ).status_code == 200
+    assert (
+        admin_client.post(f"/api/users/{alice.id}/disabled", json={"disabled": True}).status_code
+        == 200
+    )
     assert alice_client.get("/api/jobs").status_code == 401
 
 

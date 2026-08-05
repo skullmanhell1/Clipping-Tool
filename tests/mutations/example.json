@@ -24,7 +24,7 @@
     {
       "name": "drop_pix_fmt",
       "file": "worker/ffmpeg_utils.py",
-      "old": "    \"-pix_fmt\", OUTPUT_PIX_FMT,\n",
+      "old": "    \"-pix_fmt\",\n    OUTPUT_PIX_FMT,\n",
       "new": "",
       "why": "without -pix_fmt yuv420p the encode succeeds and the file is rejected on upload; nothing in the pipeline can see it"
     },
@@ -45,8 +45,8 @@
     {
       "name": "reorder_the_compat_flags",
       "file": "worker/ffmpeg_utils.py",
-      "old": "    \"-pix_fmt\", OUTPUT_PIX_FMT,\n    \"-profile:v\", OUTPUT_PROFILE,\n    \"-level\", OUTPUT_LEVEL,",
-      "new": "    \"-level\", OUTPUT_LEVEL,\n    \"-profile:v\", OUTPUT_PROFILE,\n    \"-pix_fmt\", OUTPUT_PIX_FMT,",
+      "old": "    \"-pix_fmt\",\n    OUTPUT_PIX_FMT,\n    \"-profile:v\",\n    OUTPUT_PROFILE,\n    \"-level\",\n    OUTPUT_LEVEL,",
+      "new": "    \"-level\",\n    OUTPUT_LEVEL,\n    \"-profile:v\",\n    OUTPUT_PROFILE,\n    \"-pix_fmt\",\n    OUTPUT_PIX_FMT,",
       "equivalent": true,
       "why": "declared equivalent: ffmpeg does not care about the order of these three, and the test checks each flag and its value rather than the sequence - so this SHOULD escape. Included to show what a legitimate `equivalent: true` looks like: the mutation changes the source and provably nothing observable. Use it sparingly, and never to silence an escape you have not understood."
     }

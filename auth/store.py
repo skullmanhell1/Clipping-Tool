@@ -22,10 +22,10 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
 
 from auth.passwords import hash_password, needs_rehash, verify_password
 from config import settings
@@ -132,12 +132,8 @@ class AuthStore:
                 """
             )
             # Looked up on every authenticated request, and swept by expiry.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
 
     # ------------------------------------------------------------------ users
@@ -174,12 +170,12 @@ class AuthStore:
             disabled=bool(row["disabled"]),
         )
 
-    def get_user(self, user_id: str) -> Optional[User]:
+    def get_user(self, user_id: str) -> User | None:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return self._row_to_user(row) if row else None
 
-    def get_user_by_name(self, username: str) -> Optional[User]:
+    def get_user_by_name(self, username: str) -> User | None:
         try:
             name = normalise_username(username)
         except ValueError:
@@ -200,9 +196,7 @@ class AuthStore:
     def set_password(self, user_id: str, password: str) -> bool:
         digest = hash_password(password)
         with self._lock, self._connect() as conn:
-            cur = conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?", (digest, user_id)
-            )
+            cur = conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (digest, user_id))
             return cur.rowcount > 0
 
     def set_disabled(self, user_id: str, disabled: bool) -> bool:
@@ -219,7 +213,7 @@ class AuthStore:
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
             return cur.rowcount > 0
 
-    def authenticate(self, username: str, password: str) -> Optional[User]:
+    def authenticate(self, username: str, password: str) -> User | None:
         """Return the user when the password is right and the account is usable.
 
         A missing user, a wrong password and a disabled account are all one ``None`` to the
@@ -257,12 +251,10 @@ class AuthStore:
         return user
 
     # --------------------------------------------------------------- sessions
-    def create_session(self, user_id: str, *, ttl_seconds: Optional[float] = None) -> Session:
+    def create_session(self, user_id: str, *, ttl_seconds: float | None = None) -> Session:
         """Issue a session for ``user_id``. The token is returned once and never stored."""
         ttl = float(
-            ttl_seconds
-            if ttl_seconds is not None
-            else settings.auth_session_ttl_hours * 3600
+            ttl_seconds if ttl_seconds is not None else settings.auth_session_ttl_hours * 3600
         )
         token = secrets.token_urlsafe(TOKEN_BYTES)
         now = time.time()
@@ -288,7 +280,7 @@ class AuthStore:
             )
         return session
 
-    def resolve_session(self, token: str) -> Optional[tuple[User, Session]]:
+    def resolve_session(self, token: str) -> tuple[User, Session] | None:
         """The user and session for ``token``, or ``None``.
 
         Expiry is enforced **here**, on read, not only by the sweeper: a session must stop
@@ -305,9 +297,7 @@ class AuthStore:
         digest = _token_digest(token)
         now = time.time()
         with self._lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM sessions WHERE token_hash = ?", (digest,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM sessions WHERE token_hash = ?", (digest,)).fetchone()
             if row is None:
                 return None
             if float(row["expires_at"]) <= now:
@@ -318,9 +308,7 @@ class AuthStore:
             ).fetchone()
             if user_row is None or bool(user_row["disabled"]):
                 return None
-            conn.execute(
-                "UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, row["id"])
-            )
+            conn.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, row["id"]))
             session = Session(
                 id=row["id"],
                 user_id=row["user_id"],
@@ -334,23 +322,17 @@ class AuthStore:
         if not token:
             return False
         with self._lock, self._connect() as conn:
-            cur = conn.execute(
-                "DELETE FROM sessions WHERE token_hash = ?", (_token_digest(token),)
-            )
+            cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_digest(token),))
             return cur.rowcount > 0
 
     def delete_sessions_for_user(self, user_id: str) -> int:
         with self._lock, self._connect() as conn:
-            return int(
-                conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,)).rowcount
-            )
+            return int(conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,)).rowcount)
 
     def purge_expired_sessions(self) -> int:
         with self._lock, self._connect() as conn:
             return int(
-                conn.execute(
-                    "DELETE FROM sessions WHERE expires_at <= ?", (time.time(),)
-                ).rowcount
+                conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (time.time(),)).rowcount
             )
 
 
@@ -358,7 +340,7 @@ class AuthStore:
 #: that does not exist as on one that does. Built at import so the cost is not paid here.
 _DUMMY_HASH = hash_password("x" * 24)
 
-_store: Optional[AuthStore] = None
+_store: AuthStore | None = None
 _store_lock = threading.Lock()
 
 

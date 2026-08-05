@@ -1,4 +1,5 @@
 """End-to-end API tests for Phase 3 publishing endpoints."""
+
 from __future__ import annotations
 
 import io
@@ -25,10 +26,19 @@ def seeded_job():
     manager = get_manager()
     job = Job(input_type="file", source="seed.mp4", options=ProcessingOptions())
     clip = ClipResult(
-        id="clipA", filename="clipA.mp4", start=0.0, end=12.0, duration=12.0,
-        title="Amazing moment", description="The description",
-        hashtags=["#one", "#two"], hook_text="Hook!", cta="Subscribe",
-        mentions=["@handle"], thumbnail_text="WOW", score=91.0,
+        id="clipA",
+        filename="clipA.mp4",
+        start=0.0,
+        end=12.0,
+        duration=12.0,
+        title="Amazing moment",
+        description="The description",
+        hashtags=["#one", "#two"],
+        hook_text="Hook!",
+        cta="Subscribe",
+        mentions=["@handle"],
+        thumbnail_text="WOW",
+        score=91.0,
     )
     job.clips = [clip]
     job.status = JobStatus.COMPLETED
@@ -99,8 +109,11 @@ def test_publish_clip_creates_attempts(client, seeded_job):
 
     resp = client.post(
         f"/api/jobs/{job.id}/clips/{clip.id}/publish",
-        json={"platforms": ["youtube"], "mode": "review",
-              "routes": {"youtube": {"account_id": "chan1"}}},
+        json={
+            "platforms": ["youtube"],
+            "mode": "review",
+            "routes": {"youtube": {"account_id": "chan1"}},
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -112,8 +125,9 @@ def test_publish_clip_creates_attempts(client, seeded_job):
 
 
 def test_publish_unknown_job_404(client):
-    resp = client.post("/api/jobs/nope/clips/none/publish",
-                       json={"platforms": ["youtube"], "mode": "review"})
+    resp = client.post(
+        "/api/jobs/nope/clips/none/publish", json={"platforms": ["youtube"], "mode": "review"}
+    )
     assert resp.status_code == 404
 
 
@@ -121,7 +135,6 @@ def test_info_reports_platforms(client):
     resp = client.get("/api/info")
     assert resp.status_code == 200
     assert "platforms" in resp.json()
-
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +239,6 @@ def test_url_job_carries_new_fields_through(client):
     assert job.options.selection_prompt == "find X"
 
 
-
 # ---------------------------------------------------------------------------
 # v0.8.0 — Speaker Diarisation & Multi-Speaker Reframe:
 #          /api/info superset + upload option passthrough
@@ -284,7 +296,6 @@ def test_upload_unknown_reframe_layout_falls_back_to_default(client):
     job = get_manager().store.get(job_id)
     assert job is not None
     assert job.options.reframe_layout == "follow_active"
-
 
 
 # ---------------------------------------------------------------------------
@@ -352,9 +363,9 @@ def engine_registry():
         for record in saved:
             get_registry().register(record.engine, priority=record.priority)
         reset_report()
-        assert [record.engine_id for record in get_registry().records()] == saved_ids, (
-            "default engine registry leaked out of the test"
-        )
+        assert [
+            record.engine_id for record in get_registry().records()
+        ] == saved_ids, "default engine registry leaked out of the test"
 
 
 def test_info_exposes_engine_keys_and_retains_preexisting_keys(client, engine_registry):
@@ -449,7 +460,6 @@ def test_upload_with_unrecognised_engine_options_still_creates_job(client):
     assert not hasattr(job.options, "stem_separation_enabled")
     assert job.options.aspect == "9:16"
     assert job.options.captions is True
-
 
 
 # ---------------------------------------------------------------------------
@@ -565,9 +575,7 @@ def test_upload_accepts_every_kinetic_field(client):
     assert str(job.options.kinetic_confidence_floor) == "0.4"
 
     # Omitting every field keeps the documented defaults (Req 17.1).
-    plain = client.post(
-        "/api/upload", files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")}
-    )
+    plain = client.post("/api/upload", files={"files": ("clip.mp4", b"FAKEVIDEODATA", "video/mp4")})
     assert plain.status_code == 200, plain.text
     default_job = get_manager().store.get(plain.json()["jobs"][0]["id"])
     assert default_job is not None

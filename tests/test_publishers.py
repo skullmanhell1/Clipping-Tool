@@ -1,4 +1,5 @@
 """Adapter tests for each platform publisher with mocked HTTP/subprocess."""
+
 from __future__ import annotations
 
 import json
@@ -15,9 +16,15 @@ from tests.fakes import FakeHTTPClient, FakeResponse
 
 
 def _request(video_file, **overrides):
-    kwargs = dict(video_path=video_file, title="Great clip",
-                  description="desc", hashtags=["#a", "#b"], cta="Follow",
-                  mentions=["@me"], mode="auto")
+    kwargs = dict(
+        video_path=video_file,
+        title="Great clip",
+        description="desc",
+        hashtags=["#a", "#b"],
+        cta="Follow",
+        mentions=["@me"],
+        mode="auto",
+    )
     kwargs.update(overrides)
     return PublishRequest(**kwargs)
 
@@ -85,8 +92,12 @@ def test_tiktok_draft_when_not_approved(monkeypatch, video_file):
     def handler(method, url, kwargs):
         if "/init/" in url:
             seen["init"] = url
-        return FakeResponse(json_data={"data": {"upload_url": "https://up", "publish_id": "p1"},
-                                       "error": {"code": "ok"}})
+        return FakeResponse(
+            json_data={
+                "data": {"upload_url": "https://up", "publish_id": "p1"},
+                "error": {"code": "ok"},
+            }
+        )
 
     pub = TikTokPublisher(client=FakeHTTPClient(handler))
     result = pub.publish(_request(video_file, mode="auto"))
@@ -102,8 +113,12 @@ def test_tiktok_direct_post_when_approved(monkeypatch, video_file):
     def handler(method, url, kwargs):
         if "/init/" in url:
             seen["init"] = url
-        return FakeResponse(json_data={"data": {"upload_url": "https://up", "publish_id": "p2"},
-                                       "error": {"code": "ok"}})
+        return FakeResponse(
+            json_data={
+                "data": {"upload_url": "https://up", "publish_id": "p2"},
+                "error": {"code": "ok"},
+            }
+        )
 
     pub = TikTokPublisher(client=FakeHTTPClient(handler))
     result = pub.publish(_request(video_file, mode="auto"))
@@ -224,8 +239,9 @@ def test_whop_upload_and_attach(monkeypatch, video_file):
     def fake_run(cmd, **kwargs):
         payload = json.loads(kwargs["input"])
         assert payload["target_type"] == "chat"
-        out = json.dumps({"success": True, "file_id": "file_1",
-                          "url": "https://whop/file_1", "attached": True})
+        out = json.dumps(
+            {"success": True, "file_id": "file_1", "url": "https://whop/file_1", "attached": True}
+        )
         return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
 
     monkeypatch.setattr(whop_mod.subprocess, "run", fake_run)
@@ -241,8 +257,9 @@ def test_whop_upload_without_target_is_review(monkeypatch, video_file):
     import publishers.whop as whop_mod
 
     def fake_run(cmd, **kwargs):
-        out = json.dumps({"success": True, "file_id": "file_2",
-                          "url": "https://whop/file_2", "attached": False})
+        out = json.dumps(
+            {"success": True, "file_id": "file_2", "url": "https://whop/file_2", "attached": False}
+        )
         return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
 
     monkeypatch.setattr(whop_mod.subprocess, "run", fake_run)

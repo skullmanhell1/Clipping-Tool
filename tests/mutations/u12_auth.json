@@ -49,7 +49,7 @@
     {
       "name": "middleware_lets_anonymous_through",
       "file": "api/security.py",
-      "old": "        if resolved is None:\n            await _send_json(\n                send, 401, {\"detail\": \"Not authenticated. Sign in to continue.\"}\n            )\n            return",
+      "old": "        if resolved is None:\n            await _send_json(send, 401, {\"detail\": \"Not authenticated. Sign in to continue.\"})\n            return",
       "new": "        if resolved is None:\n            await self.app(scope, receive, send)\n            return",
       "why": "authentication becomes decoration: the UI still shows a login form and the API answers everyone"
     },

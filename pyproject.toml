@@ -40,6 +40,22 @@ markers = [
 ]
 
 
+[tool.black]
+# I9. Line length matches ruff's below; they disagree by default (black 88, ruff 88 but
+# this project 100) and a disagreement means one tool reformats what the other rejects.
+line-length = 100
+target-version = ["py311"]
+# Mirrors [tool.ruff].exclude. black does not read that, and without this it would
+# reformat the vendored frontend and anything left in storage/.
+extend-exclude = '''
+/(
+    \.venv
+  | frontend
+  | storage
+)/
+'''
+
+
 [tool.ruff]
 # Previously there was no ruff configuration at all, so the enforced rule set was
 # whatever the installed ruff version happened to default to — 857 findings on ruff 0.16
@@ -51,17 +67,22 @@ line-length = 100
 exclude = ["frontend", ".venv", "storage"]
 
 [tool.ruff.lint]
-# Deliberately a focused set: rules that catch mistakes rather than rules that impose a
-# house style on 300 existing files. `UP` (pyupgrade, ~450 findings — mostly
-# `Optional[X]` -> `X | None`) and `B` (bugbear, ~30) are both worth adopting, but each
-# is a mechanical sweep of its own and does not belong in the same change as a set of
-# behavioural fixes.
+# I9 adds `UP` and `B` to the original focused set. They were held back deliberately —
+# each is a mechanical sweep across ~90 files and had no business landing in the same
+# change as a behavioural fix, where the one line that mattered would have been invisible
+# among six hundred that did not.
 select = [
     "F",   # pyflakes: undefined names, unused imports/variables — real bugs
     "E4",  # import placement/shadowing
     "E7",  # statement-level mistakes
     "E9",  # syntax and IO errors
     "I",   # import sorting, so import blocks stop churning between contributors
+    "UP",  # pyupgrade: py311 idiom (`X | None`, `list[...]`, StrEnum)
+    "B",   # bugbear: likely bugs — chiefly `zip()` that silently truncates
+    # `S` is not part of I9. It arrived on the base branch with the security phase while this
+    # sweep was being prepared, and the merge keeps it: this change adds rules, and dropping one
+    # would be a silent narrowing of the gate disguised as a formatting commit. Its three
+    # wholesale ignores and its per-file test exemptions are below, unchanged.
     "S",   # bandit: security findings. Three rules are ignored below, with reasons.
 ]
 
@@ -90,12 +111,28 @@ ignore = [
     "S112",
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# B008 flags a function call in a default argument, which is right almost everywhere and
+# wrong for FastAPI: `File(...)`, `Form(...)`, `Depends(...)` and `Query(...)` in a default
+# *are* the framework's parameter declaration syntax, not values captured once at import.
+# Listed here rather than silenced per-file so the rule keeps working on genuine cases in
+# the same modules — `api/main.py` has ~90 `Form(...)` parameters and one real mistake in
+# there would otherwise be indistinguishable from them.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Query",
+]
+
 [tool.ruff.lint.per-file-ignores]
-# publishers/* is written in a deliberately compressed one-statement-per-line style
-# (`self._stop.clear(); self._thread = ...`). Reformatting those modules is a standalone
-# refactor; scoping the exemption here keeps the checks live everywhere else rather than
-# disabling them globally, which is what a top-level ignore would have done.
-"publishers/*" = ["E701", "E702", "E401"]
+# `"publishers/*" = ["E701", "E702", "E403"]` used to live here, for a deliberately
+# compressed one-statement-per-line style (`self._stop.clear(); self._thread = ...`). I9's
+# black run expanded it, so the exemption now suppresses nothing — verified with
+# `ruff check publishers --select E701,E702,E401 --config 'lint.per-file-ignores={}'`.
+# Removed rather than left in place: a stale exemption reads as "these rules are known to
+# fail here", which would be untrue and would hide it if they started failing again.
+#
 # tests/* imports after module-level setup on purpose: conftest rewrites environment
 # variables before `config` is imported, and several test modules import their subject
 # only after installing a guard. That ordering is the point, so E402 cannot apply.

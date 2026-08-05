@@ -65,11 +65,19 @@ jobs:
       # older releases). The rule set is now pinned in pyproject.toml, which is what makes
       # blocking on it meaningful.
       #
-      # Formatting is deliberately not enforced: black is in requirements-dev but has never
-      # run, and adopting it would reformat essentially every file. That is a standalone
-      # change, not a CI fix.
+      # I9 adds `UP` (pyupgrade) and `B` (bugbear) to the selection. `B905` is the one that
+      # earns its place: `zip()` without `strict=` silently truncates to the shorter operand,
+      # which is a wrong answer rather than an error.
       - name: Lint (ruff)
         run: ruff check .
+
+      # Formatting is now enforced. It previously was not, with the honest reason that black
+      # had never run and adopting it would reformat essentially every file — which I9 has now
+      # done as its own change, so the reason has expired. `--check` only reports; it never
+      # rewrites the tree in CI, so a formatting failure is a diff to apply locally rather
+      # than a commit appearing from the runner.
+      - name: Format (black --check)
+        run: black --check .
 
       - name: Import & boot smoke test
         run: |

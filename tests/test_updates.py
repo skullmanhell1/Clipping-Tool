@@ -1,4 +1,5 @@
 """Tests for the update-check logic."""
+
 from __future__ import annotations
 
 from updates import UpdateChecker, is_newer, parse_version
@@ -20,9 +21,11 @@ def test_is_newer():
 
 def test_checker_reports_update(monkeypatch):
     from config import settings
+
     monkeypatch.setattr(settings, "update_check_enabled", True)
-    checker = UpdateChecker(http_get=lambda url: {"tag_name": "v99.0.0",
-                                                  "html_url": "http://x/rel"})
+    checker = UpdateChecker(
+        http_get=lambda url: {"tag_name": "v99.0.0", "html_url": "http://x/rel"}
+    )
     result = checker.check(force=True)
     assert result["latest"] == "v99.0.0"
     assert result["update_available"] is True
@@ -32,6 +35,7 @@ def test_checker_reports_update(monkeypatch):
 def test_checker_no_update_when_same(monkeypatch):
     from config import settings
     from updates import get_current_version
+
     monkeypatch.setattr(settings, "update_check_enabled", True)
     current = get_current_version()
     checker = UpdateChecker(http_get=lambda url: {"tag_name": current})
@@ -40,6 +44,7 @@ def test_checker_no_update_when_same(monkeypatch):
 
 def test_checker_disabled(monkeypatch):
     from config import settings
+
     monkeypatch.setattr(settings, "update_check_enabled", False)
     checker = UpdateChecker(http_get=lambda url: {"tag_name": "v99.0.0"})
     result = checker.check(force=True)
@@ -49,6 +54,7 @@ def test_checker_disabled(monkeypatch):
 
 def test_checker_handles_fetch_failure(monkeypatch):
     from config import settings
+
     monkeypatch.setattr(settings, "update_check_enabled", True)
 
     def boom(url):

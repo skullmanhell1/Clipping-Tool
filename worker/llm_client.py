@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from config import LLMProvider, settings
 
@@ -33,7 +34,7 @@ class BaseLLMClient(ABC):
     def complete(
         self,
         prompt: str,
-        system: Optional[str] = None,
+        system: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
@@ -43,10 +44,10 @@ class BaseLLMClient(ABC):
     def complete_json(
         self,
         prompt: str,
-        system: Optional[str] = None,
+        system: str | None = None,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> Union[dict, list]:
+    ) -> dict | list:
         """Return parsed JSON from the model.
 
         A short instruction is appended nudging the model to emit JSON only, and
@@ -56,8 +57,9 @@ class BaseLLMClient(ABC):
         sys = (system or "") + (
             "\nYou must respond with valid JSON only. No prose, no code fences."
         )
-        raw = self.complete(prompt, system=sys.strip(), temperature=temperature,
-                            max_tokens=max_tokens)
+        raw = self.complete(
+            prompt, system=sys.strip(), temperature=temperature, max_tokens=max_tokens
+        )
         return parse_json(raw)
 
 
@@ -71,9 +73,9 @@ class OpenAIClient(BaseLLMClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
     ) -> None:
         api_key = api_key or settings.openai_api_key
         if not api_key:
@@ -81,7 +83,9 @@ class OpenAIClient(BaseLLMClient):
         from openai import OpenAI
 
         base_url = base_url or settings.openai_base_url
-        self._client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+        self._client = (
+            OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+        )
         self._model = model or settings.openai_model
 
     def complete(self, prompt, system=None, temperature=0.7, max_tokens=1024) -> str:
@@ -137,8 +141,8 @@ class MockLLMClient(BaseLLMClient):
 
     def __init__(
         self,
-        responses: Optional[list[str]] = None,
-        handler: Optional[Callable[[str, Optional[str]], str]] = None,
+        responses: list[str] | None = None,
+        handler: Callable[[str, str | None], str] | None = None,
     ) -> None:
         self._responses = list(responses or [])
         self._handler = handler
@@ -155,7 +159,8 @@ class MockLLMClient(BaseLLMClient):
 
 # --- JSON extraction helper -------------------------------------------------
 
-def parse_json(text: str) -> Union[dict, list]:
+
+def parse_json(text: str) -> dict | list:
     """Leniently parse JSON from a model response.
 
     Handles ```json fenced blocks and surrounding prose by extracting the
@@ -201,10 +206,10 @@ def parse_json(text: str) -> Union[dict, list]:
 
 # --- provider selection + dependency injection ------------------------------
 
-_client_override: Optional[BaseLLMClient] = None
+_client_override: BaseLLMClient | None = None
 
 
-def set_llm_client(client: Optional[BaseLLMClient]) -> None:
+def set_llm_client(client: BaseLLMClient | None) -> None:
     """Install (or clear, with ``None``) a process-wide client override.
 
     Used by tests to inject a :class:`MockLLMClient`.

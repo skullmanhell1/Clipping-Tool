@@ -50,7 +50,6 @@ import logging
 import re
 import threading
 import time
-from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
@@ -132,7 +131,7 @@ def extract_token(headers: Headers) -> str:
     return ""
 
 
-def may_access_job(job: object, user: Optional[User]) -> bool:
+def may_access_job(job: object, user: User | None) -> bool:
     """Whether ``user`` may see ``job``. The single authorization rule.
 
     * No job - no access. A caller with a job id that resolves to nothing gets the same
@@ -155,7 +154,7 @@ def may_access_job(job: object, user: Optional[User]) -> bool:
     return str(getattr(job, "owner", "") or "") == user.id
 
 
-def current_user(request: Request) -> Optional[User]:
+def current_user(request: Request) -> User | None:
     """The authenticated user, or ``None`` when auth is disabled."""
     return getattr(request.state, "user", None)
 
@@ -303,9 +302,7 @@ class AuthMiddleware:
         # stating that twice would mean one of the two copies is never exercised.
         resolved = get_auth_store().resolve_session(extract_token(headers))
         if resolved is None:
-            await _send_json(
-                send, 401, {"detail": "Not authenticated. Sign in to continue."}
-            )
+            await _send_json(send, 401, {"detail": "Not authenticated. Sign in to continue."})
             return
 
         user, _session = resolved
@@ -330,7 +327,7 @@ class AuthMiddleware:
         and serving those to anyone with a session would leak precisely the clips of the
         users who have been using the tool longest.
         """
-        remainder = path[len(CLIPS_PREFIX):]
+        remainder = path[len(CLIPS_PREFIX) :]
         job_id = remainder.split("/", 1)[0]
         # No empty-job_id guard: an empty id finds no job, and `may_access_job(None, ...)`
         # already refuses. A separate check here would be a second statement of the same
@@ -344,7 +341,7 @@ class AuthMiddleware:
         return may_access_job(get_manager().store.get(job_id), user)
 
 
-def bootstrap_admin() -> Optional[User]:
+def bootstrap_admin() -> User | None:
     """Create the configured first admin when auth is on and there are no users.
 
     Raises ``RuntimeError`` when auth is enabled, no user exists, and no bootstrap account is
@@ -373,7 +370,6 @@ def bootstrap_admin() -> Optional[User]:
         user.username,
     )
     return user
-
 
 
 # ---------------------------------------------------------------------------------------------
@@ -430,7 +426,7 @@ _QUERY_TOKEN_PATHS = re.compile(r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download
 _BEARER = "bearer "
 
 
-def token_matches(supplied: Optional[str]) -> bool:
+def token_matches(supplied: str | None) -> bool:
     """Whether ``supplied`` is the configured secret.
 
     ``hmac.compare_digest`` rather than ``==``: string comparison returns as soon as it finds a
@@ -445,7 +441,7 @@ def token_matches(supplied: Optional[str]) -> bool:
     return hmac.compare_digest(supplied.strip(), expected)
 
 
-def extract_api_token(request: Request) -> Optional[str]:
+def extract_api_token(request: Request) -> str | None:
     """Pull the shared secret from a request, preferring headers.
 
     Named apart from :func:`extract_token`, which pulls a U12 *session* token from a cookie or
@@ -458,7 +454,7 @@ def extract_api_token(request: Request) -> Optional[str]:
     """
     header = request.headers.get("authorization") or ""
     if header.lower().startswith(_BEARER):
-        return header[len(_BEARER):]
+        return header[len(_BEARER) :]
     direct = request.headers.get("x-api-token")
     if direct:
         return direct
@@ -562,7 +558,7 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._windows: dict[str, tuple[float, int]] = {}
 
-    def check(self, key: str, *, limit: int, window: float, now: Optional[float] = None) -> bool:
+    def check(self, key: str, *, limit: int, window: float, now: float | None = None) -> bool:
         """Record a request and return whether it is allowed."""
         if limit <= 0 or window <= 0:
             return True

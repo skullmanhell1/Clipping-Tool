@@ -6,6 +6,7 @@ property text and a ``Validates: Requirements ...`` docstring. Reuses the
 ``FakeWord`` helper from ``tests/conftest.py`` and the shared ``SpyAssetProvider``
 / ``RecordingDownloader`` doubles from ``tests/fakes.py``.
 """
+
 from __future__ import annotations
 
 from hypothesis import HealthCheck, given, settings
@@ -30,12 +31,28 @@ from worker.models import ClipResult, ProcessingOptions, effective_options
 # Tokens that exercise the deterministic content-word heuristic: stopwords,
 # long content words, ALL-CAPS acronyms, numerals, and short fillers.
 _TOKEN_POOL = [
-    "the", "a", "and", "of", "to",              # stopwords
-    "revolutionary", "strategy", "algorithm",     # long content words
-    "growth", "leverage", "compound", "framework",
-    "NASA", "CEO", "AI",                          # ALL-CAPS acronyms
-    "$5", "42", "100%",                           # numerals / currency
-    "go", "win", "big", "now",                    # short words
+    "the",
+    "a",
+    "and",
+    "of",
+    "to",  # stopwords
+    "revolutionary",
+    "strategy",
+    "algorithm",  # long content words
+    "growth",
+    "leverage",
+    "compound",
+    "framework",
+    "NASA",
+    "CEO",
+    "AI",  # ALL-CAPS acronyms
+    "$5",
+    "42",
+    "100%",  # numerals / currency
+    "go",
+    "win",
+    "big",
+    "now",  # short words
 ]
 
 _INTENSITIES = list(BROLL_INTENSITY.keys())
@@ -142,14 +159,21 @@ def test_p14_no_cue_in_removed_interval(data, intensity):
 # --------------------------------------------------------------------------- #
 def _good_external_asset():
     return AssetRef(
-        path="/tmp/ext.png", kind="image", provider="external",
-        source_id="sid-1", license="CC0", attribution="Photo by X",
+        path="/tmp/ext.png",
+        kind="image",
+        provider="external",
+        source_id="sid-1",
+        license="CC0",
+        attribution="Photo by X",
     )
 
 
 def _local_asset():
     return AssetRef(
-        path="/tmp/local.png", kind="image", provider="local", license="local",
+        path="/tmp/local.png",
+        kind="image",
+        provider="local",
+        license="local",
     )
 
 
@@ -193,9 +217,9 @@ def test_p15_asset_sourcing_mode_semantics(keyword, local_hit):
     resolve_asset(keyword, "local_then_external", local, external)
     assert local.searches == [keyword]
     if local_hit:
-        assert dl.calls == []          # local hit => no external call
+        assert dl.calls == []  # local hit => no external call
     else:
-        assert len(dl.calls) == 1      # local miss => external queried
+        assert len(dl.calls) == 1  # local miss => external queried
 
     # local_then_external with no key -> behaves as local_only.
     local, dl, external = fresh(has_key=False)
@@ -330,9 +354,9 @@ def test_mode_dispatch_local_only_uses_local_provider():
     dl = RecordingDownloader(result=_good_external_asset())
     external = ExternalProvider("byok-key", "https://api", downloader=dl)
     engine = Broll_Engine(
-        ProcessingOptions(broll=True, broll_intensity="standard",
-                          asset_sourcing_mode="local_only"),
-        local=local, external=external,
+        ProcessingOptions(broll=True, broll_intensity="standard", asset_sourcing_mode="local_only"),
+        local=local,
+        external=external,
     )
     cues = engine.plan(words, 12.0)
     assert cues  # keywords selected
@@ -349,9 +373,11 @@ def test_broll_provider_di_wiring_local_then_external():
     dl = RecordingDownloader(result=_good_external_asset())
     external = ExternalProvider("byok-key", "https://api", downloader=dl)
     engine = Broll_Engine(
-        ProcessingOptions(broll=True, broll_intensity="standard",
-                          asset_sourcing_mode="local_then_external"),
-        local=local, external=external,
+        ProcessingOptions(
+            broll=True, broll_intensity="standard", asset_sourcing_mode="local_then_external"
+        ),
+        local=local,
+        external=external,
     )
     resolved = engine.resolve(engine.plan(words, 12.0))
     assert resolved
@@ -373,7 +399,8 @@ def test_unknown_license_asset_dropped():
     external = ExternalProvider("byok-key", "https://api", downloader=dl)
     engine = Broll_Engine(
         ProcessingOptions(broll=True, asset_sourcing_mode="local_then_external"),
-        local=local, external=external,
+        local=local,
+        external=external,
     )
     resolved = engine.resolve(engine.plan(words, 12.0))
     assert resolved == []  # unknown license => all cues dropped
@@ -388,7 +415,8 @@ def test_local_then_external_no_key_behaves_as_local_only():
     external = ExternalProvider("", "https://api", downloader=dl)  # no key
     engine = Broll_Engine(
         ProcessingOptions(broll=True, asset_sourcing_mode="local_then_external"),
-        local=local, external=external,
+        local=local,
+        external=external,
     )
     engine.resolve(engine.plan(words, 12.0))
     assert dl.calls == []  # no external call without a key
@@ -401,13 +429,26 @@ def test_broll_asset_record_shape_for_clip_result():
     ``ClipResult.broll_assets`` with the documented keys and serialises cleanly.
     """
     cue = BrollCue(
-        1.0, 3.5, "strategy",
-        asset=AssetRef("/tmp/ext.mp4", "video", "external", source_id="sid-9",
-                      license="CC-BY", attribution="Clip by Y"),
+        1.0,
+        3.5,
+        "strategy",
+        asset=AssetRef(
+            "/tmp/ext.mp4",
+            "video",
+            "external",
+            source_id="sid-9",
+            license="CC-BY",
+            attribution="Clip by Y",
+        ),
     )
     record = broll_asset_record(cue)
     assert set(record) == {
-        "provider", "source_id", "license", "attribution", "keyword", "path",
+        "provider",
+        "source_id",
+        "license",
+        "attribution",
+        "keyword",
+        "path",
     }
     assert record == {
         "provider": "external",
@@ -419,7 +460,11 @@ def test_broll_asset_record_shape_for_clip_result():
     }
 
     clip = ClipResult(
-        id="c1", filename="c1.mp4", start=0.0, end=10.0, duration=10.0,
+        id="c1",
+        filename="c1.mp4",
+        start=0.0,
+        end=10.0,
+        duration=10.0,
         broll_assets=[record],
     )
     assert clip.to_dict()["broll_assets"] == [record]

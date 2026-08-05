@@ -49,19 +49,14 @@ class PasswordError(ValueError):
     """A password could not be hashed or a stored hash could not be read."""
 
 
-def hash_password(password: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R,
-                  p: int = SCRYPT_P) -> str:
+def hash_password(password: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int = SCRYPT_P) -> str:
     """Return a self-describing scrypt hash of ``password``."""
     if not isinstance(password, str) or not password:
         raise PasswordError("A password is required.")
     if len(password) > MAX_PASSWORD_LENGTH:
-        raise PasswordError(
-            f"Password is too long (limit {MAX_PASSWORD_LENGTH} characters)."
-        )
+        raise PasswordError(f"Password is too long (limit {MAX_PASSWORD_LENGTH} characters).")
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise PasswordError(
-            f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
-        )
+        raise PasswordError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
     salt = secrets.token_bytes(SALT_BYTES)
     key = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=KEY_BYTES)
     return f"{_PREFIX}${n}${r}${p}${salt.hex()}${key.hex()}"
@@ -105,8 +100,7 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(candidate, expected)
 
 
-def needs_rehash(stored: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R,
-                 p: int = SCRYPT_P) -> bool:
+def needs_rehash(stored: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int = SCRYPT_P) -> bool:
     """Whether ``stored`` was made with weaker parameters than the current ones.
 
     Called after a *successful* login, which is the only moment the plaintext is available

@@ -32,8 +32,9 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from config import settings
 from worker.transcript_cache import hash_source
@@ -47,8 +48,10 @@ SCHEMA = 1
 
 def cache_dir() -> Path:
     """Where intermediates live. Created on demand."""
-    directory = Path(getattr(settings, "intermediate_cache_dir", "") or
-                     (Path(settings.temp_dir) / "intermediates"))
+    directory = Path(
+        getattr(settings, "intermediate_cache_dir", "")
+        or (Path(settings.temp_dir) / "intermediates")
+    )
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -69,7 +72,7 @@ def _fingerprint(params: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
-def key_for(name: str, source: str | Path, params: Optional[dict[str, Any]] = None) -> str:
+def key_for(name: str, source: str | Path, params: dict[str, Any] | None = None) -> str:
     """The cache key for measurement ``name`` of ``source`` under ``params``."""
     return f"{name}-{hash_source(source)}-{_fingerprint(params or {})}"
 
@@ -78,7 +81,7 @@ def path_for(key: str) -> Path:
     return cache_dir() / f"{key}.json"
 
 
-def load(key: str) -> Optional[Any]:
+def load(key: str) -> Any | None:
     """The cached value for ``key``, or ``None`` on a miss or any problem reading it."""
     path = path_for(key)
     try:
@@ -117,7 +120,7 @@ def memoise(
     name: str,
     source: str | Path,
     compute: Callable[[], Any],
-    params: Optional[dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
 ) -> Any:
     """Return the cached measurement for ``source``, computing and storing it on a miss.
 
@@ -142,7 +145,7 @@ def memoise(
     return value
 
 
-def frames_dir_for(source: str | Path, params: Optional[dict[str, Any]] = None) -> Optional[Path]:
+def frames_dir_for(source: str | Path, params: dict[str, Any] | None = None) -> Path | None:
     """A stable directory for this source's sampled keyframes, or ``None`` when disabled.
 
     Keyframes are *files*, so they are cached as files rather than serialised into JSON. The
@@ -160,7 +163,7 @@ def frames_dir_for(source: str | Path, params: Optional[dict[str, Any]] = None) 
         return None
 
 
-def prune(max_entries: Optional[int] = None) -> int:
+def prune(max_entries: int | None = None) -> int:
     """Delete the oldest entries beyond ``max_entries``. Returns how many were removed.
 
     An unbounded cache of whole-file measurements is a slow disk leak on a long-lived instance:
@@ -168,7 +171,8 @@ def prune(max_entries: Optional[int] = None) -> int:
     part of it. Pruning by modification time keeps the sources someone is actually working on.
     """
     limit = int(
-        max_entries if max_entries is not None
+        max_entries
+        if max_entries is not None
         else getattr(settings, "intermediate_cache_max_entries", 200)
     )
     if limit <= 0:
@@ -176,7 +180,8 @@ def prune(max_entries: Optional[int] = None) -> int:
     try:
         directory = cache_dir()
         entries = [
-            item for item in directory.iterdir()
+            item
+            for item in directory.iterdir()
             if item.suffix == ".json" or item.name.startswith("frames-")
         ]
     except OSError:

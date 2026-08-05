@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — adopted black, plus ruff `UP` and `B` (I9)
+
+- **`I9` — formatting and two more rule families, as one sweep and nothing else.** 170 files
+  reformatted by `black` at 100 columns (matching ruff's width, because two tools with
+  different line lengths take turns undoing each other), 735 ruff findings fixed, and
+  `black --check .` now blocks in CI. Held back until last on purpose: it touches nearly
+  every file, and landing it alongside a behavioural change would have buried the handful of
+  lines that mattered among six hundred that did not. **No behaviour is intended to change.**
+
+  Most of it was mechanical — 428 `Optional[X]` → `X | None`, 126 `List[…]` → `list[…]`, 65
+  redundant quoted annotations. Three parts were not:
+
+  **`(str, Enum)` → `StrEnum` on all eight enums (`UP042`) is a real behaviour change**, and
+  worth knowing about: `str(JobStatus.QUEUED)` was `"JobStatus.QUEUED"` and is now `"queued"`.
+  Equality, ordering, JSON and `.value` are unaffected, and the codebase already used `.value`
+  explicitly wherever the string mattered, so nothing depended on the old form. Adopted rather
+  than ignored because two of these classes documented themselves as "mirrors JobStatus's
+  str-Enum style" — the convention was deliberate and shared, so moving one meant moving all
+  eight.
+
+  **`zip()` now declares `strict=` at all 33 call sites (`B905`)**, and this is the finding
+  that justifies adopting `B`: `zip` silently truncates to its shorter operand, which produces
+  a wrong answer rather than an error. Each site was classified rather than swept: **14 got
+  `strict=False`** because they iterate a sequence against its own tail (`zip(xs, xs[1:])`) and
+  are *meant* to be uneven, and **19 got `strict=True`** where the operands must correspond —
+  weights against components, times against coordinates, a golden frame list against a sampled
+  one. The suite passes unchanged, which is the evidence that all 19 really were equal-length.
+
+  **`B008` is configured off for FastAPI rather than ignored per file.** `File(...)`,
+  `Form(...)`, `Depends(...)` and `Query(...)` in a default argument are the framework's
+  parameter syntax, not a value captured at import. They are listed in
+  `flake8-bugbear.extend-immutable-calls`, so the rule stays live for genuine cases in the same
+  modules — `api/main.py` has ~90 `Form(...)` parameters, and a real mistake among them would
+  otherwise be indistinguishable.
+
+- **Removed: the `publishers/*` exemption for `E701`/`E702`/`E401`.** It existed for a
+  deliberately compressed one-statement-per-line style; black expanded it, so the exemption now
+  suppresses nothing (verified by re-running those rules with `per-file-ignores` overridden to
+  empty). A stale exemption reads as "these rules are known to fail here", which is untrue and
+  would hide it if they started failing again.
+
+- Three mutation specs went **stale** — a spec quotes source text verbatim, so reformatting the
+  file it points at silently unhooks it, and `mutate.py` reports that as a failure rather than a
+  pass. Repaired and re-verified: all five specs, 83 mutations, 0 escaped, 0 stale. The trap is
+  now written down in the README.
+
 ### Added — multi-user authentication and per-user ownership (U12)
 
 - **`U12` — accounts, sessions and per-user job ownership.** Off by default:

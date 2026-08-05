@@ -44,9 +44,7 @@ def test_every_setting_is_documented():
     failure message lists the specific names so the fix is mechanical.
     """
     missing = sorted(name.upper() for name in _setting_names() - _documented_keys())
-    assert not missing, (
-        f"{len(missing)} setting(s) missing from .env.example: {missing}"
-    )
+    assert not missing, f"{len(missing)} setting(s) missing from .env.example: {missing}"
 
 
 def test_no_documented_key_is_stale():
@@ -58,9 +56,7 @@ def test_no_documented_key_is_stale():
     ``publish_default_interval_seconds`` was renamed.
     """
     stale = sorted(name.upper() for name in _documented_keys() - _setting_names())
-    assert not stale, (
-        f"{len(stale)} key(s) in .env.example are not settings: {stale}"
-    )
+    assert not stale, f"{len(stale)} key(s) in .env.example are not settings: {stale}"
 
 
 def test_the_example_file_parses_as_env_assignments():

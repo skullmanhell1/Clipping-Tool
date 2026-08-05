@@ -43,11 +43,20 @@ def _probe(path) -> dict[str, str]:
     """``pix_fmt``, ``profile``, ``level`` and ``r_frame_rate`` of a file's video stream."""
     proc = subprocess.run(
         [
-            FFPROBE, "-v", "error", "-select_streams", "v",
-            "-show_entries", "stream=pix_fmt,profile,level,r_frame_rate",
-            "-of", "default=nw=1", str(path),
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "stream=pix_fmt,profile,level,r_frame_rate",
+            "-of",
+            "default=nw=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     out: dict[str, str] = {}
@@ -68,12 +77,30 @@ def source_422(tmp_path):
     path = tmp_path / "src422.mp4"
     subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc=s=320x240:d=1:r=15",
-            "-f", "lavfi", "-i", "sine=d=1",
-            "-shortest", "-pix_fmt", "yuv422p", "-c:v", "libx264", "-y", str(path),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=s=320x240:d=1:r=15",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=d=1",
+            "-shortest",
+            "-pix_fmt",
+            "yuv422p",
+            "-c:v",
+            "libx264",
+            "-y",
+            str(path),
         ],
-        check=True, capture_output=True, timeout=120,
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     probed = _probe(path)
     assert probed["pix_fmt"] == "yuv422p", "the fixture must really be 4:2:2"
@@ -165,13 +192,30 @@ def test_the_missing_flags_really_were_the_difference(source_422, tmp_path):
     out = tmp_path / "legacy.mp4"
     subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-i", str(source_422),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_422),
             # The pre-O1/O2/O3 argument list, verbatim.
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "copy", "-movflags", "+faststart", str(out),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(out),
         ],
-        check=True, capture_output=True, timeout=120,
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     probed = _probe(out)
     assert probed["pix_fmt"] == "yuv422p", (
@@ -179,7 +223,6 @@ def test_the_missing_flags_really_were_the_difference(source_422, tmp_path):
         "proves nothing"
     )
     assert probed["r_frame_rate"] != f"{app_settings.output_fps}/1"
-
 
 
 def test_o8_the_quality_flag_is_never_hand_rolled_as_crf_outside_the_builder():

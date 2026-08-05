@@ -1,15 +1,16 @@
 """Common contracts shared by every publishing integration."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
-class PublishState(str, Enum):
+class PublishState(StrEnum):
     QUEUED = "queued"
     SCHEDULED = "scheduled"
     UPLOADING = "uploading"
@@ -36,10 +37,12 @@ class PublisherStatus:
     #: publisher that mints tokens on demand has nothing to expire, whereas one using a static
     #: long-lived token has an expiry nobody here can see. Reporting both as "no expiry" would
     #: tell an operator their Instagram token is fine right up until the day it is not.
-    token_expires_at: Optional[float] = None
+    token_expires_at: float | None = None
     #: ``refreshable`` (exchanged from a refresh token), ``static`` (a long-lived token the
     #: operator pasted in), or ``none`` (no token-based auth).
-    token_kind: str = "static"  # noqa: S105 - names a *kind* of credential (static/refreshable/none), not one
+    token_kind: str = (
+        "static"  # noqa: S105 - names a *kind* of credential (static/refreshable/none), not one
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +51,7 @@ class PublisherStatus:
 @dataclass
 class PublishRequest:
     """Platform-neutral upload request."""
+
     video_path: Path
     title: str = ""
     description: str = ""
@@ -60,7 +64,7 @@ class PublishRequest:
     target_type: str = ""
     target_id: str = ""
     mode: str = "auto"  # auto | review
-    scheduled_at: Optional[datetime] = None
+    scheduled_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -130,4 +134,4 @@ class BasePublisher(ABC):
 
     @staticmethod
     def now() -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)

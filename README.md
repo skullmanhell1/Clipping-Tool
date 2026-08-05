@@ -331,6 +331,7 @@ Things worth knowing before turning it on:
 
 ```bash
 ruff check .                       # lint (blocking in CI)
+black --check .                    # formatting (blocking in CI); drop --check to apply
 pytest                             # warnings are errors; skips fail CI
 python scripts/fetch_emoji.py --check   # the emoji the keyword map can emit are vendored
 scripts/docker_smoke.sh            # build the image and check it serves the app
@@ -345,6 +346,10 @@ one engine unreachable was invisible partly because nothing in the suite objecte
 **A skipped test fails CI.** ffmpeg, the fonts and the opencv runtime libraries are all installed by
 the workflow, so a skip means a dependency silently went missing and the tests it gates have quietly
 stopped running — which is exactly how an earlier ffmpeg gap went unnoticed for several releases.
+
+**Formatting is black, at 100 columns** — the same width ruff enforces, because two tools with
+different line lengths take turns undoing each other. `black --check .` blocks in CI; run
+`black .` to apply.
 
 ### Mutation testing
 
@@ -370,6 +375,10 @@ python scripts/mutate.py --spec tests/mutations/example.json --list
 - **CAUGHT** — a test failed. The behaviour is genuinely pinned.
 - **ESCAPED** — everything passed. Either the tests do not cover the behaviour, or the mutation was
   *equivalent* and changed nothing observable.
+- **STALE** — the `old` snippet no longer appears in the file, so nothing was mutated. Also a
+  failure, and the one that a *formatting* change causes: a spec quotes source text verbatim, so
+  reformatting the file it points at silently unhooks it. I9's black run made three specs stale.
+  Re-run every spec after anything that rewrites source.
 
 Those two need different fixes, and the difference matters. A missing test wants a test. An
 equivalent mutant usually means the same fact is stated in two places, so changing one has no

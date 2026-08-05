@@ -89,7 +89,11 @@ were tried and both are worse than the finding — `npm audit fix --force` *down
 
 ## 3. What is actually left
 
-12 items. Only one is a matter of effort.
+11 items, and **none of them is a matter of effort any more**. The three that were — `U4`, `U12`
+and `I9` — are done; everything still open is blocked on something that cannot be obtained from
+here. That changes what the next session is for: not "pick the next item" but "get one of the
+blockers", and the biggest of them is `M4`/`S1`, because it gates every selection-quality item
+below it.
 
 **`U12` (multi-user auth) is done**, and off by default — `AUTH_ENABLED=false` is the shipped
 single-tenant behaviour. The parts that will surprise you: authentication is **one ASGI
@@ -111,11 +115,10 @@ knowing where the seams ended up, because the next person to touch trimming will
 removal and a cut list compose by union into **one** keep list and **one** re-encode — do not add a
 second pass.
 
-### Buildable now
-
-| Item | What | Why it was left |
-| --- | --- | --- |
-| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this on its own branch, last.** It touches nearly every file and will conflict with anything else open. |
+**`I9` is done too.** `black` at 100 columns is now enforced by CI (`black --check .`), and ruff's
+selection adds `UP` and `B`. Two consequences to know about: `str()` on any of the eight enums now
+returns the value rather than `ClassName.MEMBER` (they are `StrEnum`), and `zip()` must declare
+`strict=` — `False` for the pairwise `zip(xs, xs[1:])` idiom, `True` otherwise.
 
 ### Blocked on model weights CI cannot have
 
