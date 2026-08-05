@@ -1,7 +1,29 @@
-"""Request authentication and per-user authorization (U12).
+"""Request authentication, per-user authorization (U12), and rate limiting.
 
-**One choke point, deliberately.** Authentication is an ASGI middleware rather than a set of
-``Depends(...)`` on 45 handlers, for two reasons that are not stylistic:
+**Two authentication schemes live here, and they do not stack.** ``AUTH_ENABLED`` selects
+between them:
+
+* **on** — accounts. A session cookie (or bearer token) identifies a :class:`~auth.store.User`,
+  and ``/clips`` media is additionally checked against the owning job. This is U12.
+* **off** — the single shared secret, ``API_AUTH_TOKEN``. This is what main already shipped and
+  what most installs are running; it stays in force so that turning accounts *off*, or upgrading
+  to a build that has them, cannot silently reopen a deployment that was closed.
+
+Selecting rather than combining is the decision worth defending. Requiring both would mean a
+browser needs a secret *and* an account, so the login page could not load without the secret
+already in hand — and the secret would then be a credential shared by every user, which is the
+thing accounts exist to replace. Requiring either would make the shared secret a permanent
+bypass of per-user ownership: anyone holding it could read every user's clips. So with accounts
+on, the secret is not consulted at all, and ``require_api_token`` and ``ClipsAuthMiddleware``
+both become no-ops.
+
+Rate limiting is orthogonal to both and applies in either mode: a session says who you are, not
+how much CPU you may spend. :class:`RateLimiter` guards the expensive routes;
+:class:`LoginRateLimiter` guards password guessing. They are separate because the budgets differ
+by two orders of magnitude and one is keyed by username.
+
+**One choke point for authentication, deliberately.** It is an ASGI middleware rather than a set
+of ``Depends(...)`` on 45 handlers, for two reasons that are not stylistic:
 
 * ``app.mount("/clips", StaticFiles(...))`` is not a route, so **route dependencies do not
   apply to it**. The clip media - the actual product - would stay world-readable while every
@@ -22,14 +44,18 @@ request refers to. :func:`may_access_job` is the single rule.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import re
 import threading
 import time
 from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from auth import get_auth_store
 from auth.store import User
@@ -205,17 +231,36 @@ class LoginRateLimiter:
 login_rate_limiter = LoginRateLimiter()
 
 
-def client_key(request: Request) -> str:
-    """A stable-enough client identifier for rate limiting.
+def client_identity(request: Request) -> str:
+    """A stable key for the caller, for rate limiting only.
 
-    ``request.client.host`` is the peer address. Behind a reverse proxy that is the proxy,
-    which would make the limit global rather than per client. ``X-Forwarded-For`` is
-    deliberately **not** consulted: it is caller-supplied and trivially rotated, so honouring
-    it would let an attacker reset their own budget by changing a header - strictly worse
-    than a shared bucket.
+    ``X-Forwarded-For`` is consulted only when ``TRUST_FORWARDED_FOR`` says to, and the
+    distinction is load-bearing in both directions. Directly exposed, the header is
+    caller-supplied and trusting it lets one client present as unlimited distinct clients — the
+    limiter would be decorative. Behind a proxy that sets it, ignoring it makes every request
+    look like the proxy, so all callers share one bucket and the limiter throttles the whole
+    deployment at once.
+
+    The left-most entry is taken: proxies append, so the original client is first.
+
+    This replaces U12's ``client_key``, which unconditionally ignored the header. Both branches
+    reasoned correctly about the risk they were looking at and reached opposite conclusions;
+    the setting is what lets a deployment answer for itself, and one definition means the login
+    limiter and the route limiter cannot disagree about who a caller is.
     """
+    if settings.trust_forwarded_for:
+        forwarded = request.headers.get("x-forwarded-for") or ""
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
     client = request.client
     return client.host if client and client.host else "unknown"
+
+
+#: U12 named this ``client_key``. Kept as an alias rather than renaming the call sites in
+#: ``api/main.py``, because the two names read correctly in their own contexts and an alias
+#: cannot drift from the implementation.
+client_key = client_identity
 
 
 async def _send_json(send, status: int, payload: dict) -> None:
@@ -328,3 +373,254 @@ def bootstrap_admin() -> Optional[User]:
         user.username,
     )
     return user
+
+
+
+# ---------------------------------------------------------------------------------------------
+# The single-tenant scheme: one shared secret. Active only while AUTH_ENABLED is off.
+#
+# This is main's implementation, carried through the U12 merge unchanged in behaviour and gated
+# on `auth_enabled`. Keeping it is not tidiness: API_AUTH_TOKEN is what closed the deployment
+# described in `render.yaml`, most installs are running it, and a build that quietly stopped
+# honouring it because a *different* auth feature was added would reopen every one of them. With
+# accounts on it is not consulted, for the reasons in the module docstring.
+# ---------------------------------------------------------------------------------------------
+
+#: Paths that never require the secret.
+#:
+#: ``/healthz`` must stay open or container health checks and uptime probes fail — it returns
+#: ``{"status": "ok"}`` and nothing else, so it leaks nothing. The docs endpoints are FastAPI
+#: defaults; they describe the API rather than exposing data, and locking them would make the
+#: deployment undebuggable for its own operator.
+#:
+#: Deliberately a *different* list from :data:`EXEMPT_EXACT`, which governs sessions. The two
+#: schemes exempt different things for different reasons — ``/api/auth/login`` has to be reachable
+#: without a session but has no reason to be reachable without the shared secret, and ``/docs``
+#: is the reverse — so merging them would widen both to the union of their exemptions.
+_SECRET_EXEMPT_PATHS = frozenset(
+    {"/healthz", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+)
+
+#: The static mount that serves rendered clips and thumbnails off disk.
+_CLIPS_MOUNT_PREFIX = "/clips/"
+
+#: Paths where the secret may travel in the query string.
+#:
+#: The category is precise, and it is not "whatever is convenient": **read-only media retrieval
+#: that a browser reaches by navigation rather than by `fetch`.** Three places qualify, and all
+#: three are GET requests that return bytes and change nothing:
+#:
+#:   /clips/...                          <video src> and poster in ClipCard.jsx
+#:   /api/clips/{job}/{file}/video       an <a href> download link
+#:   /api/clips/{job}/{file}/download    an <a href> download link (zip + metadata)
+#:
+#: A browser cannot attach a header to any of those, so without this, enabling auth would break
+#: playback and downloads in the UI that ships with the app — and the symptom would look like
+#: broken video rather than like a security setting.
+#:
+#: Everything else is header-only, which is the part that matters: no token ever appears in the
+#: URL of a request that mutates state, so none reaches an access log, browser history or a
+#: `Referer` header for anything that writes.
+#:
+#: With accounts on, the equivalent problem is solved by the session *cookie*, which a browser
+#: does attach to ``<video src>`` — which is why U12 needs no query-parameter escape hatch.
+_QUERY_TOKEN_PATHS = re.compile(r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download|video)$)")
+
+#: How a caller supplies the secret.
+_BEARER = "bearer "
+
+
+def token_matches(supplied: Optional[str]) -> bool:
+    """Whether ``supplied`` is the configured secret.
+
+    ``hmac.compare_digest`` rather than ``==``: string comparison returns as soon as it finds a
+    difference, so the time it takes reveals how many leading characters were right, and a secret
+    that leaks its own prefix can be guessed a character at a time.
+    """
+    expected = settings.api_auth_token_value
+    if not expected:
+        return True  # auth disabled; see _run_startup for the warning this produces
+    if not supplied:
+        return False
+    return hmac.compare_digest(supplied.strip(), expected)
+
+
+def extract_api_token(request: Request) -> Optional[str]:
+    """Pull the shared secret from a request, preferring headers.
+
+    Named apart from :func:`extract_token`, which pulls a U12 *session* token from a cookie or
+    bearer header. Both branches called their extractor ``extract_token``; they return different
+    kinds of credential, and one name for two would be the sort of collision that type-checks.
+
+    ``Authorization: Bearer <t>`` and ``X-API-Token: <t>`` are the supported headers, and are the
+    only option for anything that changes state. A ``?token=`` query parameter is accepted only
+    for the read-only media paths in :data:`_QUERY_TOKEN_PATHS`, which documents why.
+    """
+    header = request.headers.get("authorization") or ""
+    if header.lower().startswith(_BEARER):
+        return header[len(_BEARER):]
+    direct = request.headers.get("x-api-token")
+    if direct:
+        return direct
+    if request.method in ("GET", "HEAD") and _QUERY_TOKEN_PATHS.match(request.url.path):
+        # Method-checked as well as path-checked. The two /api/clips routes are GET-only today,
+        # so this changes nothing now - but if a POST were ever added under one of those paths it
+        # would otherwise inherit the query-token allowance silently.
+        return request.query_params.get("token")
+    return None
+
+
+def secret_is_the_active_scheme() -> bool:
+    """Whether the shared secret is the credential right now.
+
+    One place to ask, so the dependency and the middleware cannot answer differently — which is
+    the failure this merge was most able to introduce, given each of them lived in a different
+    branch.
+    """
+    return not settings.auth_enabled
+
+
+def require_api_token(request: Request) -> None:
+    """Reject a request that does not carry the shared secret.
+
+    Registered once as an app-level dependency, so it applies to every route including any added
+    later. Returns ``None`` — it is a guard, not a provider of a value.
+
+    ``401`` with ``WWW-Authenticate`` rather than ``403``: the caller has supplied no usable
+    credential, which is what 401 means, and the header tells a client what to send.
+
+    A no-op when accounts are on: :class:`AuthMiddleware` has already established who the caller
+    is, and demanding a second, shared credential on top would make the login page unreachable
+    for anyone who did not already hold it.
+    """
+    if not secret_is_the_active_scheme():
+        return
+    if request.url.path in _SECRET_EXEMPT_PATHS:
+        return
+    if token_matches(extract_api_token(request)):
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Missing or invalid API token. Send Authorization: Bearer <token>.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+class ClipsAuthMiddleware(BaseHTTPMiddleware):
+    """Apply the shared secret to the ``/clips`` static mount.
+
+    The mount serves finished clips and thumbnails straight off disk. The two per-clip endpoints
+    in ``api.main`` normalise the filename to a basename and (for the zip route) cross-check the
+    clip against the job store, but the mount does none of that — so it was both the least
+    guarded and the widest path to rendered output.
+
+    Scoped to one prefix rather than wrapping everything: routes are already covered by
+    :func:`require_api_token`, and a middleware that duplicated that would give the same rule two
+    implementations to drift apart.
+
+    A no-op when accounts are on, where :class:`AuthMiddleware` guards the same prefix and does
+    strictly more — it checks the *owning job*, not merely that the caller has a credential.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if (
+            secret_is_the_active_scheme()
+            and request.url.path.startswith(_CLIPS_MOUNT_PREFIX)
+            and not token_matches(extract_api_token(request))
+        ):
+            return JSONResponse(
+                {"detail": "Missing or invalid API token."},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return await call_next(request)
+
+
+class RateLimiter:
+    """A fixed-window request counter, keyed by caller.
+
+    In-process and deliberately not Redis. ``redis`` and ``rq`` are declared dependencies that no
+    code imports; making the app safe should not be the thing that finally turns an unused
+    optional dependency into a mandatory service.
+
+    A fixed window rather than a sliding log: it needs one integer and one timestamp per caller
+    instead of a list of arrival times, which matters because the key space is attacker-influenced.
+    The cost is that a caller can send up to twice the limit across a window boundary, which for
+    protecting expensive routes on a self-hosted tool is an acceptable trade and is stated here
+    rather than discovered.
+
+    Thread-safe because the sync endpoints run in Starlette's threadpool, so several requests
+    touch this concurrently.
+
+    Distinct from :class:`LoginRateLimiter`, which counts *failed logins* per username and client
+    over a 15-minute window. Same shape, different budgets by two orders of magnitude, and only
+    one of them is keyed by a name a caller supplies — collapsing them into one would mean a
+    password guess and a render request sharing a bucket.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._windows: dict[str, tuple[float, int]] = {}
+
+    def check(self, key: str, *, limit: int, window: float, now: Optional[float] = None) -> bool:
+        """Record a request and return whether it is allowed."""
+        if limit <= 0 or window <= 0:
+            return True
+        moment = time.monotonic() if now is None else now
+        with self._lock:
+            started, count = self._windows.get(key, (moment, 0))
+            if moment - started >= window:
+                started, count = moment, 0
+            count += 1
+            self._windows[key] = (started, count)
+            # Opportunistic eviction, under the lock we already hold. Without it the dict grows
+            # once per distinct client forever, which on a public endpoint is a memory leak an
+            # attacker chooses the size of.
+            if len(self._windows) > 4096:
+                cutoff = moment - window
+                self._windows = {k: v for k, v in self._windows.items() if v[0] > cutoff}
+            return count <= limit
+
+    def reset(self) -> None:
+        """Forget all windows. For tests, and for a settings change at runtime."""
+        with self._lock:
+            self._windows.clear()
+
+
+#: Module-level limiter shared by every rate-limited route, so the budget is per client rather
+#: than per endpoint - twenty submissions and twenty uploads is forty expensive operations.
+limiter = RateLimiter()
+
+
+def rate_limit(request: Request) -> None:
+    """Reject a request from a caller that has exceeded its budget.
+
+    Applied to the expensive routes only — job submission, upload, preview, rerender, regenerate,
+    resume and caption preview. Deliberately **not** applied to the read routes: ``App.jsx`` polls
+    ``/api/jobs`` every 1200 ms and the publish history alongside it, which is 50 requests a minute
+    from a single idle browser, so a 30-per-minute budget on reads would throttle the UI that ships
+    with this app rather than an abuser. Phase 5 replaces that poll loop with SSE; limiting reads
+    becomes reasonable once it has.
+
+    Applies in **both** auth modes, unlike the shared secret. An authenticated user is still a
+    caller who can queue unbounded transcode work, and with accounts on there are more of them.
+    """
+    if not settings.rate_limit_enabled:
+        return
+    key = client_identity(request)
+    allowed = limiter.check(
+        key,
+        limit=settings.rate_limit_requests,
+        window=settings.rate_limit_window_seconds,
+    )
+    if allowed:
+        return
+    retry_after = max(1, int(settings.rate_limit_window_seconds))
+    raise HTTPException(
+        status_code=429,
+        detail=(
+            f"Rate limit exceeded: more than {settings.rate_limit_requests} requests in "
+            f"{settings.rate_limit_window_seconds:g}s. Retry in {retry_after}s."
+        ),
+        headers={"Retry-After": str(retry_after)},
+    )
