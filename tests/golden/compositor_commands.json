@@ -1,0 +1,617 @@
+{
+  "broll_music_captions_emoji": {
+    "effects": [
+      "broll:fire",
+      "captions",
+      "color:vivid",
+      "emoji:standard",
+      "music:chill",
+      "music_degraded:synthesised",
+      "zoom"
+    ],
+    "flags": [
+      "-y",
+      "-loop",
+      "-t",
+      "-loop",
+      "-t",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]eq=contrast=1.12:saturation=1.35:brightness=0.02,zoompan=z='(1+0.12*on/90)':d=1:fps=30:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'[vlook]",
+      "[2:v]scale=540:-1,format=rgba,setpts=PTS-STARTPTS+0.400/TB[bpre0]",
+      "[vlook][bpre0]overlay=x='(W-w)/2':y='H*0.12':enable='between(t,0.400,1.400)'[vbroll]",
+      "[vbroll]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]",
+      "[3:v]scale=150:-1,format=rgba,fade=t=in:st=1.700:d=0.18:alpha=1[e0]",
+      "[vbase][e0]overlay=x='(W-w)*0.16':y='H*0.15':enable='between(t,1.700,3.000)'[vout]",
+      "[1:a]aloop=loop=-1:size=2147483647,atrim=0:3.000,asetpts=N/SR/TB,afade=t=in:st=0:d=0.350,afade=t=out:st=1.800:d=1.200[bedfit]",
+      "[bedfit]volume=0.120[bedlvl]",
+      "[bedlvl]anull[bedv]",
+      "[0:a][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/synth_bed_chill.m4a",
+      "<TMP>/overlay.png",
+      "<TMP>/overlay.png"
+    ],
+    "maps": [
+      "[vout]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "broll_with_captions_and_emoji": {
+    "effects": [
+      "broll:fire",
+      "captions",
+      "emoji:standard"
+    ],
+    "flags": [
+      "-y",
+      "-loop",
+      "-t",
+      "-loop",
+      "-t",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[1:v]scale=540:-1,format=rgba,setpts=PTS-STARTPTS+0.400/TB[bpre0]",
+      "[0:v][bpre0]overlay=x='(W-w)/2':y='H*0.12':enable='between(t,0.400,1.400)'[vbroll]",
+      "[vbroll]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]",
+      "[2:v]scale=150:-1,format=rgba,fade=t=in:st=1.700:d=0.18:alpha=1[e0]",
+      "[vbase][e0]overlay=x='(W-w)*0.16':y='H*0.15':enable='between(t,1.700,3.000)'[vout]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/overlay.png",
+      "<TMP>/overlay.png"
+    ],
+    "maps": [
+      "[vout]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "caption_preset_pop": {
+    "effects": [
+      "caption_preset:pop",
+      "captions"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "captions_and_hook": {
+    "effects": [
+      "captions",
+      "hook_title"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "captions_only": {
+    "effects": [
+      "captions"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "emoji_only": {
+    "effects": [
+      "emoji:standard"
+    ],
+    "flags": [
+      "-y",
+      "-loop",
+      "-t",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[1:v]scale=150:-1,format=rgba,fade=t=in:st=1.700:d=0.18:alpha=1[e0]",
+      "[0:v][e0]overlay=x='(W-w)*0.16':y='H*0.15':enable='between(t,1.700,3.000)'[vout]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/overlay.png"
+    ],
+    "maps": [
+      "[vout]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "emoji_with_music": {
+    "effects": [
+      "emoji:standard",
+      "music:chill",
+      "music_degraded:synthesised"
+    ],
+    "flags": [
+      "-y",
+      "-loop",
+      "-t",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[2:v]scale=150:-1,format=rgba,fade=t=in:st=1.700:d=0.18:alpha=1[e0]",
+      "[0:v][e0]overlay=x='(W-w)*0.16':y='H*0.15':enable='between(t,1.700,3.000)'[vout]",
+      "[1:a]aloop=loop=-1:size=2147483647,atrim=0:3.000,asetpts=N/SR/TB,afade=t=in:st=0:d=0.350,afade=t=out:st=1.800:d=1.200[bedfit]",
+      "[bedfit]volume=0.120[bedlvl]",
+      "[bedlvl]anull[bedv]",
+      "[0:a][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/synth_bed_chill.m4a",
+      "<TMP>/overlay.png"
+    ],
+    "maps": [
+      "[vout]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "everything_visual": {
+    "effects": [
+      "captions",
+      "color:vivid",
+      "fades",
+      "hook_title",
+      "progress_bar",
+      "transitions",
+      "zoom"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]eq=contrast=1.12:saturation=1.35:brightness=0.02,zoompan=z='if(lt(on,15),1.18-(1.18-(1+0.12*on/90))*on/15,(1+0.12*on/90))':d=1:fps=30:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',fade=t=in:st=0:d=0.400,fade=t=out:st=2.600:d=0.400,subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts',drawbox=x=0:y=ih-12:w='iw*t/3.000':h=12:color=0x22D3EE@0.9:t=fill[vbase]",
+      "[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st=2.600:d=0.400[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "fades_audio_only": {
+    "effects": [
+      "fades"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]fade=t=in:st=0:d=0.400,fade=t=out:st=2.600:d=0.400[vbase]",
+      "[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st=2.600:d=0.400[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "hook_title_only": {
+    "effects": [
+      "hook_title"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "look_and_captions": {
+    "effects": [
+      "captions",
+      "color:warm",
+      "fades",
+      "zoom"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]eq=saturation=1.15:gamma_r=1.06:gamma_b=0.94,zoompan=z='(1+0.12*on/90)':d=1:fps=30:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',fade=t=in:st=0:d=0.400,fade=t=out:st=2.600:d=0.400,subtitles='<TMP>/base.ass':fontsdir='<REPO>/assets/fonts'[vbase]",
+      "[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st=2.600:d=0.400[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "look_only": {
+    "effects": [
+      "color:vivid",
+      "zoom"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]eq=contrast=1.12:saturation=1.35:brightness=0.02,zoompan=z='(1+0.12*on/90)':d=1:fps=30:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  },
+  "loudness_with_music": {
+    "effects": [
+      "loudness:-14lufs",
+      "music:upbeat",
+      "music_degraded:synthesised"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[1:a]aloop=loop=-1:size=2147483647,atrim=0:3.000,asetpts=N/SR/TB,afade=t=in:st=0:d=0.350,afade=t=out:st=1.800:d=1.200[bedfit]",
+      "[bedfit]volume=0.120[bedlvl]",
+      "[bedlvl]anull[bedv]",
+      "[0:a][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
+      "[aout]loudnorm=I=-14:TP=-1:LRA=11:measured_I=-21.87:measured_TP=-13.46:measured_LRA=0:measured_thresh=-31.87:offset=0:linear=true:print_format=summary[aloud]",
+      "[aloud]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/synth_bed_upbeat.m4a"
+    ],
+    "maps": [
+      "0:v",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "music_and_fades": {
+    "effects": [
+      "fades",
+      "music:chill",
+      "music_degraded:synthesised"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]fade=t=in:st=0:d=0.400,fade=t=out:st=2.600:d=0.400[vbase]",
+      "[1:a]aloop=loop=-1:size=2147483647,atrim=0:3.000,asetpts=N/SR/TB,afade=t=in:st=0:d=0.350,afade=t=out:st=1.800:d=1.200[bedfit]",
+      "[bedfit]volume=0.120[bedlvl]",
+      "[bedlvl]anull[bedv]",
+      "[0:a]afade=t=in:st=0:d=0.400,afade=t=out:st=2.600:d=0.400[orig]",
+      "[orig][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/synth_bed_chill.m4a"
+    ],
+    "maps": [
+      "[vbase]",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "music_only": {
+    "effects": [
+      "music:chill",
+      "music_degraded:synthesised"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-c:a",
+      "-b:a",
+      "-ar",
+      "-ac",
+      "-movflags"
+    ],
+    "graph": [
+      "[1:a]aloop=loop=-1:size=2147483647,atrim=0:3.000,asetpts=N/SR/TB,afade=t=in:st=0:d=0.350,afade=t=out:st=1.800:d=1.200[bedfit]",
+      "[bedfit]volume=0.120[bedlvl]",
+      "[bedlvl]anull[bedv]",
+      "[0:a][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
+      "[aout]alimiter=limit=0.8913:level=disabled[apeak]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4",
+      "<TMP>/synth_bed_chill.m4a"
+    ],
+    "maps": [
+      "0:v",
+      "[apeak]"
+    ],
+    "rendered": true
+  },
+  "nothing_enabled": {
+    "rendered": false
+  },
+  "progress_bar_only": {
+    "effects": [
+      "progress_bar"
+    ],
+    "flags": [
+      "-y",
+      "-map",
+      "-map",
+      "-c:v",
+      "-preset",
+      "-crf",
+      "-pix_fmt",
+      "-profile:v",
+      "-level",
+      "-r",
+      "-maxrate",
+      "-bufsize",
+      "-c:a",
+      "-movflags"
+    ],
+    "graph": [
+      "[0:v]drawbox=x=0:y=ih-12:w='iw*t/3.000':h=12:color=0x22D3EE@0.9:t=fill[vbase]"
+    ],
+    "inputs": [
+      "<TMP>/base.mp4"
+    ],
+    "maps": [
+      "[vbase]",
+      "0:a"
+    ],
+    "rendered": true
+  }
+}

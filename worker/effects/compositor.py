@@ -160,6 +160,113 @@ def _beat_times(base_clip: str | Path, options: ProcessingOptions) -> tuple[floa
     )
 
 
+class Filter_Graph:
+    """Owns ffmpeg input registration, label bookkeeping and segment order.
+
+    Before this existed, all three were expressed by hand in :func:`render_clip`: layering was
+    append-order into two Python lists, labels were string literals reassigned as the function
+    progressed (``video_label = "vbase"``), and input indices were derived arithmetically from
+    ``engine_input_count`` and whether music was present. A mis-ordered append or a stale label
+    is not an error — the graph still parses, ffmpeg still encodes, and the only symptom is in
+    the pixels.
+
+    Three responsibilities, and the third is the one that was most fragile:
+
+    **Ordering.** Segments are emitted in the order they are added, joined with ``;``. A phase
+    says what it wants layered on top; it never sees the list.
+
+    **Labels.** The graph tracks the current video and audio label. A phase declares its
+    *output* label and receives the current one as input, so the two can never disagree — which
+    is what a hand-maintained ``video_label`` variable could do silently.
+
+    **Input indices.** Inputs are registered in argv order and each registration returns the
+    index of its first input. Nothing counts ``"-i"`` occurrences in a fragment any more. The
+    previous accounting was three interacting offsets (music shifts b-roll, b-roll shifts emoji),
+    and it was fragile enough that the brand logo is drawn with ffmpeg's ``movie=`` source filter
+    purely to avoid perturbing it.
+
+    Note what this class deliberately does **not** own: whether a stream was changed enough to
+    need re-encoding. That decision stays in :func:`render_clip`, because "a segment was added"
+    and "the audio must be re-encoded" are different questions — loudness normalisation and the
+    true-peak limiter both add segments and neither is a reason to re-encode on its own, since
+    both are gated on something else having already changed the audio.
+    """
+
+    def __init__(self, base_clip: str | Path) -> None:
+        #: argv fragments in ffmpeg order. The base clip is always index 0.
+        self._input_args: list[str] = ["-i", str(base_clip)]
+        self._next_index = 1
+        self._segments: list[str] = []
+        self.video_label = "0:v"
+        self.audio_label = "0:a"
+
+    # -- inputs ------------------------------------------------------------
+    @property
+    def next_input_index(self) -> int:
+        """The index the next registered input will occupy.
+
+        Read *before* registering, by builders that need to reference their own inputs inside a
+        filter fragment they are about to produce.
+        """
+        return self._next_index
+
+    def add_inputs(self, args: Sequence[str]) -> int:
+        """Register a block of ffmpeg input arguments; return its first input's index.
+
+        Registration order is argv order, so an index handed out here is the index ffmpeg will
+        assign. That equivalence is the whole point: it used to be maintained by arithmetic in a
+        different part of the function from where the inputs were appended.
+        """
+        first = self._next_index
+        self._input_args.extend(str(arg) for arg in args)
+        self._next_index += list(args).count("-i")
+        return first
+
+    @property
+    def input_args(self) -> list[str]:
+        return list(self._input_args)
+
+    # -- filters -----------------------------------------------------------
+    def chain_video(self, filters: Sequence[str], out_label: str) -> None:
+        """Apply ``filters`` to the current video label, producing ``out_label``."""
+        if not filters:
+            return
+        self._segments.append(f"[{self.video_label}]{','.join(filters)}[{out_label}]")
+        self.video_label = out_label
+
+    def chain_audio(self, filters: Sequence[str], out_label: str) -> None:
+        """Apply ``filters`` to the current audio label, producing ``out_label``."""
+        if not filters:
+            return
+        self._segments.append(f"[{self.audio_label}]{','.join(filters)}[{out_label}]")
+        self.audio_label = out_label
+
+    def add_video_segment(self, segment: str, out_label: str) -> None:
+        """Add a pre-built segment that leaves the video on ``out_label``.
+
+        For the overlay builders (b-roll, emoji, brand logo), which emit their own multi-step
+        fragments because they wire up their own inputs. They are given the current label and
+        told which one to produce, so the graph still owns the hand-off.
+        """
+        if not segment:
+            return
+        self._segments.append(segment)
+        self.video_label = out_label
+
+    def add_audio_segment(self, segment: str, out_label: str) -> None:
+        if not segment:
+            return
+        self._segments.append(segment)
+        self.audio_label = out_label
+
+    def serialise(self) -> str:
+        """The ``-filter_complex`` value, or an empty string when nothing was added."""
+        return ";".join(self._segments)
+
+    def __bool__(self) -> bool:
+        return bool(self._segments)
+
+
 def render_clip(
     base_clip: str | Path,
     dest: str | Path,
@@ -209,11 +316,17 @@ def render_clip(
     engine_input_args = _engine_input_args(
         _input_order_contributions(engine_contributions)
     )
-    engine_input_count = engine_input_args.count("-i")
     base_clip = Path(base_clip)
     dest = Path(dest)
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # The graph owns inputs, labels and segment order from here on. The base clip is index 0 and
+    # the reserved engine block follows it immediately, because the host publishes each engine's
+    # ``first_input_index`` before the engine runs and knows nothing about the music, b-roll or
+    # emoji decisions taken later in this function.
+    graph = Filter_Graph(base_clip)
+    graph.add_inputs(engine_input_args)
 
     info = probe(base_clip)
     width, height = info.width, info.height
@@ -491,22 +604,30 @@ def render_clip(
             broll_cues = []
 
     # ---------------------------------------------------------------------
-    # Input index accounting (Req 10.3), explicit and collision-free:
+    # Input registration (Req 10.3). Order is argv order, and the graph hands out the index
+    # each block lands on:
     #     idx 0        : base clip
-    #     idx 1..N     : reserved engine input block (N == engine_input_count,
-    #                    0 on every v0.8.0 / all-off run — Reqs 1.5, 23.3)
+    #     idx 1..N     : reserved engine input block (empty on every v0.8.0 / all-off
+    #                    run, so nothing below shifts — Reqs 1.5, 23.3)
     #     music_index  : music (when present)
     #     broll_offset : b-roll inputs (contiguous)
     #     emoji_offset : emoji inputs (after b-roll)
     #
-    # The engine block sits immediately after the base clip because the host must
-    # publish each engine's ``first_input_index`` BEFORE the engine runs, and it
-    # knows nothing about the music/b-roll/emoji decisions taken here. Everything
-    # downstream of the block is therefore shifted by ``engine_input_count``; with
-    # no contribution that shift is 0 and every index below is unchanged.
+    # The engine block sits immediately after the base clip because the host must publish each
+    # engine's ``first_input_index`` BEFORE the engine runs, and it knows nothing about the
+    # music/b-roll/emoji decisions taken here.
+    #
+    # Music is *registered* here rather than in the audio section further down, even though its
+    # filter is not added until then. Registration and filtering are separate concerns and the
+    # graph is what keeps them consistent: the b-roll offset depends on whether a music input
+    # exists, so the two used to be linked by the arithmetic
+    # ``(2 if music_path is not None else 1) + <engine input count>`` — correct, and silently
+    # wrong the moment anything else claimed an index.
     # ---------------------------------------------------------------------
-    music_index = 1 + engine_input_count
-    broll_offset = (2 if music_path is not None else 1) + engine_input_count
+    music_index = graph.next_input_index if music_path is not None else -1
+    if music_path is not None:
+        graph.add_inputs(["-i", str(music_path)])
+    broll_offset = graph.next_input_index
 
     # Build the b-roll overlay graph (below captions). Any failure degrades to
     # a b-roll-disabled render rather than failing the clip (Reqs 10.6, 9.3).
@@ -538,42 +659,29 @@ def render_clip(
                 for c in broll_cues if float(c.end) > float(c.start)
             ]
 
-    num_broll_inputs = broll_input_args.count("-i")
-    emoji_offset = broll_offset + num_broll_inputs
+    graph.add_inputs(broll_input_args)
+    emoji_offset = graph.next_input_index
 
     # ---------------------------------------------------------------------
     # Assemble the video filter graph (bottom -> top):
-    #     look chain -> b-roll overlays -> captions/progress -> emoji
+    #     look chain -> b-roll overlays -> captions/progress -> emoji -> logo
     # ---------------------------------------------------------------------
-    # Base clip first, then the reserved engine block (empty unless an engine
-    # contributed an input), then music / b-roll / emoji below.
-    inputs: list[str] = ["-i", str(base_clip), *engine_input_args]
-    graph_parts: list[str] = []
-    video_label = "0:v"
-
     if broll_graph:
-        # Split so b-roll sits below the caption layer.
-        if look_chain:
-            graph_parts.append(f"[0:v]{','.join(look_chain)}[vlook]")
-        graph_parts.append(broll_graph)
-        video_label = "vbroll"
-        if caption_chain:
-            graph_parts.append(f"[{video_label}]{','.join(caption_chain)}[vbase]")
-            video_label = "vbase"
+        # Split, so b-roll sits *below* the caption layer and text stays legible (Req 10.2).
+        graph.chain_video(look_chain, "vlook")
+        graph.add_video_segment(broll_graph, "vbroll")
+        graph.chain_video(caption_chain, "vbase")
     else:
-        # No b-roll: rebuild the single combined look+caption chain exactly as
-        # the compositor always has.
-        full_chain = look_chain + caption_chain
-        if full_chain:
-            graph_parts.append(f"[0:v]{','.join(full_chain)}[vbase]")
-            video_label = "vbase"
+        # No b-roll: one combined look+caption chain, which is what the compositor has always
+        # emitted when nothing needs to be composited between the two.
+        graph.chain_video(look_chain + caption_chain, "vbase")
 
     # Emoji overlays sit on top of the caption layer.
     emoji_inputs: list[str] = []
     emoji_graph = ""
     if emoji_cues:
         emoji_inputs, emoji_graph = emoji.build_overlay(
-            emoji_cues, base_label=video_label, out_label="vout",
+            emoji_cues, base_label=graph.video_label, out_label="vout",
             duration=duration, animate=options.emoji_animate,
             # A8: the real target width. build_overlay assumed 1080, so the emoji was
             # sized for a frame the output might not have.
@@ -584,9 +692,9 @@ def render_clip(
             placement=str(getattr(settings, "emoji_placement", "spread") or "spread"),
             caption_position=options.caption_position or "bottom",
         )
+    graph.add_inputs(emoji_inputs)
     if emoji_graph:
-        graph_parts.append(emoji_graph)
-        video_out = "vout"
+        graph.add_video_segment(emoji_graph, "vout")
         applied.append(f"emoji:{options.emoji}")
         # A13: record the artwork set, and record it *separately* when a glyph came from the
         # vendored Noto fallback instead. The fallback keeps the overlay rather than dropping it,
@@ -599,8 +707,6 @@ def render_clip(
             used = [Path(emoji_inputs[i + 1]) for i, a in enumerate(emoji_inputs) if a == "-i"]
             if any(path.resolve().parent != wanted for path in used):
                 applied.append(f"emoji_style_degraded:{emoji_style.name}")
-    else:
-        video_out = video_label
 
     # U6: the brand logo, on top of everything - captions and emoji included. A watermark that
     # an emoji overlay could cover is not a watermark.
@@ -610,19 +716,19 @@ def render_clip(
     # from them, and that accounting is what keeps the v0.8.0 parity guarantee. Adding an input
     # for a watermark would put all of those at risk to save nothing.
     logo_graph = branding.logo_filter(
-        options, width, height, base_label=video_out, out_label="vbrand"
+        options, width, height, base_label=graph.video_label, out_label="vbrand"
     )
     if logo_graph:
-        graph_parts.append(logo_graph)
-        video_out = "vbrand"
+        graph.add_video_segment(logo_graph, "vbrand")
         applied.append("brand_logo")
 
     # Record composited b-roll (only the cues actually in the graph, Req 9.4).
     if broll_graph:
         applied.extend(broll_notes)
 
-    # Audio graph.
-    audio_out = "0:a"
+    # Audio graph. `audio_changed` stays a local decision rather than something the graph
+    # infers: it means "re-encode the audio", and the last two stages below add segments without
+    # being a reason to re-encode on their own — both are gated on it already being true.
     audio_changed = False
 
     # AU4/AU5: clean the speech *first*, before anything is mixed into it.
@@ -638,21 +744,19 @@ def render_clip(
     # threshold any platform normalises against.
     repair = audio.speech_repair_chain()
     if repair and info.has_audio:
-        graph_parts.append(f"[0:a]{','.join(repair)}[aclean]")
-        audio_out = "aclean"
+        graph.chain_audio(repair, "aclean")
         audio_changed = True
         if audio.denoise_filter():
             applied.append("speech_denoise")
         if audio.deesser_filter():
             applied.append("deesser")
 
-    speech_label = audio_out
+    speech_label = graph.audio_label
     if music_path is not None:
-        # Music follows the engine block and precedes the b-roll/emoji inputs, so
-        # its index is 1 on every run without an engine contribution (i.e. the
-        # label is byte-identically ``1:a`` for every v0.8.0 caller).
-        inputs += ["-i", str(music_path)]
-        graph_parts.append(
+        # The input was registered with the others further up, so `music_index` is the index
+        # ffmpeg will give it - 1 on every run without an engine contribution, which is what
+        # makes the label byte-identically ``1:a`` for every v0.8.0 caller.
+        graph.add_audio_segment(
             audio.music_mix_filter(speech_label, f"{music_index}:a", "aout",
                                    options.music_volume, duration,
                                    fade=options.fades,
@@ -662,9 +766,9 @@ def render_clip(
                                    # composited - a cue whose asset failed to resolve is not on
                                    # screen, and ducking under nothing is a hole in the bed.
                                    broll_windows=broll_duck_windows,
-                                   broll_duck=broll_duck_amount)
+                                   broll_duck=broll_duck_amount),
+            "aout",
         )
-        audio_out = "aout"
         audio_changed = True
         applied.append(f"music:{options.music}")
         if options.music_duck:
@@ -682,11 +786,10 @@ def render_clip(
             applied.append(f"music_track:{music_bed.track_index}/{music_bed.track_count}")
     elif options.fades and info.has_audio:
         out_start = max(0.0, duration - 0.4)
-        graph_parts.append(
-            f"[{speech_label}]afade=t=in:st=0:d=0.400"
-            f",afade=t=out:st={out_start:.3f}:d=0.400[aout]"
+        graph.chain_audio(
+            ["afade=t=in:st=0:d=0.400", f"afade=t=out:st={out_start:.3f}:d=0.400"],
+            "aout",
         )
-        audio_out = "aout"
         audio_changed = True
 
     # Engine audio contributions chain onto whatever audio label the compositor
@@ -694,8 +797,7 @@ def render_clip(
     # exactly like the music/fade paths above.
     engine_audio = [f for c in contributions for f in c.audio_filters]
     if engine_audio and info.has_audio:
-        graph_parts.append(f"[{audio_out}]{','.join(engine_audio)}[aeng]")
-        audio_out = "aeng"
+        graph.chain_audio(engine_audio, "aeng")
         audio_changed = True
 
     # --- loudness normalisation (AU1) -------------------------------------
@@ -717,10 +819,7 @@ def render_clip(
             applied.append("loudness_degraded:unmeasurable")
         else:
             target = audio.platform_loudness_target(options.platform)
-            graph_parts.append(
-                f"[{audio_out}]{audio.loudnorm_filter(stats, target)}[aloud]"
-            )
-            audio_out = "aloud"
+            graph.chain_audio([audio.loudnorm_filter(stats, target)], "aloud")
             applied.append(f"loudness:{target:g}lufs")
 
     # --- true-peak limiting (AU3) -----------------------------------------
@@ -730,15 +829,10 @@ def render_clip(
     # +5.5 dBFS). No marker is recorded, deliberately - this is a safety stage that is
     # inaudible when it does not engage, and "applied" markers describe choices, not guards.
     if settings.true_peak_limit_enabled and info.has_audio and audio_changed:
-        graph_parts.append(f"[{audio_out}]{audio.true_peak_limit_filter()}[apeak]")
-        audio_out = "apeak"
+        graph.chain_audio([audio.true_peak_limit_filter()], "apeak")
 
-    # Inputs are ordered base -> engines -> music -> b-roll -> emoji (Req 10.3);
-    # the engine block was emitted with the base clip above so its indices are
-    # fixed and knowable before any engine ran.
-    inputs += broll_input_args
-    inputs += emoji_inputs
-
+    # Inputs were registered base -> engines -> music -> b-roll -> emoji (Req 10.3) as each
+    # was decided, so the graph already holds them in argv order.
     video_changed = (
         bool(look_chain) or bool(caption_chain) or bool(broll_graph)
         or bool(emoji_graph) or bool(logo_graph)
@@ -749,15 +843,15 @@ def render_clip(
     # ---------------------------------------------------------------------
     # Build and run the ffmpeg command.
     # ---------------------------------------------------------------------
-    cmd = [settings.ffmpeg_binary, "-y", *inputs]
-    if graph_parts:
-        cmd += ["-filter_complex", ";".join(graph_parts)]
+    cmd = [settings.ffmpeg_binary, "-y", *graph.input_args]
+    if graph:
+        cmd += ["-filter_complex", graph.serialise()]
 
     # Map video.
-    cmd += ["-map", f"[{video_out}]" if video_changed else "0:v"]
+    cmd += ["-map", f"[{graph.video_label}]" if video_changed else "0:v"]
     # Map audio (only if the source has audio).
     if info.has_audio:
-        cmd += ["-map", f"[{audio_out}]" if audio_changed else "0:a"]
+        cmd += ["-map", f"[{graph.audio_label}]" if audio_changed else "0:a"]
 
     # Codecs: re-encode only the streams we changed.
     if video_changed:
