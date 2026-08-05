@@ -80,6 +80,26 @@ def _dependency_names(route: APIRoute) -> list[str]:
     ]
 
 
+def _is_spa_fallback(route: APIRoute) -> bool:
+    """Is this the placeholder page that stands in for an unbuilt frontend?
+
+    `api/main.py` serves the SPA one of two ways: a `StaticFiles` mount at `""` when
+    `frontend/dist` exists, or a `GET /` HTML fallback when it does not. Which one is registered
+    says whether somebody has run `npm run build` - it says nothing about the API - so neither
+    belongs in a frozen table.
+
+    Leaving them in is what broke this suite. The table was frozen on a checkout with the frontend
+    built; the Backend CI job installs no Node and builds nothing, so there it reported
+    ``endpoints added: ['GET /']``, a mount list one item short, and
+    ``expected exactly one catch-all mount, got []`` - three failures out of seven in a job whose
+    Python was fine, and the whole reason this freeze looked broken rather than useful.
+
+    Both are excluded from `capture()` and asserted directly, in both states, by
+    :func:`test_the_spa_is_served_exactly_once_and_last`.
+    """
+    return route.path == "/" and "ui" in route.tags
+
+
 def capture() -> dict:
     """The whole routing table as plain data.
 
@@ -101,6 +121,9 @@ def capture() -> dict:
     builtin: list[dict] = []
 
     for route in iter_api_routes():
+        # Excluded: registered only when the frontend has *not* been built. See _is_spa_fallback.
+        if _is_spa_fallback(route):
+            continue
         # HEAD is added implicitly alongside GET and carries no information of its own.
         for method in sorted(route.methods - {"HEAD"}):
             api[f"{method} {route.path}"] = {
@@ -119,8 +142,12 @@ def capture() -> dict:
 
     for route in app.routes:
         if isinstance(route, Mount):
+            # Excluded for the same reason as the fallback route above: the mount at `""` is the
+            # built SPA, so freezing it freezes whether `frontend/dist` existed at capture time.
+            # Its ordering requirement - the thing that actually matters - is asserted directly.
+            if route.path == "":
+                continue
             mounts.append({
-                # `""` is the SPA catch-all. It must stay last.
                 "path": route.path,
                 "name": route.name,
                 "app": type(route.app).__name__,
@@ -210,18 +237,35 @@ def test_no_route_is_shadowed_by_an_earlier_one():
                 )
 
 
-def test_the_spa_catch_all_mount_is_last():
+def test_the_spa_is_served_exactly_once_and_last():
     """Asserted independently of the golden, because getting it wrong fails silently.
 
     The mount at `""` matches every path. A router registered after it would have all of its
     routes answered with `index.html` and a 200, so no request would error and no test that only
     checks status codes would notice.
+
+    Written for both states of `frontend/dist` on purpose. `api/main.py` registers the mount when
+    the SPA has been built and a `GET /` fallback page when it has not, and asserting only the
+    first made this a statement about the working tree: green locally, red in CI, where the backend
+    job builds no frontend. Which of the two is present is not a property worth freezing - that
+    *exactly one* of them is, and that the greedy one cannot shadow anything, is.
     """
     mounts = [
         (index, route) for index, route in enumerate(app.routes) if isinstance(route, Mount)
     ]
     catch_all = [(index, route) for index, route in mounts if route.path == ""]
-    assert len(catch_all) == 1, f"expected exactly one catch-all mount, got {catch_all}"
+    fallback = [route for route in iter_api_routes() if _is_spa_fallback(route)]
+
+    assert len(catch_all) + len(fallback) == 1, (
+        "`/` must be served exactly once - by the SPA mount when the frontend is built, or by the "
+        f"fallback page when it is not - but found {len(catch_all)} catch-all mount(s) and "
+        f"{len(fallback)} fallback route(s)"
+    )
+
+    if not catch_all:
+        # Unbuilt checkout: nothing is greedy, so there is no ordering requirement to check.
+        return
+
     index, _route = catch_all[0]
     assert index == len(app.routes) - 1, (
         "the catch-all StaticFiles mount is not last; every route after it is unreachable: "

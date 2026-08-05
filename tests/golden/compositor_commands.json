@@ -489,7 +489,7 @@
       "[bedfit]volume=0.120[bedlvl]",
       "[bedlvl]anull[bedv]",
       "[0:a][bedv]amix=inputs=2:duration=first:normalize=0[aout]",
-      "[aout]loudnorm=I=-14:TP=-1:LRA=11:measured_I=-21.87:measured_TP=-13.46:measured_LRA=0:measured_thresh=-31.87:offset=-0:linear=true:print_format=summary[aloud]",
+      "[aout]loudnorm=I=-14:TP=-1:LRA=11:measured_I=-21.87:measured_TP=-13.46:measured_LRA=0:measured_thresh=-31.87:offset=0:linear=true:print_format=summary[aloud]",
       "[aloud]alimiter=limit=0.8913:level=disabled[apeak]"
     ],
     "inputs": [
