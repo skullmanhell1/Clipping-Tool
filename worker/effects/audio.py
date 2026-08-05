@@ -602,6 +602,26 @@ class LoudnessStats:
     target_offset: float
 
 
+def _measured(raw: object) -> float:
+    """One ``loudnorm`` JSON measurement as a float, with negative zero collapsed.
+
+    ``float("-0.00")`` is ``-0.0``, and ``f"{-0.0:g}"`` is ``"-0"`` - so a measurement ffmpeg
+    reported as ``-0.00`` travelled all the way into the emitted filter as ``offset=-0``. That is
+    the same gain as ``offset=0`` to ffmpeg and carries no information, but it made the command
+    this project builds depend on *which ffmpeg build did the measuring*: the analysis pass prints
+    ``"target_offset" : "-0.00"`` on some builds and ``"0.00"`` on others for the identical input.
+    ``tests/test_compositor_graph_parity.py`` caught it - the frozen ``loudness_with_music`` graph
+    was recorded with ``offset=-0`` and ffmpeg 6.1.1 produces ``offset=0``, with all four other
+    measurements byte-identical.
+
+    Adding ``0.0`` is the whole trick: under IEEE-754, ``-0.0 + 0.0`` is ``+0.0`` while every other
+    value is unchanged. Applied to all five measurements rather than just the offset, because any
+    of them can come back as ``-0.00`` - ``input_lra`` is already ``0.0`` for a pure tone and is
+    one ffmpeg build away from being ``-0.0``.
+    """
+    return float(raw) + 0.0
+
+
 def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
     """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
 
@@ -638,11 +658,11 @@ def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
     try:
         data = json.loads(stderr[start : end + 1])
         return LoudnessStats(
-            input_i=float(data["input_i"]),
-            input_tp=float(data["input_tp"]),
-            input_lra=float(data["input_lra"]),
-            input_thresh=float(data["input_thresh"]),
-            target_offset=float(data["target_offset"]),
+            input_i=_measured(data["input_i"]),
+            input_tp=_measured(data["input_tp"]),
+            input_lra=_measured(data["input_lra"]),
+            input_thresh=_measured(data["input_thresh"]),
+            target_offset=_measured(data["target_offset"]),
         )
     except (ValueError, KeyError, TypeError):
         return None
