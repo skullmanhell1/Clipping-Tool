@@ -204,3 +204,80 @@ def test_detect_faces_keeps_boxes_from_a_detector_that_returns_faceboxes(make_vi
         "every FaceBox-shaped detection was discarded by the coercion"
     )
     assert per_frame[0][0].center == pytest.approx((160.0, 140.0))
+
+
+
+# --------------------------------------------------------------------------- #
+# Tracking quality on the record
+# --------------------------------------------------------------------------- #
+def test_coverage_is_reported_as_a_marker(monkeypatch):
+    """A `reframe` marker says a face was followed, not that it was followed well."""
+    from config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "reframe_coverage_floor", 0.7, raising=False)
+
+    good = rf.Track_Report([rf.Center(0.0, 1, 1)], sampled=100, detected=100, tracked=100)
+    assert rf.coverage_notes(good) == ["reframe_coverage:100"]
+
+    ok = rf.Track_Report([rf.Center(0.0, 1, 1)], sampled=100, detected=100, tracked=71)
+    assert rf.coverage_notes(ok) == ["reframe_coverage:71"]
+
+
+def test_coverage_below_the_floor_is_flagged(monkeypatch):
+    """The case worth looking at: the crop held a stale position most of the time."""
+    from config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "reframe_coverage_floor", 0.7, raising=False)
+
+    poor = rf.Track_Report([rf.Center(0.0, 1, 1)], sampled=100, detected=90, tracked=33)
+    assert rf.coverage_notes(poor) == ["reframe_coverage:33", "reframe_low_coverage"]
+
+    # Exactly at the floor is not below it.
+    edge = rf.Track_Report([rf.Center(0.0, 1, 1)], sampled=100, detected=100, tracked=70)
+    assert rf.coverage_notes(edge) == ["reframe_coverage:70"]
+
+
+def test_the_floor_is_operator_policy_not_a_constant(monkeypatch):
+    from config import settings as app_settings
+
+    report = rf.Track_Report([rf.Center(0.0, 1, 1)], sampled=100, detected=100, tracked=80)
+
+    monkeypatch.setattr(app_settings, "reframe_coverage_floor", 0.9, raising=False)
+    assert "reframe_low_coverage" in rf.coverage_notes(report)
+
+    monkeypatch.setattr(app_settings, "reframe_coverage_floor", 0.5, raising=False)
+    assert "reframe_low_coverage" not in rf.coverage_notes(report)
+
+
+def test_nothing_sampled_reports_nothing():
+    """A coverage figure for a render that never sampled anything would be a fabrication."""
+    assert rf.coverage_notes(rf.Track_Report([])) == []
+
+
+@requires_ffmpeg
+def test_apply_reframe_records_coverage_only_on_success(make_video, tmp_path, monkeypatch):
+    """Markers are appended after the render, so a failure leaves none behind.
+
+    Asserted because the ordering is the whole reason this is an out-parameter: a coverage
+    figure recorded for a clip that then fell through to a static crop would describe a
+    render that does not exist.
+    """
+    src = make_video("cov.mp4", duration=1.0, w=1280, h=720)
+
+    monkeypatch.setattr(
+        rf, "track_faces_report",
+        lambda *a, **k: rf.Track_Report(
+            [rf.Center(0.0, 400, 360), rf.Center(1.0, 700, 360)],
+            sampled=10, detected=10, tracked=4,
+        ),
+    )
+    notes: list[str] = []
+    rf.apply_reframe(src, tmp_path / "ok.mp4", aspect="9:16", notes=notes)
+    assert notes == ["reframe_coverage:40", "reframe_low_coverage"]
+
+    # Now the failing path: no centres at all.
+    monkeypatch.setattr(rf, "track_faces_report", lambda *a, **k: rf.Track_Report([]))
+    failed_notes: list[str] = []
+    with pytest.raises(rf.ReframeUnavailable):
+        rf.apply_reframe(src, tmp_path / "no.mp4", aspect="9:16", notes=failed_notes)
+    assert failed_notes == [], "a failed reframe must not leave a coverage marker behind"

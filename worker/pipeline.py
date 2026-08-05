@@ -507,14 +507,23 @@ def run_pipeline(
                 # crop-blur (Reqs 14.1-14.4).
                 applied.append("speaker_reframe_degraded")
                 try:
-                    reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                    # `notes` collects the tracking-quality markers, gathered into a local
+                    # list and extended afterwards so `reframe` still reads first on the
+                    # record - the marker order describes what happened, in order.
+                    reframe_notes: list[str] = []
+                    reframe.apply_reframe(
+                        raw, geo, aspect=options.aspect, notes=reframe_notes
+                    )
                     applied.append("reframe")
+                    applied.extend(reframe_notes)
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
                     fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
         elif options.reframe:
             try:
-                reframe.apply_reframe(raw, geo, aspect=options.aspect)
+                reframe_notes = []
+                reframe.apply_reframe(raw, geo, aspect=options.aspect, notes=reframe_notes)
                 applied.append("reframe")
+                applied.extend(reframe_notes)
             except (reframe.ReframeUnavailable, fu.FFmpegError):
                 fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
         else:

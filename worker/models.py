@@ -586,6 +586,20 @@ class ClipResult:
     #   - ``faces_none``                     zero face tracks detected
     #   - ``speaker_reframe_degraded``       speaker-aware geometry unusable/failed;
     #                                        fell back along the chain
+    #
+    # Face-tracking quality. ``reframe`` says the crop followed a face; it does not say
+    # whether it followed one *well*, and until these markers existed a clip whose subject
+    # was found in every sampled frame and one whose subject was found in a third of them
+    # carried an identical record. The second is a crop holding a stale position two thirds
+    # of the time, which on screen is the framing freezing while the subject moves.
+    #   - ``reframe_coverage:<pct>``         percentage of sampled frames in which the
+    #                                        tracked subject was actually detected. Counts
+    #                                        the *subject's* track, not any face: a frame
+    #                                        where some other face was found is still a
+    #                                        frame the crop is guessing on.
+    #   - ``reframe_low_coverage``           coverage fell below
+    #                                        ``settings.reframe_coverage_floor``; the
+    #                                        framing on this clip is worth looking at
     effects_applied: list[str] = field(default_factory=list)
 
     # --- Tier 1: provenance for composited b-roll assets ------------------

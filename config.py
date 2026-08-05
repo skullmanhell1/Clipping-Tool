@@ -742,6 +742,21 @@ class Settings(BaseSettings):
         description="Use zero-phase (lag-free) forward-backward smoothing for the reframe "
                     "crop path. Off restores the causal EMA, which trails the subject.",
     )
+    # Below this fraction of sampled frames containing the tracked subject, the clip record
+    # gains a ``reframe_low_coverage`` marker. A `reframe` marker says the crop followed a
+    # face, not that it followed one well, so without this a clip tracked in every frame and
+    # one tracked in a third of them were indistinguishable.
+    #
+    # 0.7 sits between the two figures PR #92 measured for the shipped cascade: 0.886
+    # detection coverage overall, and 0.60 through a profile turn - the case where a frontal
+    # cascade loses the subject. So it fires when tracking is mostly guessing rather than
+    # merely imperfect.
+    reframe_coverage_floor: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Detection coverage below which a clip is marked reframe_low_coverage.",
+    )
 
     # ------------------------------------------- output geometry (O5, O9) --
     # Resolution was fixed at the 1080-class values in ffmpeg_utils.ASPECT_PRESETS with no way

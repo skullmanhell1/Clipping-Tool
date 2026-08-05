@@ -956,6 +956,7 @@ def apply_reframe(
     sample_fps: Optional[float] = None,
     command_fps: Optional[float] = None,
     smoothing: float = 0.35,
+    notes: Optional[list[str]] = None,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -972,6 +973,13 @@ def apply_reframe(
     growing linearly with clip length. Both settings are now honoured, which also puts a
     ceiling on the work: at the shipped values a clip up to 180s - the longest the
     ``90s-3min`` preset produces - still gets the full rate.
+
+    ``notes`` is an optional out-parameter collecting the tracking-quality markers described
+    on :attr:`worker.models.ClipResult.effects_applied`. An out-parameter rather than a
+    changed return type because this function returns a ``Path`` to 48 call sites and tests,
+    and because the markers must only be recorded once the render has actually succeeded -
+    on any failure the caller falls down the degradation ladder and a coverage figure for a
+    render that never happened would be worse than none.
     """
     if aspect not in ASPECT_PRESETS:
         raise ReframeUnavailable(f"Unknown aspect '{aspect}'")
@@ -1044,7 +1052,31 @@ def apply_reframe(
         raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
     finally:
         cmd_file.unlink(missing_ok=True)
+
+    if notes is not None:
+        notes.extend(coverage_notes(report))
     return dest
+
+
+def coverage_notes(report: Track_Report) -> list[str]:
+    """PURE: the tracking-quality markers for ``report``.
+
+    Separated from :func:`apply_reframe` so the marker vocabulary is testable without
+    rendering anything, and so the speaker-aware path can adopt it without duplicating the
+    threshold logic.
+
+    The percentage is rounded to an integer deliberately. It is read by a human deciding
+    whether to look at a clip, so the extra digits carry no information they would act on,
+    and a float would put its formatting into every record and golden that ever quotes one.
+    """
+    if report.sampled <= 0:
+        return []
+    pct = int(round(report.coverage * 100))
+    out = [f"reframe_coverage:{pct}"]
+    floor = float(getattr(settings, "reframe_coverage_floor", 0.7) or 0.0)
+    if report.coverage < floor:
+        out.append("reframe_low_coverage")
+    return out
 
 
 def _aspect_ratio_parts(aspect: str) -> tuple[int, int]:
