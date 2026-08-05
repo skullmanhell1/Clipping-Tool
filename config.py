@@ -707,6 +707,17 @@ class Settings(BaseSettings):
         description="Reset reframe tracking at shot changes (V4). Costs one video-only decode "
                     "per reframed clip; off restores smoothing straight through cuts.",
     )
+    # The reframe smoother was causal — every output depended only on samples at or before
+    # it, so the crop necessarily trailed the subject. Measured against a ground-truth path
+    # with the subject panning 500 px/s, that lag was a mean centre error of 40 px and a p95
+    # of 159 px at the full sampling rate, in a 608 px-wide crop window. The whole face path
+    # is known before ffmpeg runs, so the filter is allowed to look ahead; forward-backward
+    # filtering cancels the phase shift exactly. Off restores the pre-0.12 causal filter.
+    reframe_zero_phase: bool = Field(
+        default=True,
+        description="Use zero-phase (lag-free) forward-backward smoothing for the reframe "
+                    "crop path. Off restores the causal EMA, which trails the subject.",
+    )
 
     # ------------------------------------------- output geometry (O5, O9) --
     # Resolution was fixed at the 1080-class values in ffmpeg_utils.ASPECT_PRESETS with no way
