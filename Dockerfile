@@ -143,10 +143,22 @@ COPY --from=frontend /ui/dist ./frontend/dist
 # Not `--system`: that flag allocates from the low reserved range and warns when given an explicit
 # UID above SYS_UID_MAX (999). The UID has to be an explicit high number so a bind-mounted host
 # directory can be chowned to it, so the flag and the requirement are incompatible.
+#
+# `/app/assets` is chowned too, but **not** recursively, and that distinction is the whole point:
+# `settings.ensure_local_dirs()` creates `assets/broll` and `assets/broll_cache` at startup, and
+# `worker/effects/emoji.style_assets_dir()` creates `assets/emoji-<style>` on the first render with
+# a non-default artwork set. None of those three exist in the image, so with `/app/assets` root
+# owned the container died during startup with
+# `PermissionError: [Errno 13] Permission denied: '/app/assets/broll'` — the app never reached the
+# point of serving a request, which is what `scripts/docker_smoke.sh` catches.
+# Granting the *directory* rather than the tree lets those subdirectories be created while the
+# vendored fonts and emoji inside stay root-owned and read-only, so the 8 MB of committed artwork
+# still cannot be rewritten by the running process (and it costs no extra image layer data).
 RUN groupadd --gid 10001 clipper \
     && useradd --uid 10001 --gid clipper --no-create-home --shell /usr/sbin/nologin clipper \
     && mkdir -p /app/storage \
-    && chown -R clipper:clipper /app/storage
+    && chown -R clipper:clipper /app/storage \
+    && chown clipper:clipper /app/assets
 
 USER clipper
 
