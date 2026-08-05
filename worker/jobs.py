@@ -23,7 +23,13 @@ from typing import Any
 from config import settings
 from worker import cancellation, llm_cost, observability
 from worker import download as dl
-from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
+from worker.models import (
+    CANCELLABLE_JOB_STATUSES,
+    ClipResult,
+    Job,
+    JobStatus,
+    ProcessingOptions,
+)
 from worker.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -257,30 +263,42 @@ class JobManager:
     def cancel(self, job_id: str) -> bool:
         """Ask a job to stop, returning whether it was in a cancellable state.
 
-        A queued job is marked cancelled immediately - no worker has claimed it, so there is
-        nothing to wait for and reporting it as "cancelling" would be a lie. A processing job is
-        marked cancelled *and* flagged, because the worker stops at its next checkpoint and the
-        user needs the acknowledgement now rather than whenever the current ffmpeg pass ends.
+        The two cases genuinely differ, and Phase 7 stopped flattening them:
 
-        A finished job (completed, failed, already cancelled) returns ``False`` rather than
-        raising: cancelling something that already stopped is a harmless no-op, and reporting it
-        as an error would make a double-click on the button look like a failure.
+        * A **queued** job is marked ``CANCELLED`` immediately. No worker has claimed it, so
+          there is nothing to wait for and reporting it as "cancelling" would be a lie.
+        * A **processing** job is marked ``CANCELLING``. The worker stops at its next
+          checkpoint, and a job already inside an ffmpeg pass finishes that pass first - so the
+          honest answer is "stopping", and it becomes ``CANCELLED`` when the worker actually
+          unwinds (see the ``Job_Cancelled`` handler in ``_execute``).
+
+          This used to write ``CANCELLED`` here, with the *API response* carrying the word
+          "cancelling". That put the truth in the transient half: the record said cancelled, the
+          UI re-read it a moment later, and the job appeared to have stopped while it was still
+          rendering.
+
+        A finished job - completed, failed, already cancelled, or already cancelling - returns
+        ``False`` rather than raising: cancelling something that has already stopped or is
+        already stopping is a harmless no-op, and reporting it as an error would make a
+        double-click on the button look like a failure.
         """
         job = self.store.get(job_id)
-        if job is None or job.status in (
-            JobStatus.COMPLETED,
-            JobStatus.FAILED,
-            JobStatus.CANCELLED,
-        ):
+        if job is None or job.status not in CANCELLABLE_JOB_STATUSES:
             return False
         cancellation.request_cancel(job_id)
+        stopping = job.status is JobStatus.PROCESSING
         self.store.update(
             job_id,
-            status=JobStatus.CANCELLED,
-            stage="Cancelled",
+            status=JobStatus.CANCELLING if stopping else JobStatus.CANCELLED,
+            stage="Cancelling" if stopping else "Cancelled",
             error=None,
         )
-        logger.info("job %s cancelled by request (was %s)", job_id, job.status.value)
+        logger.info(
+            "job %s %s by request (was %s)",
+            job_id,
+            "cancelling" if stopping else "cancelled",
+            job.status.value,
+        )
         return True
 
     def submit_batch(self, items: list[dict], options: ProcessingOptions) -> str:

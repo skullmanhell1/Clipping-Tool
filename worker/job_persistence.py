@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 #: nothing will ever advance them. Recorded as failures on load.
 INTERRUPTED_STATUSES = frozenset({JobStatus.QUEUED.value, JobStatus.PROCESSING.value})
 
+#: Statuses that cannot survive a restart either, but whose honest resolution is *not* failure.
+#:
+#: A job caught mid-``CANCELLING`` had a worker that no longer exists, so like the two above it
+#: would otherwise sit in a non-terminal state forever with nothing to advance it. But the user
+#: asked for it to stop, and it did stop - abruptly, and by the restart rather than by the
+#: checkpoint, which is a difference of no consequence to them. Recording it as failed would
+#: inflate exactly the failure rate that ``JobStatus.CANCELLED`` exists to keep honest, and would
+#: attach a "re-submit the source" error to a job nobody wanted finished.
+RESTART_RESOLVED_STATUSES = {JobStatus.CANCELLING.value: JobStatus.CANCELLED}
+
 #: Stage text given to a job that was interrupted mid-flight.
 INTERRUPTED_STAGE = "Interrupted by restart"
 
@@ -168,6 +178,10 @@ class Job_Persistence:
 
         jobs: list[Job] = []
         interrupted: list[Job] = []
+        # Rewritten but *not* failed. Tracked separately from `interrupted` so the log line can
+        # say what it actually did - reporting a cancellation as "marked as failed" is the same
+        # conflation `JobStatus.CANCELLED` exists to prevent.
+        resolved_jobs: list[Job] = []
         for row in rows:
             try:
                 data = json.loads(row["data"])
@@ -175,7 +189,19 @@ class Job_Persistence:
                 logger.warning("skipping unreadable job record in %s", self.path)
                 continue
             job = Job.from_dict(data)
-            if str(data.get("status") or "") in INTERRUPTED_STATUSES:
+            persisted_status = str(data.get("status") or "")
+            resolved = RESTART_RESOLVED_STATUSES.get(persisted_status)
+            if resolved is not None:
+                # Reached its requested end, just not by the route it expected. Left alone it
+                # would sit in a non-terminal state with no worker to advance it.
+                job.status = resolved
+                job.stage = "Cancelled"
+                job.error = None
+                job.updated_at = time.time()
+                resolved_jobs.append(job)
+                jobs.append(job)
+                continue
+            if persisted_status in INTERRUPTED_STATUSES:
                 job.status = JobStatus.FAILED
                 job.stage = INTERRUPTED_STAGE
                 # I5: say whether resuming is possible, and how much is already done. A job that
@@ -191,8 +217,12 @@ class Job_Persistence:
                 interrupted.append(job)
             jobs.append(job)
 
-        for job in interrupted:
+        for job in interrupted + resolved_jobs:
             self.save(job)
+        if resolved_jobs:
+            logger.info(
+                "resolved %d job(s) that were still cancelling at restart", len(resolved_jobs)
+            )
         if interrupted:
             logger.warning("marked %d interrupted job(s) as failed after restart", len(interrupted))
         return jobs

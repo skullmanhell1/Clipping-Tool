@@ -30,7 +30,7 @@ from worker.download import (
     validate_public_url,
 )
 from worker.jobs import get_manager
-from worker.models import ProcessingOptions
+from worker.models import JobStatus, ProcessingOptions
 
 router = APIRouter()
 
@@ -502,23 +502,31 @@ def cancel_job(job_id: str) -> dict:
     The response says ``cancelling`` for a job that was mid-render, because the worker stops at
     its next checkpoint and a job already inside an ffmpeg pass finishes that pass first. Saying
     "cancelled" while a render is still writing would be a claim the API cannot back.
+
+    Phase 7: ``state`` is now read back off the job rather than predicted from its status
+    *before* the call. The prediction was a second implementation of the rule that lives in
+    ``JobManager.cancel``, and the two could disagree with no test able to see it - the response
+    would say one thing while the record the UI polls said another. ``cancelling`` is a real
+    persisted status now, so there is one answer and this route reports it.
     """
     manager = get_manager()
     job = manager.store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    was_running = job.status.value == "processing"
     if not manager.cancel(job_id):
         raise HTTPException(
             status_code=409,
             detail=f"Job is {job.status.value} and cannot be cancelled",
         )
+    # Re-read: `cancel` decided which of the two states applies, and that decision is the answer.
+    stopped = manager.store.get(job_id)
+    state = stopped.status.value if stopped is not None else JobStatus.CANCELLED.value
     return {
         "job_id": job_id,
-        "state": "cancelling" if was_running else "cancelled",
+        "state": state,
         "detail": (
             "Stopping at the next checkpoint; a pass already in progress will finish first."
-            if was_running
+            if state == JobStatus.CANCELLING.value
             else "Stopped before processing began."
         ),
     }

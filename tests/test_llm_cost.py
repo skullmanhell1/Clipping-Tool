@@ -372,7 +372,6 @@ def test_complete_json_records_exactly_one_call():
     assert llm_cost.usage_for("j1").to_dict()["calls"] == 1
 
 
-
 # --------------------------------------------------------------------------- #
 # The job record, and the route that reports it
 # --------------------------------------------------------------------------- #

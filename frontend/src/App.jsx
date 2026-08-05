@@ -9,6 +9,7 @@ import PublishingPanel from "./components/PublishingPanel.jsx";
 import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
+import { ACTIVE_JOB_STATUSES } from "./jobStatus.js";
 
 const numOrNull = (value) =>
   value === "" || value === null || value === undefined ? null : Number(value);
@@ -421,8 +422,13 @@ export default function App() {
   // suppression — silently missed the case that matters, because a job going from processing to
   // completed does not change the count, so the fast 1.2s poll continued indefinitely after
   // everything had finished. This fixes that as well as the warning.
+  // Phase 7: `cancelling` counts as active. It is a real persisted status now, and a job in it
+  // still holds the worker — a cancel cannot interrupt an ffmpeg pass, so the job keeps running
+  // until that pass ends. Omitting it here would drop the app to its slow idle interval at
+  // precisely the moment the user is watching for the cancel to take effect, so the transition
+  // to `cancelled` would arrive seconds late and the UI would look stuck on "Stopping…".
   const hasActiveJobs = useMemo(
-    () => jobs.some((job) => ["queued", "processing"].includes(job.status)),
+    () => jobs.some((job) => ACTIVE_JOB_STATUSES.includes(job.status)),
     [jobs]
   );
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClipCard from "./ClipCard.jsx";
 import ReviewBar from "./ReviewBar.jsx";
 import { api, formatDuration } from "../api.js";
+import { ACTIVE_JOB_STATUSES, CANCELLABLE_JOB_STATUSES } from "../jobStatus.js";
 import {
   CLIP_SHAPE,
   PUBLISHER_STATUSES_SHAPE,
@@ -16,6 +17,10 @@ const STATUS_STYLES = {
   processing: "bg-amber-500/20 text-amber-300",
   completed: "bg-emerald-500/20 text-emerald-300",
   failed: "bg-rose-500/20 text-rose-300",
+  // Phase 7: `cancelling` is still work in progress, so it is coloured like `processing` rather
+  // than like `cancelled`. Without an entry here it fell through to the `queued` style, which
+  // says the opposite of what is happening — a job mid-ffmpeg-pass shown as waiting to start.
+  cancelling: "bg-amber-500/20 text-amber-300",
   // I4: cancelled is styled distinctly from failed, not merged with it. A job the user stopped
   // did not go wrong, and colouring it as an error tells them it did.
   cancelled: "bg-slate-600/40 text-slate-300",
@@ -212,7 +217,12 @@ export default function JobCard({
 
   const percentage = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
-  const inFlight = job.status === "processing" || job.status === "queued";
+  // Phase 7: `cancelling` is in flight — the job still holds the worker until the current
+  // ffmpeg pass ends — so the progress bar stays up. But it is no longer *cancellable*, which
+  // is a separate question: a second cancel would answer 409, so the button goes away.
+  const stopping = job.status === "cancelling";
+  const inFlight = ACTIVE_JOB_STATUSES.includes(job.status);
+  const canCancel = CANCELLABLE_JOB_STATUSES.includes(job.status);
   const hint = job.status === "failed" ? errorHint(job.error) : null;
 
   const cancel = async () => {
@@ -246,7 +256,7 @@ export default function JobCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {inFlight && (
+          {canCancel && (
             <button
               type="button"
               disabled={cancelling}
@@ -293,6 +303,22 @@ export default function JobCard({
       {cancelError && (
         <div className="mt-3 rounded-lg border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-300">
           {cancelError}
+        </div>
+      )}
+
+      {/* Phase 7: the distinction the API has always reported and the UI could not show.
+          Cancellation is cooperative — the worker stops at its next checkpoint, and a job inside
+          an ffmpeg pass finishes that pass first, which can be tens of seconds. Saying "stopped"
+          here would be wrong in the way that matters: someone told a job had finished may delete
+          the source or resubmit, while the render is still writing the file. */}
+      {stopping && (
+        <div className="mt-3 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">
+          <p className="font-medium">Stopping…</p>
+          <p className="mt-1 text-xs text-amber-300/80">
+            The job stops at its next checkpoint. A processing step already underway — an ffmpeg
+            pass, for instance — finishes first, so this can take up to a minute. Clips already
+            written are kept.
+          </p>
         </div>
       )}
 

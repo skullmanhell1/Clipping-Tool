@@ -327,3 +327,58 @@ describe("JobCard LLM cost accounting", () => {
     expect(screen.getByText("claude-3-5-sonnet-latest")).toBeInTheDocument();
   });
 });
+
+/**
+ * Phase 7: the `cancelling` state.
+ *
+ * `cancelling` is a real persisted status now, and the card has to treat it as *work in progress*
+ * rather than as a finished job. The failure being guarded against is the one the previous
+ * arrangement actually produced: a job shown as stopped while ffmpeg was still writing its file.
+ * Someone reading that may delete the source or resubmit.
+ */
+describe("JobCard cancelling state", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const withStatus = (status) => setup([clip("a")], { job: { ...job([clip("a")]), status } });
+
+  it("says stopping, and that a pass underway finishes first", () => {
+    withStatus("cancelling");
+    expect(screen.getByText(/^Stopping…$/)).toBeInTheDocument();
+    expect(screen.getByText(/finishes first/i)).toBeInTheDocument();
+    // The distinction that matters: it must NOT claim the job has stopped.
+    expect(screen.queryByText(/Stopped before finishing/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the progress bar up, because the job is still running", () => {
+    withStatus("cancelling");
+    expect(screen.getByText(/Step 6\/6/)).toBeInTheDocument();
+  });
+
+  it("does not offer Cancel again", () => {
+    // A second cancel answers 409, so offering the button would produce an error banner for a
+    // user doing something reasonable.
+    withStatus("cancelling");
+    expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
+  });
+
+  it("offers Cancel while queued or processing", () => {
+    withStatus("processing");
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
+  });
+
+  it("styles cancelling as work in progress rather than as queued", () => {
+    // Without an entry in STATUS_STYLES it fell through to the `queued` style, which says the
+    // opposite of what is happening — a job mid-ffmpeg-pass shown as waiting to start.
+    withStatus("cancelling");
+    const badge = screen.getByText("cancelling");
+    expect(badge.className).toContain("amber");
+  });
+
+  it("still reports a finished cancellation as stopped", () => {
+    withStatus("cancelled");
+    expect(screen.getByText(/Stopped before finishing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Stopping…$/)).not.toBeInTheDocument();
+  });
+});

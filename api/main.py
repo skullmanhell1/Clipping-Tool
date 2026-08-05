@@ -89,6 +89,7 @@ from config import settings
 # advertises every AV engine (each still default-off). See worker/engines/loader.py.
 from worker.engines import loader  # noqa: F401
 from worker.jobs import get_manager
+from worker.models import ACTIVE_JOB_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +305,10 @@ def fallback_index_html() -> str:
 
     try:
         jobs = get_manager().store.all()
-        active = sum(1 for j in jobs if j.status.value in ("queued", "processing"))
+        # One definition of "active", shared with the metrics gauge and mirrored by the
+        # frontend. Spelled as a literal tuple here once, which is how adding a status could
+        # have made a busy instance report as idle.
+        active = sum(1 for j in jobs if j.status in ACTIVE_JOB_STATUSES)
         rows.append(_row("Jobs", f"{len(jobs)} known, {active} active"))
     except Exception:
         rows.append(_row("Jobs", "job store unavailable", ok=False))

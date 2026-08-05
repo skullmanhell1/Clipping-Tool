@@ -31,10 +31,45 @@ class JobStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    # Phase 7: requested, but the worker has not stopped yet.
+    #
+    # Cancellation is cooperative - a thread cannot be killed safely, and `subprocess.run`
+    # exposes no handle to signal - so the worker notices at its next checkpoint and a job
+    # already inside an ffmpeg pass finishes that pass first. That can be tens of seconds.
+    #
+    # This state exists because the alternative was a lie. `cancel` used to write CANCELLED
+    # immediately and the API returned "cancelling" in its response, but the response is
+    # transient and the *record* is what the UI reads a moment later - so the card flipped to
+    # "Stopped before finishing" while ffmpeg was still writing the file. A user who then
+    # deleted the source, or resubmitted, was acting on a completed-looking job that was
+    # still running. Non-terminal on purpose: it is the one job status that means "still
+    # working" without meaning "still making progress you asked for".
+    CANCELLING = "cancelling"
     # I4: distinct from FAILED on purpose - a job the user stopped did not go
     # wrong, and collapsing the two would both mislead the operator and inflate
     # any failure rate computed from these records.
     CANCELLED = "cancelled"
+
+
+#: Statuses that mean the job still holds, or is still waiting for, the worker.
+#:
+#: Named once because it was previously spelled as the literal tuple ``("queued", "processing")``
+#: in two places - the fallback landing page in ``api/main.py`` and the frontend's poll/stream
+#: activity check in ``App.jsx``. Adding ``CANCELLING`` to the enum without finding both would
+#: have undercounted silently: the landing page would report a busy instance as idle, and the
+#: frontend would drop to its slow interval exactly while the user was waiting to see a cancel
+#: take effect - so the transition they were watching for would arrive late or not at all.
+ACTIVE_JOB_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.PROCESSING, JobStatus.CANCELLING})
+
+#: Statuses a job never leaves.
+TERMINAL_JOB_STATUSES = frozenset({JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED})
+
+#: Statuses from which a cancel request is meaningful.
+#:
+#: Deliberately excludes ``CANCELLING``: a second cancel is a no-op rather than an error, because
+#: the button is clickable until the next frame arrives and a double-click must not read as a
+#: failure.
+CANCELLABLE_JOB_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.PROCESSING})
 
 
 @dataclass
