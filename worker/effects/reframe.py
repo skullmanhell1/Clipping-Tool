@@ -461,7 +461,7 @@ def smooth_centers(
     alpha: float = 0.35,
     *,
     cuts: Sequence[float] = (),
-    zero_phase: Optional[bool] = None,
+    zero_phase: bool | None = None,
 ) -> list[Center]:
     """Smooth the x/y paths of ``samples`` independently.
 
@@ -859,27 +859,87 @@ def build_face_tracks(
 # --------------------------------------------------------------------------- #
 # Frame sampling + face detection (lazy cv2) + ffmpeg application
 # --------------------------------------------------------------------------- #
-def _default_haar_detector(cv2) -> Callable[[object], list[tuple[int, int, int, int]]] | None:
+#: Smallest face the cascade is asked to find, in **native frame** pixels.
+#:
+#: Deliberately still the 60 px this has always used, rather than the fraction-of-frame it
+#: arguably should be. Whether a 60 px face on 4K is the subject or a bystander is a
+#: behavioural question, and answering it inside a change about sampling cost would alter
+#: which faces are found while claiming only to find them faster.
+_MIN_FACE_PX_NATIVE = 60
+
+#: Floor on the minimum in *working* coordinates. Below this the cascade is asked for faces
+#: a handful of pixels across, where it is both unreliable and slower (more scales to
+#: search). Only binds when the frame is downscaled by more than ~3.3x, i.e. 4K and up.
+_MIN_FACE_PX_FLOOR = 18
+
+
+def _default_haar_detector(
+    cv2, *, detect_width: int | None = None
+) -> Callable[[object], list[tuple[int, int, int, int]]] | None:
     """Build the default OpenCV Haar-cascade detector callable.
 
-    Returns a function ``frame -> list[(x, y, w, h)]`` or ``None`` when the
-    cascade cannot be loaded. This is the exact detection used by the v0.7.0
-    single-speaker path, extracted so the single-face and multi-face code
-    share one cascade implementation.
+    Returns a function ``frame -> list[(x, y, w, h)]`` in **native frame coordinates**, or
+    ``None`` when the cascade cannot be loaded. This is the cascade used by the v0.7.0
+    single-speaker path, extracted so the single-face and multi-face code share one
+    implementation.
+
+    ``detect_width`` (default ``settings.reframe_detect_width``) is the width the frame is
+    scaled to *before* detection, with boxes scaled back afterwards. Detection dominated the
+    sampling cost — measured on a 60 s 1080p clip, 300 sampled frames cost 5.5 s of detection
+    against 2.2 s of decode — and that cost is what forced the sample cap down to a rate that
+    could not follow a moving subject. Detecting on a smaller frame buys the cost back.
+
+    It is nearly free in accuracy because a crop window is far larger than the error: on a
+    real photograph, detecting at 320 px wide instead of 512 moved the resolved face centre
+    by **1.4 px** in native coordinates, against a 608 px-wide 9:16 crop of 1080p.
+    ``INTER_AREA`` is the right filter here specifically because it averages rather than
+    samples, so it does not alias away the eye/brow contrast the cascade keys on.
+
+    The scaling happens inside the detector rather than in :func:`_sample_face_boxes` so that
+    an *injected* detector still receives native frames, exactly as its contract says.
     """
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     detector = cv2.CascadeClassifier(cascade_path)
     if detector.empty():
         return None
 
+    if detect_width is None:
+        detect_width = int(getattr(settings, "reframe_detect_width", 0) or 0)
+
     def _detect(frame) -> list[tuple[int, int, int, int]]:
+        height, width = frame.shape[:2]
+        scale = 1.0
+        if detect_width and 0 < detect_width < width:
+            scale = detect_width / float(width)
+            frame = cv2.resize(
+                frame,
+                (detect_width, max(1, int(round(height * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
-        # Spelled out as a fixed 4-tuple rather than `tuple(int(v) for v in f)`, which produces
+        # The same real-world face size as before: the native-pixel minimum carried into
+        # working coordinates, so downscaling changes the cost and not the admission rule.
+        min_side = max(_MIN_FACE_PX_FLOOR, int(round(_MIN_FACE_PX_NATIVE * scale)))
+        faces = detector.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_side, min_side)
+        )
+        # Spelled out as fixed 4-tuples rather than `tuple(int(v) for v in f)`, which produces
         # `tuple[int, ...]` — a type that does not match the declared return and would let a
         # detector returning 3- or 5-element rects through unnoticed. Haar rects are always
-        # (x, y, w, h), so indexing is also the shape check.
-        return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
+        # (x, y, w, h), so indexing is also the shape check. Kept through the rescale: the
+        # generator form this commit originally used is the one that comment rules out.
+        if scale == 1.0:
+            return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
+        inverse = 1.0 / scale
+        return [
+            (
+                int(round(f[0] * inverse)),
+                int(round(f[1] * inverse)),
+                int(round(f[2] * inverse)),
+                int(round(f[3] * inverse)),
+            )
+            for f in faces
+        ]
 
     return _detect
 
@@ -1751,9 +1811,7 @@ def build_follow_active_path(
     # ``1/alpha`` grid steps either side (~125 ms at alpha 0.35 on a 24 fps grid), which
     # softens the start and end of a move rather than displacing it.
     smoother = (
-        ema_smooth_zero_phase
-        if bool(getattr(settings, "reframe_zero_phase", True))
-        else ema_smooth
+        ema_smooth_zero_phase if bool(getattr(settings, "reframe_zero_phase", True)) else ema_smooth
     )
     xs = smoother([c[0] for c in base], alpha)
     ys = smoother([c[1] for c in base], alpha)

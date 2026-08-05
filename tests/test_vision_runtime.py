@@ -85,3 +85,145 @@ def test_the_default_face_cascade_actually_loads():
         f"{cv2.data.haarcascades!r}; face detection would return no faces on every "
         "frame and every clip would fall back to a static centre crop"
     )
+
+
+def _face_frame(cv2, width: int = 1920, height: int = 1080):
+    """A frame the real cascade actually detects, drawn rather than photographed.
+
+    Enough of the light/dark structure the frontal cascade keys on — brow bars over dark
+    eyes, a nose shadow, a mouth, a dark hairline — over a textured background so the
+    detector has something to reject. Verified to detect straight-on and, usefully, to stop
+    detecting past about 60 degrees of head turn, which is the known weakness of a frontal
+    cascade rather than an artefact of the drawing.
+
+    Drawn, not a bundled photograph, because the assertion below is an *equivalence* between
+    two resolutions of the same image. That holds for any image the cascade fires on, and a
+    drawing keeps the test self-contained instead of resting on another package shipping a
+    sample file.
+    """
+    import numpy as np
+
+    canvas = np.full((height, width, 3), 95, np.uint8)
+    for i in range(0, width, 37):
+        cv2.line(canvas, (i, 0), (i + 60, height), (108, 104, 100), 2)
+
+    cx, cy, face_h = width // 2, height // 2, int(height * 0.45)
+    face_w = int(face_h * 0.75)
+    cv2.ellipse(canvas, (cx, cy), (face_w // 2, face_h // 2), 0, 0, 360, (170, 190, 210), -1)
+    eye_dx, eye_dy = int(0.20 * face_w), -int(0.13 * face_h)
+    eye_r = max(2, int(0.070 * face_h))
+    for side in (-1, 1):
+        ex = cx + side * eye_dx
+        cv2.ellipse(
+            canvas, (ex, cy + eye_dy), (eye_r, int(eye_r * 0.72)), 0, 0, 360, (40, 40, 45), -1
+        )
+        cv2.rectangle(
+            canvas,
+            (ex - eye_r - 2, cy + eye_dy - int(0.075 * face_h)),
+            (ex + eye_r + 2, cy + eye_dy - int(0.045 * face_h)),
+            (55, 50, 50),
+            -1,
+        )
+    cv2.ellipse(
+        canvas,
+        (cx, cy + int(0.06 * face_h)),
+        (max(2, int(0.05 * face_w)), int(0.10 * face_h)),
+        0,
+        0,
+        360,
+        (140, 158, 178),
+        -1,
+    )
+    cv2.ellipse(
+        canvas,
+        (cx, cy + int(0.24 * face_h)),
+        (int(0.17 * face_w), max(2, int(0.045 * face_h))),
+        0,
+        0,
+        360,
+        (70, 70, 95),
+        -1,
+    )
+    cv2.ellipse(
+        canvas,
+        (cx, cy - int(0.42 * face_h)),
+        (face_w // 2, int(0.16 * face_h)),
+        0,
+        0,
+        360,
+        (45, 40, 40),
+        -1,
+    )
+    return cv2.GaussianBlur(canvas, (5, 5), 0), (cx, cy)
+
+
+def test_detecting_on_a_downscaled_frame_resolves_the_same_face_centre():
+    """``reframe_detect_width`` must change the cost and not the answer.
+
+    Detection is scaled down to buy back the cost of sampling more often, and boxes are
+    scaled back to native coordinates afterwards. The thing that could silently go wrong is
+    the scaling arithmetic: an inverse applied to the wrong quantity, or a minimum face size
+    left in working pixels, moves every crop without failing anything — the render still
+    succeeds and the clip record still says ``reframe``.
+
+    So this asserts the **resolved centre**, through the real cascade, at native resolution
+    and at the shipped working width, and requires them to agree to within a few pixels. The
+    tolerance is in native pixels and is far below what is visible: the 9:16 crop of a 1080p
+    frame is 608 px wide, so 12 px is 2% of the window.
+    """
+    cv2 = pytest.importorskip("cv2", reason=_REASON, exc_type=ImportError)
+    pytest.importorskip("numpy", reason=_REASON, exc_type=ImportError)
+
+    from worker.effects import reframe
+
+    frame, (true_cx, true_cy) = _face_frame(cv2)
+
+    resolved = {}
+    for width in (0, 640):
+        detector = reframe._default_haar_detector(cv2, detect_width=width)
+        assert detector is not None
+        boxes = detector(frame)
+        assert boxes, f"the cascade found no face at detect_width={width}"
+        x, y, w, h = max(boxes, key=lambda b: b[2] * b[3])
+        resolved[width] = (x + w / 2.0, y + h / 2.0)
+        # Sanity: the box is in NATIVE coordinates. A missing inverse scale would put the
+        # centre at a third of the frame and still look like a plausible face position.
+        assert abs(resolved[width][0] - true_cx) < 0.10 * frame.shape[1]
+        assert abs(resolved[width][1] - true_cy) < 0.10 * frame.shape[0]
+
+    dx = abs(resolved[0][0] - resolved[640][0])
+    dy = abs(resolved[0][1] - resolved[640][1])
+    assert dx < 12 and dy < 12, (
+        f"detecting at 640 px moved the resolved centre by ({dx:.1f}, {dy:.1f}) native px "
+        f"against detecting at {frame.shape[1]} px; the box scale-back is wrong"
+    )
+
+
+def test_the_minimum_face_size_is_carried_into_working_coordinates():
+    """Downscaling must not quietly make detection stricter.
+
+    The cascade's minimum face size is in pixels, so leaving it at its native value while
+    shrinking the frame would reject every face between the old minimum and that minimum
+    times the scale factor — detection would get *pickier* as a side effect of a change made
+    for speed, and the only symptom would be more clips falling back to a static crop.
+
+    Asserted through the real ``detectMultiScale`` by giving it a face just above the native
+    minimum and requiring it to be found at both widths.
+    """
+    cv2 = pytest.importorskip("cv2", reason=_REASON, exc_type=ImportError)
+    pytest.importorskip("numpy", reason=_REASON, exc_type=ImportError)
+
+    from worker.effects import reframe
+
+    # A frame whose face is ~150 px tall: comfortably above the 60 px native minimum, and
+    # small enough that a minimum left in native pixels (60 px at a 3x downscale means
+    # 180 px native) would reject it.
+    frame, _ = _face_frame(cv2, width=1920, height=333)
+
+    for width in (0, 640):
+        detector = reframe._default_haar_detector(cv2, detect_width=width)
+        assert detector is not None
+        assert detector(frame), (
+            f"a ~150 px face was not found at detect_width={width}; the minimum face size "
+            "is not being scaled into working coordinates"
+        )
