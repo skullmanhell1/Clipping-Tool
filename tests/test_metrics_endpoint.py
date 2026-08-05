@@ -481,14 +481,25 @@ def test_a_query_token_is_not_accepted(monkeypatch):
 def test_the_route_is_registered_before_the_spa_catch_all():
     """The mount at ``/`` swallows any path no route claimed first.
 
-    Asserted through the OpenAPI document plus the position of the catch-all, rather than by
-    looking for the path in ``app.routes``: this Starlette version keeps an included router as a
-    single opaque entry, so a naive membership check passes vacuously and would keep passing if
-    the router were dropped.
+    Asserted through the OpenAPI document plus the *source order* of the registrations, rather
+    than by looking for the path in ``app.routes``: this Starlette version keeps an included
+    router as a single opaque entry, so a naive membership check passes vacuously and would keep
+    passing if the router were dropped.
+
+    Source order rather than the position of the final route, because whether a catch-all exists
+    at all depends on whether ``frontend/dist`` has been built - the backend CI job does not
+    build it. A test that only passes on a built checkout is a test that reddens CI for a reason
+    unrelated to what it is checking.
     """
+    import inspect
+
+    from api import main
+
     assert "/metrics" in app.openapi()["paths"]
-    last = app.routes[-1]
-    assert getattr(last, "path", None) == "", "the SPA catch-all must be the final route"
+    source = inspect.getsource(main)
+    registration = source.index("include_router(metrics.router)")
+    first_mount = source.index("app.mount(")
+    assert registration < first_mount, "the metrics router must be registered before the mounts"
 
 
 # --------------------------------------------------------------------------- #

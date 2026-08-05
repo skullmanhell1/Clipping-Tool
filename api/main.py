@@ -261,7 +261,21 @@ if _FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="ui")
 else:
 
-    @app.get("/", response_class=HTMLResponse, tags=["ui"])
+    # `include_in_schema=False` (Phase 7), for two reasons that point the same way.
+    #
+    # It made the OpenAPI document depend on whether `frontend/dist` happened to exist: this
+    # route is registered only when the frontend has *not* been built, so `/` appeared in the
+    # schema on an unbuilt checkout and vanished on a built one. `openapi.json` is now committed
+    # and diffed in CI, and the backend job does not build the frontend - so the document
+    # generated locally and the one CI generates disagreed about a path, for a reason that has
+    # nothing to do with the API.
+    #
+    # It is also simply the right answer independently. This is an HTML status page for a human
+    # who arrived by accident, not an API endpoint, and the SPA mount it stands in for is already
+    # absent from the schema (a StaticFiles mount contributes no routes). Documenting the
+    # fallback while omitting the thing it substitutes for described a surface that existed in
+    # neither state.
+    @app.get("/", response_class=HTMLResponse, tags=["ui"], include_in_schema=False)
     def index() -> str:
         """Fallback page when the frontend has not been built (U13)."""
         return fallback_index_html()

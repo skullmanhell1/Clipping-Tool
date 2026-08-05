@@ -196,3 +196,43 @@ def test_it_is_a_valid_openapi_document():
                 "trace",
             }, f"{path} has an unexpected method {method!r}"
             assert operation.get("responses"), f"{path} {method} documents no responses"
+
+
+def test_the_document_does_not_depend_on_whether_the_frontend_is_built(monkeypatch):
+    """Found by running the suite the way CI does, and it would have reddened every PR.
+
+    ``api.main`` registers a fallback HTML route at ``/`` *only* when ``frontend/dist`` is absent,
+    so the path appeared in the schema on an unbuilt checkout and vanished on a built one. The
+    backend CI job never builds the frontend, so the committed document - generated on a machine
+    that had - disagreed with the one CI generates, about a path that has nothing to do with the
+    API.
+
+    Fixed at the source with ``include_in_schema=False`` rather than by filtering the path out
+    here, because a document that omits routes the app really serves is the same lie as a stale
+    one. This pins the invariant: the schema must describe the API, not the build state.
+    """
+    documented = set(json.loads(COMMITTED.read_text(encoding="utf-8"))["paths"])
+    assert "/" not in documented, (
+        "'/' is in the committed document. It is served either by the SPA StaticFiles mount "
+        "(which contributes no routes) or by the fallback HTML page (include_in_schema=False), "
+        "so its presence means the document was generated from a state CI cannot reproduce."
+    )
+
+
+def test_the_fallback_index_is_excluded_from_the_schema():
+    """The mechanism behind the invariant above, pinned directly.
+
+    Asserted on the source rather than by manipulating ``frontend/dist`` on disk: moving a
+    directory out from under a running test suite is the kind of fixture that fails half way and
+    leaves the checkout broken for every test after it.
+    """
+    import inspect
+
+    from api import main
+
+    source = inspect.getsource(main)
+    declaration = source[source.index('@app.get("/"') :].split(")", 1)[0]
+    assert "include_in_schema=False" in declaration, (
+        "the fallback index route is back in the schema; openapi.json will now differ between "
+        "a built and an unbuilt checkout"
+    )
