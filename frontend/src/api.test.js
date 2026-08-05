@@ -314,3 +314,144 @@ describe("auth token", () => {
     expect(api.downloadUrl("j", "c.mp4")).toBe("/api/clips/j/c.mp4/download");
   });
 });
+
+describe("jobEvents", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Stub `fetch` with a streaming response that yields `chunks` in order.
+   *
+   * `chunks` are byte arrays rather than strings so a test can split a frame — or a single
+   * multi-byte character — wherever it likes, which is the whole point of several of these.
+   */
+  const streamOf = (chunks, { ok = true, status = 200 } = {}) => {
+    let index = 0;
+    const body = {
+      getReader: () => ({
+        read: async () =>
+          index < chunks.length ? { done: false, value: chunks[index++] } : { done: true },
+        releaseLock: () => {},
+      }),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok, status, body }));
+  };
+
+  const utf8 = (text) => new TextEncoder().encode(text);
+
+  it("delivers a snapshot and an incremental frame to the right handler", async () => {
+    streamOf([
+      utf8('event: snapshot\ndata: {"jobs":[{"id":"a"}]}\n\n'),
+      utf8('event: jobs\ndata: {"jobs":[{"id":"b"}]}\n\n'),
+    ]);
+    const snapshots = [];
+    const updates = [];
+    await api.jobEvents({
+      onSnapshot: (jobs) => snapshots.push(jobs),
+      onJobs: (jobs) => updates.push(jobs),
+    });
+    expect(snapshots).toEqual([[{ id: "a" }]]);
+    expect(updates).toEqual([[{ id: "b" }]]);
+  });
+
+  it("reassembles a frame split across chunk boundaries", async () => {
+    // A frame is not a chunk. TCP decides where the split lands, so a reader that assumed one
+    // frame per read would drop or corrupt updates under exactly the load this endpoint exists
+    // for — a large job list is guaranteed to span reads.
+    streamOf([
+      utf8("event: snap"),
+      utf8('shot\ndata: {"jobs":[{"id'),
+      utf8('":"a","title":"Split"}]}\n'),
+      utf8("\n"),
+    ]);
+    const snapshots = [];
+    await api.jobEvents({ onSnapshot: (jobs) => snapshots.push(jobs) });
+    expect(snapshots).toEqual([[{ id: "a", title: "Split" }]]);
+  });
+
+  it("does not corrupt a multi-byte character split across chunks", async () => {
+    // This is why the decoder is called with `{ stream: true }`. Decoding each chunk
+    // independently turns a UTF-8 sequence broken across a read into U+FFFD, and clip titles
+    // are where non-ASCII actually appears.
+    const payload = utf8('event: snapshot\ndata: {"jobs":[{"id":"a","title":"café ☕"}]}\n\n');
+    // Split inside the multi-byte sequence for the coffee cup.
+    const cut = payload.indexOf(0xe2) + 1;
+    streamOf([payload.slice(0, cut), payload.slice(cut)]);
+    const snapshots = [];
+    await api.jobEvents({ onSnapshot: (jobs) => snapshots.push(jobs) });
+    expect(snapshots[0][0].title).toBe("café ☕");
+  });
+
+  it("delivers several frames arriving in one chunk", async () => {
+    streamOf([
+      utf8(
+        'event: jobs\ndata: {"jobs":[{"id":"a"}]}\n\nevent: jobs\ndata: {"jobs":[{"id":"b"}]}\n\n'
+      ),
+    ]);
+    const updates = [];
+    await api.jobEvents({ onJobs: (jobs) => updates.push(jobs) });
+    expect(updates).toEqual([[{ id: "a" }], [{ id: "b" }]]);
+  });
+
+  it("ignores the heartbeat comment frame", async () => {
+    // The server sends `: ping` to keep intermediaries from closing an idle stream. It carries
+    // no data and must not reach a handler as an empty update, which would blank the job list.
+    streamOf([utf8(': ping\n\nevent: jobs\ndata: {"jobs":[{"id":"a"}]}\n\n')]);
+    const updates = [];
+    await api.jobEvents({ onJobs: (jobs) => updates.push(jobs) });
+    expect(updates).toEqual([[{ id: "a" }]]);
+  });
+
+  it("skips a malformed frame and keeps reading", async () => {
+    // One truncated or non-JSON frame must not end a stream that is otherwise fine; the next
+    // update supersedes it anyway.
+    streamOf([
+      utf8("event: jobs\ndata: {not json\n\n"),
+      utf8('event: jobs\ndata: {"jobs":[{"id":"good"}]}\n\n'),
+    ]);
+    const updates = [];
+    await api.jobEvents({ onJobs: (jobs) => updates.push(jobs) });
+    expect(updates).toEqual([[{ id: "good" }]]);
+  });
+
+  it("rejects on a non-OK status instead of resolving silently", async () => {
+    // A 401 must be an error the caller can act on. Resolving would look like a stream that
+    // simply never reported anything, and the UI would sit at "queued" forever.
+    streamOf([], { ok: false, status: 401 });
+    await expect(api.jobEvents({})).rejects.toThrow("Event stream failed (401)");
+  });
+
+  it("rejects when the environment cannot stream a response body", async () => {
+    // This is the rejection the fallback to polling is built on: without it, an environment
+    // with no streaming `fetch` would get a resolved promise and no updates at all.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, body: null }));
+    await expect(api.jobEvents({})).rejects.toThrow(/unsupported/i);
+  });
+
+  it("asks for no request timeout", async () => {
+    // The default 30s deadline would abort a healthy stream mid-render. Asserted on the
+    // resolved request options rather than by waiting, because the bug is silent and slow.
+    streamOf([]);
+    await api.jobEvents({});
+    const [, init] = globalThis.fetch.mock.calls[0];
+    // `apiFetch` takes the fast path when there is no timeout and no signal, so it forwards
+    // neither a signal nor an AbortController — which is itself the evidence no timer was set.
+    expect(init.signal).toBeUndefined();
+    expect(init.headers.Accept).toBe("text/event-stream");
+  });
+
+  it("sends the token as a header, not in the query string", async () => {
+    // The reason this is `fetch` and not `EventSource`. The stream stays open for an entire
+    // render, so a `?token=` would sit in access and proxy logs for its whole lifetime.
+    window.localStorage.setItem("clipper_token", "s3cret");
+    streamOf([]);
+    await api.jobEvents({});
+    const [url, init] = globalThis.fetch.mock.calls[0];
+    expect(url).toBe("/api/jobs/events");
+    expect(url).not.toContain("token");
+    expect(init.headers["X-API-Token"]).toBe("s3cret");
+    window.localStorage.removeItem("clipper_token");
+  });
+});

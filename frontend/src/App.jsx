@@ -175,6 +175,35 @@ export const DEFAULT_SETTINGS = Object.fromEntries(
  */
 export const BACKEND_UNREACHABLE_AFTER = 3;
 
+/**
+ * How many failed attempts to open the event stream before giving up on it for the session.
+ *
+ * Two. An environment that cannot carry SSE — a proxy that buffers responses, a browser without
+ * streaming `fetch` — fails immediately and fails every time, so one retry is enough to tell it
+ * apart from a container that happened to be restarting. Falling back permanently rather than
+ * retrying forever matters because the fallback *works*: retrying a stream that will never work
+ * would leave the user watching a frozen progress bar behind a banner, when polling would have
+ * shown them the truth.
+ */
+export const STREAM_FALLBACK_AFTER = 2;
+
+/** Delay before reconnecting a stream that dropped. */
+export const STREAM_RETRY_MS = 1000;
+
+/**
+ * How often to refresh publish attempts while the event stream is carrying job progress.
+ *
+ * The stream deliberately carries jobs only. Publish attempts live in a different store
+ * (`history.db`) and reading them is a SQL query, where reading jobs is a dict lookup — putting
+ * them in the stream would mean querying that database twice a second for every open tab, which
+ * is exactly the kind of cost the job store is structured to avoid.
+ *
+ * Five seconds rather than the 1.2s they used to arrive at, because nothing needs them faster:
+ * an attempt changes state when a publisher answers, on the order of seconds, and the actions a
+ * user takes on one already refresh it immediately.
+ */
+export const PUBLISH_ATTEMPT_POLL_MS = 5000;
+
 export const DEFAULT_PUBLISHING = {
   platforms: [],
   campaign_id: "",
@@ -245,6 +274,11 @@ export default function App() {
   // Consecutive poll failures. See `poll` and BACKEND_UNREACHABLE_AFTER.
   const [pollFailures, setPollFailures] = useState(0);
   const pollRef = useRef(null);
+  // Whether job progress arrives over the event stream. Starts true and only ever goes false —
+  // see STREAM_FALLBACK_AFTER. Kept in state rather than a ref because the polling effect is
+  // gated on it and has to re-run when it flips.
+  const [useStream, setUseStream] = useState(true);
+  const streamAttemptsRef = useRef(0);
   const defaultAppliedRef = useRef(false);
 
   const loadPublishingData = useCallback(async () => {
@@ -392,7 +426,100 @@ export default function App() {
     [jobs]
   );
 
+  /**
+   * Apply an incremental frame from the event stream.
+   *
+   * Merge by id rather than replace, because the frame contains only the jobs that changed.
+   * Re-sorted newest-first on `created_at` so the order matches what `GET /api/jobs` returns —
+   * the rest of the app reads `jobs` as an ordered list, and a merge that appended would put a
+   * newly-started job at the bottom while a full refetch put it at the top.
+   */
+  const mergeJobs = useCallback((changed) => {
+    setJobs((previous) => {
+      const byId = new Map(previous.map((job) => [job.id, job]));
+      changed.forEach((job) => byId.set(job.id, job));
+      return [...byId.values()].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    });
+  }, []);
+
+  // Job progress over SSE (Phase 5.5).
+  //
+  // Note what this effect does *not* depend on: `hasActiveJobs`. The 1200/4000ms split below
+  // exists only because a poll has to choose a rate, and the rate has to change when work starts
+  // or stops. A stream has no rate — the server sends a frame when something moves — so the
+  // "is anything running" question stops being an input, and the connection is no longer torn
+  // down and rebuilt every time a job crosses the queued/processing boundary.
   useEffect(() => {
+    if (!useStream) return undefined;
+    // Same arming condition as the poll: an idle tab that has submitted nothing opens nothing.
+    if (trackedIds.size === 0 && !watch.enabled) return undefined;
+
+    const controller = new AbortController();
+    let cancelled = false;
+    let retryTimer = null;
+
+    const connect = async () => {
+      try {
+        await api.jobEvents({
+          signal: controller.signal,
+          onSnapshot: (all) => {
+            // Authoritative, so replace. This is what makes a reconnect self-healing: whatever
+            // was missed while disconnected is superseded rather than reconciled.
+            setJobs(all);
+            setPollFailures(0);
+            streamAttemptsRef.current = 0;
+          },
+          onJobs: (changed) => {
+            mergeJobs(changed);
+            setPollFailures(0);
+          },
+        });
+        // A clean close is not an error — a server restart looks like this — so reconnect.
+        if (!cancelled) retryTimer = setTimeout(connect, STREAM_RETRY_MS);
+      } catch (error) {
+        // Our own teardown, not a failure. Reporting it would show the unreachable-backend
+        // banner every time the user navigated away.
+        if (cancelled || error?.name === "AbortError") return;
+        streamAttemptsRef.current += 1;
+        setPollFailures((previous) => previous + 1);
+        if (streamAttemptsRef.current >= STREAM_FALLBACK_AFTER) {
+          setUseStream(false);
+          return;
+        }
+        retryTimer = setTimeout(connect, STREAM_RETRY_MS);
+      }
+    };
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      controller.abort();
+    };
+  }, [useStream, trackedIds, watch.enabled, mergeJobs]);
+
+  // Publish attempts, while the stream is carrying jobs. The fallback `poll` fetches these in the
+  // same pass, so this runs only when the stream has taken its place. See PUBLISH_ATTEMPT_POLL_MS.
+  useEffect(() => {
+    if (!useStream) return undefined;
+    if (trackedIds.size === 0 && !watch.enabled) return undefined;
+    const load = () =>
+      api
+        .history()
+        .then((history) => setPublishAttempts(history.publish_attempts || []))
+        // Swallowed on purpose: the unreachable-backend banner is driven by the job stream, which
+        // is the connection that matters. A failure here would double-count the same outage.
+        .catch(() => {});
+    load();
+    const id = setInterval(load, PUBLISH_ATTEMPT_POLL_MS);
+    return () => clearInterval(id);
+  }, [useStream, trackedIds, watch.enabled]);
+
+  // The polling fallback. Documented as a fallback rather than removed: it is what runs when the
+  // stream cannot be established (see STREAM_FALLBACK_AFTER), and it is the only path that works
+  // behind an intermediary that buffers responses.
+  useEffect(() => {
+    if (useStream) return undefined;
     const active = watch.enabled || hasActiveJobs;
     if (pollRef.current) clearInterval(pollRef.current);
     if (trackedIds.size > 0 || watch.enabled) {
@@ -400,7 +527,7 @@ export default function App() {
       pollRef.current = setInterval(poll, active ? 1200 : 4000);
     }
     return () => pollRef.current && clearInterval(pollRef.current);
-  }, [trackedIds, watch.enabled, poll, hasActiveJobs]);
+  }, [useStream, trackedIds, watch.enabled, poll, hasActiveJobs]);
 
   const handlePreview = useCallback(async (url) => {
     setPreview(null);

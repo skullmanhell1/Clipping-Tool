@@ -15,12 +15,22 @@ import App, { DEFAULT_PUBLISHING, DEFAULT_SETTINGS, SETTINGS_SCHEMA, toOptions }
  * covers every declared setting, that no key has drifted into camelCase, and that the six value
  * transforms and the four publishing-derived fields still do what their declarations say.
  *
- * The second is the polling loop. Its two intervals — 1.2s while work is in flight, 4s when it is
- * not — are a load decision, not a cosmetic one: the fast poll issues two requests a second per
- * open tab, so leaking it after a job finishes, or after the component unmounts, is a bug that
- * only shows up as server load nobody can attribute. The interval is also rebuilt whenever its
- * dependencies change, which makes "does it still stop" a question worth asking of the real
- * component rather than of a hook in isolation.
+ * The second is how job progress arrives. Since Phase 5.5 that is an SSE stream, with the old
+ * poll kept as the fallback for an environment that cannot carry one. Both paths are tested,
+ * because both ship and each fails differently.
+ *
+ * For the stream, the failure modes are lifecycle ones: a connection that is not closed on unmount
+ * leaks a request that never ends (worse than a leaked interval, which at least ends between
+ * ticks), a connection rebuilt on every progress frame would be far more expensive than the poll
+ * it replaced, and an incremental frame applied by replacing rather than merging would delete
+ * every job it did not mention. None of those are visible in the UI.
+ *
+ * For the fallback, the two intervals — 1.2s while work is in flight, 4s when it is not — are a
+ * load decision, not a cosmetic one: the fast poll issues two requests a second per open tab, so
+ * leaking it after a job finishes, or after the component unmounts, is a bug that only shows up as
+ * server load nobody can attribute. Those assertions are unchanged from before the stream existed;
+ * they now run behind a forced fallback, because the path they describe is still shipped and is
+ * what a user behind a buffering proxy actually gets.
  *
  * `./api.js` is mocked wholesale so no test touches `fetch`, but `resolveLanguage` is kept real:
  * it is the transform `SETTINGS_SCHEMA` uses to expand the language setting, so a fake one would
@@ -38,7 +48,8 @@ const { mockApi } = vi.hoisted(() => ({
     campaigns: vi.fn(),
     history: vi.fn(),
     profiles: vi.fn(),
-    // Called by the poll and by submission.
+    // The SSE job stream (Phase 5.5) and the poll it replaced.
+    jobEvents: vi.fn(),
     listJobs: vi.fn(),
     submitUrl: vi.fn(),
     submitBatch: vi.fn(),
@@ -297,6 +308,9 @@ beforeEach(() => {
   mockApi.history.mockResolvedValue({ publish_attempts: [] });
   mockApi.profiles.mockResolvedValue({ profiles: [], default_id: null });
   mockApi.listJobs.mockResolvedValue({ jobs: [] });
+  // A stream that opens and then says nothing, which is what an idle backend looks like. Tests
+  // that care override this — `fakeStream` to drive frames, or a rejection to force the fallback.
+  mockApi.jobEvents.mockImplementation(() => new Promise(() => {}));
   mockApi.submitUrl.mockResolvedValue(job({ id: "submitted-1", status: "queued", source: "u" }));
 });
 
@@ -348,7 +362,241 @@ const submitOneUrl = async () => {
   return mockApi.submitUrl.mock.calls.at(-1)[1];
 };
 
-describe("App polling", () => {
+/**
+ * A controllable stand-in for `api.jobEvents`.
+ *
+ * Returns a promise that stays pending, like a real open stream, plus handles to push frames into
+ * the component and to end it. `EventSource` is not used by the implementation and does not exist
+ * in jsdom anyway, so there is nothing to polyfill — the seam is this one function, which is what
+ * makes it mockable at all.
+ */
+const fakeStream = () => {
+  const state = { snapshot: null, jobs: null, settle: null, aborts: 0, opens: 0 };
+  mockApi.jobEvents.mockImplementation(({ onSnapshot, onJobs, signal }) => {
+    state.opens += 1;
+    state.snapshot = onSnapshot;
+    state.jobs = onJobs;
+    signal?.addEventListener("abort", () => {
+      state.aborts += 1;
+      // A real reader rejects with an AbortError when the signal fires; the component relies on
+      // that name to tell its own teardown apart from a genuine failure.
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      state.settle?.reject(error);
+    });
+    return new Promise((resolve, reject) => {
+      state.settle = { resolve, reject };
+    });
+  });
+  return {
+    get opens() {
+      return state.opens;
+    },
+    get aborts() {
+      return state.aborts;
+    },
+    emitSnapshot: async (jobs) => {
+      await act(async () => state.snapshot(jobs));
+      await settle();
+    },
+    emitJobs: async (jobs) => {
+      await act(async () => state.jobs(jobs));
+      await settle();
+    },
+    /** End the stream the way a server restart would: cleanly, not as an error. */
+    close: async () => {
+      await act(async () => {
+        state.settle.resolve();
+        await Promise.resolve();
+      });
+    },
+  };
+};
+
+describe("App job event stream", () => {
+  let stream;
+
+  beforeEach(() => {
+    stream = fakeStream();
+  });
+
+  it("opens no stream until something is being tracked", async () => {
+    // An idle tab that has submitted nothing has nothing to follow. This is the same arming
+    // condition the poll had, and it is why an open tab costs the server nothing.
+    await mount();
+    await advance(10000);
+    expect(mockApi.jobEvents).not.toHaveBeenCalled();
+  });
+
+  it("opens the stream as soon as the watch folder is reported active", async () => {
+    // Watch-folder mode produces jobs this tab never submitted, so it is the one case where
+    // following progress has to start without the user doing anything.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    expect(mockApi.jobEvents).toHaveBeenCalled();
+  });
+
+  it("does not poll the job list while the stream is carrying progress", async () => {
+    // The point of the endpoint. If both ran, this would be strictly more work than before.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await advance(10000);
+    expect(mockApi.listJobs).not.toHaveBeenCalled();
+  });
+
+  it("replaces the job list from a snapshot", async () => {
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await stream.emitSnapshot([
+      job({ id: "a", source: "/watch/a.mp4", title: "Alpha", created_at: 2 }),
+    ]);
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+  });
+
+  it("merges an incremental frame by id instead of replacing the list", async () => {
+    // The failure this prevents is silent and total: applying a frame that contains one job by
+    // replacing the array would delete every other job from the UI while they carried on
+    // rendering on the server.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await stream.emitSnapshot([
+      job({ id: "a", source: "/watch/a.mp4", title: "Alpha", created_at: 2 }),
+      job({ id: "b", source: "/watch/b.mp4", title: "Beta", created_at: 1 }),
+    ]);
+    await stream.emitJobs([
+      job({ id: "b", source: "/watch/b.mp4", title: "Beta renamed", created_at: 1 }),
+    ]);
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Beta renamed")).toBeInTheDocument();
+  });
+
+  it("keeps the newest job first after a merge, as the job list route does", async () => {
+    // `jobs` is read as an ordered list, so a merge that appended would put a newly-started job
+    // at the bottom of the page while a full refetch put it at the top.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await stream.emitSnapshot([
+      job({ id: "old", source: "/watch/old.mp4", title: "Older", created_at: 1 }),
+    ]);
+    await stream.emitJobs([
+      job({ id: "new", source: "/watch/new.mp4", title: "Newer", created_at: 9 }),
+    ]);
+    const rendered = screen.getByText("Newer").compareDocumentPosition(screen.getByText("Older"));
+    // Node.DOCUMENT_POSITION_FOLLOWING — "Older" comes after "Newer".
+    expect(rendered & 4).toBeTruthy();
+  });
+
+  it("does not reopen the stream when a job changes state", async () => {
+    // The concrete gain over polling. The 1200/4000ms split existed because a poll must choose a
+    // rate and the rate had to change when work started or stopped, so the timer was torn down
+    // and rebuilt on every queued->processing->completed transition. A stream has no rate, so
+    // `hasActiveJobs` is deliberately not one of its dependencies. Reconnecting per transition
+    // would be far more expensive than the poll it replaced.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    const opens = stream.opens;
+    await stream.emitSnapshot([
+      job({ id: "a", source: "/watch/a.mp4", status: "queued", created_at: 1 }),
+    ]);
+    await stream.emitJobs([
+      job({ id: "a", source: "/watch/a.mp4", status: "processing", created_at: 1 }),
+    ]);
+    await stream.emitJobs([
+      job({ id: "a", source: "/watch/a.mp4", status: "completed", progress: 1, created_at: 1 }),
+    ]);
+    expect(stream.opens).toBe(opens);
+  });
+
+  it("closes the stream when the app unmounts", async () => {
+    // A leaked stream is worse than a leaked interval: the request never ends at all, so it holds
+    // a connection on the server for a component that no longer exists.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    const { unmount } = await mount();
+    expect(stream.aborts).toBe(0);
+    unmount();
+    expect(stream.aborts).toBe(1);
+  });
+
+  it("reconnects after the server closes the stream cleanly", async () => {
+    // A server restart or a proxy recycling the connection ends the stream without an error. That
+    // is not a failure and must not count towards the fallback, but it does need reconnecting or
+    // progress silently stops arriving for the rest of the session.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    const opens = stream.opens;
+    await stream.close();
+    await advance(1100);
+    expect(stream.opens).toBe(opens + 1);
+  });
+
+  it("refreshes publish attempts on its own slower interval while streaming", async () => {
+    // The stream carries jobs only, deliberately: publish attempts live in a different database
+    // and reading them is a SQL query where reading jobs is a dict lookup. They still have to
+    // refresh, just not twice a second.
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    const before = mockApi.history.mock.calls.length;
+    await advance(5000);
+    expect(mockApi.history.mock.calls.length).toBe(before + 1);
+    await advance(5000);
+    expect(mockApi.history.mock.calls.length).toBe(before + 2);
+  });
+});
+
+describe("App stream fallback", () => {
+  it("falls back to polling after two failed attempts to open the stream", async () => {
+    // An environment that cannot carry SSE fails immediately and every time, so retrying forever
+    // would leave the user watching a frozen progress bar when polling would have worked.
+    mockApi.jobEvents.mockRejectedValue(new Error("no streaming here"));
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    expect(mockApi.listJobs).not.toHaveBeenCalled();
+    await advance(1100);
+    await waitFor(() => expect(mockApi.listJobs).toHaveBeenCalled());
+    expect(mockApi.jobEvents.mock.calls.length).toBe(2);
+  });
+
+  it("stops trying the stream once it has fallen back", async () => {
+    // Otherwise every re-arm would pay for two more failed connections.
+    mockApi.jobEvents.mockRejectedValue(new Error("no streaming here"));
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await advance(1100);
+    await settle();
+    const attempts = mockApi.jobEvents.mock.calls.length;
+    await advance(20000);
+    expect(mockApi.jobEvents.mock.calls.length).toBe(attempts);
+  });
+
+  it("reports an unreachable backend when neither the stream nor the poll answers", async () => {
+    // The two failed stream attempts and the failing polls count towards the same total, which is
+    // what the banner is gated on — a user does not care which transport could not reach the
+    // server, only that nothing can.
+    mockApi.jobEvents.mockRejectedValue(new Error("no streaming here"));
+    mockApi.listJobs.mockRejectedValue(new Error("backend down"));
+    mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
+    await mount();
+    await advance(1100);
+    await waitFor(() => expect(mockApi.listJobs).toHaveBeenCalled());
+    await advance(2500);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot reach the backend/i);
+  });
+});
+
+describe("App polling fallback", () => {
+  // These are the assertions that described the only transport there used to be. They are kept
+  // verbatim in substance, run behind a forced fallback: the poll still ships, and its two
+  // intervals are still a load decision worth pinning.
+  beforeEach(() => {
+    mockApi.jobEvents.mockRejectedValue(new Error("no streaming here"));
+  });
+
+  /** Burn through the stream attempts so `useStream` flips and the interval is installed. */
+  const fallBack = async () => {
+    await advance(1100);
+    await settle();
+  };
+
   it("does not poll at all until something is being tracked", async () => {
     // With nothing submitted and no watch folder there is nothing to ask about, and an unconditional
     // interval would have every idle tab querying the job list forever.
@@ -362,6 +610,7 @@ describe("App polling", () => {
     // polling has to start without the user doing anything.
     mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
     await mount();
+    await fallBack();
     expect(mockApi.listJobs).toHaveBeenCalled();
   });
 
@@ -376,6 +625,7 @@ describe("App polling", () => {
     await mount();
     expect(mockApi.listJobs).not.toHaveBeenCalled();
     await submitOneUrl();
+    await fallBack();
     await waitFor(() => expect(mockApi.listJobs).toHaveBeenCalled());
     const before = mockApi.listJobs.mock.calls.length;
     // And it is an interval, not a single poll at submission time.
@@ -391,6 +641,7 @@ describe("App polling", () => {
     });
     await mount();
     await submitOneUrl();
+    await fallBack();
     await waitFor(() => expect(mockApi.listJobs).toHaveBeenCalled());
     const before = mockApi.listJobs.mock.calls.length;
     await advance(1200);
@@ -410,6 +661,7 @@ describe("App polling", () => {
     });
     await mount();
     await submitOneUrl();
+    await fallBack();
     // The submitted job arrives `queued`, so the fast interval is installed and then replaced once
     // the first poll reports it finished. Counting from after that transition is the point.
     await waitFor(() => expect(mockApi.listJobs).toHaveBeenCalled());
@@ -428,6 +680,7 @@ describe("App polling", () => {
     mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
     mockApi.listJobs.mockResolvedValue({ jobs: [job({ status: "completed", progress: 1 })] });
     await mount();
+    await fallBack();
     const before = mockApi.listJobs.mock.calls.length;
     await advance(1200);
     expect(mockApi.listJobs.mock.calls.length).toBe(before + 1);
@@ -440,6 +693,7 @@ describe("App polling", () => {
     mockApi.watchStatus.mockResolvedValue({ enabled: true, folder: "/inbox" });
     mockApi.listJobs.mockResolvedValue({ jobs: [job({ status: "processing" })] });
     const { unmount } = await mount();
+    await fallBack();
     const before = mockApi.listJobs.mock.calls.length;
     unmount();
     await advance(10000);
