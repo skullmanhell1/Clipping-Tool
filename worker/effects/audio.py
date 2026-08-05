@@ -602,22 +602,30 @@ class LoudnessStats:
     target_offset: float
 
 
-def _measured(value: str | float) -> float:
-    """One loudnorm measurement, with the sign stripped off a zero.
+def _measured(raw: str | float) -> float:
+    """One ``loudnorm`` JSON measurement as a float, with negative zero collapsed.
 
-    ``loudnorm`` prints its report with two decimals, so a measurement that is zero to that
-    precision arrives as either ``"0.00"`` or ``"-0.00"`` depending on which side of zero the
-    unrounded value fell — and ``float("-0.00")`` is ``-0.0``, which ``format(_, "g")`` renders
-    as ``-0``. The two are the same number and the same argument to ffmpeg, but not the same
-    *string*, so the sign bit leaked into the second-pass filter and from there into
-    ``tests/golden/compositor_commands.json``: the frozen graph said ``offset=-0`` because the
-    ffmpeg that froze it rounded down, and CI's ffmpeg 6.1.1 rounds up and reported ``offset=0``.
-    A one-bit difference in a value that is zero either way failed the build.
+    Typed ``str | float`` because ffmpeg quotes these values (``"input_i" : "-21.87"``) while a
+    build that emitted them as JSON numbers would still be valid - and because ``object`` does not
+    type-check: ``float()`` accepts ``str | Buffer | SupportsFloat | SupportsIndex``, so the wider
+    annotation fails ``mypy .`` outright. A ``ValueError`` or ``TypeError`` from anything else is
+    caught by the caller, which returns ``None`` and renders without normalisation.
 
-    Adding ``0.0`` is the IEEE-754 way to normalise this: ``-0.0 + 0.0`` is ``+0.0``, and every
-    other value is unchanged (adding zero is exact in binary floating point).
+    ``float("-0.00")`` is ``-0.0``, and ``f"{-0.0:g}"`` is ``"-0"`` - so a measurement ffmpeg
+    reported as ``-0.00`` travelled all the way into the emitted filter as ``offset=-0``. That is
+    the same gain as ``offset=0`` to ffmpeg and carries no information, but it made the command
+    this project builds depend on *which ffmpeg build did the measuring*: the analysis pass prints
+    ``"target_offset" : "-0.00"`` on some builds and ``"0.00"`` on others for the identical input.
+    ``tests/test_compositor_graph_parity.py`` caught it - the frozen ``loudness_with_music`` graph
+    was recorded with ``offset=-0`` and ffmpeg 6.1.1 produces ``offset=0``, with all four other
+    measurements byte-identical.
+
+    Adding ``0.0`` is the whole trick: under IEEE-754, ``-0.0 + 0.0`` is ``+0.0`` while every other
+    value is unchanged. Applied to all five measurements rather than just the offset, because any
+    of them can come back as ``-0.00`` - ``input_lra`` is already ``0.0`` for a pure tone and is
+    one ffmpeg build away from being ``-0.0``.
     """
-    return float(value) + 0.0
+    return float(raw) + 0.0
 
 
 def measure_loudness(source: str | Path) -> Optional[LoudnessStats]:
