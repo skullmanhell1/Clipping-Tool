@@ -726,6 +726,30 @@ def _sample_face_boxes(
     return out
 
 
+def _as_rect(box: object) -> Optional[tuple[int, int, int, int]]:
+    """Coerce one detection to ``(x, y, w, h)``, or ``None`` if it is not a rectangle.
+
+    Accepts a 4-element sequence *and* anything exposing ``x``/``y``/``w``/``h``, which
+    :class:`FaceBox` does. Unpacking positionally - as this used to - silently discarded a
+    ``FaceBox``, because it carries a leading ``t`` and so has five fields: the
+    ``except (TypeError, ValueError): continue`` swallowed it and the frame came back empty.
+    Inert with the built-in cascade, which yields plain 4-tuples, and a trap for exactly the
+    person plugging in a better detector - they would get a working render, a ``reframe``
+    marker, and a crop that never moved.
+    """
+    for attrs in (("x", "y", "w", "h"),):
+        if all(hasattr(box, name) for name in attrs):
+            try:
+                return tuple(int(getattr(box, name)) for name in attrs)  # type: ignore[return-value]
+            except (TypeError, ValueError):
+                return None
+    try:
+        x, y, w, h = box  # type: ignore[misc]
+        return int(x), int(y), int(w), int(h)
+    except (TypeError, ValueError):
+        return None
+
+
 def detect_faces(
     video: str | Path,
     *,
@@ -757,39 +781,148 @@ def detect_faces(
     for t, boxes in per_frame:
         frame_boxes: list[FaceBox] = []
         for b in boxes:
-            try:
-                x, y, w, h = b
-            except (TypeError, ValueError):
+            rect = _as_rect(b)
+            if rect is None:
                 continue
-            frame_boxes.append(FaceBox(round(float(t), 3), int(x), int(y), int(w), int(h)))
+            x, y, w, h = rect
+            frame_boxes.append(FaceBox(round(float(t), 3), x, y, w, h))
         result.append(frame_boxes)
     return result
 
 
-def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
-    """Sample frames and return the main-face centre path (``Center`` samples).
+@dataclass(frozen=True)
+class Track_Report:
+    """The main-face path plus enough to say how well tracking actually went.
 
-    Uses OpenCV's Haar cascade (via the shared :func:`_sample_face_boxes`
-    machinery). Returns ``[]`` when cv2 is unavailable, the video cannot be
-    opened, or no faces are found anywhere (caller falls back). This is the
-    unchanged v0.7.0 single-speaker behaviour: it keeps only the dominant face
-    per sampled frame and holds the last known centre through frames with no
-    detection.
+    ``sampled`` is how many frames were examined, ``detected`` how many held any face at
+    all, and ``tracked`` how many contributed a box to the chosen subject's track.
+    ``coverage`` is the last of those over the first, because it is the one that decides
+    what the crop does: a frame the subject was not found in is a frame the crop is
+    guessing on, whether or not some other face was visible.
     """
-    per_frame = _sample_face_boxes(video, sample_fps=sample_fps)
-    if not per_frame:
-        return []
 
-    samples: list[Center] = []
-    last_center: Optional[tuple[float, float]] = None
+    centers: list[Center]
+    sampled: int = 0
+    detected: int = 0
+    tracked: int = 0
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of sampled frames in which the tracked subject was found (0..1)."""
+        return (self.tracked / self.sampled) if self.sampled else 0.0
+
+
+def choose_main_track(tracks: list[Face_Track]) -> Optional[Face_Track]:
+    """PURE: the track most likely to be the subject - present longest, size as tie-break.
+
+    Replaces "the largest box in this frame, decided again from scratch every frame", which
+    is what the single-face path used to do and which has no defence against a false
+    positive: a cascade phantom that happens to be bigger than the real face wins outright,
+    and the crop jumps to it for exactly as long as it persists. PR #92 measured the shipped
+    cascade at **1.32 faces per detecting frame** on a two-shot, so phantoms are a documented
+    reality rather than a hypothetical, and a benchmark against an intermittent phantom
+    larger than the real face had ``pick_main_face`` choosing the phantom on **every frame it
+    appeared**.
+
+    Presence is the discriminator because it is the thing a phantom does not have. A
+    spurious detection fires on a particular alignment of background texture and stops when
+    the shot moves; a person stays in frame. So the boxes are grouped into tracks first (by
+    :func:`build_face_tracks`, which already does IoU continuity for the speaker-aware path)
+    and the track with the most boxes wins.
+
+    Size only breaks ties, and enters as ``sqrt`` of the median area rather than the area
+    itself - the same reasoning PR #92 applied to its confidence weighting. Plain area lets
+    scale dominate: a phantom twice the width of the real face has four times its area, so it
+    would only need a quarter of the presence to win. Under ``sqrt`` it needs half, and the
+    median rather than the mean keeps one enormous frame from carrying a whole track.
+
+    Deterministic: ``max`` returns the first maximal element, so an exact tie resolves to
+    creation order, which is frame order.
+    """
+    if not tracks:
+        return None
+
+    def score(track: Face_Track) -> float:
+        if not track.boxes:
+            return 0.0
+        areas = sorted(float(b.w) * float(b.h) for b in track.boxes)
+        mid = len(areas) // 2
+        median = areas[mid] if len(areas) % 2 else (areas[mid - 1] + areas[mid]) / 2.0
+        return len(track.boxes) * math.sqrt(max(1.0, median))
+
+    best = max(tracks, key=score)
+    return best if best.boxes else None
+
+
+def track_faces_report(
+    video: str | Path,
+    *,
+    sample_fps: Optional[float] = None,
+    max_samples: Optional[int] = None,
+    detector: Optional[Callable] = None,
+) -> Track_Report:
+    """Sample frames, follow one subject across them, and report how well that went.
+
+    ``sample_fps`` and ``max_samples`` default to ``settings.reframe_sample_fps`` and
+    ``settings.reframe_sample_cap``. They used to be ignored on this path entirely - see
+    :func:`apply_reframe`.
+
+    Returns an empty report (rather than raising) when cv2 is unavailable, the video cannot
+    be opened, or no face is found anywhere; the caller turns that into
+    :class:`ReframeUnavailable` and the pipeline falls back down its ladder.
+
+    The subject's centre is held through frames where it was not detected, which is the
+    previous behaviour and the right one - freezing the crop is better than snapping it to
+    the frame centre - but the *number* of frames that happened on is now reported instead
+    of being invisible.
+    """
+    if sample_fps is None:
+        sample_fps = float(settings.reframe_sample_fps)
+    if max_samples is None:
+        max_samples = int(settings.reframe_sample_cap)
+
+    per_frame = _sample_face_boxes(
+        video, sample_fps=sample_fps, max_samples=max_samples, detector=detector
+    )
+    if not per_frame:
+        return Track_Report([])
+
+    frames: list[list[FaceBox]] = []
+    times: list[float] = []
     for t, boxes in per_frame:
-        center = pick_main_face([tuple(f) for f in boxes])
+        stamp = round(float(t), 3)
+        times.append(stamp)
+        frames.append([FaceBox(stamp, int(b[0]), int(b[1]), int(b[2]), int(b[3])) for b in boxes])
+
+    detected = sum(1 for boxes in frames if boxes)
+    main = choose_main_track(build_face_tracks(frames))
+    if main is None:
+        return Track_Report([], sampled=len(times), detected=detected)
+
+    by_time = {box.t: box.center for box in main.boxes}
+    samples: list[Center] = []
+    last: Optional[tuple[float, float]] = None
+    for stamp in times:
+        center = by_time.get(stamp, last)
         if center is None:
-            center = last_center
-        if center is not None:
-            samples.append(Center(round(t, 3), center[0], center[1]))
-            last_center = center
-    return samples
+            # Before the subject first appears there is nothing to hold, so these frames
+            # contribute no command and the crop simply starts where the subject does.
+            continue
+        last = center
+        samples.append(Center(stamp, center[0], center[1]))
+
+    return Track_Report(
+        samples, sampled=len(times), detected=detected, tracked=len(by_time)
+    )
+
+
+def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
+    """The main-face centre path. Thin wrapper over :func:`track_faces_report`.
+
+    Kept because it is this module's long-standing public entry point for the single-face
+    path; callers that need to know how well tracking went want the report instead.
+    """
+    return track_faces_report(video, sample_fps=sample_fps).centers
 
 
 #: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
@@ -820,7 +953,7 @@ def apply_reframe(
     video: str | Path,
     dest: str | Path,
     aspect: str = "9:16",
-    sample_fps: float = 5.0,
+    sample_fps: Optional[float] = None,
     command_fps: Optional[float] = None,
     smoothing: float = 0.35,
 ) -> Path:
@@ -829,6 +962,16 @@ def apply_reframe(
     Raises :class:`ReframeUnavailable` when no usable face path is found or the
     aspect is not narrower than the source (nothing to track) so the caller can
     fall back to the static reformat.
+
+    ``sample_fps`` now defaults to ``settings.reframe_sample_fps`` instead of a hard-coded
+    ``5.0``. It was a literal default, and ``pipeline.py`` calls this with the aspect only,
+    so **REFRAME_SAMPLE_FPS had no effect on the default reframe path at all** - an operator
+    lowering it to make renders cheaper, or raising it to follow a livelier subject, changed
+    nothing and got no warning. The same was true of REFRAME_SAMPLE_CAP, which
+    :func:`track_faces` never passed on, leaving this path's sampling cost unbounded and
+    growing linearly with clip length. Both settings are now honoured, which also puts a
+    ceiling on the work: at the shipped values a clip up to 180s - the longest the
+    ``90s-3min`` preset produces - still gets the full rate.
     """
     if aspect not in ASPECT_PRESETS:
         raise ReframeUnavailable(f"Unknown aspect '{aspect}'")
@@ -854,7 +997,8 @@ def apply_reframe(
         # Target isn't a tighter crop than the source; nothing to follow.
         raise ReframeUnavailable("target aspect is not narrower than source")
 
-    samples = track_faces(video, sample_fps=sample_fps)
+    report = track_faces_report(video, sample_fps=sample_fps)
+    samples = report.centers
     if not samples:
         raise ReframeUnavailable("no faces detected")
 
