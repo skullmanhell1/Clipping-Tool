@@ -41,6 +41,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+# Aliased because `metrics` already means "this job's Stage_Timing accumulator" throughout this
+# module and its callers, and reusing the name for the process-wide registry would make every
+# existing `metrics.record(...)` line ambiguous to a reader. Import-safe: `worker.metrics` is
+# stdlib-only and imports nothing from this package, so there is no cycle.
+from worker import metrics as process_metrics
+
 #: The job whose work the current thread/task is doing, or ``None``.
 _current_job: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "clipping_job_id", default=None
@@ -160,6 +166,16 @@ class Job_Metrics:
                 self.stages[name] = timing
             timing.seconds += max(0.0, float(seconds))
             timing.count += 1
+        # Phase 7: the same observation into the process-lifetime histogram that backs
+        # `/metrics`. Hooked *here* rather than at each call site because this method is where
+        # every stage timing in the pipeline already lands - both the `progress` callback's
+        # stage transitions and the `stage()` context manager below funnel through it - so a
+        # stage cannot be added in future without appearing in the histogram too.
+        #
+        # Outside the lock: `observe_stage` takes its own, and while the nesting could not
+        # deadlock (nothing in `worker.metrics` calls back into this module), holding a lock
+        # across a call into another locked component is a habit that eventually does.
+        process_metrics.observe_stage(name, seconds)
 
     def total_seconds(self) -> float:
         with self._lock:

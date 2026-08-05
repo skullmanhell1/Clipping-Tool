@@ -41,6 +41,7 @@ from api.routers import (
     clips,
     jobs,
     metadata,
+    metrics,
     profiles,
     publishing,
     storage,
@@ -222,6 +223,10 @@ app.include_router(storage.router)
 app.include_router(profiles.router)
 app.include_router(watch.router)
 app.include_router(clips.router)
+# Phase 7. Registered before the static mounts like every other router, so that the SPA
+# catch-all mount at "/" cannot shadow "/metrics" - the mount is last precisely because it
+# swallows any path no route claimed first.
+app.include_router(metrics.router)
 
 
 # allow_credentials is derived rather than hard-coded: a wildcard origin and

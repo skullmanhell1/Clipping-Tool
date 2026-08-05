@@ -23,6 +23,10 @@ from typing import Any
 from config import settings
 from worker import cancellation, llm_cost, observability, webhook
 from worker import download as dl
+
+# Aliased: `metrics` is already bound to this job's stage-timing accumulator inside `_execute`,
+# and shadowing it would silently redirect every existing `metrics.record`/`metrics.to_list` call.
+from worker import metrics as process_metrics
 from worker.models import (
     CANCELLABLE_JOB_STATUSES,
     ClipResult,
@@ -637,10 +641,36 @@ class JobManager:
             # webhook cannot turn a finished render into a failed one.
             final = self.store.get(job_id)
             if final is not None:
+                self._record_outcome_metrics(final)
                 webhook.notify(final)
             # I4: the request has been honoured, so forget it. Left in place it would grow
             # without bound on a long-running instance.
             cancellation.clear(job_id)
+
+    @staticmethod
+    def _record_outcome_metrics(final: Any) -> None:
+        """Feed one finished job into the process-lifetime counters behind ``/metrics``.
+
+        Called from the same ``finally`` as the webhook and for the same reason: it is the one
+        point every terminal path reaches exactly once.
+
+        A *resumed* job is counted twice - once when it failed, once when the retry finished -
+        and that is the honest reading rather than an oversight. Two runs happened, two outcomes
+        were produced, and the first failure really did occur; suppressing it would make the
+        failure rate depend on whether anyone happened to retry.
+
+        Total, like the webhook: telemetry must never be the thing that fails a render that has
+        already finished.
+        """
+        try:
+            status = getattr(final.status, "value", str(final.status))
+            process_metrics.count_job_finished(status)
+            clips = list(getattr(final, "clips", None) or ())
+            process_metrics.count_clips_rendered(len(clips))
+            for clip in clips:
+                process_metrics.count_degradations(getattr(clip, "effects_applied", None) or ())
+        except Exception:  # pragma: no cover - defensive; counting must not break a job
+            logger.debug("could not record outcome metrics", exc_info=True)
 
     @staticmethod
     def _store_clip(storage, write_sidecar, job_id: str, clip, clips_dir: Path) -> None:

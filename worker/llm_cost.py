@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config import settings
+from worker import metrics as process_metrics
 from worker import observability
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,39 @@ def record_response(model: str, response: Any, job_id: str | None = None) -> Non
             # An LLM call outside a job - a capability probe, or a test. Nothing to attribute
             # it to, and inventing a bucket would put real spend under a fake job id.
             return
-        usage_for(job).record(model, extract_usage(response))
+        usage = extract_usage(response)
+        usage_for(job).record(model, usage)
+        _record_process_metrics(model, usage)
     except Exception:  # pragma: no cover - defensive; accounting must not break a render
         logger.debug("could not record LLM usage", exc_info=True)
+
+
+def _record_process_metrics(model: str, usage: Token_Usage | None) -> None:
+    """Mirror one call into the cross-job counters behind ``/metrics`` (Phase 7).
+
+    Separate from the per-job registry above because the two answer different questions and have
+    different lifetimes: ``_usage`` is bounded and keyed by job so one job's spend can be reported
+    with it, while these counters are monotonic for the life of the process so ``rate()`` over
+    them is meaningful.
+
+    Cost is computed from *this call's* tokens rather than read from ``Model_Usage.cost_usd()``,
+    which is cumulative - adding a running total to a counter on every call would count the first
+    call once, the second twice, and the tenth ten times.
+    """
+    name = str(model or "unknown")
+    if usage is None:
+        process_metrics.count_llm_call(name, unmetered=True)
+        return
+    prompt = max(0, usage.prompt_tokens)
+    completion = max(0, usage.completion_tokens)
+    process_metrics.count_llm_call(name, prompt, completion)
+    rates = _rates()
+    if rates is None:
+        # Unpriced: nothing recorded, so the absence of `clipping_llm_cost_usd_total` means "no
+        # rate configured" rather than "priced, and free". Recording 0.0 would be read as the
+        # latter, which is the false zero this module exists to avoid.
+        return
+    input_rate, output_rate = rates
+    process_metrics.count_llm_cost(
+        (prompt * input_rate + completion * output_rate) / 1_000_000, name
+    )

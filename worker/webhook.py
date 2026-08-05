@@ -56,6 +56,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from config import settings
+from worker import metrics as process_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,7 @@ def notify(job: Any, *, client: Any = None) -> bool:
         code = int(getattr(response, "status_code", 0))
         if 200 <= code < 300:
             logger.info("job webhook delivered (%s) for %s", code, payload["event"])
+            process_metrics.count_webhook("delivered")
             return True
         # Logged rather than retried, and the body is included truncated: a receiver's error
         # message is usually the only thing that says why, and the whole body could be a page.
@@ -227,10 +229,20 @@ def notify(job: Any, *, client: Any = None) -> bool:
             code,
             str(getattr(response, "text", ""))[:200],
         )
+        process_metrics.count_webhook("rejected")
         return False
     except Exception as exc:
         # Deliberately broad. The point of this handler is that no failure here - DNS, TLS,
         # timeout, a client library raising something undocumented - can change the outcome of a
         # render that has already finished.
         logger.warning("job webhook could not be delivered: %s", exc)
+        # `error` is kept distinct from `rejected` because they need different responses: a
+        # rejection means the receiver is up and refused the payload, an error means it was never
+        # reached. A single `failed` count would hide which.
+        #
+        # The paths that send nothing at all - no URL configured, or a URL whose scheme or host is
+        # unusable - are deliberately not counted here. They are not delivery attempts, and a
+        # deployment with webhooks switched off would otherwise show a steady stream of
+        # "deliveries" that never left the process.
+        process_metrics.count_webhook("error")
         return False
