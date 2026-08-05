@@ -100,6 +100,31 @@ class Settings(BaseSettings):
         default=60.0,
         description="Length of the rate-limit window in seconds.",
     )
+    # --- GET /api/jobs/events (SSE) -----------------------------------------------------
+    # How often the stream re-reads the job store looking for a change.
+    #
+    # A server-side poll rather than a notification hook, because `JobStore` has no change
+    # signal to hook: progress is written from a worker thread through `store.update`, and
+    # adding a condition variable or subscriber list there would mean the render path could
+    # block on, or raise into, a delivery mechanism for a browser tab. Reading the store is a
+    # dict copy under a lock with no SQLite access, so the loop is cheap enough that the
+    # simpler placement wins.
+    #
+    # 0.5s rather than the 1.2s the frontend used to poll at: the cost per tick is now a
+    # local dict read instead of two HTTP round trips plus a full JSON re-serialisation of
+    # every job, so the interval can be shorter and the progress bar moves more smoothly.
+    job_events_poll_interval_seconds: float = Field(
+        default=0.5,
+        description="How often GET /api/jobs/events checks the job store for changes.",
+    )
+    # Idle keepalive. An SSE connection that sends nothing looks dead to anything in the
+    # middle: nginx's default proxy_read_timeout is 60s, and cloud load balancers are
+    # typically similar. A comment frame costs three bytes and keeps the connection open,
+    # and it is also what lets the server notice a client that went away without a FIN.
+    job_events_heartbeat_seconds: float = Field(
+        default=15.0,
+        description="Idle keepalive interval for the GET /api/jobs/events stream.",
+    )
     # SSRF guard. yt-dlp will fetch whatever it is given, so an unauthenticated URL endpoint is
     # a request forwarder into the deployment's own network - including cloud metadata at
     # 169.254.169.254. Self-hosters who genuinely want to ingest from a LAN media server can opt

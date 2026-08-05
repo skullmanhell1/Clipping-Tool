@@ -184,6 +184,96 @@ export const api = {
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => apiFetch(`/api/jobs/${id}`).then(jsonOrThrow),
 
+  /**
+   * Stream job progress from `GET /api/jobs/events` (Phase 5.5).
+   *
+   * Resolves when the server closes the stream, rejects if it cannot be opened
+   * or dies mid-flight. It does not reconnect — the caller decides whether a
+   * dropped stream means retry or fall back to polling, because only the caller
+   * knows whether it still cares.
+   *
+   * `fetch` rather than `EventSource`, and that is the whole reason this is
+   * hand-rolled instead of three lines. `EventSource` cannot set a request
+   * header, so authenticating it would mean putting the API token in the query
+   * string — and unlike the `<video src>` case that allowance exists for, this
+   * connection stays open for an entire render, so the token would sit in every
+   * access log and proxy log for as long as the tab did. `fetch` sends the
+   * header normally, at the cost of parsing the frames here.
+   *
+   * @param {object} handlers
+   * @param {(jobs: object[]) => void} handlers.onSnapshot Full authoritative list.
+   * @param {(jobs: object[]) => void} handlers.onJobs Only the changed jobs; merge by id.
+   * @param {AbortSignal} [handlers.signal] Closes the stream.
+   */
+  jobEvents: async ({ onSnapshot, onJobs, signal } = {}) => {
+    // NO_TIMEOUT for the same reason uploads use it: the request is *supposed*
+    // to stay open indefinitely, so the 30s default deadline would abort a
+    // perfectly healthy stream mid-render. Liveness is the server's heartbeat's
+    // job, not a deadline's.
+    const response = await apiFetch("/api/jobs/events", {
+      headers: { Accept: "text/event-stream" },
+      timeout: NO_TIMEOUT,
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Event stream failed (${response.status})`);
+    }
+    // Guarded rather than assumed: `response.body` is absent in environments
+    // without streaming fetch. Throwing here is what lets the caller fall back
+    // to polling instead of silently receiving no updates forever.
+    if (!response.body?.getReader) {
+      throw new Error("Event stream unsupported: no readable response body");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // `stream: true` matters: a chunk boundary can fall inside a multi-byte
+        // UTF-8 sequence, and decoding each chunk independently would corrupt
+        // any non-ASCII character that straddled one — clip titles and
+        // transcripts are exactly where that shows up.
+        buffer += decoder.decode(value, { stream: true });
+
+        // Frames are separated by a blank line. Anything after the last
+        // separator is a partial frame and stays in the buffer.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const trimmed = frame.trim();
+          // A comment frame — the server's heartbeat. Nothing to deliver, but
+          // arriving at all is the signal that the connection is alive.
+          if (!trimmed || trimmed.startsWith(":")) continue;
+          let name = null;
+          let data = null;
+          for (const line of trimmed.split("\n")) {
+            if (line.startsWith("event:")) name = line.slice(6).trim();
+            else if (line.startsWith("data:")) data = line.slice(5).trim();
+          }
+          if (!name || !data) continue;
+          let payload;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            // One malformed frame must not kill a stream that is otherwise
+            // fine; the next update supersedes it anyway.
+            continue;
+          }
+          const jobs = payload.jobs || [];
+          if (name === "snapshot") onSnapshot?.(jobs);
+          else if (name === "jobs") onJobs?.(jobs);
+        }
+      }
+    } finally {
+      // Releasing the lock lets the body be cancelled by the abort signal
+      // rather than leaving a reader attached to a dead stream.
+      reader.releaseLock?.();
+    }
+  },
+
   // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
   // which jsonOrThrow surfaces as an error carrying the API's own explanation.
   cancelJob: (id) => apiFetch(`/api/jobs/${id}/cancel`, { method: "POST" }).then(jsonOrThrow),

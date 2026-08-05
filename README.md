@@ -85,6 +85,36 @@ length, aspect, caption style, effects, publishing targets, …) as a **named
 profile**. Keep multiple profiles, quick-switch, edit/delete, and mark one as
 the **default** that pre-fills settings on load.
 
+**Live job progress over SSE** — the dashboard follows a render through
+`GET /api/jobs/events`, a [Server-Sent
+Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+stream. It sends every job once on connect, then only the jobs whose state has
+actually changed. It replaces a poll loop that refetched the whole job list —
+including every clip and each job's full options object — twice a second for as
+long as a tab was open, whether or not anything had moved.
+
+Two settings control it, both in `.env.example`:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `JOB_EVENTS_POLL_INTERVAL_SECONDS` | `0.5` | How often the stream re-reads the job store looking for a change. Cheaper than the old client poll despite being more frequent: it is an in-memory dict read, not an HTTP round trip plus a full JSON re-serialisation. |
+| `JOB_EVENTS_HEARTBEAT_SECONDS` | `15.0` | Idle keepalive. A stream that sends nothing looks dead to anything in the middle, and nginx's default `proxy_read_timeout` is 60s. If you raise this, raise `proxy_read_timeout` too — whichever is shorter decides when the stream drops. |
+
+**Polling is kept as a fallback, not removed.** If the stream cannot be opened
+twice in a row the UI switches to the old 1.2s/4s poll for the rest of the
+session. That is the path you get behind a reverse proxy that buffers responses,
+or in a browser without streaming `fetch`, and it is why
+`X-Accel-Buffering: no` is set on the stream — without it nginx buffers the
+response and the UI receives one lump of progress at the end of the render
+instead of a moving progress bar.
+
+The stream authenticates with the same `Authorization`/`X-API-Token` header as
+every other route. It deliberately does **not** accept `?token=`: the browser
+`EventSource` API cannot set headers, so the client reads it with `fetch`
+instead rather than putting the token in the URL of a connection that stays open
+for a whole render — where it would sit in access and proxy logs for that
+connection's lifetime.
+
 **Updates & maintenance** — the running **version** is shown in the UI; an
 **"update available" banner** appears when a newer GitHub release exists;
 [semantic versioning](https://semver.org) via the `VERSION` file; CI builds +
