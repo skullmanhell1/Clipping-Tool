@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import PropTypes from "prop-types";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -170,6 +171,13 @@ function Harness({ initial, onChange }) {
     />
   );
 }
+
+// Declared like the panel it wraps: the settings object is opaque here for the same reason it is
+// there — `SETTINGS_SCHEMA` in App.jsx is the one place that list is written down.
+Harness.propTypes = {
+  initial: PropTypes.object.isRequired,
+  onChange: PropTypes.func.isRequired,
+};
 
 const setupHarness = (settings = {}) => {
   const onChange = vi.fn();

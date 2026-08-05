@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 import { formatDuration } from "../api.js";
 
 /**
@@ -46,3 +48,19 @@ export default function PreviewCard({ preview, loading }) {
     </div>
   );
 }
+
+PreviewCard.propTypes = {
+  // Nothing here is required. A null `preview` is the normal state — before a URL is pasted, while
+  // one is being fetched, and after a fetch that failed — and the early return above is what makes
+  // that renderable. Inside the payload, only what the extractor happened to report is present: a
+  // live stream has no duration and the card says "--:--" rather than "0:00", and a source with no
+  // uploader simply loses that line.
+  preview: PropTypes.shape({
+    title: PropTypes.string,
+    uploader: PropTypes.string,
+    duration: PropTypes.number,
+    thumbnail: PropTypes.string,
+    source: PropTypes.string,
+  }),
+  loading: PropTypes.bool,
+};

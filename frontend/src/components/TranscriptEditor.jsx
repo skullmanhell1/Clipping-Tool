@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api, formatDuration } from "../api.js";
@@ -165,3 +166,15 @@ export default function TranscriptEditor({ jobId, clipId, onApply, applying = fa
     </div>
   );
 }
+
+TranscriptEditor.propTypes = {
+  // Both required: they are the address of the transcript this editor exists to fetch, and they are
+  // also what the reset effect keys on, so a missing one would leave one clip's struck words
+  // applied to another's.
+  jobId: PropTypes.string.isRequired,
+  clipId: PropTypes.string.isRequired,
+  // Called with `?.`, so a read-only mounting is legitimate — but a caller that omits it gives the
+  // user an Apply button that does nothing.
+  onApply: PropTypes.func,
+  applying: PropTypes.bool,
+};

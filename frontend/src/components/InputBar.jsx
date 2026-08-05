@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useRef, useState } from "react";
 
 /**
@@ -91,3 +92,12 @@ export default function InputBar({ onChange, onPreview }) {
     </div>
   );
 }
+
+InputBar.propTypes = {
+  // Required: this component holds the URLs and the files, and a parent that does not take them
+  // has no way to submit anything. It is called unguarded on every keystroke.
+  onChange: PropTypes.func.isRequired,
+  // Optional, and called with `?.` — the preview is a convenience on blur, and a caller that
+  // does not want one (a batch-only view, a test) is a legitimate arrangement.
+  onPreview: PropTypes.func,
+};

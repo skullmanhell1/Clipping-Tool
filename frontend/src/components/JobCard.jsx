@@ -1,7 +1,15 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClipCard from "./ClipCard.jsx";
 import ReviewBar from "./ReviewBar.jsx";
 import { api, formatDuration } from "../api.js";
+import {
+  CLIP_SHAPE,
+  PUBLISHER_STATUSES_SHAPE,
+  PUBLISHING_SHAPE,
+  PUBLISH_ATTEMPT_SHAPE,
+  WIRE_OPTIONS_SHAPE,
+} from "./shapes.js";
 
 const STATUS_STYLES = {
   queued: "bg-slate-700 text-slate-200",
@@ -422,3 +430,38 @@ export default function JobCard({
     </div>
   );
 }
+
+JobCard.propTypes = {
+  // Required, and required in the two fields the card cannot do without: `id` addresses every call
+  // it makes, and `status` decides which of the five bodies it renders — a job with no status would
+  // fall through to the queued badge and a progress bar for work that may have finished.
+  job: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    status: PropTypes.string.isRequired,
+    // Always sent by `/api/jobs`, and dereferenced unguarded in the completed branch.
+    clips: PropTypes.arrayOf(CLIP_SHAPE).isRequired,
+    title: PropTypes.string,
+    source: PropTypes.string,
+    input_type: PropTypes.string,
+    duration: PropTypes.number,
+    progress: PropTypes.number,
+    stage: PropTypes.string,
+    // U8: the step counter, shown only when both are positive, because a wrong step number is
+    // worse than none.
+    stage_index: PropTypes.number,
+    stage_total: PropTypes.number,
+    stage_timings: PropTypes.array,
+    error: PropTypes.string,
+  }).isRequired,
+  llmAvailable: PropTypes.bool,
+  publishing: PUBLISHING_SHAPE,
+  publisherStatuses: PUBLISHER_STATUSES_SHAPE,
+  // Every attempt in the app; this card filters out the ones belonging to its own clips.
+  publishAttempts: PropTypes.arrayOf(PUBLISH_ATTEMPT_SHAPE),
+  // Called with `?.` after a verdict or an edit. Without it the batch bar's tally never moves,
+  // because the counts are derived from the clips the parent holds.
+  onClipUpdated: PropTypes.func,
+  onPublished: PropTypes.func,
+  // U7: forwarded verbatim to each clip's re-render. Already in wire form.
+  settings: WIRE_OPTIONS_SHAPE,
+};
