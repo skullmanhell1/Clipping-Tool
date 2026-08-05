@@ -52,11 +52,25 @@ def _make_tone(path, *, freq=300, seconds=4.0, volume=1.0, rate=44100, channels=
     """A tone at a known level, deliberately *not* at the output's rate/layout."""
     subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"sine=f={freq}:d={seconds}:sample_rate={rate}",
-            "-af", f"volume={volume}", "-ac", str(channels), "-y", str(path),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f={freq}:d={seconds}:sample_rate={rate}",
+            "-af",
+            f"volume={volume}",
+            "-ac",
+            str(channels),
+            "-y",
+            str(path),
         ],
-        check=True, capture_output=True, timeout=120,
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     return path
 
@@ -64,11 +78,20 @@ def _make_tone(path, *, freq=300, seconds=4.0, volume=1.0, rate=44100, channels=
 def _probe_audio(path) -> dict[str, str]:
     proc = subprocess.run(
         [
-            FFPROBE, "-v", "error", "-select_streams", "a",
-            "-show_entries", "stream=sample_rate,channels,codec_name",
-            "-of", "default=nw=1", str(path),
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=sample_rate,channels,codec_name",
+            "-of",
+            "default=nw=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     out: dict[str, str] = {}
@@ -126,9 +149,22 @@ def test_measure_loudness_returns_none_instead_of_raising(tmp_path):
 
     silent_video = tmp_path / "novideo.mp4"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=black:s=64x64:d=1", "-y", str(silent_video)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=64x64:d=1",
+            "-y",
+            str(silent_video),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     assert audio.measure_loudness(silent_video) is None
 
@@ -149,16 +185,29 @@ def test_a_quiet_clip_is_normalised_to_the_platform_target(platform, tmp_path):
     target = audio.platform_loudness_target(platform)
     out = tmp_path / f"{platform}.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(source),
-         "-af", audio.loudnorm_filter(before, target), "-y", str(out)],
-        check=True, capture_output=True, timeout=180,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-af",
+            audio.loudnorm_filter(before, target),
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
 
     after = audio.measure_loudness(out)
     assert after is not None
-    assert abs(after.input_i - target) < 1.0, (
-        f"{platform}: {before.input_i:.2f} LUFS -> {after.input_i:.2f}, wanted {target}"
-    )
+    assert (
+        abs(after.input_i - target) < 1.0
+    ), f"{platform}: {before.input_i:.2f} LUFS -> {after.input_i:.2f}, wanted {target}"
     # And the true-peak ceiling is respected, which is the other half of AU1: a clip that
     # hits 0 dBFS will clip in the lossy encoder even at the right loudness.
     assert after.input_tp <= app_settings.loudness_true_peak_db + 0.5, after
@@ -180,26 +229,52 @@ def test_a_loud_clip_is_brought_down_not_only_up(tmp_path):
     """
     source = tmp_path / "loud.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "anoisesrc=c=pink:a=0.8:d=4", "-y", str(source)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=c=pink:a=0.8:d=4",
+            "-y",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     before = audio.measure_loudness(source)
     assert before is not None
 
-    target = before.input_i - 8.0          # unambiguously quieter than the source
+    target = before.input_i - 8.0  # unambiguously quieter than the source
     out = tmp_path / "quieter.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(source),
-         "-af", audio.loudnorm_filter(before, target), "-y", str(out)],
-        check=True, capture_output=True, timeout=180,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-af",
+            audio.loudnorm_filter(before, target),
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
     after = audio.measure_loudness(out)
     assert after is not None
     assert after.input_i < before.input_i, "a clip above the target must be turned down"
-    assert abs(after.input_i - target) < 1.0, (
-        f"{before.input_i:.2f} LUFS -> {after.input_i:.2f}, wanted {target:.2f}"
-    )
+    assert (
+        abs(after.input_i - target) < 1.0
+    ), f"{before.input_i:.2f} LUFS -> {after.input_i:.2f}, wanted {target:.2f}"
 
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +317,7 @@ def test_fades_still_apply_on_both_paths():
     """Fades and ducking are independent; adding one must not drop the other."""
     for duck in (True, False):
         graph = audio.music_mix_filter("0:a", "1:a", "aout", 0.12, 5.0, fade=True, duck=duck)
-        assert graph.count("afade=t=in") == 2, graph    # bed and speech
+        assert graph.count("afade=t=in") == 2, graph  # bed and speech
         assert graph.count("afade=t=out") == 2, graph
 
 
@@ -260,12 +335,25 @@ def test_the_duck_graph_runs_and_lowers_the_bed_under_speech(tmp_path):
     """
     speech = tmp_path / "speech.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "sine=f=300:d=3:sample_rate=48000",
-         # silent for 1s, loud for 1s, silent for 1s
-         "-af", "volume='if(between(t,1,2),1.0,0.0)':eval=frame",
-         "-y", str(speech)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=300:d=3:sample_rate=48000",
+            # silent for 1s, loud for 1s, silent for 1s
+            "-af",
+            "volume='if(between(t,1,2),1.0,0.0)':eval=frame",
+            "-y",
+            str(speech),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     bed = _make_tone(tmp_path / "bed.wav", freq=800, seconds=3.0, rate=48000)
 
@@ -273,10 +361,26 @@ def test_the_duck_graph_runs_and_lowers_the_bed_under_speech(tmp_path):
         out = tmp_path / f"mixed_{int(duck)}.wav"
         graph = audio.music_mix_filter("0:a", "1:a", "aout", 0.9, 3.0, duck=duck)
         subprocess.run(
-            [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-i", str(speech), "-i", str(bed),
-             "-filter_complex", graph, "-map", "[aout]", "-y", str(out)],
-            check=True, capture_output=True, timeout=180,
+            [
+                FFMPEG,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(speech),
+                "-i",
+                str(bed),
+                "-filter_complex",
+                graph,
+                "-map",
+                "[aout]",
+                "-y",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=180,
         )
         assert out.exists() and out.stat().st_size > 0
         return out
@@ -288,10 +392,21 @@ def test_the_duck_graph_runs_and_lowers_the_bed_under_speech(tmp_path):
         measures the bed even while someone is talking over it.
         """
         proc = subprocess.run(
-            [FFMPEG, "-nostdin", "-hide_banner", "-i", str(path),
-             "-af", f"atrim=start={start}:end={end},highpass=f=600,volumedetect",
-             "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120,
+            [
+                FFMPEG,
+                "-nostdin",
+                "-hide_banner",
+                "-i",
+                str(path),
+                "-af",
+                f"atrim=start={start}:end={end},highpass=f=600,volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         for line in proc.stderr.splitlines():
             if "mean_volume:" in line:
@@ -341,15 +456,26 @@ def test_a_44100_mono_source_is_delivered_as_48000_stereo(tmp_path):
 
     out = tmp_path / "delivered.m4a"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(source),
-         *aac_args(), "-y", str(out)],
-        check=True, capture_output=True, timeout=180,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            *aac_args(),
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
     probed = _probe_audio(out)
     assert probed["sample_rate"] == str(app_settings.output_sample_rate)
     assert probed["channels"] == str(app_settings.output_channels)
     assert probed["codec_name"] == "aac"
-
 
 
 # --------------------------------------------------------------------------- #
@@ -365,19 +491,47 @@ def test_a_44100_mono_source_is_delivered_as_48000_stereo(tmp_path):
 def _float_tone(path, *, gain_db, freq=300, seconds=2.0):
     """A tone at a known level, as 32-bit float so it can legitimately exceed full scale."""
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", f"sine=f={freq}:d={seconds}:sample_rate={_RATE}",
-         "-af", f"volume={gain_db}dB", "-c:a", "pcm_f32le", "-y", str(path)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f={freq}:d={seconds}:sample_rate={_RATE}",
+            "-af",
+            f"volume={gain_db}dB",
+            "-c:a",
+            "pcm_f32le",
+            "-y",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     return path
 
 
 def _true_peak_db(path) -> float:
     proc = subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-i", str(path),
-         "-af", "ebur128=peak=true", "-f", "null", "-"],
-        capture_output=True, text=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-af",
+            "ebur128=peak=true",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     peaks = [line for line in proc.stderr.splitlines() if "Peak:" in line]
     assert peaks, f"no true-peak reading:\n{proc.stderr[-800:]}"
@@ -424,9 +578,24 @@ def test_a_signal_over_the_ceiling_is_brought_down_to_it(tmp_path):
 
     limited = tmp_path / "limited.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(hot),
-         "-af", audio.true_peak_limit_filter(), "-c:a", "pcm_f32le", "-y", str(limited)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(hot),
+            "-af",
+            audio.true_peak_limit_filter(),
+            "-c:a",
+            "pcm_f32le",
+            "-y",
+            str(limited),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     peak = _true_peak_db(limited)
     assert peak <= app_settings.loudness_true_peak_db + 0.5, peak
@@ -447,9 +616,24 @@ def test_the_limiter_is_transparent_below_the_ceiling(tmp_path):
 
     out = tmp_path / "out.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(quiet),
-         "-af", audio.true_peak_limit_filter(), "-c:a", "pcm_f32le", "-y", str(out)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(quiet),
+            "-af",
+            audio.true_peak_limit_filter(),
+            "-c:a",
+            "pcm_f32le",
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     assert _true_peak_db(out) == pytest.approx(before_peak, abs=0.2)
     assert _integrated_lufs(out) == pytest.approx(before_lufs, abs=0.2)
@@ -471,10 +655,28 @@ def test_a_mix_that_would_clip_is_contained(tmp_path):
         graph = "[1:a]volume=0.9[bedv];[0:a][bedv]amix=inputs=2:duration=first:normalize=0[m]"
         graph += f";[m]{extra}[out]" if extra else ";[m]anull[out]"
         subprocess.run(
-            [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-i", str(speech), "-i", str(bed), "-filter_complex", graph,
-             "-map", "[out]", "-c:a", "pcm_f32le", "-y", str(out)],
-            check=True, capture_output=True, timeout=120,
+            [
+                FFMPEG,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(speech),
+                "-i",
+                str(bed),
+                "-filter_complex",
+                graph,
+                "-map",
+                "[out]",
+                "-c:a",
+                "pcm_f32le",
+                "-y",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
         )
         return _true_peak_db(out)
 
@@ -494,30 +696,52 @@ def test_the_compositor_puts_the_limiter_after_loudness_normalisation(tmp_path, 
 
     source = tmp_path / "src.mp4"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "testsrc=s=320x240:d=2:r=30",
-         "-f", "lavfi", "-i", f"sine=f=300:d=2:sample_rate={_RATE}",
-         "-shortest", "-c:v", "libx264", "-c:a", "aac", "-y", str(source)],
-        check=True, capture_output=True, timeout=180,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=s=320x240:d=2:r=30",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=300:d=2:sample_rate={_RATE}",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-y",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
 
     captured: list[list[str]] = []
     monkeypatch.setattr(compositor, "_run", lambda cmd, **kw: captured.append(list(cmd)))
 
-    options = ProcessingOptions(platform="tiktok")   # shipped defaults: fades on
-    compositor.render_clip(source, tmp_path / "out.mp4", options,
-                           [FakeWord(0.2, 0.6, "money")], tmp_path)
+    options = ProcessingOptions(platform="tiktok")  # shipped defaults: fades on
+    compositor.render_clip(
+        source, tmp_path / "out.mp4", options, [FakeWord(0.2, 0.6, "money")], tmp_path
+    )
     assert captured, "no ffmpeg invocation captured"
     graph = captured[-1][captured[-1].index("-filter_complex") + 1]
     assert "alimiter=" in graph, graph
-    assert graph.index("loudnorm=") < graph.index("alimiter="), (
-        "the limiter must come after loudness normalisation, not before it"
-    )
+    assert graph.index("loudnorm=") < graph.index(
+        "alimiter="
+    ), "the limiter must come after loudness normalisation, not before it"
 
     # And it is genuinely optional.
     captured.clear()
     monkeypatch.setattr(app_settings, "true_peak_limit_enabled", False)
-    compositor.render_clip(source, tmp_path / "out2.mp4", options,
-                           [FakeWord(0.2, 0.6, "money")], tmp_path)
+    compositor.render_clip(
+        source, tmp_path / "out2.mp4", options, [FakeWord(0.2, 0.6, "money")], tmp_path
+    )
     graph = captured[-1][captured[-1].index("-filter_complex") + 1]
     assert "alimiter=" not in graph

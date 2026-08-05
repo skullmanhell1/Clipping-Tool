@@ -35,7 +35,7 @@ def _clean_registries():
 # --------------------------------------------------------------------------- #
 def test_nothing_is_cancelled_by_default():
     assert cancellation.is_cancelled("abc") is False
-    cancellation.checkpoint("abc")          # must not raise
+    cancellation.checkpoint("abc")  # must not raise
 
 
 def test_a_request_makes_the_checkpoint_raise():
@@ -77,7 +77,7 @@ def test_the_registry_is_safe_across_threads():
                 cancellation.checkpoint("threaded")
         except cancellation.Job_Cancelled:
             pass
-        except BaseException as exc:      # noqa: BLE001 - recorded and re-raised below
+        except BaseException as exc:  # noqa: BLE001 - recorded and re-raised below
             errors.append(exc)
 
     thread = threading.Thread(target=worker)
@@ -111,8 +111,9 @@ def test_cancelling_a_queued_job_marks_it_cancelled_not_failed():
 def test_cancelling_a_finished_job_is_a_no_op_rather_than_an_error():
     """A double-click on the button must not look like a failure."""
     store = jobs.JobStore(persistence=False)
-    job = Job(input_type="file", source="x.mp4", options=ProcessingOptions(),
-              status=JobStatus.COMPLETED)
+    job = Job(
+        input_type="file", source="x.mp4", options=ProcessingOptions(), status=JobStatus.COMPLETED
+    )
     store.add(job)
     manager = jobs.JobManager(store=store)
     assert manager.cancel(job.id) is False
@@ -144,8 +145,7 @@ def test_submitting_clears_a_stale_request(monkeypatch):
     store = jobs.JobStore(persistence=False)
     manager = jobs.JobManager(store=store)
     scheduled: list = []
-    monkeypatch.setattr(manager._executor, "submit",
-                        lambda fn, *a, **k: scheduled.append(a))
+    monkeypatch.setattr(manager._executor, "submit", lambda fn, *a, **k: scheduled.append(a))
 
     # Pre-poison every id this submit could be given.
     original_clear = cancellation.clear
@@ -266,8 +266,7 @@ def test_installing_twice_does_not_double_the_filter():
     observability.install()
     root = logging.getLogger()
     for handler in root.handlers:
-        matching = [f for f in handler.filters
-                    if isinstance(f, observability.Job_Context_Filter)]
+        matching = [f for f in handler.filters if isinstance(f, observability.Job_Context_Filter)]
         assert len(matching) <= 1, "the filter was attached more than once"
 
 
@@ -288,9 +287,9 @@ def test_a_stage_is_timed_and_counted():
 def test_the_mean_distinguishes_per_clip_stages_from_per_job_ones():
     """Both exist in this pipeline, and total time alone cannot compare them."""
     metrics = observability.metrics_for("job-b")
-    metrics.record("Transcribing audio", 30.0)          # once per job
+    metrics.record("Transcribing audio", 30.0)  # once per job
     for _ in range(10):
-        metrics.record("Rendering clip", 4.0)           # once per clip
+        metrics.record("Rendering clip", 4.0)  # once per clip
     rows = {r["stage"]: r for r in metrics.to_list()}
     assert rows["Rendering clip"]["seconds"] > rows["Transcribing audio"]["seconds"]
     assert rows["Rendering clip"]["mean_seconds"] < rows["Transcribing audio"]["mean_seconds"]
@@ -387,13 +386,16 @@ def test_metrics_are_safe_under_concurrent_recording():
 # --------------------------------------------------------------------------- #
 # U8 - stage position
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("stage,expected", [
-    ("Starting", 1),
-    ("Analyzing video", 2),
-    ("Transcribing audio", 3),
-    ("Finding the best moments", 4),
-    ("Completed - 3 clip(s)", len(jobs.JOB_STAGES)),
-])
+@pytest.mark.parametrize(
+    "stage,expected",
+    [
+        ("Starting", 1),
+        ("Analyzing video", 2),
+        ("Transcribing audio", 3),
+        ("Finding the best moments", 4),
+        ("Completed - 3 clip(s)", len(jobs.JOB_STAGES)),
+    ],
+)
 def test_known_stages_map_to_their_position(stage, expected):
     assert jobs.stage_position(stage) == expected
 

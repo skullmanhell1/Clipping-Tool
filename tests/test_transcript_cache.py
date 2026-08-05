@@ -41,7 +41,9 @@ def _transcript(text="hello there"):
         language="en",
         segments=[
             TranscriptSegment(
-                0.0, 2.0, text,
+                0.0,
+                2.0,
+                text,
                 words=[Word(0.0, 1.0, "hello", 0.9), Word(1.0, 2.0, "there", 0.8)],
             )
         ],
@@ -114,9 +116,9 @@ def test_the_model_is_part_of_the_key(media):
 
 def test_every_asr_parameter_is_part_of_the_key(media):
     baseline = _key(media)
-    assert _key(media, language="en") != baseline        # forced vs auto-detect
-    assert _key(media, translate=True) != baseline       # different task entirely
-    assert _key(media, beam_size=1) != baseline          # different decoding
+    assert _key(media, language="en") != baseline  # forced vs auto-detect
+    assert _key(media, translate=True) != baseline  # different task entirely
+    assert _key(media, beam_size=1) != baseline  # different decoding
     # And the same inputs are stable, or nothing would ever hit.
     assert _key(media) == baseline
 
@@ -155,7 +157,8 @@ def test_word_probabilities_survive(media, cache_dir):
     transcript_cache.store(key, _transcript())
     loaded = transcript_cache.load(key)
     assert [w.probability for w in loaded.segments[0].words] == [
-        pytest.approx(0.9), pytest.approx(0.8)
+        pytest.approx(0.9),
+        pytest.approx(0.8),
     ]
 
 
@@ -271,13 +274,14 @@ def test_the_cache_can_be_turned_off(media, cache_dir, monkeypatch):
 
 def test_hit_and_miss_are_reportable(media, cache_dir, monkeypatch):
     """Callers need to be able to say which path ran - a silent cache is hard to trust."""
-    monkeypatch.setattr("worker.transcribe.transcribe_uncached",
-                        lambda *a, **k: _transcript())
+    monkeypatch.setattr("worker.transcribe.transcribe_uncached", lambda *a, **k: _transcript())
     events: list[str] = []
-    transcribe(media, on_hit=lambda key: events.append("hit"),
-                      on_miss=lambda key: events.append("miss"))
-    transcribe(media, on_hit=lambda key: events.append("hit"),
-                      on_miss=lambda key: events.append("miss"))
+    transcribe(
+        media, on_hit=lambda key: events.append("hit"), on_miss=lambda key: events.append("miss")
+    )
+    transcribe(
+        media, on_hit=lambda key: events.append("hit"), on_miss=lambda key: events.append("miss")
+    )
     assert events == ["miss", "hit"]
 
 

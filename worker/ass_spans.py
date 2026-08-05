@@ -128,9 +128,7 @@ def animation_span(
     if style in ("typewriter", "slide_up"):
         # `slide_up` carries the event-level `\move` (added by the kinetic emitter) plus this
         # per-word alpha gate, so its words still appear on beat rather than all at once.
-        return (
-            f"{{\\alpha&HFF&\\t({rel},{rel + TYPEWRITER_RAMP_MS},\\alpha&H00&)}}{escaped}"
-        )
+        return f"{{\\alpha&HFF&\\t({rel},{rel + TYPEWRITER_RAMP_MS},\\alpha&H00&)}}{escaped}"
 
     duration = int(motion_ms)
 
@@ -144,9 +142,6 @@ def animation_span(
         )
 
     if style == "highlight_sweep":
-        return (
-            f"{{\\c{highlight}&\\t({rel},{rel + duration},"
-            f"\\c{primary}&)}}{escaped}"
-        )
+        return f"{{\\c{highlight}&\\t({rel},{rel + duration}," f"\\c{primary}&)}}{escaped}"
 
     return escaped

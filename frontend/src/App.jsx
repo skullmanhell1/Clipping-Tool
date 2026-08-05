@@ -258,14 +258,17 @@ export default function App() {
     }
   }, []);
 
-  const applyProfile = useCallback((id) => {
-    setActiveProfileId(id);
-    if (!id) return;
-    const profile = profiles.find((p) => p.id === id);
-    if (!profile) return;
-    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
-    setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
-  }, [profiles]);
+  const applyProfile = useCallback(
+    (id) => {
+      setActiveProfileId(id);
+      if (!id) return;
+      const profile = profiles.find((p) => p.id === id);
+      if (!profile) return;
+      setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
+      setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
+    },
+    [profiles]
+  );
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -279,7 +282,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api.watchStatus().then(setWatch).catch(() => {});
+    api
+      .watchStatus()
+      .then(setWatch)
+      .catch(() => {});
     api
       .info()
       .then((info) => {
@@ -290,7 +296,10 @@ export default function App() {
         setCapabilities(info.capabilities || null);
       })
       .catch(() => {});
-    api.updates().then(setUpdateInfo).catch(() => {});
+    api
+      .updates()
+      .then(setUpdateInfo)
+      .catch(() => {});
     loadPublishingData();
     // Load profiles and pre-fill from the default profile once on startup.
     loadProfiles().then((data) => {
@@ -306,22 +315,31 @@ export default function App() {
     });
   }, [loadPublishingData, loadProfiles]);
 
-  const handleSaveProfile = useCallback(async (name, id) => {
-    const saved = await api.saveProfile({ name, id, settings, publishing });
-    await loadProfiles();
-    setActiveProfileId(saved.id);
-  }, [settings, publishing, loadProfiles]);
+  const handleSaveProfile = useCallback(
+    async (name, id) => {
+      const saved = await api.saveProfile({ name, id, settings, publishing });
+      await loadProfiles();
+      setActiveProfileId(saved.id);
+    },
+    [settings, publishing, loadProfiles]
+  );
 
-  const handleSetDefaultProfile = useCallback(async (id) => {
-    await api.setDefaultProfile(id);
-    await loadProfiles();
-  }, [loadProfiles]);
+  const handleSetDefaultProfile = useCallback(
+    async (id) => {
+      await api.setDefaultProfile(id);
+      await loadProfiles();
+    },
+    [loadProfiles]
+  );
 
-  const handleDeleteProfile = useCallback(async (id) => {
-    await api.deleteProfile(id);
-    if (id === activeProfileId) setActiveProfileId("");
-    await loadProfiles();
-  }, [activeProfileId, loadProfiles]);
+  const handleDeleteProfile = useCallback(
+    async (id) => {
+      await api.deleteProfile(id);
+      if (id === activeProfileId) setActiveProfileId("");
+      await loadProfiles();
+    },
+    [activeProfileId, loadProfiles]
+  );
 
   const handleClipUpdated = useCallback((jobId, updatedClip) => {
     setJobs((previous) =>
@@ -329,9 +347,7 @@ export default function App() {
         job.id === jobId
           ? {
               ...job,
-              clips: job.clips.map((clip) =>
-                clip.id === updatedClip.id ? updatedClip : clip
-              ),
+              clips: job.clips.map((clip) => (clip.id === updatedClip.id ? updatedClip : clip)),
             }
           : job
       )
@@ -340,10 +356,7 @@ export default function App() {
 
   const poll = useCallback(async () => {
     try {
-      const [{ jobs: allJobs }, history] = await Promise.all([
-        api.listJobs(),
-        api.history(),
-      ]);
+      const [{ jobs: allJobs }, history] = await Promise.all([api.listJobs(), api.history()]);
       setJobs(allJobs);
       setPublishAttempts(history.publish_attempts || []);
     } catch {
@@ -459,9 +472,7 @@ export default function App() {
             </h1>
             <p className="mt-1 text-slate-400">
               Create, package, schedule, and publish short-form clips.
-              {version && (
-                <span className="ml-2 text-xs text-slate-600">v{version}</span>
-              )}
+              {version && <span className="ml-2 text-xs text-slate-600">v{version}</span>}
             </p>
           </div>
           <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
@@ -476,9 +487,7 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveView(id)}
                 className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                  activeView === id
-                    ? "bg-brand text-white"
-                    : "text-slate-400 hover:text-white"
+                  activeView === id ? "bg-brand text-white" : "text-slate-400 hover:text-white"
                 }`}
               >
                 {label}
@@ -490,9 +499,12 @@ export default function App() {
         {updateInfo?.update_available && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-700/60 bg-amber-950/40 p-3 text-sm text-amber-200">
             <span>
-              🎉 Update available — v{updateInfo.latest} is out (you're on v
-              {updateInfo.current}). Update with{" "}
-              <code className="rounded bg-slate-900 px-1">git pull &amp;&amp; docker compose up --build</code>.
+              🎉 Update available — v{updateInfo.latest} is out (you're on v{updateInfo.current}).
+              Update with{" "}
+              <code className="rounded bg-slate-900 px-1">
+                git pull &amp;&amp; docker compose up --build
+              </code>
+              .
             </span>
             <a
               href={updateInfo.html_url}
@@ -525,7 +537,10 @@ export default function App() {
               </p>
               <p className="mt-1 text-xs text-slate-500">
                 Update the app with{" "}
-                <code className="rounded bg-slate-950 px-1">git pull &amp;&amp; docker compose up --build</code>.
+                <code className="rounded bg-slate-950 px-1">
+                  git pull &amp;&amp; docker compose up --build
+                </code>
+                .
               </p>
             </div>
           </div>
@@ -605,8 +620,8 @@ export default function App() {
         )}
 
         <footer className="mt-12 border-t border-slate-800 pt-6 text-xs text-slate-500">
-          You are responsible for holding the rights to any source footage you process.
-          See the README for content and copyright guidance.
+          You are responsible for holding the rights to any source footage you process. See the
+          README for content and copyright guidance.
         </footer>
       </div>
     </div>

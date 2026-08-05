@@ -1,4 +1,5 @@
 """Tests for caption templates/positions and the hook-title ASS builder."""
+
 from __future__ import annotations
 
 import pytest
@@ -60,7 +61,6 @@ def test_subtitles_filter_escapes_path():
     assert "\\:" in f  # colon escaped for ffmpeg filter syntax
 
 
-
 # --- Task 2.8: keyword highlighting disabled skips all LLM work ------------
 def test_keyword_highlight_disabled_makes_zero_llm_calls():
     """Validates: Requirements 3.6
@@ -89,7 +89,6 @@ def test_keyword_highlight_disabled_makes_zero_llm_calls():
     # so the highest-salience word wins rather than both. Emphasising two words in three
     # is what made highlighting meaningless before.
     assert result == {2}
-
 
 
 # ===========================================================================
@@ -135,12 +134,15 @@ def test_in_caption_emoji_independent_of_overlay_emoji(tmp_path):
     words = [Word(0.0, 0.5, "money"), Word(0.5, 1.0, "today")]
     dest = tmp_path / "emoji.ass"
     build_ass(
-        [Cue(0.0, 1.0, words)], dest, preset=preset, clip_duration=1.0,
+        [Cue(0.0, 1.0, words)],
+        dest,
+        preset=preset,
+        clip_duration=1.0,
         emoji_downloader=downloader,
     )
     text = dest.read_text()
     assert "\U0001f4b0" in text  # money glyph appears inline in the cue text
-    assert downloads == []       # overlay/download machinery is never used
+    assert downloads == []  # overlay/download machinery is never used
 
     # A preset with in-caption emoji disabled inserts no glyph.
     assert caption_emoji_glyph(Word(0.0, 1.0, "money"), BUILTIN_PRESETS["karaoke"]) == ""
@@ -206,7 +208,11 @@ def test_p10_every_preset_position_renders(preset_name, position, make_video, tm
     cues = words_to_cues(words)
     ass = tmp_path / f"{preset_name}_{position}.ass"
     build_ass(
-        cues, ass, preset=preset, keyword_indices={1}, position=position,
+        cues,
+        ass,
+        preset=preset,
+        keyword_indices={1},
+        position=position,
         clip_duration=2.0,
     )
     out = tmp_path / f"{preset_name}_{position}.mp4"

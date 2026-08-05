@@ -55,8 +55,11 @@ def save_profile(req: ProfileModel) -> dict:
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Profile name is required")
     prof = get_profile_store().save(
-        req.name, req.settings, req.publishing,
-        profile_id=req.id, make_default=req.make_default,
+        req.name,
+        req.settings,
+        req.publishing,
+        profile_id=req.id,
+        make_default=req.make_default,
     )
     return prof.to_dict()
 

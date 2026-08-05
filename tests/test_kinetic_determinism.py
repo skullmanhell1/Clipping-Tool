@@ -47,6 +47,7 @@ function and each example needs its own clean Pipeline ``temp_dir``.
 ``deadline=None`` is used for the same reason: this property touches the
 filesystem.
 """
+
 from __future__ import annotations
 
 import ast
@@ -303,7 +304,7 @@ def _invoke(temp_dir: Any, *, env: dict, **context_kwargs):
         # reproduce the written document exactly (Req 11.10).
         planned = engine.plan(ctx)
         emitted = emit_ass(planned)
-    assert refused == []                    # zero subprocesses, zero sockets
+    assert refused == []  # zero subprocesses, zero sockets
     path = ctx.workspace.path(ASS_NAME)
     return result, ctx, path.read_bytes(), emitted, planned, prober
 
@@ -319,7 +320,7 @@ def _events(content: str) -> list[tuple[str, str]]:
     for line in content.splitlines():
         if not line.startswith("Dialogue: "):
             continue
-        fields = line[len("Dialogue: "):].split(",", 9)
+        fields = line[len("Dialogue: ") :].split(",", 9)
         events.append((fields[3], fields[9] if len(fields) > 9 else ""))
     return events
 
@@ -369,7 +370,7 @@ def _perturbed(opts: Kinetic_Options, name: str) -> Kinetic_Options:
     timeline=st_word_timeline(),
     option_fields=st_kinetic_options(),
     time_base=st_time_base(),
-    seed=st.integers(min_value=0, max_value=2 ** 32 - 1),
+    seed=st.integers(min_value=0, max_value=2**32 - 1),
     hook_text=st.sampled_from(["", "watch this", "THE TRUTH ABOUT 2 THINGS"]),
 )
 def test_p19_output_is_byte_identical_offline_and_side_effect_free(
@@ -395,12 +396,8 @@ def test_p19_output_is_byte_identical_offline_and_side_effect_free(
     words, duration = timeline
     # Two independently constructed but equal options values: equal inputs must
     # produce equal digests and equal output, whichever value object was used.
-    opts_a = dataclasses.replace(
-        Kinetic_Options.parse(option_fields), captions_enabled=True
-    )
-    opts_b = dataclasses.replace(
-        Kinetic_Options.parse(dict(option_fields)), captions_enabled=True
-    )
+    opts_a = dataclasses.replace(Kinetic_Options.parse(option_fields), captions_enabled=True)
+    opts_b = dataclasses.replace(Kinetic_Options.parse(dict(option_fields)), captions_enabled=True)
     assert opts_a == opts_b
 
     with tempfile.TemporaryDirectory() as temp_a, tempfile.TemporaryDirectory() as temp_b:
@@ -437,9 +434,7 @@ def test_p19_output_is_byte_identical_offline_and_side_effect_free(
         assert planned_a == planned_b
         assert result_a.plan == result_b.plan
         assert Kinetic_Plan.from_dict(planned_a) == Kinetic_Plan.from_dict(planned_b)
-        assert Kinetic_Plan.from_dict(result_a.plan) == Kinetic_Plan.from_dict(
-            result_b.plan
-        )
+        assert Kinetic_Plan.from_dict(result_a.plan) == Kinetic_Plan.from_dict(result_b.plan)
         assert result_a.markers == result_b.markers
 
         # --- no environment leakage (Reqs 11.5, 11.7, 11.8, 11.9) ----------
@@ -490,9 +485,7 @@ def test_p19_output_is_byte_identical_offline_and_side_effect_free(
             assert all(prober.count_for(cap) == 1 for cap in set(prober.calls))
 
         # --- non-vacuity control: a timeline that provably emits events -----
-        reference_opts = dataclasses.replace(
-            opts_a, captions_enabled=True, hook_enabled=True
-        )
+        reference_opts = dataclasses.replace(opts_a, captions_enabled=True, hook_enabled=True)
         ref, ref_ctx, ref_bytes, _ref_emitted, ref_planned, _ref_prober = _invoke(
             temp_a,
             env=_ENV_A,
@@ -510,7 +503,7 @@ def test_p19_output_is_byte_identical_offline_and_side_effect_free(
         ref_styles = [style for style, _text in ref_events]
         ref_cue_count = len(ref_planned["cues"])
         assert ref_cue_count >= 1
-        assert ref_styles.count("Hook") == 1            # the hook event exists
+        assert ref_styles.count("Hook") == 1  # the hook event exists
         assert 1 <= ref_styles.count("Default") <= ref_cue_count
         assert len(ref_events) <= ref_cue_count + 1
         _assert_no_environment_leak(
@@ -520,14 +513,14 @@ def test_p19_output_is_byte_identical_offline_and_side_effect_free(
 
     # --- the Options_Digest (Reqs 11.3, 11.4, 12.6, 15.5) -----------------
     digest_a = options_digest(opts_a)
-    assert digest_a == options_digest(opts_b)                   # equal options
+    assert digest_a == options_digest(opts_b)  # equal options
     assert digest_a == options_digest(Kinetic_Options.parse(opts_a.to_dict()))
     assert len(digest_a) == 16
     assert digest_a == digest_a.lower()
     assert all(char in "0123456789abcdef" for char in digest_a)
 
     field_names = tuple(entry.name for entry in dataclasses.fields(Kinetic_Options))
-    assert len(field_names) >= 20                    # the whole record is covered
+    assert len(field_names) >= 20  # the whole record is covered
     for name in field_names:
         twin = _perturbed(opts_a, name)
         assert twin != opts_a, name
@@ -579,8 +572,16 @@ _FORBIDDEN_IMPORTS = frozenset(
 #: file (module scope or inside a lazy accessor). Pinned as an allowlist rather
 #: than a denylist so a *new* clock-bearing dependency also fails this test.
 _ALLOWED_IMPORT_ROOTS = frozenset(
-    {"__future__", "collections", "dataclasses", "math", "pathlib", "typing",
-     "unicodedata", "worker"}
+    {
+        "__future__",
+        "collections",
+        "dataclasses",
+        "math",
+        "pathlib",
+        "typing",
+        "unicodedata",
+        "worker",
+    }
 )
 
 #: Attribute names that would betray a clock, a pid or a locale read even if the
@@ -708,9 +709,7 @@ def _with_counted_rng(ctx: Engine_Context, probe: _Refusing_Rng) -> Engine_Conte
     the engine is exercised against the same object the host would hand it.
     """
     values = {
-        entry.name: getattr(ctx, entry.name)
-        for entry in dataclasses.fields(ctx)
-        if entry.init
+        entry.name: getattr(ctx, entry.name) for entry in dataclasses.fields(ctx) if entry.init
     }
 
     class _Counted_Rng_Context(type(ctx)):  # type: ignore[misc]
@@ -753,9 +752,7 @@ class _Recording_Keyword_Planner:
         self.calls: list[dict] = []
 
     def __call__(self, words, *, use_ai=False, client=None):
-        self.calls.append(
-            {"words": list(words), "use_ai": use_ai, "client": client}
-        )
+        self.calls.append({"words": list(words), "use_ai": use_ai, "client": client})
         return self.selection
 
 
@@ -843,14 +840,14 @@ def test_planning_never_consults_the_context_rng():
             words=REFERENCE_WORDS,
             duration=REFERENCE_DURATION,
             time_base=Time_Base(fps=30.0),
-            seed=2 ** 32 - 1,
+            seed=2**32 - 1,
             hook_text="watch this",
             clip_id="clip-seed-high",
         )
         assert low[0].status is Engine_Status.APPLIED
         assert high[0].status is Engine_Status.APPLIED
-        assert low[2] == high[2]            # byte-identical documents
-        assert low[4] == high[4]            # equal serialised plans
+        assert low[2] == high[2]  # byte-identical documents
+        assert low[4] == high[4]  # equal serialised plans
 
 
 def test_the_engine_module_imports_no_clock_locale_or_process_symbol():
@@ -872,12 +869,8 @@ def test_the_engine_module_imports_no_clock_locale_or_process_symbol():
     assert {"dataclasses", "math", "unicodedata", "worker"} <= roots
 
     # No attribute access betrays a clock/pid/locale reached another way.
-    attributes = {
-        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
-    }
-    assert not (attributes & _FORBIDDEN_ATTRIBUTES), sorted(
-        attributes & _FORBIDDEN_ATTRIBUTES
-    )
+    attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    assert not (attributes & _FORBIDDEN_ATTRIBUTES), sorted(attributes & _FORBIDDEN_ATTRIBUTES)
 
     # And none of those names is bound in the imported module's namespace.
     for name in sorted(_FORBIDDEN_IMPORTS):
@@ -888,12 +881,11 @@ def test_the_engine_module_imports_no_clock_locale_or_process_symbol():
     lazy = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        and node.col_offset > 0
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and node.col_offset > 0
     ]
-    assert [
-        f"{getattr(node, 'module', '')}.{node.names[0].name}" for node in lazy
-    ] == ["worker.captions"]
+    assert [f"{getattr(node, 'module', '')}.{node.names[0].name}" for node in lazy] == [
+        "worker.captions"
+    ]
     assert "def _captions()" in source
 
 
@@ -915,7 +907,7 @@ def test_the_emitter_consumes_every_mapping_in_sorted_order():
     # (a) A plan built from a *reversed* palette is normalised back to sorted
     #     order, and emits byte-identically.
     reversed_colors = {key: plan.colors[key] for key in reversed(list(plan.colors))}
-    assert list(reversed_colors) != list(plan.colors)      # the input really differs
+    assert list(reversed_colors) != list(plan.colors)  # the input really differs
     twin = dataclasses.replace(plan, colors=reversed_colors)
     assert list(twin.colors) == sorted(twin.colors)
     assert emit_ass(twin) == emit_ass(plan)
@@ -944,9 +936,7 @@ def test_the_emitter_consumes_every_mapping_in_sorted_order():
         assert _mapping_view_calls(functions[name]) == [], name
 
     iterating = {
-        name: views
-        for name, node in functions.items()
-        if (views := _mapping_view_calls(node))
+        name: views for name, node in functions.items() if (views := _mapping_view_calls(node))
     }
     assert iterating, "expected at least one mapping-consuming helper"
     for name, views in sorted(iterating.items()):
@@ -974,7 +964,7 @@ def test_keyword_indices_are_only_membership_tested():
     )
 
     words = [word for cue in plan.cues for word in cue.words]
-    assert len(words) == len(REFERENCE_WORDS)              # nothing was dropped
+    assert len(words) == len(REFERENCE_WORDS)  # nothing was dropped
 
     # The planner was consulted exactly once, offline (``client=None``), with the
     # surviving words in emission order.
@@ -982,9 +972,7 @@ def test_keyword_indices_are_only_membership_tested():
     call = planner.calls[0]
     assert call["client"] is None
     assert call["use_ai"] is True
-    assert [word.text for word in call["words"]] == [
-        word.text for word in REFERENCE_WORDS
-    ]
+    assert [word.text for word in call["words"]] == [word.text for word in REFERENCE_WORDS]
 
     # Membership was tested once per positional index, in order.
     assert planner.selection.tested == list(range(len(words)))
@@ -1019,6 +1007,7 @@ def test_a_durable_run_records_the_artifact_key_through_recording_storage():
     The flag-off case is asserted in the same test: a non-durable run stores
     nothing and records no key.
     """
+
     class _Options:
         """A minimal Processing_Options stand-in (the flat fields land in task 13.1)."""
 
@@ -1073,7 +1062,7 @@ def test_a_durable_run_records_the_artifact_key_through_recording_storage():
         assert [key for key, _path in storage.save_file_calls] == [expected_key]
         assert storage.exists(expected_key)
         assert storage.open(expected_key).read() == document
-        assert markers == []                       # nothing failed to persist
+        assert markers == []  # nothing failed to persist
 
         stored = outcome.results[0].artifacts[0]
         assert stored.durable is True

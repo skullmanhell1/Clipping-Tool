@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from worker.engines.base import AV_Engine, Engine_Stage
 
@@ -92,7 +92,7 @@ def _coerce_priority(value: Any, default: int = DEFAULT_PRIORITY) -> int:
     return int(default)
 
 
-def _coerce_stage(value: Any) -> Optional[Engine_Stage]:
+def _coerce_stage(value: Any) -> Engine_Stage | None:
     """Return ``value`` as an :class:`Engine_Stage`, or ``None`` when unrecognised.
 
     ``None`` means "no such stage": a *registration* substitutes
@@ -183,9 +183,7 @@ class Engine_Registry:
         weight = _coerce_priority(
             getattr(engine, "priority", DEFAULT_PRIORITY) if priority is None else priority
         )
-        record = Engine_Record(
-            engine=engine, engine_id=engine_id, stage=stage, priority=weight
-        )
+        record = Engine_Record(engine=engine, engine_id=engine_id, stage=stage, priority=weight)
         with self._lock:
             existing = self._records.get(engine_id)
             if existing is not None:
@@ -211,7 +209,7 @@ class Engine_Registry:
             raise KeyError(f"no engine registered for Engine_Id {key!r}")
         return record.engine
 
-    def find(self, engine_id: str) -> Optional[AV_Engine]:
+    def find(self, engine_id: str) -> AV_Engine | None:
         """Non-raising variant of :meth:`get`: ``None`` when the id is unknown."""
         record = self._records.get(_as_text(engine_id))
         return record.engine if record is not None else None
@@ -240,7 +238,7 @@ class Engine_Registry:
         """Every :class:`Engine_Record`, in ``(priority, engine_id)`` order."""
         return self._sorted_records()
 
-    def stage_of(self, engine_id: str) -> Optional[Engine_Stage]:
+    def stage_of(self, engine_id: str) -> Engine_Stage | None:
         """The Engine_Stage ``engine_id`` was registered under, or ``None``."""
         record = self._records.get(_as_text(engine_id))
         return record.stage if record is not None else None

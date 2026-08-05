@@ -15,7 +15,6 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 
@@ -127,7 +126,7 @@ def vad_parameters() -> dict:
     }
 
 
-def resolve_initial_prompt(vocabulary: str = "") -> Optional[str]:
+def resolve_initial_prompt(vocabulary: str = "") -> str | None:
     """Combine the standing prompt with this job's vocabulary (T4).
 
     Returns ``None`` rather than ``""`` when there is nothing to say, because faster-whisper
@@ -146,7 +145,7 @@ def resolve_initial_prompt(vocabulary: str = "") -> Optional[str]:
 
 def transcribe_uncached(
     audio_or_video: str | Path,
-    language: Optional[str] = None,
+    language: str | None = None,
     translate: bool = False,
     beam_size: int = 5,
     *,
@@ -215,11 +214,11 @@ def transcribe_uncached(
 def cache_key_for(
     audio_or_video: str | Path,
     *,
-    language: Optional[str] = None,
+    language: str | None = None,
     translate: bool = False,
     beam_size: int = 5,
     vocabulary: str = "",
-) -> Optional[str]:
+) -> str | None:
     """The T8 cache key for these ASR parameters, or ``None`` if the source is unreadable.
 
     Named and exported rather than inlined into :func:`transcribe` because a second caller
@@ -249,7 +248,7 @@ def cache_key_for(
 
 def transcribe(
     audio_or_video: str | Path,
-    language: Optional[str] = None,
+    language: str | None = None,
     translate: bool = False,
     beam_size: int = 5,
     *,
@@ -281,13 +280,21 @@ def transcribe(
 
     if not settings.transcript_cache_enabled:
         return _filtered(
-            transcribe_uncached(audio_or_video, language=language, translate=translate,
-                                beam_size=beam_size, vocabulary=vocabulary)
+            transcribe_uncached(
+                audio_or_video,
+                language=language,
+                translate=translate,
+                beam_size=beam_size,
+                vocabulary=vocabulary,
+            )
         )
 
     key = cache_key_for(
-        audio_or_video, language=language, translate=translate,
-        beam_size=beam_size, vocabulary=vocabulary,
+        audio_or_video,
+        language=language,
+        translate=translate,
+        beam_size=beam_size,
+        vocabulary=vocabulary,
     )
 
     if key is not None:
@@ -300,8 +307,13 @@ def transcribe(
     if key is not None and on_miss is not None:
         on_miss(key)
 
-    transcript = transcribe_uncached(audio_or_video, language=language, translate=translate,
-                                     beam_size=beam_size, vocabulary=vocabulary)
+    transcript = transcribe_uncached(
+        audio_or_video,
+        language=language,
+        translate=translate,
+        beam_size=beam_size,
+        vocabulary=vocabulary,
+    )
     if key is not None:
         transcript_cache.store(key, transcript)
     return _filtered(transcript)
@@ -322,6 +334,7 @@ def _filtered(transcript: Transcript) -> Transcript:
     if result.removed_count:
         logger.info(
             "T3: dropped %d transcript segment(s): %s",
-            result.removed_count, "; ".join(result.reasons[:5]),
+            result.removed_count,
+            "; ".join(result.reasons[:5]),
         )
     return result.transcript

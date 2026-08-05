@@ -29,12 +29,13 @@ hypothesis runs many examples inside a single test function and each example nee
 own clean Pipeline ``temp_dir``. ``@settings(deadline=None)`` is used for the same
 reason: these properties touch the filesystem.
 """
+
 from __future__ import annotations
 
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any
 
 import pytest
 from hypothesis import given, settings
@@ -73,7 +74,7 @@ class Recording_Logger:
     """Captures ``warning`` calls so "logs exactly once" can be asserted (Req 17.4)."""
 
     def __init__(self) -> None:
-        self.warnings: List[Tuple[Any, ...]] = []
+        self.warnings: list[tuple[Any, ...]] = []
 
     def warning(self, message: Any, *args: Any) -> None:
         self.warnings.append((message, *args))
@@ -84,7 +85,7 @@ class Refusing_Remover:
 
     def __init__(self, exc: OSError | None = None) -> None:
         self.exc = exc or OSError("cannot remove workspace")
-        self.calls: List[Path] = []
+        self.calls: list[Path] = []
 
     def __call__(self, path: Path) -> None:
         self.calls.append(Path(path))
@@ -101,7 +102,7 @@ class Witness_Storage(RecordingStorage):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.witnessed: List[Tuple[str, bool]] = []
+        self.witnessed: list[tuple[str, bool]] = []
 
     def save_file(self, key, path):  # type: ignore[override]
         self.witnessed.append((key, Path(path).exists()))
@@ -135,9 +136,9 @@ def drive_clip(
 
     Returns ``(markers, workspaces, persisted)``.
     """
-    markers: List[str] = []
-    workspaces: List[Engine_Workspace] = []
-    persisted: List[Any] = []
+    markers: list[str] = []
+    workspaces: list[Engine_Workspace] = []
+    persisted: list[Any] = []
 
     for outcome in outcomes:
         engine_id = outcome["engine_id"]
@@ -186,9 +187,9 @@ def assert_contained(root: Path, candidate: Path) -> None:
     """Assert ``candidate`` resolves to ``root`` or beneath it (Reqs 16.5, 16.6)."""
     resolved_root = root.resolve()
     resolved = candidate.resolve()
-    assert resolved == resolved_root or resolved_root in resolved.parents, (
-        f"{candidate} escaped {root}"
-    )
+    assert (
+        resolved == resolved_root or resolved_root in resolved.parents
+    ), f"{candidate} escaped {root}"
 
 
 def assert_safe_component(component: str) -> None:
@@ -348,7 +349,7 @@ def test_p30_workspaces_are_always_cleaned_up_durable_artifacts_first(outcomes, 
             temp_dir, job_id, "clip_c", outcomes, storage=storage, logger=logger
         )
         assert all(not ws.exists() for ws in later)
-        assert len(logger.warnings) == len(blocked)      # no new warning
+        assert len(logger.warnings) == len(blocked)  # no new warning
 
         # And the whole job still cleans up, blocked workspaces included (17.6).
         cleanup_job_workspaces(temp_dir, job_id)
@@ -367,9 +368,7 @@ def test_p30_workspaces_are_always_cleaned_up_durable_artifacts_first(outcomes, 
     engine_id=st_hostile_component(),
     name=st_hostile_component(),
 )
-def test_p31_durable_artifact_keys_are_safe_and_backend_neutral(
-    job_id, clip_id, engine_id, name
-):
+def test_p31_durable_artifact_keys_are_safe_and_backend_neutral(job_id, clip_id, engine_id, name):
     """Validates: Requirements 18.1, 18.2, 18.3, 18.4, 18.5"""
     key = artifact_key(job_id, clip_id, engine_id, name)
 
@@ -429,7 +428,7 @@ def test_p32_artifact_persistence_failure_degrades_not_fails(
     with tempfile.TemporaryDirectory(prefix="engine-ws-") as raw_temp:
         temp_dir = Path(raw_temp)
         clip_path = temp_dir / "clip_a.mp4"
-        clip_path.write_bytes(b"finished-clip")          # the clip is already produced
+        clip_path.write_bytes(b"finished-clip")  # the clip is already produced
 
         names = [f"{name}_{index}.bin" for index in range(durable_count)]
         keys = {artifact_key("job_x", "clip_a", engine_id, item) for item in names}
@@ -488,9 +487,7 @@ def job_workspaces(tmp_path):
         shutil.rmtree(job_temp, ignore_errors=True)
 
 
-def test_job_cleanup_routes_through_retention_when_auto_delete_enabled(
-    monkeypatch, job_workspaces
-):
+def test_job_cleanup_routes_through_retention_when_auto_delete_enabled(monkeypatch, job_workspaces):
     """Validates: Requirements 17.2, 17.6 — job cleanup goes through ``cleanup_temp``."""
     from storage_backends import retention
 
@@ -498,7 +495,7 @@ def test_job_cleanup_routes_through_retention_when_auto_delete_enabled(
     engines_root = job_temp / ENGINE_TEMP_ROOT / job_id
     assert engines_root.is_dir()
 
-    calls: List[str] = []
+    calls: list[str] = []
     real_cleanup_temp = retention.cleanup_temp
 
     def spy(target=None):
@@ -506,15 +503,13 @@ def test_job_cleanup_routes_through_retention_when_auto_delete_enabled(
         return real_cleanup_temp(target)
 
     monkeypatch.setattr(retention, "cleanup_temp", spy)
-    monkeypatch.setattr(
-        "runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(True)
-    )
+    monkeypatch.setattr("runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(True))
 
     removed = cleanup_job_artifacts(job_id, temp_dir=job_temp)
 
-    assert calls == [job_id]                     # routed through the retention path
+    assert calls == [job_id]  # routed through the retention path
     assert removed >= 1
-    assert not engines_root.exists()             # no workspace survives (17.6)
+    assert not engines_root.exists()  # no workspace survives (17.6)
     assert not job_temp.exists()
 
 
@@ -525,16 +520,14 @@ def test_job_workspaces_survive_when_auto_delete_disabled(monkeypatch, job_works
     job_id, job_temp = job_workspaces
     engines_root = job_temp / ENGINE_TEMP_ROOT / job_id
 
-    calls: List[str] = []
+    calls: list[str] = []
     monkeypatch.setattr(retention, "cleanup_temp", lambda target=None: calls.append(target))
-    monkeypatch.setattr(
-        "runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False)
-    )
+    monkeypatch.setattr("runtime_config.get_runtime_config", lambda: Stub_Runtime_Config(False))
 
     removed = cleanup_job_artifacts(job_id, temp_dir=job_temp)
 
     assert removed == 0
-    assert calls == []                           # nothing removed, nothing routed
+    assert calls == []  # nothing removed, nothing routed
     assert engines_root.is_dir()
     assert sorted(path.name for path in engines_root.rglob("scratch.bin")) == [
         "scratch.bin",

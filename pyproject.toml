@@ -63,6 +63,8 @@ select = [
     "E9",  # syntax and IO errors
     "I",   # import sorting, so import blocks stop churning between contributors
     "S",   # bandit: security findings. Three rules are ignored below, with reasons.
+    "UP",  # pyupgrade: 689 findings, swept in one commit. Two rules ignored below.
+    "B",   # bugbear: 43 findings, swept in the same commit. One rule ignored below.
 ]
 
 # Three `S` rules are switched off wholesale rather than annotated ~50 times. Each is a rule that
@@ -88,14 +90,36 @@ ignore = [
     # ~30 degradation paths at once. Deliberately deferred, not overlooked.
     "S110",
     "S112",
+    # UP042 wants `class X(str, Enum)` rewritten as `StrEnum`, and that is a **behaviour change**,
+    # not a modernisation. `str(LLMProvider.OPENAI)` is "LLMProvider.OPENAI" under `(str, Enum)`
+    # and "openai" under `StrEnum`. All eight of these enums cross a serialisation boundary —
+    # `JobStatus` and `PublishState` are compared as strings by the frontend, `StorageBackend` and
+    # `LLMProvider` are read from settings, and job status is persisted to SQLite — so any code
+    # that interpolates one rather than reading `.value` would silently change what it writes.
+    #
+    # Worth doing as its own change, with the serialisation paths audited. It must not ride along
+    # in a formatting sweep, which is the whole reason this sweep is a separate commit.
+    "UP042",
+    # B905 wants an explicit `strict=` on all 33 `zip()` calls. The rule is right that silently
+    # truncating on a length mismatch hides bugs — but choosing `strict=True` per site is a
+    # behavioural decision about whether unequal lengths are an error, and choosing `strict=False`
+    # everywhere is 33 lines that assert nobody thought about it. Either way it is a behavioural
+    # pass, and this is a mechanical one. Deferred deliberately, not overlooked.
+    "B905",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# publishers/* is written in a deliberately compressed one-statement-per-line style
-# (`self._stop.clear(); self._thread = ...`). Reformatting those modules is a standalone
-# refactor; scoping the exemption here keeps the checks live everywhere else rather than
-# disabling them globally, which is what a top-level ignore would have done.
+# publishers/* was written in a deliberately compressed one-statement-per-line style
+# (`self._stop.clear(); self._thread = ...`). `black` has now reformatted those modules, so the
+# exemption should no longer be load-bearing — it is kept for one release because removing it in
+# the same commit that reformats the files would make it impossible to tell which change made the
+# checks pass. Drop it in a follow-up once this has landed.
 "publishers/*" = ["E701", "E702", "E401"]
+# B008 forbids a function call in an argument default. FastAPI's entire request-parsing API is
+# exactly that: `files: list[UploadFile] = File(...)`, `language: str = Form(None)`,
+# `_: None = Depends(rate_limit)`. There is no alternative spelling — the call *is* how the
+# framework is told what a parameter is — so this rule cannot apply to the route modules.
+"api/*" = ["B008"]
 # tests/* imports after module-level setup on purpose: conftest rewrites environment
 # variables before `config` is imported, and several test modules import their subject
 # only after installing a guard. That ordering is the point, so E402 cannot apply.
@@ -208,3 +232,27 @@ module = [
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+
+
+
+[tool.black]
+# `black` was in `requirements-dev.txt` from the beginning and had **never run**; `ci.yml`
+# documented the waiver, on the correct grounds that adopting it reformats essentially every file
+# and does not belong in the same change as a behavioural fix. This is that separate change: 180
+# of 204 files reformatted, nothing else in flight.
+#
+# 100, not black's default of 88, to match `[tool.ruff] line-length`. Two formatters disagreeing
+# about where a line ends is worse than either choice — every file would be reformatted by one
+# and flagged by the other.
+line-length = 100
+target-version = ["py311"]
+
+# Same exclusions as ruff, for the same reason: not our source.
+extend-exclude = '''
+/(
+    \.venv
+  | storage
+  | frontend
+  | \.devtools
+)/
+'''

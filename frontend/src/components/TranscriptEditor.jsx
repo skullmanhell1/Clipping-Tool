@@ -99,8 +99,8 @@ export default function TranscriptEditor({ jobId, clipId, onApply, applying = fa
           misaligned editor has the user striking the wrong words. */}
       {state.data?.trimmed ? (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
-          This clip was already tightened when it was rendered, so these word times run ahead of
-          the video you are playing. The cuts still apply to the original window.
+          This clip was already tightened when it was rendered, so these word times run ahead of the
+          video you are playing. The cuts still apply to the original window.
         </p>
       ) : null}
 
@@ -114,7 +114,7 @@ export default function TranscriptEditor({ jobId, clipId, onApply, applying = fa
               onClick={() => toggle(index)}
               aria-pressed={isStruck}
               aria-label={`${isStruck ? "Restore" : "Cut"} “${word.text}” at ${word.start.toFixed(
-                2,
+                2
               )} seconds`}
               className={`rounded px-1 transition ${
                 isStruck

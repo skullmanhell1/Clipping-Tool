@@ -17,8 +17,8 @@ rather than ``drawtext`` so it works on ffmpeg builds without freetype.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from worker.ffmpeg_utils import escape_filter_path
 
@@ -38,7 +38,7 @@ MUSIC_MOODS = ("upbeat", "chill", "dramatic", "corporate", "suspense")
 _escape_filter_path = escape_filter_path
 
 
-def lut_filter(lut_path: str | None) -> Optional[str]:
+def lut_filter(lut_path: str | None) -> str | None:
     """A ``lut3d`` filter for a user-supplied 3D LUT, or ``None`` (V18).
 
     The five colour presets are fixed ``eq``/``curves`` strings, so a creator with a look of
@@ -64,7 +64,7 @@ def lut_filter(lut_path: str | None) -> Optional[str]:
     return f"lut3d=file='{_escape_filter_path(path.resolve())}'"
 
 
-def color_filter(preset: str, lut_path: str | None = None) -> Optional[str]:
+def color_filter(preset: str, lut_path: str | None = None) -> str | None:
     """Return the colour chain for a preset, a LUT, or both (V18).
 
     A LUT is applied *after* the preset when both are present, because a LUT is a look-up over
@@ -105,7 +105,7 @@ TRANSITION_STYLES: tuple[str, ...] = ("punch_in", "zoom_cut", "whip_pan", "disso
 TRANSITION_S = 0.5
 
 
-def dissolve_filter(style: str, duration: float) -> Optional[str]:
+def dissolve_filter(style: str, duration: float) -> str | None:
     """The fade component of a ``dissolve`` opening (V9), or ``None`` for other styles.
 
     Kept separate from :func:`zoom_filter` because a dissolve is not a zoom: expressing it as
@@ -129,7 +129,7 @@ def zoom_filter(
     style: str = "punch_in",
     ease: bool = False,
     beats: Sequence[float] = (),
-) -> Optional[str]:
+) -> str | None:
     """Return a ``zoompan`` filter for a slow zoom and/or a punch-in intro.
 
     Args:
@@ -246,18 +246,13 @@ def _beat_bump_expr(beats: Sequence[float], fps: float) -> str:
     return "(1+" + "+".join(terms) + ")"
 
 
-def video_fade_filter(
-    duration: float, fade_dur: float = 0.4
-) -> Optional[str]:
+def video_fade_filter(duration: float, fade_dur: float = 0.4) -> str | None:
     """Return a video ``fade`` in/out filter, or ``None`` for very short clips."""
     if duration <= 2 * fade_dur + 0.2:
         # Too short to fade both ends cleanly; fade in only.
         return f"fade=t=in:st=0:d={min(fade_dur, duration / 3):.3f}"
     out_start = max(0.0, duration - fade_dur)
-    return (
-        f"fade=t=in:st=0:d={fade_dur:.3f},"
-        f"fade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
-    )
+    return f"fade=t=in:st=0:d={fade_dur:.3f}," f"fade=t=out:st={out_start:.3f}:d={fade_dur:.3f}"
 
 
 #: Where the progress bar sits (V13).
@@ -299,12 +294,8 @@ def progress_bar_filter(
 
     boxes = []
     if style == "track":
-        boxes.append(
-            f"drawbox=x=0:y={y}:w=iw:h={thickness}:color={track_color}@0.25:t=fill"
-        )
-    boxes.append(
-        f"drawbox=x=0:y={y}:w='iw*t/{dur:.3f}':h={thickness}:color={color}@0.9:t=fill"
-    )
+        boxes.append(f"drawbox=x=0:y={y}:w=iw:h={thickness}:color={track_color}@0.25:t=fill")
+    boxes.append(f"drawbox=x=0:y={y}:w='iw*t/{dur:.3f}':h={thickness}:color={color}@0.9:t=fill")
     return ",".join(boxes)
 
 
@@ -319,7 +310,7 @@ def build_video_chain(
     transitions: bool = False,
     fades: bool = False,
     progress_bar: bool = False,
-    subtitles: Optional[str] = None,
+    subtitles: str | None = None,
     transition_style: str = "punch_in",
     progress_position: str = "bottom",
     progress_style: str = "bar",
@@ -349,9 +340,15 @@ def build_video_chain(
         chain.append(c)
 
     z = zoom_filter(
-        duration, fps, width, height,
-        ken_burns=zoom, punch_in=transitions, style=transition_style,
-        ease=zoom_ease, beats=beats,
+        duration,
+        fps,
+        width,
+        height,
+        ken_burns=zoom,
+        punch_in=transitions,
+        style=transition_style,
+        ease=zoom_ease,
+        beats=beats,
     )
     if z:
         chain.append(z)
@@ -375,9 +372,13 @@ def build_video_chain(
     if progress_bar:
         chain.append(
             progress_bar_filter(
-                duration, width, height,
-                thickness=progress_thickness, color=progress_color,
-                position=progress_position, style=progress_style,
+                duration,
+                width,
+                height,
+                thickness=progress_thickness,
+                color=progress_color,
+                position=progress_position,
+                style=progress_style,
             )
         )
 

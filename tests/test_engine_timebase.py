@@ -23,12 +23,14 @@ every ``duration`` handed to ``normalize_segments`` matches the generator's
 
 Everything here is pure and offline: no ffmpeg, no probe, no filesystem.
 """
+
 from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -84,7 +86,7 @@ class _FakeMediaInfo:
 # --------------------------------------------------------------------------- #
 # Reference normalisation, used only by P24                                     #
 # --------------------------------------------------------------------------- #
-def _reference_valid_interval(record: Any, duration: float) -> Optional[Tuple[float, float]]:
+def _reference_valid_interval(record: Any, duration: float) -> tuple[float, float] | None:
     """Return the clamped ``(start, end)`` of a *valid* record, else ``None``.
 
     Independent restatement of the acceptance criteria (Reqs 14.1, 14.3, 14.7):
@@ -121,7 +123,7 @@ def _reference_valid_interval(record: Any, duration: float) -> Optional[Tuple[fl
     return (start, end)
 
 
-def _reference_normalize(records: Any, duration: float) -> List[Tuple[float, float]]:
+def _reference_normalize(records: Any, duration: float) -> list[tuple[float, float]]:
     """Sort + merge the valid clamped intervals, overlapping *or* touching (Req 14.2)."""
     intervals = []
     for record in records:
@@ -130,7 +132,7 @@ def _reference_normalize(records: Any, duration: float) -> List[Tuple[float, flo
             intervals.append(interval)
     intervals.sort()
 
-    merged: List[Tuple[float, float]] = []
+    merged: list[tuple[float, float]] = []
     for start, end in intervals:
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
@@ -197,9 +199,7 @@ def test_p21_timebase_conversions_round_trip_and_fps_fallback(time_base, invalid
 @settings(max_examples=100, deadline=None)
 @given(
     time_base=st_time_base(),
-    t=st.floats(
-        min_value=0.0, max_value=CLIP_DURATION, allow_nan=False, allow_infinity=False
-    ),
+    t=st.floats(min_value=0.0, max_value=CLIP_DURATION, allow_nan=False, allow_infinity=False),
 )
 def test_p22_frame_quantisation_bounded_and_snap_idempotent(time_base, t):
     """Validates: Requirements 13.6, 15.3, 15.4

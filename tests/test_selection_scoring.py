@@ -117,7 +117,7 @@ def test_an_all_silent_source_has_no_baseline_rather_than_a_wrong_one():
 
 
 def test_an_unmeasurable_window_is_flagged_not_scored_zero():
-    """"No reading" and "very quiet" must be distinguishable by the caller."""
+    """ "No reading" and "very quiet" must be distinguishable by the caller."""
     empty = audio_features.energy_in_window([], 0.0, 10.0, baseline=-20.0)
     assert empty.reliable is False
     assert empty.relative_energy == 0.0, "an unmeasured window claimed a difference"
@@ -129,21 +129,33 @@ def test_the_envelope_finds_a_quiet_passage_in_real_audio(tmp_path):
     src = tmp_path / "tone.m4a"
     subprocess.run(
         [
-            settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "sine=frequency=300:duration=8:sample_rate=48000",
-            "-af", "volume=enable='between(t,3,5)':volume=0.02",
-            "-c:a", "aac", str(src), "-y",
+            settings.ffmpeg_binary,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=300:duration=8:sample_rate=48000",
+            "-af",
+            "volume=enable='between(t,3,5)':volume=0.02",
+            "-c:a",
+            "aac",
+            str(src),
+            "-y",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     envelope = audio_features.energy_envelope(src)
     assert len(envelope) >= 7, f"expected ~8 one-second readings, got {envelope}"
 
     loud = audio_features.energy_in_window(envelope, 0.0, 3.0)
     quiet = audio_features.energy_in_window(envelope, 3.5, 5.0)
-    assert quiet.mean_db < loud.mean_db - 15.0, (
-        f"the quiet passage was not detected: loud={loud.mean_db} quiet={quiet.mean_db}"
-    )
+    assert (
+        quiet.mean_db < loud.mean_db - 15.0
+    ), f"the quiet passage was not detected: loud={loud.mean_db} quiet={quiet.mean_db}"
 
 
 @requires_ffmpeg
@@ -152,11 +164,24 @@ def test_a_source_with_no_audio_degrades_to_no_information(tmp_path):
     src = tmp_path / "mute.mp4"
     subprocess.run(
         [
-            settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=black:s=64x64:d=2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src), "-y",
+            settings.ffmpeg_binary,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+            "-y",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     assert audio_features.energy_envelope(src) == []
 
@@ -175,7 +200,7 @@ def test_silence_at_the_opening_zeroes_the_hook_score():
     all neutral or better, a weighted sum would still return roughly 0.5 for a clip that opens
     on two seconds of nothing.
     """
-    late = words_at(3.0, 2.0, 10.0)          # nothing until 2.0s, past the 1.0s deadline
+    late = words_at(3.0, 2.0, 10.0)  # nothing until 2.0s, past the 1.0s deadline
     result = hook_score.hook_score(0.0, 10.0, late, text="how do you actually do this?")
     assert result["hook_score"] == 0.0
     assert result["hook_promptness"] == 0.0
@@ -294,11 +319,15 @@ def test_a_duplicate_does_not_cost_the_user_a_clip():
 def test_a_recap_far_away_in_time_is_still_a_duplicate():
     """Zero overlap, same clip to a viewer - the case timing alone cannot catch."""
     original = Cand(
-        10.0, 40.0, score=90.0,
+        10.0,
+        40.0,
+        score=90.0,
         text="the biggest mistake founders make is hiring senior engineers too early",
     )
     recap = Cand(
-        900.0, 930.0, score=85.0,
+        900.0,
+        930.0,
+        score=85.0,
         text="hiring senior engineers too early is the biggest mistake founders make",
     )
     assert candidate_ranking.overlap_fraction(original, recap) == 0.0
@@ -369,7 +398,9 @@ def test_similarity_counts_repetition_rather_than_ignoring_it():
 
 
 def test_thresholds_of_one_disable_each_check():
-    a, b = Cand(0.0, 30.0, 90.0, text="same words here"), Cand(1.0, 31.0, 80.0, text="same words here")
+    a, b = Cand(0.0, 30.0, 90.0, text="same words here"), Cand(
+        1.0, 31.0, 80.0, text="same words here"
+    )
     kept = candidate_ranking.deduplicate([a, b], max_overlap=1.0, max_similarity=1.0)
     assert kept == [a, b]
 
@@ -383,7 +414,8 @@ def test_degenerate_spans_are_discarded_not_ranked():
 # --------------------------------------------------------------------------- #
 def _measured(start, end, *, hook, rate=1.0, energy_db=0.0, quiet=0.0):
     return Cand(
-        start, end,
+        start,
+        end,
         features={
             "hook_score": hook,
             "relative_speech_rate": rate,
@@ -406,9 +438,9 @@ def test_a_shorter_stronger_segment_outranks_a_longer_dull_one():
     ranked = candidate_ranking.rank_candidates(
         [monologue, punchy], target=45.0, min_len=30.0, max_len=60.0
     )
-    assert ranked[0] is punchy, (
-        f"the longest segment still won: {[(c.start, c.score) for c in ranked]}"
-    )
+    assert (
+        ranked[0] is punchy
+    ), f"the longest segment still won: {[(c.start, c.score) for c in ranked]}"
     assert punchy.score > monologue.score
 
 
@@ -461,9 +493,7 @@ def test_a_missing_feature_contributes_neutrally_not_zero():
 
 def test_ranking_is_deterministic_for_equal_scores():
     a, b = _measured(50.0, 95.0, hook=0.5), _measured(0.0, 45.0, hook=0.5)
-    ranked = candidate_ranking.rank_candidates(
-        [a, b], target=45.0, min_len=30.0, max_len=60.0
-    )
+    ranked = candidate_ranking.rank_candidates([a, b], target=45.0, min_len=30.0, max_len=60.0)
     assert [c.start for c in ranked] == [0.0, 50.0], "ties did not break on position"
 
 
@@ -502,14 +532,20 @@ def test_zeroing_the_hook_weight_changes_the_outcome(monkeypatch):
 #: zero-division test below - which is what happened when S7/S8/S12 added three, and is the point of
 #: listing them.
 SELECTION_WEIGHT_NAMES = (
-    "hook", "pace", "energy", "length", "structure", "standalone", "intensity",
+    "hook",
+    "pace",
+    "energy",
+    "length",
+    "structure",
+    "standalone",
+    "intensity",
 )
 
 
 def test_the_weight_list_covers_every_selection_weight():
     """Guards the list above against a weight being added and silently untested."""
     declared = {
-        name[len("selection_weight_"):]
+        name[len("selection_weight_") :]
         for name in type(settings).model_fields
         if name.startswith("selection_weight_")
     }
@@ -530,9 +566,12 @@ def test_the_weight_list_covers_every_selection_weight():
 def test_all_weights_zero_does_not_divide_by_zero(monkeypatch):
     for name in SELECTION_WEIGHT_NAMES:
         monkeypatch.setattr(settings, f"selection_weight_{name}", 0.0)
-    assert candidate_ranking.score_candidate(
-        _measured(0.0, 45.0, hook=1.0), target=45.0, min_len=30.0, max_len=60.0
-    ) == 0.0
+    assert (
+        candidate_ranking.score_candidate(
+            _measured(0.0, 45.0, hook=1.0), target=45.0, min_len=30.0, max_len=60.0
+        )
+        == 0.0
+    )
 
 
 def test_the_hook_weights_are_wired_too(monkeypatch):
@@ -683,8 +722,10 @@ def test_snapping_does_not_annex_a_neighbouring_candidate():
     from worker.visual_selection import _snap_candidates
 
     transcript = Transcript(language="en", segments=[Seg(0.0, 4.0, "hello there my friend")])
-    cands = [ClipCandidate(start=0.0, end=2.0, score=90.0),
-             ClipCandidate(start=2.0, end=4.0, score=89.0)]
+    cands = [
+        ClipCandidate(start=0.0, end=2.0, score=90.0),
+        ClipCandidate(start=2.0, end=4.0, score=89.0),
+    ]
     out = _snap_candidates(cands, transcript, 4.0)
     windows = [(c.start, c.end) for c in out]
     assert windows == [(0.0, 2.0), (2.0, 4.0)], f"snapping collapsed the candidates: {windows}"

@@ -114,9 +114,7 @@ class FilterGraph:
         return list(self._inputs)
 
     # -- segments ----------------------------------------------------------
-    def chain(
-        self, input_label: str, filters: Sequence[str], output_label: str
-    ) -> str:
+    def chain(self, input_label: str, filters: Sequence[str], output_label: str) -> str:
         """Append ``[input_label]f1,f2,…[output_label]`` and return ``output_label``.
 
         Returning the output label is what lets a caller thread the chain without restating the
