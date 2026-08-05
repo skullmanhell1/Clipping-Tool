@@ -10,128 +10,6 @@ import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
 
-// Advanced AV engines (Req 20.4): a sibling engine spec adds its
-// `<engine_id>_enabled` flag and option defaults *here only* — `toOptions`
-// forwards every key generically, and profiles persist them automatically
-// because they round-trip through the opaque settings blob.
-//
-// Keys use the snake_case API spellings, because `engineOptions` forwards them
-// verbatim to the `/api/upload` Form fields and `OptionsModel` — a camelCase key
-// here would silently never reach the backend.
-const DEFAULT_ENGINE_SETTINGS = {
-  // Kinetic typography engine (kinetic-typography spec, Req 17.5). Defaults
-  // mirror `ProcessingOptions` / `Kinetic_Options` exactly; the flag is off, so
-  // a stock install still renders exactly as v0.8.0.
-  kinetic_typography_enabled: false,
-  kinetic_style: "karaoke_fill",
-  kinetic_reveal: "cumulative",
-  kinetic_font: "",
-  kinetic_max_lines: 2,
-  kinetic_max_line_width: 22,
-  kinetic_safe_area_x_pct: 6.0,
-  kinetic_safe_area_y_pct: 10.0,
-  kinetic_motion_ms: 120,
-  kinetic_confidence_floor: 0.0,
-
-  // Stem inpainting engine (audio-stem-inpainting spec). Defaults mirror
-  // `ProcessingOptions` / `Stem_Options` exactly; the flag is off, so a stock install
-  // still renders exactly as v0.8.0. Listing every field here is what makes them reach
-  // the backend and round-trip through saved profiles without a dedicated panel.
-  stem_inpainting_enabled: false,
-  stem_mix_preset: "custom",
-  stem_gain_vocals: 1.0,
-  stem_gain_music: 1.0,
-  stem_gain_other: 1.0,
-  stem_repair_mode: "crossfade",
-  stem_repair_window_ms: 12,
-  stem_declick: false,
-  stem_backend: "auto",
-  stem_model: "htdemucs",
-  stem_retain_stems: false,
-};
-
-const engineOptions = (settings) =>
-  Object.fromEntries(
-    Object.keys(DEFAULT_ENGINE_SETTINGS).map((key) => [
-      key,
-      settings[key] === undefined ? DEFAULT_ENGINE_SETTINGS[key] : settings[key],
-    ])
-  );
-
-const DEFAULT_SETTINGS = {
-  language: "auto",
-  clip_length: "auto",
-  aspect: "9:16",
-  num_clips: "auto",
-  strategy: "ai",
-  captions: true,
-  subtitle_sidecar: false,
-  topic: "",
-  vocabulary: "",
-  vibe: "",
-  platform: "generic",
-  hashtag_count: 5,
-  range_start: "",
-  range_end: "",
-  metadata: true,
-  // Phase 4 — visual effects (all individually toggleable)
-  caption_template: "karaoke",
-  caption_position: "bottom",
-  reframe: false,
-  zoom: false,
-  transitions: false,
-  hook_title: false,
-  fades: false,
-  progress_bar: false,
-  color: "",
-  music: "",
-  music_volume: 0.12,
-  emoji: "off",
-  emoji_mode: "keyword",
-  emoji_animate: true,
-  filler_removal: false,
-  // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
-  caption_preset: "karaoke",
-  // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
-  // blob, so a kit is saved, applied and set as default by machinery that already exists.
-  brand_font: "",
-  brand_primary_color: "",
-  brand_highlight_color: "",
-  brand_cta: "",
-  brand_logo: "",
-  brand_logo_position: "top_right",
-  brand_logo_scale: 0.16,
-  brand_logo_opacity: 0.85,
-  caption_animation: "",
-  caption_keyword_highlight: false,
-  caption_keyword_ai: false,
-  caption_emoji: false,
-  broll: false,
-  broll_intensity: "standard",
-  asset_sourcing_mode: "off",
-  broll_provider: "",
-  selection_prompt: "",
-  visual_selection: false,
-  permissibility_mode: false,
-  // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
-  diarization: false,
-  speaker_reframe: false,
-  reframe_layout: "follow_active",
-  reframe_intensity: "standard",
-  // Advanced AV engines — every flag/option default, forwarded generically
-  ...DEFAULT_ENGINE_SETTINGS,
-};
-
-const DEFAULT_PUBLISHING = {
-  platforms: [],
-  campaign_id: "",
-  mode: "review",
-  schedule: "",
-  account_id: "",
-  target_type: "",
-  target_id: "",
-};
-
 const numOrNull = (value) =>
   value === "" || value === null || value === undefined ? null : Number(value);
 
@@ -141,74 +19,186 @@ const scheduleToEpoch = (value) => {
   return Number.isNaN(milliseconds) ? null : milliseconds / 1000;
 };
 
-function toOptions(settings, publishing) {
-  const { language, translate } = resolveLanguage(settings.language);
-  return {
-    language,
-    translate,
-    clip_length: settings.clip_length,
-    aspect: settings.aspect,
-    num_clips: settings.num_clips,
-    strategy: settings.strategy,
-    captions: settings.captions,
-    subtitle_sidecar: settings.subtitle_sidecar,
-    topic: settings.topic,
-    vocabulary: settings.vocabulary,
-    vibe: settings.vibe,
-    platform: settings.platform,
-    hashtag_count: Number(settings.hashtag_count) || 0,
-    range_start: numOrNull(settings.range_start),
-    range_end: numOrNull(settings.range_end),
-    metadata: settings.metadata,
-    publish_to: publishing.mode === "auto" ? publishing.platforms : [],
-    campaign_id: publishing.campaign_id,
-    publish_mode: publishing.mode,
-    schedule_at: scheduleToEpoch(publishing.schedule),
-    // Phase 4 — visual effects
-    caption_template: settings.caption_template,
-    caption_position: settings.caption_position,
-    reframe: settings.reframe,
-    zoom: settings.zoom,
-    transitions: settings.transitions,
-    hook_title: settings.hook_title,
-    fades: settings.fades,
-    progress_bar: settings.progress_bar,
-    color: settings.color,
-    music: settings.music,
-    music_volume: Number(settings.music_volume) || 0,
-    emoji: settings.emoji,
-    emoji_mode: settings.emoji_mode,
-    emoji_animate: settings.emoji_animate,
-    filler_removal: settings.filler_removal,
-    // Tier 1 — animated captions / b-roll / visual selection
-    caption_preset: settings.caption_preset,
-    brand_font: settings.brand_font,
-    brand_primary_color: settings.brand_primary_color,
-    brand_highlight_color: settings.brand_highlight_color,
-    brand_cta: settings.brand_cta,
-    brand_logo: settings.brand_logo,
-    brand_logo_position: settings.brand_logo_position,
-    brand_logo_scale: settings.brand_logo_scale,
-    brand_logo_opacity: settings.brand_logo_opacity,
-    caption_animation: settings.caption_animation,
-    caption_keyword_highlight: settings.caption_keyword_highlight,
-    caption_keyword_ai: settings.caption_keyword_ai,
-    caption_emoji: settings.caption_emoji,
-    broll: settings.broll,
-    broll_intensity: settings.broll_intensity,
-    asset_sourcing_mode: settings.asset_sourcing_mode,
-    broll_provider: settings.broll_provider,
-    selection_prompt: settings.selection_prompt,
-    visual_selection: settings.visual_selection,
-    permissibility_mode: settings.permissibility_mode,
-    // Speaker diarisation & multi-speaker reframe
-    diarization: settings.diarization,
-    speaker_reframe: settings.speaker_reframe,
-    reframe_layout: settings.reframe_layout,
-    reframe_intensity: settings.reframe_intensity,
-    // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
-    ...engineOptions(settings),
-  };
+const numberOrZero = (value) => Number(value) || 0;
+
+/**
+ * Every setting, declared once.
+ *
+ * This replaces three separate statements of the same list: `DEFAULT_SETTINGS` (~52 keys),
+ * `toOptions` (~60 hand-written `key: settings.key` lines) and the engine block. Adding a
+ * setting meant editing two of them, and forgetting `toOptions` produced a setting that
+ * appeared in the UI, saved into a profile, and **never reached the backend** — the failure the
+ * old comment warned about, with nothing to catch it.
+ *
+ * Each entry is `{ default }` plus, where the wire form differs from the stored form, one of:
+ *
+ *   `toWire`   a value transform. Only six settings need one.
+ *   `expand`   returns several wire fields from one setting. `language` is the only case:
+ *              the UI stores `"es-translate"` and the API takes `language` + `translate`.
+ *   `from`     `"publishing"`, for the four wire fields that come from the publishing state
+ *              rather than from settings. They are declared here, in wire order, so the
+ *              request shape is readable in one place — but they are excluded from
+ *              `DEFAULT_SETTINGS`, because they are not settings.
+ *
+ * **Declaration order is the wire order**, which is why the publishing four sit in the middle
+ * where they have always been rather than being appended.
+ *
+ * **Keys are the snake_case API spellings** and that is load-bearing twice over: they are
+ * forwarded verbatim as `/api/upload` form fields and matched against `OptionsModel`, and saved
+ * profiles round-trip the whole settings object opaquely — so renaming a key here silently
+ * invalidates every stored profile. `tests/App.settings.test.jsx` pins the spellings.
+ */
+export const SETTINGS_SCHEMA = {
+  // `resolveLanguage` splits the UI's single choice into the two fields the API takes.
+  language: { default: "auto", expand: (value) => resolveLanguage(value) },
+  clip_length: { default: "auto" },
+  aspect: { default: "9:16" },
+  num_clips: { default: "auto" },
+  strategy: { default: "ai" },
+  captions: { default: true },
+  subtitle_sidecar: { default: false },
+  topic: { default: "" },
+  vocabulary: { default: "" },
+  vibe: { default: "" },
+  platform: { default: "generic" },
+  hashtag_count: { default: 5, toWire: numberOrZero },
+  // Empty means "no bound", which the API spells as null rather than as 0.
+  range_start: { default: "", toWire: numOrNull },
+  range_end: { default: "", toWire: numOrNull },
+  metadata: { default: true },
+
+  // From the publishing state, not from settings. `publish_to` is deliberately empty unless
+  // the mode is `auto`: in `review` mode the clips are held for approval, and sending the
+  // platform list would publish them immediately.
+  publish_to: {
+    from: "publishing",
+    toWire: (publishing) => (publishing.mode === "auto" ? publishing.platforms : []),
+  },
+  campaign_id: { from: "publishing", toWire: (publishing) => publishing.campaign_id },
+  publish_mode: { from: "publishing", toWire: (publishing) => publishing.mode },
+  schedule_at: {
+    from: "publishing",
+    toWire: (publishing) => scheduleToEpoch(publishing.schedule),
+  },
+
+  // Phase 4 — visual effects (all individually toggleable)
+  caption_template: { default: "karaoke" },
+  caption_position: { default: "bottom" },
+  reframe: { default: false },
+  zoom: { default: false },
+  transitions: { default: false },
+  hook_title: { default: false },
+  fades: { default: false },
+  progress_bar: { default: false },
+  color: { default: "" },
+  music: { default: "" },
+  music_volume: { default: 0.12, toWire: numberOrZero },
+  emoji: { default: "off" },
+  emoji_mode: { default: "keyword" },
+  emoji_animate: { default: true },
+  filler_removal: { default: false },
+
+  // Tier 1 — animated captions / b-roll / visual selection (all default OFF / karaoke)
+  caption_preset: { default: "karaoke" },
+  // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
+  // blob, so a kit is saved, applied and set as default by machinery that already exists.
+  brand_font: { default: "" },
+  brand_primary_color: { default: "" },
+  brand_highlight_color: { default: "" },
+  brand_cta: { default: "" },
+  brand_logo: { default: "" },
+  brand_logo_position: { default: "top_right" },
+  brand_logo_scale: { default: 0.16 },
+  brand_logo_opacity: { default: 0.85 },
+  caption_animation: { default: "" },
+  caption_keyword_highlight: { default: false },
+  caption_keyword_ai: { default: false },
+  caption_emoji: { default: false },
+  broll: { default: false },
+  broll_intensity: { default: "standard" },
+  asset_sourcing_mode: { default: "off" },
+  broll_provider: { default: "" },
+  selection_prompt: { default: "" },
+  visual_selection: { default: false },
+  permissibility_mode: { default: false },
+
+  // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
+  diarization: { default: false },
+  speaker_reframe: { default: false },
+  reframe_layout: { default: "follow_active" },
+  reframe_intensity: { default: "standard" },
+
+  // Advanced AV engines (Req 20.4). A sibling engine spec adds its `<engine_id>_enabled` flag
+  // and option defaults *here only* — they are forwarded generically and profiles persist them
+  // automatically, because they round-trip through the opaque settings blob.
+  //
+  // Kinetic typography (kinetic-typography spec, Req 17.5) and stem inpainting
+  // (audio-stem-inpainting spec). Both mirror `ProcessingOptions` exactly and both flags are
+  // off, so a stock install still renders exactly as v0.8.0.
+  kinetic_typography_enabled: { default: false },
+  kinetic_style: { default: "karaoke_fill" },
+  kinetic_reveal: { default: "cumulative" },
+  kinetic_font: { default: "" },
+  kinetic_max_lines: { default: 2 },
+  kinetic_max_line_width: { default: 22 },
+  kinetic_safe_area_x_pct: { default: 6.0 },
+  kinetic_safe_area_y_pct: { default: 10.0 },
+  kinetic_motion_ms: { default: 120 },
+  kinetic_confidence_floor: { default: 0.0 },
+  stem_inpainting_enabled: { default: false },
+  stem_mix_preset: { default: "custom" },
+  stem_gain_vocals: { default: 1.0 },
+  stem_gain_music: { default: 1.0 },
+  stem_gain_other: { default: 1.0 },
+  stem_repair_mode: { default: "crossfade" },
+  stem_repair_window_ms: { default: 12 },
+  stem_declick: { default: false },
+  stem_backend: { default: "auto" },
+  stem_model: { default: "htdemucs" },
+  stem_retain_stems: { default: false },
+};
+
+/** Initial settings, derived from the one schema. */
+export const DEFAULT_SETTINGS = Object.fromEntries(
+  Object.entries(SETTINGS_SCHEMA)
+    .filter(([, spec]) => spec.from !== "publishing")
+    .map(([key, spec]) => [key, spec.default])
+);
+
+export const DEFAULT_PUBLISHING = {
+  platforms: [],
+  campaign_id: "",
+  mode: "review",
+  schedule: "",
+  account_id: "",
+  target_type: "",
+  target_id: "",
+};
+
+/**
+ * Build the request body from the current settings and publishing state.
+ *
+ * Derived from `SETTINGS_SCHEMA` rather than restating it, so a setting cannot exist in the UI
+ * and be missing from the request. A missing key falls back to its declared default, which is
+ * what lets an older saved profile — written before a setting existed — still submit.
+ */
+export function toOptions(settings, publishing) {
+  const wire = {};
+  for (const [key, spec] of Object.entries(SETTINGS_SCHEMA)) {
+    if (spec.from === "publishing") {
+      wire[key] = spec.toWire(publishing);
+      continue;
+    }
+    // `undefined` means "absent", not "false" — so a saved profile predating this setting gets
+    // the default, while a user's explicit `false`, `0` or `""` survives.
+    const value = settings[key] === undefined ? spec.default : settings[key];
+    if (spec.expand) {
+      Object.assign(wire, spec.expand(value));
+    } else {
+      wire[key] = spec.toWire ? spec.toWire(value) : value;
+    }
+  }
+  return wire;
 }
 
 export default function App() {
