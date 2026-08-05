@@ -389,8 +389,30 @@ about half; the omissions are small helpers, not whole subsystems.
 ├── updates.py                      # in-app update check
 ├── VERSION · CHANGELOG.md · requirements{,-dev,-ml}.txt · .env.example
 ├── docker-compose.yml · Dockerfile · render.yaml
-└── docs/IMPROVEMENT_PLAN.md        # the backlog (an audit of v0.10.0 — read its banner)
+├── openapi.json                    # the committed API surface — CI fails if it drifts
+└── docs/
+    ├── IMPROVEMENT_PLAN.md         # the backlog (an audit of v0.10.0 — read its banner)
+    └── BACKUP_AND_RESTORE.md       # what to back up, how, and the restore traps
 ```
+
+### Backing up your data
+
+Self-hosting means your publish history, job records and rendered clips live on your own
+disk, and nothing in this project backs them up for you. **[docs/BACKUP_AND_RESTORE.md](docs/BACKUP_AND_RESTORE.md)**
+covers what is durable, what is regenerable, and the two ways a restore silently fails.
+
+The short version, if you read nothing else:
+
+* Two SQLite databases matter — `storage/jobs.db` and `storage/history.db`. `history.db` is
+  the irreplaceable one: it is the only record of what was published where.
+* **Do not back them up with `cp`.** Both run in WAL mode, so a copy taken while the app is
+  running can be missing every recent commit — measured at 0 rows out of 59. Use
+  `sqlite3 storage/jobs.db ".backup '/backups/jobs.db'"`, which is safe against a live writer.
+* **When restoring, delete the old `-wal` and `-shm` files too.** Leaving them behind makes
+  SQLite replay the stale log over your restored data, discarding the entire restore while
+  `PRAGMA integrity_check` still reports `ok`.
+* A `history.db` backup contains **live OAuth access tokens in plaintext**. Treat it like
+  `.env`.
 
 ---
 
