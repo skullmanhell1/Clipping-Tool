@@ -2,6 +2,9 @@ import { useState } from "react";
 import BrandKitPanel from "./BrandKitPanel.jsx";
 import CaptionStylePicker from "./CaptionStylePicker.jsx";
 import Dropdown from "./Dropdown.jsx";
+// `Toggle` used to be defined privately in this file, which is why two other panels re-styled a
+// raw checkbox instead of reusing it. See components/ui/.
+import Toggle from "./ui/Toggle.jsx";
 
 // Option lists mirror the backend's accepted values (see /api/info).
 const LANGUAGES = [
@@ -267,29 +270,6 @@ const engineHint = (engine) => {
   }
   return engine?.requires_network ? "Requires network access (blocked in permissibility mode)" : "";
 };
-
-// A small labelled checkbox toggle used across the effects section.
-function Toggle({ label, checked, onChange, hint, disabled }) {
-  return (
-    <label
-      className={`flex items-start gap-2 text-sm text-slate-300 ${
-        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-      }`}
-    >
-      <input
-        type="checkbox"
-        checked={!!checked}
-        disabled={!!disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 accent-emerald-500"
-      />
-      <span>
-        {label}
-        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
-      </span>
-    </label>
-  );
-}
 
 /**
  * The settings panel: core dropdowns (Language, Clip Length, Aspect Ratio,
