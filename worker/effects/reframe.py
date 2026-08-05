@@ -1237,19 +1237,26 @@ def build_follow_active_path(
                 bx, by = base_orig[j]
                 base[j] = (fx + (bx - fx) * frac, fy + (by - fy) * frac)
 
-    # Smooth the x/y series with the intensity alpha. Zero-phase by default for the same
-    # reason as the single-speaker path: this grid is fully known before ffmpeg runs, so
-    # there is no reason to accept a causal filter's lag. The deliberate speaker-change
-    # ramps above survive it — symmetric smoothing widens a transition by roughly
-    # ``1/alpha`` grid steps either side (~125 ms at alpha 0.35 on a 24 fps grid), which
-    # softens the start and end of a move rather than displacing it.
-    smoother = (
-        ema_smooth_zero_phase
-        if bool(getattr(settings, "reframe_zero_phase", True))
-        else ema_smooth
-    )
-    xs = smoother([c[0] for c in base], alpha)
-    ys = smoother([c[1] for c in base], alpha)
+    # EMA-smooth the x/y series with the intensity alpha.
+    #
+    # Deliberately still the CAUSAL filter, unlike the single-speaker path, which was moved to
+    # zero-phase because its lag was measurable and visible. Two reasons this path is
+    # different, and they were established by trying it rather than assumed:
+    #
+    #   * The motion here is not a subject being followed, it is a set of *deliberately
+    #     constructed* transition ramps (above), timed to start when a speaker starts. A
+    #     symmetric filter looks ahead, so it begins the move ~1/alpha grid steps early
+    #     - about 125 ms at alpha 0.35 - and the crop drifts toward the next speaker before
+    #     they have said anything. `test_p15_speaker_change_transitions_smoothly` pins that
+    #     the path starts on the previous speaker's position and caught this immediately.
+    #   * There is no ground-truth harness for this path, so "better" is not measurable here
+    #     the way it is for a single tracked face. Changing intentional timing on the
+    #     strength of an argument that was only verified elsewhere is how a plausible
+    #     regression gets shipped.
+    #
+    # Wiring it up belongs with a follow-active benchmark, not with this change.
+    xs = ema_smooth([c[0] for c in base], alpha)
+    ys = ema_smooth([c[1] for c in base], alpha)
 
     # Clamp every centre so the crop window stays fully in-frame throughout.
     lo_x, hi_x = crop_w / 2.0, src_w - crop_w / 2.0
