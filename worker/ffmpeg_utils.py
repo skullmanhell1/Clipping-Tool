@@ -15,9 +15,16 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from config import settings
+
+if TYPE_CHECKING:
+    # Type-checking only. `h264_args` imports `worker.video_encoders` lazily *inside* the
+    # function, and that stays as it is — this module is imported by almost everything, and the
+    # encoder probe runs a real one-frame encode. Naming the type here costs nothing at runtime
+    # and is what lets `_compat_args` be checked against the object it is actually handed.
+    from worker.video_encoders import VideoEncoder
 
 
 class FFmpegError(RuntimeError):
@@ -69,7 +76,7 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
 )
 
 
-def _compat_args(encoder) -> list[str]:
+def _compat_args(encoder: "VideoEncoder") -> list[str]:
     """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
 
     Built *from* the tuple rather than respelling it, and that is the whole point of this function
@@ -86,10 +93,15 @@ def _compat_args(encoder) -> list[str]:
     """
     pairs = zip(H264_COMPAT_ARGS[::2], H264_COMPAT_ARGS[1::2])
     args: list[str] = []
+    # Read directly rather than through `getattr(..., default)`. Both fields are declared on
+    # `VideoEncoder` with defaults, and every encoder reaching here comes from
+    # `resolve_encoder()`, so there is no object without them - the defaults were guarding against
+    # a type that is now named in the signature, and they would have silently supplied a
+    # project-default pix_fmt if either field were ever renamed.
     for flag, value in pairs:
-        if flag == "-pix_fmt" and getattr(encoder, "pix_fmt", ""):
+        if flag == "-pix_fmt" and encoder.pix_fmt:
             value = encoder.pix_fmt
-        elif flag == "-level" and not getattr(encoder, "accepts_level", True):
+        elif flag == "-level" and not encoder.accepts_level:
             continue
         args += [flag, value]
     return args

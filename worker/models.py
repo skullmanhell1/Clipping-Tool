@@ -283,7 +283,10 @@ class ProcessingOptions:
         # Coerce numeric fields that may arrive as strings from form data.
         for num_field in ("range_start", "range_end", "schedule_at"):
             v = valid.get(num_field)
-            if v in ("", None):
+            # `v is None or v == ""` rather than `v in ("", None)`: identical for every value
+            # that reaches here, but a form a type checker can narrow, so the `float(v)` below is
+            # known to receive a non-None value rather than relying on the `except TypeError`.
+            if v is None or v == "":
                 valid[num_field] = None
             else:
                 try:

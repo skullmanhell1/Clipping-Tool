@@ -36,10 +36,20 @@ PRIMARY_IOU = 0.5
 
 
 class TimeRange(Protocol):
-    """Anything with ``start`` and ``end`` - a ``ClipCandidate`` or a ``LabelledMoment``."""
+    """Anything with ``start`` and ``end`` - a ``ClipCandidate`` or a ``LabelledMoment``.
 
-    start: float
-    end: float
+    Declared as read-only properties rather than as bare mutable attributes. A Protocol that
+    states ``start: float`` requires an implementation whose ``start`` is *settable*, which
+    silently excluded ``LabelledMoment`` — it is a ``@dataclass(frozen=True)``, so its attributes
+    are read-only and it did not satisfy the very Protocol whose docstring names it. Nothing here
+    ever writes to a range, so asking only to read one is both accurate and wider.
+    """
+
+    @property
+    def start(self) -> float: ...
+
+    @property
+    def end(self) -> float: ...
 
 
 def iou(a: TimeRange, b: TimeRange) -> float:

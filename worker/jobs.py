@@ -23,7 +23,7 @@ from typing import Any, Optional
 from config import settings
 from worker import cancellation, observability
 from worker import download as dl
-from worker.models import Job, JobStatus, ProcessingOptions
+from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -172,11 +172,17 @@ class JobStore:
             job.updated_at = time.time()
         self._persist(job)
 
-    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[object]:
+    def update_clip(self, job_id: str, clip_id: str, fields: dict) -> Optional[ClipResult]:
         """Atomically update editable fields on one clip within a job.
 
         Only known :class:`ClipResult` attributes are updated (unknown keys are
         ignored). Returns the updated clip, or ``None`` if not found.
+
+        Annotated as ``Optional[ClipResult]`` rather than the ``Optional[object]`` it used to
+        be. The docstring already promised a ``ClipResult``, and `job.clips` is typed as one, so
+        `object` was imprecision rather than a deliberate widening — but it propagated: every
+        caller in ``api/main.py`` then had to reach for attributes mypy could not see, which was
+        14 of the 18 findings in that file. Naming the real type here fixes them all at once.
         """
         import time
 
@@ -196,8 +202,11 @@ class JobStore:
         self._persist(job)
         return clip
 
-    def get_clip(self, job_id: str, clip_id: str) -> Optional[object]:
-        """Return a single clip within a job, or ``None``."""
+    def get_clip(self, job_id: str, clip_id: str) -> Optional[ClipResult]:
+        """Return a single clip within a job, or ``None``.
+
+        See :meth:`update_clip` for why this names ``ClipResult`` rather than ``object``.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:

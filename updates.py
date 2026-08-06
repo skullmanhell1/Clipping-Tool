@@ -80,7 +80,10 @@ class UpdateChecker:
     def check(self, force: bool = False) -> dict[str, Any]:
         """Return ``{current, latest, update_available, html_url, checked_at, ...}``."""
         current = get_current_version()
-        result = {
+        # Annotated because the literal's inferred value type is `bool | str | None`, which the
+        # float `checked_at` assigned further down does not fit - and the declared return type is
+        # already `dict[str, Any]`.
+        result: dict[str, Any] = {
             "current": current,
             "latest": None,
             "update_available": False,

@@ -38,9 +38,31 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Optional, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Optional,
+    Protocol,
+    TypeGuard,
+    runtime_checkable,
+)
 
 from worker.engines.timebase import Time_Base
+
+if TYPE_CHECKING:
+    # Type-checking only, which is what preserves the import discipline stated in the module
+    # docstring: at runtime this module still imports nothing but the standard library and
+    # `worker.engines.timebase`, and `test_every_engine_module_imports_without_heavy_dependencies`
+    # proves it in a fresh interpreter.
+    #
+    # These two names were previously bare string annotations carrying `# noqa: F821`, which
+    # silenced the linter but left them genuinely undefined — so mypy reported them and no tool
+    # could check either field. `worker.engines.artifacts` imports `Engine_Artifact` from this
+    # module, so the reference is circular; that is fine here because the cycle exists only for
+    # the type checker, which resolves it, and never at runtime.
+    from worker.engines.artifacts import Engine_Workspace
+    from worker.engines.capabilities import Capability_Report
 
 __all__ = [
     "DIGEST_LENGTH",
@@ -108,8 +130,13 @@ class Engine_Status(str, Enum):
 # ---------------------------------------------------------------------------
 
 
-def _is_number(value: Any) -> bool:
+def _is_number(value: Any) -> TypeGuard[int | float]:
     """True for a real numeric value that is not a bool.
+
+    Typed as a :class:`TypeGuard` rather than plain ``bool`` so the narrowing this performs is
+    visible to the type checker. Every caller here follows the check with ``float(value)``, and
+    without the guard each of those reads as ``float(<something> | None)`` — which was two of the
+    findings in this module and would have needed a suppression apiece to silence.
 
     Mirrors ``worker.engines.timebase._is_number``: a ``bool`` is deliberately
     **not** a number here even though ``isinstance(True, int)`` is ``True`` in
@@ -430,8 +457,8 @@ class Engine_Context:
     options: Any = None                   # this engine's resolved Engine_Options
     options_digest: str = ""              # Req 11.1
     seed: int = 0                         # Req 12.2 — only randomness source
-    workspace: Optional["Engine_Workspace"] = None      # noqa: F821 - worker.engines.artifacts
-    capabilities: Optional["Capability_Report"] = None  # noqa: F821 - worker.engines.capabilities
+    workspace: Optional["Engine_Workspace"] = None      # worker.engines.artifacts
+    capabilities: Optional["Capability_Report"] = None  # worker.engines.capabilities
     permissibility: bool = False          # ProcessingOptions.permissibility_mode
     deadline: float = math.inf            # time.monotonic() budget end (Req 8.6)
     time_budget_s: float = 0.0

@@ -13,8 +13,11 @@ import reactHooks from "eslint-plugin-react-hooks";
 
 export default [
   {
-    // Build output and dependencies are not ours to lint.
-    ignores: ["dist/**", "node_modules/**"],
+    // Build output, dependencies and generated reports are not ours to lint. `coverage/**` is the
+    // v8 HTML report: it ships its own JS with its own eslint-disable directives, so linting it
+    // reports warnings about someone else's generated file — and only *after* a coverage run, so
+    // the lint result would otherwise depend on whether one had happened.
+    ignores: ["dist/**", "node_modules/**", "coverage/**"],
   },
   js.configs.recommended,
   {

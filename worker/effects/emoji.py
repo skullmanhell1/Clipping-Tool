@@ -510,8 +510,17 @@ def _candidate_keys(token: str) -> list[str]:
     if token.endswith("ly") and len(token) > 4:
         keys.append(token[:-2])
 
+    # Order-preserving de-duplication. Written as a loop rather than the
+    # `not (key in seen or seen.add(key))` comprehension idiom it replaces: that relies on
+    # `set.add` returning None to keep the `or` falsy, which works but reads as a bug and is
+    # reported as one (`"add" of "set" does not return a value`). Same output, same order.
     seen: set[str] = set()
-    return [key for key in keys if not (key in seen or seen.add(key))]
+    unique: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
 
 
 def lookup_emoji(token: str, mapping: dict[str, str]) -> str:

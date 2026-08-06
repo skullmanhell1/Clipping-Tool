@@ -5,4 +5,19 @@ ruff>=0.5,<1.0        # lint + format
 black>=24.4,<25.0     # formatter
 mypy>=1.10,<2.0       # static typing
 pytest>=8.2,<9.0      # test runner
+pytest-cov>=5.0,<8.0  # coverage measurement (reported in CI, not gated)
 hypothesis>=6.100,<7.0 # property-based testing
+
+# `pip-audit` is deliberately NOT listed here, and that is not an oversight.
+#
+# It depends on `requests`, and installing `requests` into the environment the suite runs in
+# changes yt-dlp's behaviour: yt-dlp prefers its `requests`-based request handler when the package
+# is importable, and that handler leaves a socket unclosed. The resulting `ResourceWarning` is
+# raised by the garbage collector at an arbitrary later moment, and because `filterwarnings = error`
+# turns it into a failure, it lands on whichever test happens to be running. Measured: with
+# `requests` present, 3-4 of the `tests/test_url_ingest.py` I13 tests fail non-deterministically
+# under `pytest --cov`, and pass without it. Removing `requests` makes the same run green.
+#
+# So the audit runs in its own isolated environment in CI (see the "Audit Python dependencies"
+# step in .github/workflows/ci.yml) rather than being installed alongside the tests. Auditing the
+# dependency set must not alter the dependency set it is auditing.
