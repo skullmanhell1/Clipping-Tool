@@ -10,6 +10,7 @@ from updates import get_update_checker
 #: than repeated on each decorator.
 router = APIRouter(tags=["updates"])
 
+
 # ---------------------------------------------------------------------------
 # Updates
 # ---------------------------------------------------------------------------

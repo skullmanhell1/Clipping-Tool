@@ -59,9 +59,7 @@ class FakeManager:
 
 def make_watcher(tmp_path: Path, manager: FakeManager | None = None) -> WatchFolder:
     """A watcher on `tmp_path` with a poll interval short enough not to slow the suite."""
-    return WatchFolder(
-        folder=tmp_path, manager=manager or FakeManager(), poll_interval=0.01
-    )
+    return WatchFolder(folder=tmp_path, manager=manager or FakeManager(), poll_interval=0.01)
 
 
 def write(path: Path, size: int) -> Path:
@@ -237,7 +235,7 @@ def test_several_files_each_get_their_own_stability_check(tmp_path):
     write(growing, 100)
 
     watcher._scan_once()
-    write(growing, 900)                      # b is still arriving
+    write(growing, 900)  # b is still arriving
     assert watcher._scan_once() == [str(settled)]
     assert watcher._scan_once() == [str(growing)]
 

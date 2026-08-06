@@ -49,10 +49,24 @@ def _render(dest, filter_expr: str, duration: float) -> str:
     versus `sample_rate=`), and one generator means one place for that to be right.
     """
     subprocess.run(
-        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", f"{filter_expr}:d={duration}:s={RATE}",
-         "-ac", "1", "-ar", str(RATE), str(dest)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"{filter_expr}:d={duration}:s={RATE}",
+            "-ac",
+            "1",
+            "-ar",
+            str(RATE),
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
     )
     return str(dest)
 
@@ -65,16 +79,16 @@ def _silence_intervals_from_samples(path, threshold_db: float, min_len: float):
     both answers wrong in the same direction.
     """
     raw = subprocess.run(
-        [FFMPEG, "-v", "quiet", "-i", str(path), "-f", "s16le", "-ac", "1",
-         "-ar", str(RATE), "-"],
-        check=True, capture_output=True,
+        [FFMPEG, "-v", "quiet", "-i", str(path), "-f", "s16le", "-ac", "1", "-ar", str(RATE), "-"],
+        check=True,
+        capture_output=True,
     ).stdout
     samples = np.frombuffer(raw, dtype="<i2").astype(np.float64) / 32768.0
 
     window = RATE // 100  # 10 ms
     usable = len(samples) - (len(samples) % window)
     frames = samples[:usable].reshape(-1, window)
-    rms = np.sqrt((frames ** 2).mean(axis=1))
+    rms = np.sqrt((frames**2).mean(axis=1))
     # -inf for a digitally silent window would poison the comparison; floor it instead.
     with np.errstate(divide="ignore"):
         db = 20 * np.log10(np.maximum(rms, 1e-12))
@@ -125,10 +139,10 @@ def test_the_parsed_intervals_agree_with_the_decoded_samples(tmp_path):
     parsed = segmentation.detect_silences(source, noise_db=-30.0, min_silence=0.4)
     independent = _silence_intervals_from_samples(source, threshold_db=-30.0, min_len=0.4)
 
-    assert len(parsed) == len(independent), (
-        f"parser found {parsed}, decoded samples found {independent}"
-    )
-    for (p_start, p_end), (i_start, i_end) in zip(parsed, independent):
+    assert len(parsed) == len(
+        independent
+    ), f"parser found {parsed}, decoded samples found {independent}"
+    for (p_start, p_end), (i_start, i_end) in zip(parsed, independent, strict=False):
         assert p_start == pytest.approx(i_start, abs=0.2), (parsed, independent)
         assert p_end == pytest.approx(i_end, abs=0.2), (parsed, independent)
 
@@ -192,9 +206,21 @@ def _ebur128_integrated(path) -> float:
     rather than a second opinion from the same source.
     """
     proc = subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-i", str(path),
-         "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-af",
+            "ebur128=framelog=quiet",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     matches = re.findall(r"^\s*I:\s*(-?[0-9.]+)\s*LUFS", proc.stderr, re.MULTILINE)
     assert matches, f"ebur128 reported no integrated loudness:\n{proc.stderr[-1500:]}"
@@ -209,9 +235,9 @@ def test_measured_loudness_agrees_with_ebur128(tmp_path):
     assert stats is not None, "loudnorm analysis returned nothing on a plain tone"
 
     independent = _ebur128_integrated(source)
-    assert stats.input_i == pytest.approx(independent, abs=1.0), (
-        f"loudnorm reported input_i={stats.input_i}, ebur128 reported I={independent}"
-    )
+    assert stats.input_i == pytest.approx(
+        independent, abs=1.0
+    ), f"loudnorm reported input_i={stats.input_i}, ebur128 reported I={independent}"
 
 
 def test_halving_the_amplitude_lowers_the_measurement_by_about_six_db(tmp_path):
@@ -229,9 +255,9 @@ def test_halving_the_amplitude_lowers_the_measurement_by_about_six_db(tmp_path):
     assert loud_stats is not None and quiet_stats is not None
 
     delta = loud_stats.input_i - quiet_stats.input_i
-    assert delta == pytest.approx(6.02, abs=0.75), (
-        f"halving amplitude moved input_i by {delta} dB, expected about 6"
-    )
+    assert delta == pytest.approx(
+        6.02, abs=0.75
+    ), f"halving amplitude moved input_i by {delta} dB, expected about 6"
 
 
 def test_a_path_containing_braces_still_parses(tmp_path):
@@ -280,9 +306,21 @@ def test_the_field_names_match_what_loudnorm_actually_prints(tmp_path):
     """
     source = _render(tmp_path / "tone.wav", "aevalsrc=0.5*sin(2*PI*1000*t)", 3.0)
     proc = subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-i", str(source),
-         "-af", "loudnorm=print_format=json", "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-i",
+            str(source),
+            "-af",
+            "loudnorm=print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     block = proc.stderr[proc.stderr.rfind("{") : proc.stderr.rfind("}") + 1]
     report = json.loads(block)
@@ -295,10 +333,24 @@ def test_a_source_with_no_audio_returns_none(tmp_path):
     """The degrade path: the caller renders without normalisation rather than failing the clip."""
     silent_video = tmp_path / "mute.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=15:duration=1",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", str(silent_video)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x120:rate=15:duration=1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(silent_video),
+        ],
+        check=True,
+        capture_output=True,
     )
     assert audio.measure_loudness(silent_video) is None
 

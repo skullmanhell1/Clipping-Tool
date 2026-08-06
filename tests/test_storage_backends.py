@@ -1,4 +1,5 @@
 """Storage backend tests: local, S3 (mocked), and local/S3 parity."""
+
 from __future__ import annotations
 
 from contextlib import closing
@@ -103,7 +104,11 @@ def test_local_and_s3_parity(tmp_path, op):
     s3_res = _exercise(s3)
     # Compare the observable outcome for the sampled operation.
     key = {
-        "save": "exists", "exists": "exists", "size": "size", "read": "read",
-        "list": "list", "delete": "exists_after_delete",
+        "save": "exists",
+        "exists": "exists",
+        "size": "size",
+        "read": "read",
+        "list": "list",
+        "delete": "exists_after_delete",
     }[op]
     assert local_res[key] == s3_res[key]

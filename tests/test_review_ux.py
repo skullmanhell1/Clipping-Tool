@@ -25,12 +25,12 @@ from worker.models import ClipResult, Job, ProcessingOptions
 @pytest.mark.parametrize(
     "hex_color,expected",
     [
-        ("#FF0000", "&H000000FF"),   # red -> BB=00 GG=00 RR=FF
+        ("#FF0000", "&H000000FF"),  # red -> BB=00 GG=00 RR=FF
         ("#00FF00", "&H0000FF00"),
         ("#0000FF", "&H00FF0000"),
         ("#FFFFFF", "&H00FFFFFF"),
         ("#000000", "&H00000000"),
-        ("00E5FF", "&H00FFE500"),    # a leading # is optional
+        ("00E5FF", "&H00FFE500"),  # a leading # is optional
     ],
 )
 def test_u6_hex_becomes_ass_with_the_bytes_reversed(hex_color, expected):
@@ -116,9 +116,7 @@ def test_u6_the_kit_does_not_touch_the_look():
 def test_u6_a_partial_kit_only_overrides_what_it_sets():
     """Each field is additive; an unset one must not overwrite the preset with a default."""
     preset, _ = resolve_preset("karaoke")
-    result, markers = branding.apply_brand(
-        preset, ProcessingOptions(brand_font="Anton")
-    )
+    result, markers = branding.apply_brand(preset, ProcessingOptions(brand_font="Anton"))
     assert result.font == "Anton"
     assert result.colors.primary == preset.colors.primary
     assert markers == ["brand_font"]
@@ -141,9 +139,7 @@ def test_u6_a_missing_font_is_not_substituted_here():
     Doing it here too would duplicate that logic and hide the substitution behind a second one.
     """
     preset, _ = resolve_preset("karaoke")
-    result, _ = branding.apply_brand(
-        preset, ProcessingOptions(brand_font="No Such Face At All")
-    )
+    result, _ = branding.apply_brand(preset, ProcessingOptions(brand_font="No Such Face At All"))
     assert result.font == "No Such Face At All"
 
 
@@ -156,9 +152,9 @@ def test_u6_a_missing_font_is_not_substituted_here():
 def logo(tmp_path):
     path = tmp_path / "logo.png"
     subprocess.run(
-        [FFMPEG, "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
-         "-frames:v", "1", str(path)],
-        check=True, capture_output=True,
+        [FFMPEG, "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1", str(path)],
+        check=True,
+        capture_output=True,
     )
     return path
 
@@ -196,16 +192,32 @@ def test_u6_the_logo_uses_no_extra_ffmpeg_input(logo):
 @requires_ffmpeg
 @pytest.mark.parametrize(
     "position,band",
-    [("top_right", (0, 300)), ("bottom_left", (1620, 1920)),
-     ("top_left", (0, 300)), ("bottom_right", (1620, 1920))],
+    [
+        ("top_right", (0, 300)),
+        ("bottom_left", (1620, 1920)),
+        ("top_left", (0, 300)),
+        ("bottom_right", (1620, 1920)),
+    ],
 )
 def test_u6_the_logo_renders_in_the_requested_corner(tmp_path, logo, position, band):
     """Asserted on rendered pixels: a filter string can be well-formed and place nothing."""
     base = tmp_path / "base.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-f", "lavfi", "-i", "color=c=gray:s=1080x1920:r=25:d=1",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", str(base)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:s=1080x1920:r=25:d=1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(base),
+        ],
+        check=True,
+        capture_output=True,
     )
     options = ProcessingOptions(
         brand_logo=str(logo), brand_logo_position=position, brand_logo_scale=0.2
@@ -213,18 +225,48 @@ def test_u6_the_logo_renders_in_the_requested_corner(tmp_path, logo, position, b
     graph = branding.logo_filter(options, 1080, 1920, base_label="0:v", out_label="vbrand")
     out = tmp_path / f"wm_{position}.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-i", str(base), "-filter_complex", graph, "-map", "[vbrand]",
-         "-frames:v", "3", "-pix_fmt", "yuv420p", "-c:v", "libx264", str(out)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-i",
+            str(base),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vbrand]",
+            "-frames:v",
+            "3",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
     )
 
     def red_fraction(top, bottom):
         raw = subprocess.run(
-            [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(out), "-frames:v", "1",
-             "-vf", f"crop=iw:{bottom - top}:0:{top},format=rgb24", "-f", "rawvideo", "-"],
-            check=True, capture_output=True,
+            [
+                FFMPEG,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(out),
+                "-frames:v",
+                "1",
+                "-vf",
+                f"crop=iw:{bottom - top}:0:{top},format=rgb24",
+                "-f",
+                "rawvideo",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
         ).stdout
-        pixels = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+        pixels = [raw[i : i + 3] for i in range(0, len(raw), 3)]
         red = sum(1 for p in pixels if p[0] > 140 and p[1] < 90 and p[2] < 90)
         return red / max(1, len(pixels))
 
@@ -271,7 +313,8 @@ def test_u6_the_logo_width_is_even(logo):
 def test_u6_an_unknown_position_falls_back_rather_than_failing(logo):
     made = branding.logo_filter(
         ProcessingOptions(brand_logo=str(logo), brand_logo_position="middle_of_nowhere"),
-        1080, 1920,
+        1080,
+        1920,
     )
     assert made is not None
     default = branding.logo_filter(
@@ -324,8 +367,10 @@ def test_u6_the_kit_reaches_the_rendered_captions(tmp_path, monkeypatch):
     """A branding function nothing calls is not a feature."""
     plain = _render(tmp_path / "plain", monkeypatch)
     branded = _render(
-        tmp_path / "branded", monkeypatch,
-        brand_font="Bangers", brand_primary_color="#ff0000",
+        tmp_path / "branded",
+        monkeypatch,
+        brand_font="Bangers",
+        brand_primary_color="#ff0000",
     )
     assert "brand_font" in branded.effects_applied
     assert "brand_colors" in branded.effects_applied
@@ -441,7 +486,9 @@ def test_u7_a_vanished_source_is_a_clear_refusal(tmp_path):
     from worker import rerender
 
     job = Job(
-        input_type="url", source="https://example.com/v", options=ProcessingOptions(),
+        input_type="url",
+        source="https://example.com/v",
+        options=ProcessingOptions(),
         source_path=str(tmp_path / "gone.mp4"),
     )
     with pytest.raises(rerender.RerenderError) as raised:
@@ -453,8 +500,10 @@ def test_u7_the_source_path_survives_serialisation(tmp_path):
     """A persisted job outliving a restart is the normal case, not an exceptional one."""
     source = tmp_path / "src.mp4"
     job = Job(
-        input_type="url", source="https://example.com/v",
-        options=ProcessingOptions(), source_path=str(source),
+        input_type="url",
+        source="https://example.com/v",
+        options=ProcessingOptions(),
+        source_path=str(source),
     )
     assert Job.from_dict(job.to_dict()).source_path == str(source)
 
@@ -463,13 +512,23 @@ def test_u7_preserved_fields_cover_everything_a_human_edits():
     """Re-rendering is a request about pixels; replacing edited copy would be data loss."""
     from worker import rerender
 
-    for field in ("title", "description", "hashtags", "hook_text", "cta", "mentions",
-                  "thumbnail_text", "review_state"):
+    for field in (
+        "title",
+        "description",
+        "hashtags",
+        "hook_text",
+        "cta",
+        "mentions",
+        "thumbnail_text",
+        "review_state",
+    ):
         assert field in rerender.PRESERVED_FIELDS
 
 
 @requires_ffmpeg
-def test_u7_a_rerender_keeps_the_edited_metadata_and_the_filename(tmp_path, make_video, monkeypatch):
+def test_u7_a_rerender_keeps_the_edited_metadata_and_the_filename(
+    tmp_path, make_video, monkeypatch
+):
     """The end-to-end property: new pixels, same identity.
 
     The filename in particular must not change - every clip URL, publish record and history row
@@ -494,8 +553,11 @@ def test_u7_a_rerender_keeps_the_edited_metadata_and_the_filename(tmp_path, make
     )
 
     updated = rerender.rerender_clip(
-        job, clip, option_overrides={"captions": False, "metadata": False, "color": "vivid"},
-        clips_dir=clips_dir, temp_dir=tmp_path / "tmp",
+        job,
+        clip,
+        option_overrides={"captions": False, "metadata": False, "color": "vivid"},
+        clips_dir=clips_dir,
+        temp_dir=tmp_path / "tmp",
     )
 
     assert updated.filename == clip.filename
@@ -654,8 +716,13 @@ def test_u9_a_clip_starts_unreviewed():
 
 def test_u9_the_review_state_survives_serialisation():
     clip = ClipResult(
-        id="a", filename="a.mp4", start=0, end=1, duration=1,
-        review_state="approved", review_note="good",
+        id="a",
+        filename="a.mp4",
+        start=0,
+        end=1,
+        duration=1,
+        review_state="approved",
+        review_note="good",
     )
     restored = ClipResult.from_dict(clip.to_dict())
     assert restored.review_state == "approved"
@@ -693,16 +760,17 @@ def test_u9_untouched_clips_keep_their_state(review_client):
     )
     states = {clip.id: clip.review_state for clip in job.clips}
     assert states == {
-        "clip0": "pending", "clip1": "approved", "clip2": "pending", "clip3": "pending"
+        "clip0": "pending",
+        "clip1": "approved",
+        "clip2": "pending",
+        "clip3": "pending",
     }
 
 
 @pytest.mark.parametrize("state", ["maybe", "", "APPROVED", "deleted"])
 def test_u9_an_unknown_review_state_is_refused(review_client, state):
     client, job = review_client
-    response = client.post(
-        f"/api/jobs/{job.id}/clips/clip0/review", json={"review_state": state}
-    )
+    response = client.post(f"/api/jobs/{job.id}/clips/clip0/review", json={"review_state": state})
     assert response.status_code == 400
 
 

@@ -12,13 +12,7 @@ const LABELS = {
 const inputClass =
   "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-100 outline-none focus:border-brand-accent";
 
-export default function PublishingPanel({
-  value,
-  onChange,
-  statuses,
-  campaigns,
-  onCampaignSaved,
-}) {
+export default function PublishingPanel({ value, onChange, statuses, campaigns, onCampaignSaved }) {
   const [show, setShow] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -96,9 +90,7 @@ export default function PublishingPanel({
                   <label
                     key={platform}
                     className={`rounded-lg border p-2 text-xs ${
-                      status.configured
-                        ? "border-slate-700"
-                        : "border-slate-800 opacity-60"
+                      status.configured ? "border-slate-700" : "border-slate-800 opacity-60"
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -110,11 +102,7 @@ export default function PublishingPanel({
                       />
                       <b>{LABELS[platform] || platform}</b>
                     </div>
-                    <div
-                      className={
-                        status.configured ? "text-emerald-400" : "text-amber-400"
-                      }
-                    >
+                    <div className={status.configured ? "text-emerald-400" : "text-amber-400"}>
                       {status.configured
                         ? status.direct_publish
                           ? "Ready"
@@ -160,9 +148,7 @@ export default function PublishingPanel({
               <input
                 type="datetime-local"
                 value={value.schedule}
-                onChange={(event) =>
-                  onChange({ ...value, schedule: event.target.value })
-                }
+                onChange={(event) => onChange({ ...value, schedule: event.target.value })}
                 className={inputClass}
               />
             </label>
@@ -170,9 +156,7 @@ export default function PublishingPanel({
               Account / channel
               <input
                 value={value.account_id}
-                onChange={(event) =>
-                  onChange({ ...value, account_id: event.target.value })
-                }
+                onChange={(event) => onChange({ ...value, account_id: event.target.value })}
                 placeholder="optional account ID"
                 className={inputClass}
               />
@@ -181,9 +165,7 @@ export default function PublishingPanel({
               Whop target type
               <select
                 value={value.target_type}
-                onChange={(event) =>
-                  onChange({ ...value, target_type: event.target.value })
-                }
+                onChange={(event) => onChange({ ...value, target_type: event.target.value })}
                 className={inputClass}
               >
                 <option value="">None</option>
@@ -197,9 +179,7 @@ export default function PublishingPanel({
               Target ID
               <input
                 value={value.target_id}
-                onChange={(event) =>
-                  onChange({ ...value, target_id: event.target.value })
-                }
+                onChange={(event) => onChange({ ...value, target_id: event.target.value })}
                 placeholder="channel, course, forum, product, or account target"
                 className={inputClass}
               />
@@ -224,9 +204,9 @@ export default function PublishingPanel({
           </div>
           {error && <p className="text-xs text-rose-400">{error}</p>}
           <p className="text-xs text-slate-500">
-            Auto mode publishes completed clips through a saved campaign. Review mode
-            leaves publishing to each clip button. Schedule times are entered in your
-            browser’s local time and converted to UTC for the server.
+            Auto mode publishes completed clips through a saved campaign. Review mode leaves
+            publishing to each clip button. Schedule times are entered in your browser’s local time
+            and converted to UTC for the server.
           </p>
         </div>
       )}

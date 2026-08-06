@@ -18,13 +18,31 @@ const STATUS_STYLES = {
 // through to the original message rather than being replaced by something vaguer — a message we
 // cannot interpret is still the best evidence available.
 const ERROR_HINTS = [
-  [/source not found|no such file/i, "The source file is missing. It may have been cleaned up by the retention sweeper — try uploading it again."],
-  [/binary not found|ffmpeg/i, "ffmpeg could not be run. Check that it is installed and on PATH on the server."],
-  [/timed out/i, "A processing step exceeded its time limit. A very long source, or a slow host — try a shorter range with the Process from/to settings."],
-  [/no video stream/i, "No video track was found in this file. Audio-only sources cannot be clipped."],
-  [/unsupported|invalid data|moov atom/i, "This file could not be decoded. It may be corrupt or in a container ffmpeg cannot read."],
+  [
+    /source not found|no such file/i,
+    "The source file is missing. It may have been cleaned up by the retention sweeper — try uploading it again.",
+  ],
+  [
+    /binary not found|ffmpeg/i,
+    "ffmpeg could not be run. Check that it is installed and on PATH on the server.",
+  ],
+  [
+    /timed out/i,
+    "A processing step exceeded its time limit. A very long source, or a slow host — try a shorter range with the Process from/to settings.",
+  ],
+  [
+    /no video stream/i,
+    "No video track was found in this file. Audio-only sources cannot be clipped.",
+  ],
+  [
+    /unsupported|invalid data|moov atom/i,
+    "This file could not be decoded. It may be corrupt or in a container ffmpeg cannot read.",
+  ],
   [/disk|no space/i, "The server ran out of disk space. Clear old clips from the Storage panel."],
-  [/network|connection|resolve/i, "A network request failed. If this was a URL, the site may be blocking downloads."],
+  [
+    /network|connection|resolve/i,
+    "A network request failed. If this was a URL, the site may be blocking downloads.",
+  ],
 ];
 
 function errorHint(message) {
@@ -128,7 +146,12 @@ export default function JobCard({
     if (!clips.length) return undefined;
     const onKeyDown = (event) => {
       const tag = (event.target?.tagName || "").toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) {
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        event.target?.isContentEditable
+      ) {
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -208,9 +231,7 @@ export default function JobCard({
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate font-medium text-slate-100">
-            {job.title || job.source}
-          </div>
+          <div className="truncate font-medium text-slate-100">{job.title || job.source}</div>
           <div className="truncate text-xs text-slate-500">
             {job.input_type === "url" ? job.source : "Uploaded file"}
             {job.duration ? ` · ${formatDuration(job.duration)}` : ""}
@@ -303,56 +324,55 @@ export default function JobCard({
             </div>
           ) : (
             <>
-            <ReviewBar
-              counts={counts}
-              total={clips.length}
-              selectedCount={selectedClips.size}
-              busy={batchBusy}
-              error={batchError}
-              onSelectAll={() => setSelectedClips(new Set(clips.map((clip) => clip.id)))}
-              onSelectNone={() => setSelectedClips(new Set())}
-              onSelectPending={() =>
-                setSelectedClips(
-                  new Set(
-                    clips
-                      .filter((clip) => (clip.review_state || "pending") === "pending")
-                      .map((clip) => clip.id),
-                  ),
-                )
-              }
-              onApprove={() => applyBatch("approved")}
-              onReject={() => applyBatch("rejected")}
-              onReset={() => applyBatch("pending")}
-            />
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {clips.map((clip, index) => (
-                <ClipCard
-                  key={clip.id}
-                  jobId={job.id}
-                  clip={clip}
-                  settings={settings}
-                  selected={selectedClips.has(clip.id)}
-                  onToggleSelected={toggleSelected}
-                  focused={index === focusIndex}
-                  onRegisterPlayer={
-                    index === focusIndex
-                      ? (controls) => {
-                          playerRef.current = controls;
-                        }
-                      : undefined
-                  }
-                  llmAvailable={llmAvailable}
-                  publishing={publishing}
-                  publisherStatuses={publisherStatuses}
-                  attempts={(publishAttempts || []).filter(
-                    (attempt) =>
-                      attempt.job_id === job.id && attempt.clip_id === clip.id
-                  )}
-                  onUpdated={(updated) => onClipUpdated?.(job.id, updated)}
-                  onPublished={onPublished}
-                />
-              ))}
-            </div>
+              <ReviewBar
+                counts={counts}
+                total={clips.length}
+                selectedCount={selectedClips.size}
+                busy={batchBusy}
+                error={batchError}
+                onSelectAll={() => setSelectedClips(new Set(clips.map((clip) => clip.id)))}
+                onSelectNone={() => setSelectedClips(new Set())}
+                onSelectPending={() =>
+                  setSelectedClips(
+                    new Set(
+                      clips
+                        .filter((clip) => (clip.review_state || "pending") === "pending")
+                        .map((clip) => clip.id),
+                    ),
+                  )
+                }
+                onApprove={() => applyBatch("approved")}
+                onReject={() => applyBatch("rejected")}
+                onReset={() => applyBatch("pending")}
+              />
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                {clips.map((clip, index) => (
+                  <ClipCard
+                    key={clip.id}
+                    jobId={job.id}
+                    clip={clip}
+                    settings={settings}
+                    selected={selectedClips.has(clip.id)}
+                    onToggleSelected={toggleSelected}
+                    focused={index === focusIndex}
+                    onRegisterPlayer={
+                      index === focusIndex
+                        ? (controls) => {
+                            playerRef.current = controls;
+                          }
+                        : undefined
+                    }
+                    llmAvailable={llmAvailable}
+                    publishing={publishing}
+                    publisherStatuses={publisherStatuses}
+                    attempts={(publishAttempts || []).filter(
+                      (attempt) => attempt.job_id === job.id && attempt.clip_id === clip.id,
+                    )}
+                    onUpdated={(updated) => onClipUpdated?.(job.id, updated)}
+                    onPublished={onPublished}
+                  />
+                ))}
+              </div>
             </>
           )}
 
@@ -385,7 +405,9 @@ export default function JobCard({
                             {(s.seconds || 0).toFixed(1)}s
                           </td>
                           <td className="py-0.5 text-slate-500">
-                            {s.count > 1 ? `${s.count}× · ${(s.mean_seconds || 0).toFixed(1)}s each` : ""}
+                            {s.count > 1
+                              ? `${s.count}× · ${(s.mean_seconds || 0).toFixed(1)}s each`
+                              : ""}
                           </td>
                         </tr>
                       ))}

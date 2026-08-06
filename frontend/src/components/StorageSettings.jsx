@@ -74,9 +74,7 @@ export default function StorageSettings() {
   return (
     <div className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Storage
-        </h3>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Storage</h3>
         <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-400">
           backend: {backend}
         </span>
@@ -93,20 +91,18 @@ export default function StorageSettings() {
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
           <div
-            className={`h-full rounded-full ${
-              usage.low_space ? "bg-rose-500" : "bg-emerald-500"
-            }`}
+            className={`h-full rounded-full ${usage.low_space ? "bg-rose-500" : "bg-emerald-500"}`}
             style={{ width: `${Math.min(100, usedPct)}%` }}
           />
         </div>
         <div className="mt-1 text-xs text-slate-500">
-          Clips {formatBytes(usage.areas.clips)} · Sources{" "}
-          {formatBytes(usage.areas.uploads)} · Temp {formatBytes(usage.areas.temp)}
+          Clips {formatBytes(usage.areas.clips)} · Sources {formatBytes(usage.areas.uploads)} · Temp{" "}
+          {formatBytes(usage.areas.temp)}
         </div>
         {usage.low_space && (
           <div className="mt-2 rounded-lg border border-rose-800 bg-rose-950/40 p-2 text-xs text-rose-300">
-            ⚠ Low disk space ({usage.free_gb} GB free). Consider a shorter
-            retention window or running cleanup.
+            ⚠ Low disk space ({usage.free_gb} GB free). Consider a shorter retention window or
+            running cleanup.
           </div>
         )}
       </div>

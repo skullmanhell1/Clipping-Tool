@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import re
 import subprocess
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from config import settings
 
@@ -41,8 +42,8 @@ def detect_cuts(
     path: Any,
     around: float,
     *,
-    window: Optional[float] = None,
-    threshold: Optional[float] = None,
+    window: float | None = None,
+    threshold: float | None = None,
 ) -> list[float]:
     """Absolute times of hard cuts within ``window`` seconds either side of ``around``.
 
@@ -59,12 +60,23 @@ def detect_cuts(
     seek = max(0.0, float(around) - window)
     duration = window * 2.0
     command = [
-        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
-        "-ss", f"{seek:.3f}", "-t", f"{duration:.3f}", "-i", str(path),
-        "-filter:v", f"select='gt(scene,{threshold:g})',metadata=print:file=-",
+        settings.ffmpeg_binary,
+        "-nostdin",
+        "-hide_banner",
+        "-ss",
+        f"{seek:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(path),
+        "-filter:v",
+        f"select='gt(scene,{threshold:g})',metadata=print:file=-",
         # No audio decoding: this is a video-only question, and decoding audio would roughly
         # double the work for nothing.
-        "-an", "-f", "null", "-",
+        "-an",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
@@ -83,7 +95,7 @@ def detect_cuts(
     return sorted(set(cuts))
 
 
-def scan_cuts(path: Any, *, threshold: Optional[float] = None) -> list[float]:
+def scan_cuts(path: Any, *, threshold: float | None = None) -> list[float]:
     """Absolute times of every hard cut in the whole file (V4).
 
     Distinct from :func:`detect_cuts`, which scans a narrow window around one candidate. S9
@@ -99,10 +111,17 @@ def scan_cuts(path: Any, *, threshold: Optional[float] = None) -> list[float]:
     """
     threshold = float(settings.scene_snap_threshold if threshold is None else threshold)
     command = [
-        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
-        "-i", str(path),
-        "-filter:v", f"select='gt(scene,{threshold:g})',metadata=print:file=-",
-        "-an", "-f", "null", "-",
+        settings.ffmpeg_binary,
+        "-nostdin",
+        "-hide_banner",
+        "-i",
+        str(path),
+        "-filter:v",
+        f"select='gt(scene,{threshold:g})',metadata=print:file=-",
+        "-an",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=900)
@@ -123,7 +142,7 @@ def snap_start(
     end: float,
     cuts: Sequence[float],
     *,
-    max_shift: Optional[float] = None,
+    max_shift: float | None = None,
     min_duration: float = 1.0,
 ) -> tuple[float, float]:
     """Move ``start`` onto the nearest cut, if one is close enough.
@@ -142,7 +161,8 @@ def snap_start(
         return start, end
 
     candidates = [
-        cut for cut in cuts
+        cut
+        for cut in cuts
         if abs(cut - start) <= max_shift and cut < end - min_duration and cut >= 0
     ]
     if not candidates:

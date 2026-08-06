@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import escape_filter_path
@@ -36,7 +36,10 @@ from worker.ffmpeg_utils import escape_filter_path
 #: Where a logo may sit. Corners only: a watermark belongs out of the way, and the centre of a
 #: vertical clip is where the subject and the captions are.
 LOGO_POSITIONS: tuple[str, ...] = (
-    "top_left", "top_right", "bottom_left", "bottom_right",
+    "top_left",
+    "top_right",
+    "bottom_left",
+    "bottom_right",
 )
 
 #: Logo inset from the frame edge, as a fraction of frame width.
@@ -50,7 +53,7 @@ MAX_LOGO_SCALE = 0.40
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 
-def hex_to_ass(color: Any) -> Optional[str]:
+def hex_to_ass(color: Any) -> str | None:
     """Convert ``#RRGGBB`` to an ASS ``&H00BBGGRR`` colour, or ``None`` if unparseable.
 
     ASS stores colours **byte-reversed** relative to HTML - blue, green, red - with an alpha byte
@@ -75,7 +78,7 @@ def hex_to_ass(color: Any) -> Optional[str]:
     return f"&H00{blue}{green}{red}".upper()
 
 
-def ass_to_hex(color: Any) -> Optional[str]:
+def ass_to_hex(color: Any) -> str | None:
     """Convert an ASS ``&HAABBGGRR`` colour back to ``#RRGGBB``, for a UI colour input.
 
     Needed because the presets' colours are stored in ASS form and a colour picker cannot show
@@ -157,7 +160,7 @@ def logo_filter(
     *,
     base_label: str = "vbase",
     out_label: str = "vbrand",
-) -> Optional[str]:
+) -> str | None:
     """A watermark graph segment for the brand logo, or ``None`` when there is none (U6).
 
     Returns a **labelled graph segment**, not a chain filter: ``overlay`` takes two inputs, so a
@@ -181,7 +184,9 @@ def logo_filter(
         position = "top_right"
 
     try:
-        scale = float(getattr(options, "brand_logo_scale", DEFAULT_LOGO_SCALE) or DEFAULT_LOGO_SCALE)
+        scale = float(
+            getattr(options, "brand_logo_scale", DEFAULT_LOGO_SCALE) or DEFAULT_LOGO_SCALE
+        )
     except (TypeError, ValueError):
         scale = DEFAULT_LOGO_SCALE
     scale = max(MIN_LOGO_SCALE, min(MAX_LOGO_SCALE, scale))

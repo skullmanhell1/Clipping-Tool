@@ -28,6 +28,7 @@ places that *do* spawn a process (the fresh-interpreter digest check of P19 and
 the import-safety check of task 3.12) do so on purpose — a same-process check
 cannot prove either claim.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -41,10 +42,11 @@ import re
 import socket
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Mapping, Optional, Sequence
+from typing import Any, ClassVar
 from unittest import mock
 
 import pytest
@@ -147,7 +149,7 @@ class _Demo_Options:
     model: str = _DEMO_DEFAULTS["model"]
 
     @classmethod
-    def parse(cls, data: Optional[Mapping[str, Any]]) -> "_Demo_Options":
+    def parse(cls, data: Mapping[str, Any] | None) -> _Demo_Options:
         """Total parser: never raises, ignores unknown keys, defaults per field."""
         if not isinstance(data, Mapping):
             return cls()
@@ -166,9 +168,7 @@ class _Demo_Options:
                 hi=_GAIN_RANGE[1],
             ),
             layout=coerce_choice(data.get("layout"), _LAYOUTS, _DEMO_DEFAULTS["layout"]),
-            model=coerce_str(
-                data.get("model"), _DEMO_DEFAULTS["model"], max_len=_MODEL_MAX_LEN
-            ),
+            model=coerce_str(data.get("model"), _DEMO_DEFAULTS["model"], max_len=_MODEL_MAX_LEN),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -201,7 +201,7 @@ class _Demo_Engine(AV_Engine):
         return _Demo_Options.parse(source)
 
     def plan(self, ctx: Engine_Context) -> dict[str, Any]:
-        rng = ctx.rng()                     # the ONLY randomness source
+        rng = ctx.rng()  # the ONLY randomness source
         cues = []
         for word in ctx.words:
             jitter = rng.random() / 100.0
@@ -249,11 +249,11 @@ class _Mutating_Engine(AV_Engine):
         for name in _DEMO_FIELDS:
             try:
                 setattr(options, name, "mutated")
-            except Exception as exc:                     # noqa: BLE001 - recorded
+            except Exception as exc:  # noqa: BLE001 - recorded
                 self.option_errors.append((name, exc))
         try:
-            options["layout"] = "mutated"                # not a mapping either
-        except Exception as exc:                         # noqa: BLE001 - recorded
+            options["layout"] = "mutated"  # not a mapping either
+        except Exception as exc:  # noqa: BLE001 - recorded
             self.option_errors.append(("__setitem__", exc))
         return _Demo_Options.parse(dump_options(options))
 
@@ -264,7 +264,7 @@ class _Mutating_Engine(AV_Engine):
         for field in dataclasses.fields(ctx):
             try:
                 setattr(ctx, field.name, None)
-            except Exception as exc:                     # noqa: BLE001 - recorded
+            except Exception as exc:  # noqa: BLE001 - recorded
                 self.context_errors.append((field.name, exc))
         return Engine_Result(engine_id=self.engine_id, status=Engine_Status.APPLIED)
 
@@ -342,9 +342,9 @@ def _assert_timing_values_are_floats(value: Any, path: str = "$") -> None:
     if isinstance(value, dict):
         for key, item in value.items():
             if key in _TIMING_KEYS or key.endswith("_s"):
-                assert isinstance(item, float) and not isinstance(item, bool), (
-                    f"timing value at {path}.{key} is {type(item).__name__}, not float"
-                )
+                assert isinstance(item, float) and not isinstance(
+                    item, bool
+                ), f"timing value at {path}.{key} is {type(item).__name__}, not float"
             _assert_timing_values_are_floats(item, f"{path}.{key}")
         return
     if isinstance(value, list):
@@ -414,9 +414,7 @@ def test_p1_engine_result_serialises_with_closed_status_domain(outcome):
         with pytest.raises(type(exception)):
             raiser.run(ctx)
         results.append(
-            Engine_Result.failed(
-                outcome["engine_id"], f"{type(exception).__name__}: {exception}"
-            )
+            Engine_Result.failed(outcome["engine_id"], f"{type(exception).__name__}: {exception}")
         )
 
     for result in results:
@@ -530,7 +528,7 @@ def test_p16_options_parsing_is_total_and_ignores_unknown_keys(mapping):
     parse; and ``coerce_choice`` passes a known value through untouched while
     substituting the default for everything else.
     """
-    options = _Demo_Options.parse(mapping)           # must not raise (Req 10.4)
+    options = _Demo_Options.parse(mapping)  # must not raise (Req 10.4)
 
     # --- every field is a coerced valid value (Reqs 10.2, 10.4) -----------
     assert isinstance(options.enabled, bool)
@@ -551,7 +549,7 @@ def test_p16_options_parsing_is_total_and_ignores_unknown_keys(mapping):
     assert _Demo_Options.parse({}) == _Demo_Options()
 
     # --- unknown keys are ignored (Reqs 10.2, 20.5) -----------------------
-    valid = dump_options(options)                    # a valid mapping by construction
+    valid = dump_options(options)  # a valid mapping by construction
     unknown = {key: value for key, value in mapping.items() if key not in _DEMO_FIELDS}
     unknown.update({"unknown_field": mapping, "_private": [1, 2], "": None})
     extended = dict(valid)
@@ -564,10 +562,7 @@ def test_p16_options_parsing_is_total_and_ignores_unknown_keys(mapping):
     for value in list(mapping.values()) + [None, [], {}, 0, 1, True, "Karaoke", "unknown"]:
         if isinstance(value, str) and value in _LAYOUTS:
             continue
-        assert (
-            coerce_choice(value, _LAYOUTS, _DEMO_DEFAULTS["layout"])
-            == _DEMO_DEFAULTS["layout"]
-        )
+        assert coerce_choice(value, _LAYOUTS, _DEMO_DEFAULTS["layout"]) == _DEMO_DEFAULTS["layout"]
 
 
 # --------------------------------------------------------------------------- #
@@ -599,7 +594,7 @@ def test_p17_options_serialisation_round_trips(mapping):
 
     # --- only JSON-serialisable scalars, lists and mappings (Req 10.1) ----
     _assert_json_value_tree(dumped)
-    json.dumps(dumped, allow_nan=False)              # strict JSON: must not raise
+    json.dumps(dumped, allow_nan=False)  # strict JSON: must not raise
     assert set(dumped) == set(_DEMO_FIELDS)
 
     # The same holds for the ``to_dict`` face of the protocol.
@@ -701,12 +696,12 @@ def test_p19_options_digest_deterministic_order_insensitive_and_stable(left, rig
         assert options_digest(left) == options_digest(right)
 
     # --- stable in a FRESH interpreter process (Req 11.5) ----------------
-    payload = json.dumps(left_dump)                  # ASCII-only by default
+    payload = json.dumps(left_dump)  # ASCII-only by default
     probe = _run_probe(_DIGEST_PROBE, stdin=payload)
     assert probe.returncode == 0, probe.stderr
-    assert probe.stdout.strip() == left_digest, (
-        f"digest differs across processes: {left_digest} vs {probe.stdout.strip()!r}"
-    )
+    assert (
+        probe.stdout.strip() == left_digest
+    ), f"digest differs across processes: {left_digest} vs {probe.stdout.strip()!r}"
 
 
 #: Module-level ``random`` entry points that must never be consulted by an engine
@@ -800,9 +795,7 @@ def test_p20_planning_is_pure_seeded_and_reproducible(timeline, mapping, seed):
 
     # --- the seed is what varies the plan (Req 12.2) ---------------------
     other = engine.plan(
-        _context(
-            options=options, words=words, duration=duration, seed=seed + 1, digest=digest
-        )
+        _context(options=options, words=words, duration=duration, seed=seed + 1, digest=digest)
     )
     assert _canonical(other) != _canonical(first)
 
@@ -939,11 +932,9 @@ def test_every_engine_module_imports_without_heavy_dependencies():
     """
     package = _REPO_ROOT / "worker" / "engines"
     modules = ["worker.engines"] + sorted(
-        f"worker.engines.{path.stem}"
-        for path in package.glob("*.py")
-        if path.stem != "__init__"
+        f"worker.engines.{path.stem}" for path in package.glob("*.py") if path.stem != "__init__"
     )
-    assert len(modules) >= 3, modules          # __init__ + base + timebase at minimum
+    assert len(modules) >= 3, modules  # __init__ + base + timebase at minimum
 
     probe = _run_probe(_IMPORT_PROBE, *modules)
     assert probe.returncode == 0, (
@@ -951,7 +942,6 @@ def test_every_engine_module_imports_without_heavy_dependencies():
         f"stdout={probe.stdout}\nstderr={probe.stderr}"
     )
     assert probe.stdout.strip() == "ok:" + ",".join(modules)
-
 
 
 # ===========================================================================
@@ -975,8 +965,7 @@ def test_every_engine_module_imports_without_heavy_dependencies():
 #: inside it. ``index`` raising is itself part of the pin: the anchors must stay.
 _MODELS_SOURCE = (_REPO_ROOT / "worker" / "models.py").read_text(encoding="utf-8")
 _EFFECTS_DOC = _MODELS_SOURCE[
-    _MODELS_SOURCE.index("holds free-form"):
-    _MODELS_SOURCE.index("effects_applied: list[str]")
+    _MODELS_SOURCE.index("holds free-form") : _MODELS_SOURCE.index("effects_applied: list[str]")
 ]
 
 #: Production modules that emit ``effects_applied`` markers.
@@ -1104,33 +1093,79 @@ def test_v080_markers_are_disjoint_from_the_engine_namespace():
 #: ``__all__`` of every engine module, pinned exactly (order included).
 _PINNED_EXPORTS = {
     "worker.engines.base": [
-        "DIGEST_LENGTH", "MARKER_PREFIX", "FLAG_SUFFIX", "Engine_Stage",
-        "Engine_Status", "Engine_Artifact", "Compose_Input", "Compose_Contribution",
-        "Engine_Context", "Engine_Result", "marker", "merge_markers",
-        "Engine_Options", "coerce_bool", "coerce_int", "coerce_float",
-        "coerce_choice", "coerce_str", "dump_options", "options_digest",
-        "derive_seed", "AV_Engine",
+        "DIGEST_LENGTH",
+        "MARKER_PREFIX",
+        "FLAG_SUFFIX",
+        "Engine_Stage",
+        "Engine_Status",
+        "Engine_Artifact",
+        "Compose_Input",
+        "Compose_Contribution",
+        "Engine_Context",
+        "Engine_Result",
+        "marker",
+        "merge_markers",
+        "Engine_Options",
+        "coerce_bool",
+        "coerce_int",
+        "coerce_float",
+        "coerce_choice",
+        "coerce_str",
+        "dump_options",
+        "options_digest",
+        "derive_seed",
+        "AV_Engine",
     ],
     "worker.engines.registry": [
-        "Engine_Registration_Error", "Engine_Record", "Engine_Registry",
-        "get_registry", "register", "reset_registry",
+        "Engine_Registration_Error",
+        "Engine_Record",
+        "Engine_Registry",
+        "get_registry",
+        "register",
+        "reset_registry",
     ],
     "worker.engines.capabilities": [
-        "Capability_Kind", "LLM_CAPABILITY", "CAPABILITY_SEPARATOR",
-        "MAX_DETAIL_LENGTH", "FFMPEG_FILTER_TIMEOUT", "parse_capability_id",
-        "Capability_Status", "Prober", "MODEL_LOCATORS", "default_prober",
-        "Capability_Report", "get_report", "reset_report",
+        "Capability_Kind",
+        "LLM_CAPABILITY",
+        "CAPABILITY_SEPARATOR",
+        "MAX_DETAIL_LENGTH",
+        "FFMPEG_FILTER_TIMEOUT",
+        "parse_capability_id",
+        "Capability_Status",
+        "Prober",
+        "MODEL_LOCATORS",
+        "default_prober",
+        "Capability_Report",
+        "get_report",
+        "reset_report",
     ],
     "worker.engines.timebase": [
-        "DEFAULT_FPS", "DEFAULT_SAMPLE_RATE", "MIN_FPS", "MAX_FPS", "Rounding",
-        "Time_Base", "Timeline_Segment", "normalize_segments", "parse_segments",
-        "dump_segments", "total_duration", "invert_segments", "clip_bounds",
+        "DEFAULT_FPS",
+        "DEFAULT_SAMPLE_RATE",
+        "MIN_FPS",
+        "MAX_FPS",
+        "Rounding",
+        "Time_Base",
+        "Timeline_Segment",
+        "normalize_segments",
+        "parse_segments",
+        "dump_segments",
+        "total_duration",
+        "invert_segments",
+        "clip_bounds",
     ],
     "worker.engines.artifacts": [
-        "ENGINE_TEMP_ROOT", "ENGINE_KEY_ROOT", "MAX_COMPONENT_LEN",
-        "sanitize_component", "Engine_Workspace", "allocate_workspace",
-        "cleanup_workspace", "cleanup_job_workspaces", "cleanup_job_artifacts",
-        "artifact_key", "persist_artifact",
+        "ENGINE_TEMP_ROOT",
+        "ENGINE_KEY_ROOT",
+        "MAX_COMPONENT_LEN",
+        "sanitize_component",
+        "Engine_Workspace",
+        "allocate_workspace",
+        "cleanup_workspace",
+        "cleanup_job_workspaces",
+        "cleanup_job_artifacts",
+        "artifact_key",
+        "persist_artifact",
     ],
 }
 
@@ -1139,14 +1174,36 @@ _PINNED_FIELDS = {
     "Engine_Artifact": ["name", "path", "media_type", "durable", "storage_key"],
     "Compose_Input": ["path", "loop", "duration"],
     "Compose_Contribution": [
-        "engine_id", "inputs", "video_filters", "audio_filters", "subtitle_path",
+        "engine_id",
+        "inputs",
+        "video_filters",
+        "audio_filters",
+        "subtitle_path",
         "z_order",
     ],
     "Engine_Context": [
-        "job_id", "clip_id", "engine_id", "stage", "source_path", "clip_path",
-        "time_base", "clip_start", "clip_end", "duration", "words", "options",
-        "options_digest", "seed", "workspace", "capabilities", "permissibility",
-        "deadline", "time_budget_s", "first_input_index", "notes", "deps",
+        "job_id",
+        "clip_id",
+        "engine_id",
+        "stage",
+        "source_path",
+        "clip_path",
+        "time_base",
+        "clip_start",
+        "clip_end",
+        "duration",
+        "words",
+        "options",
+        "options_digest",
+        "seed",
+        "workspace",
+        "capabilities",
+        "permissibility",
+        "deadline",
+        "time_budget_s",
+        "first_input_index",
+        "notes",
+        "deps",
         # Clip_Metadata (Req 15.8) is pinned in its real, LAST position, after
         # ``deps``: a designed addition always lands at the end, so this pin still
         # fails on any undesigned reorder, rename or removal — and still fails if
@@ -1154,15 +1211,27 @@ _PINNED_FIELDS = {
         "clip_metadata",
     ],
     "Engine_Result": [
-        "engine_id", "status", "markers", "artifacts", "contribution", "plan",
-        "media", "detail", "elapsed_s",
+        "engine_id",
+        "status",
+        "markers",
+        "artifacts",
+        "contribution",
+        "plan",
+        "media",
+        "detail",
+        "elapsed_s",
     ],
     "Engine_Record": ["engine", "engine_id", "stage", "priority"],
     "Capability_Status": ["capability_id", "available", "detail"],
     "Time_Base": ["fps", "sample_rate", "rounding", "fps_substituted"],
     "Timeline_Segment": ["start", "end"],
     "Engine_Workspace": [
-        "root", "temp_dir", "job_id", "clip_id", "engine_id", "options_digest",
+        "root",
+        "temp_dir",
+        "job_id",
+        "clip_id",
+        "engine_id",
+        "options_digest",
     ],
 }
 
@@ -1228,27 +1297,42 @@ def test_engine_enums_and_constants_are_pinned():
     )
 
     assert [(s.name, s.value) for s in Engine_Stage] == [
-        ("SOURCE", "source"), ("AUDIO", "audio"), ("GEOMETRY", "geometry"),
-        ("COMPOSE", "compose"), ("POST", "post"),
+        ("SOURCE", "source"),
+        ("AUDIO", "audio"),
+        ("GEOMETRY", "geometry"),
+        ("COMPOSE", "compose"),
+        ("POST", "post"),
     ]
     assert [(s.name, s.value) for s in Engine_Status] == [
-        ("APPLIED", "applied"), ("SKIPPED", "skipped"), ("DEGRADED", "degraded"),
+        ("APPLIED", "applied"),
+        ("SKIPPED", "skipped"),
+        ("DEGRADED", "degraded"),
         ("FAILED", "failed"),
     ]
     assert [(k.name, k.value) for k in Capability_Kind] == [
-        ("PYTHON_PKG", "python_pkg"), ("BINARY", "binary"),
-        ("FFMPEG_FILTER", "ffmpeg_filter"), ("FONT", "font"),
-        ("PROVIDER_KEY", "provider_key"), ("MODEL", "model"), ("LLM", "llm"),
+        ("PYTHON_PKG", "python_pkg"),
+        ("BINARY", "binary"),
+        ("FFMPEG_FILTER", "ffmpeg_filter"),
+        ("FONT", "font"),
+        ("PROVIDER_KEY", "provider_key"),
+        ("MODEL", "model"),
+        ("LLM", "llm"),
     ]
     assert [(r.name, r.value) for r in Rounding] == [
-        ("NEAREST", "nearest"), ("FLOOR", "floor"),
+        ("NEAREST", "nearest"),
+        ("FLOOR", "floor"),
     ]
     assert (DIGEST_LENGTH, MARKER_PREFIX, FLAG_SUFFIX) == (16, "engine", "_enabled")
     assert (DEFAULT_FPS, DEFAULT_SAMPLE_RATE, MIN_FPS, MAX_FPS) == (
-        30.0, 48000, 1.0, 240.0,
+        30.0,
+        48000,
+        1.0,
+        240.0,
     )
     assert (ENGINE_TEMP_ROOT, ENGINE_KEY_ROOT, MAX_COMPONENT_LEN) == (
-        "engines", "engines", 48,
+        "engines",
+        "engines",
+        48,
     )
     assert LLM_CAPABILITY == "llm"
 
@@ -1268,22 +1352,43 @@ def test_engine_method_surface_is_pinned():
     assert {
         name: getattr(AV_Engine, name)
         for name in (
-            "engine_id", "stage", "priority", "required_capabilities",
-            "optional_capabilities", "requires_network", "requires_model_download",
-            "time_budget_s", "max_media_passes", "max_inputs", "produces_media",
+            "engine_id",
+            "stage",
+            "priority",
+            "required_capabilities",
+            "optional_capabilities",
+            "requires_network",
+            "requires_model_download",
+            "time_budget_s",
+            "max_media_passes",
+            "max_inputs",
+            "produces_media",
         )
     } == {
-        "engine_id": "", "stage": Engine_Stage.POST, "priority": 100,
-        "required_capabilities": (), "optional_capabilities": (),
-        "requires_network": False, "requires_model_download": False,
-        "time_budget_s": 30.0, "max_media_passes": 1, "max_inputs": 0,
+        "engine_id": "",
+        "stage": Engine_Stage.POST,
+        "priority": 100,
+        "required_capabilities": (),
+        "optional_capabilities": (),
+        "requires_network": False,
+        "requires_model_download": False,
+        "time_budget_s": 30.0,
+        "max_media_passes": 1,
+        "max_inputs": 0,
         "produces_media": False,
     }
     assert callable(AV_Engine.flag_field) and callable(AV_Engine.is_enabled)
 
     # Engine_Registry, including stage_of and the iteration protocol.
     assert sorted(n for n in vars(Engine_Registry) if not n.startswith("_")) == [
-        "all", "find", "for_stage", "get", "ids", "records", "register", "reset",
+        "all",
+        "find",
+        "for_stage",
+        "get",
+        "ids",
+        "records",
+        "register",
+        "reset",
         "stage_of",
     ]
     for dunder in ("__init__", "__len__", "__contains__", "__iter__"):
@@ -1293,22 +1398,40 @@ def test_engine_method_surface_is_pinned():
 
     # Capability_Report and Engine_Context/Engine_Result helpers.
     assert sorted(n for n in dir(Capability_Report) if not n.startswith("_")) == [
-        "available", "first_missing", "invalidate", "missing", "status", "to_dict",
+        "available",
+        "first_missing",
+        "invalidate",
+        "missing",
+        "status",
+        "to_dict",
     ]
     for name in ("rng", "remaining"):
         assert callable(getattr(Engine_Context, name)), name
     for name in ("to_dict", "from_dict", "skipped", "degraded", "failed"):
         assert callable(getattr(Engine_Result, name)), name
-    for name in ("from_media_info", "from_dict", "to_dict", "frame_duration",
-                 "seconds_to_frame", "frame_to_seconds", "seconds_to_sample",
-                 "sample_to_seconds", "snap"):
+    for name in (
+        "from_media_info",
+        "from_dict",
+        "to_dict",
+        "frame_duration",
+        "seconds_to_frame",
+        "frame_to_seconds",
+        "seconds_to_sample",
+        "sample_to_seconds",
+        "snap",
+    ):
         assert callable(getattr(Time_Base, name)), name
 
     # Workspace/artifact entry points, parameter names included.
     expected_signatures = {
         "sanitize_component": ["value", "fallback"],
         "allocate_workspace": [
-            "temp_dir", "job_id", "clip_id", "engine_id", "options_digest", "create",
+            "temp_dir",
+            "job_id",
+            "clip_id",
+            "engine_id",
+            "options_digest",
+            "create",
         ],
         "cleanup_workspace": ["ws", "remover", "logger"],
         "cleanup_job_workspaces": ["temp_dir", "job_id", "logger"],
@@ -1332,8 +1455,18 @@ def test_engine_method_surface_is_pinned():
 
     run_stage_signature = inspect.signature(Engine_Host.run_stage)
     assert list(run_stage_signature.parameters) == [
-        "self", "stage", "clip_id", "source", "clip_path", "clip_start",
-        "clip_end", "duration", "words", "clip_metadata", "filler_plan", "notes",
+        "self",
+        "stage",
+        "clip_id",
+        "source",
+        "clip_path",
+        "clip_start",
+        "clip_end",
+        "duration",
+        "words",
+        "clip_metadata",
+        "filler_plan",
+        "notes",
     ]
     for name in ("clip_metadata", "filler_plan"):
         added = run_stage_signature.parameters[name]
@@ -1359,9 +1492,18 @@ def test_shared_test_doubles_and_generators_are_pinned():
 
     expected_doubles = {
         "FakeEngine": [
-            "engine_id", "stage", "status", "markers", "artifacts", "contribution",
-            "plan", "media", "required_capabilities", "optional_capabilities",
-            "requires_network", "priority",
+            "engine_id",
+            "stage",
+            "status",
+            "markers",
+            "artifacts",
+            "contribution",
+            "plan",
+            "media",
+            "required_capabilities",
+            "optional_capabilities",
+            "requires_network",
+            "priority",
         ],
         "RaisingEngine": ["engine_id", "stage", "exc"],
         "SlowEngine": ["engine_id", "stage", "overrun"],
@@ -1389,21 +1531,59 @@ def test_shared_test_doubles_and_generators_are_pinned():
     # ``st_mix_preset`` / ``st_repair_*`` / ``st_tiny_clip`` generators are the
     # audio-stem-inpainting spec's tranche (its task 2.1) in the same shared module.
     assert list(strategies.__all__) == [
-        "BACKEND_IDS", "CAPABILITY_KINDS", "DEFAULT_SEGMENT_DURATION", "GAIN_DEFAULT",
-        "GAIN_MAX", "GAIN_MIN", "KINETIC_STYLES", "LLM_CAPABILITY", "MIX_PRESETS",
-        "MIX_PRESET_CHOICES", "REPAIR_MODES", "REVEAL_MODES", "SAMPLE_RATES",
-        "STEM_MAPPING", "STEM_NAMES", "WINDOW_DEFAULT_MS", "WINDOW_MAX_MS",
-        "WINDOW_MIN_MS", "st_audio_format", "st_availability_map",
-        "st_backend_stem_sets", "st_broken_word_timeline", "st_capability_id",
-        "st_engine_id", "st_engine_outcomes", "st_failure_points",
-        "st_font_availability", "st_gate_scenarios", "st_hostile_component",
-        "st_hostile_value", "st_i18n_word_timeline", "st_invalid_fps", "st_keep_plan",
-        "st_kinetic_options", "st_kinetic_style", "st_malformed_capability_id",
-        "st_mix_preset", "st_options_mapping", "st_pcm_frames", "st_priority",
-        "st_registrations", "st_repair_mode", "st_repair_window_ms", "st_reveal_mode",
-        "st_seam_notes", "st_segment_records", "st_stage", "st_stem_gains",
-        "st_stem_options", "st_time_base", "st_tiny_clip",
-        "st_well_formed_capability_id", "st_word_timeline",
+        "BACKEND_IDS",
+        "CAPABILITY_KINDS",
+        "DEFAULT_SEGMENT_DURATION",
+        "GAIN_DEFAULT",
+        "GAIN_MAX",
+        "GAIN_MIN",
+        "KINETIC_STYLES",
+        "LLM_CAPABILITY",
+        "MIX_PRESETS",
+        "MIX_PRESET_CHOICES",
+        "REPAIR_MODES",
+        "REVEAL_MODES",
+        "SAMPLE_RATES",
+        "STEM_MAPPING",
+        "STEM_NAMES",
+        "WINDOW_DEFAULT_MS",
+        "WINDOW_MAX_MS",
+        "WINDOW_MIN_MS",
+        "st_audio_format",
+        "st_availability_map",
+        "st_backend_stem_sets",
+        "st_broken_word_timeline",
+        "st_capability_id",
+        "st_engine_id",
+        "st_engine_outcomes",
+        "st_failure_points",
+        "st_font_availability",
+        "st_gate_scenarios",
+        "st_hostile_component",
+        "st_hostile_value",
+        "st_i18n_word_timeline",
+        "st_invalid_fps",
+        "st_keep_plan",
+        "st_kinetic_options",
+        "st_kinetic_style",
+        "st_malformed_capability_id",
+        "st_mix_preset",
+        "st_options_mapping",
+        "st_pcm_frames",
+        "st_priority",
+        "st_registrations",
+        "st_repair_mode",
+        "st_repair_window_ms",
+        "st_reveal_mode",
+        "st_seam_notes",
+        "st_segment_records",
+        "st_stage",
+        "st_stem_gains",
+        "st_stem_options",
+        "st_time_base",
+        "st_tiny_clip",
+        "st_well_formed_capability_id",
+        "st_word_timeline",
     ]
     assert list(strategies.__all__) == sorted(strategies.__all__)
     for name in strategies.__all__:

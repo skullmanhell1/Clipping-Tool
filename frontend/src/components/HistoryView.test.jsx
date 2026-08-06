@@ -155,8 +155,6 @@ describe("publish attempt actions", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 
     release({ state: "queued" });
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled());
   });
 });

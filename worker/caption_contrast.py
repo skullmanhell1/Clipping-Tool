@@ -34,7 +34,6 @@ import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 from worker.effects.caption_presets import CaptionPreset
@@ -124,7 +123,7 @@ def sample_background(
     band: tuple[int, int, int, int],
     *,
     count: int = SAMPLE_COUNT,
-) -> Optional[BackgroundSample]:
+) -> BackgroundSample | None:
     """Mean luma of ``band`` across ``count`` frames, or ``None`` when unmeasurable.
 
     ``None`` means "no information", and every caller treats that as "keep the preset's colours" -
@@ -141,14 +140,26 @@ def sample_background(
         try:
             result = subprocess.run(
                 [
-                    settings.ffmpeg_binary, "-hide_banner", "-loglevel", "error",
-                    "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
+                    settings.ffmpeg_binary,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{at:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
                     # Reduced to a single pixel: the mean of the band is the whole measurement, and
                     # letting the scaler compute it avoids moving a megabyte of pixels per sample.
-                    "-vf", f"crop={width}:{height}:{x}:{y},scale=1:1,format=gray",
-                    "-f", "rawvideo", "-",
+                    "-vf",
+                    f"crop={width}:{height}:{x}:{y},scale=1:1,format=gray",
+                    "-f",
+                    "rawvideo",
+                    "-",
                 ],
-                capture_output=True, timeout=60,
+                capture_output=True,
+                timeout=60,
             )
         except Exception:
             continue
@@ -161,7 +172,7 @@ def sample_background(
 
 
 def apply_auto_contrast(
-    preset: CaptionPreset, sample: Optional[BackgroundSample]
+    preset: CaptionPreset, sample: BackgroundSample | None
 ) -> tuple[CaptionPreset, list[str]]:
     """Return ``(preset, markers)`` with legibility colours chosen for the background (C20).
 
@@ -202,7 +213,7 @@ def choose_for_clip(
     duration: float,
     video_width: int,
     video_height: int,
-    position: Optional[str] = None,
+    position: str | None = None,
 ) -> tuple[CaptionPreset, list[str]]:
     """Measure the caption region of ``video`` and adapt ``preset``'s legibility colours (C20).
 

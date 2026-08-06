@@ -1,4 +1,5 @@
 """Tests for face-tracking reframe: pure geometry/smoothing + ffmpeg apply."""
+
 from __future__ import annotations
 
 import pytest
@@ -60,8 +61,7 @@ def test_apply_reframe_with_synthetic_track(make_video, tmp_path, monkeypatch):
     src = make_video("land.mp4", duration=2.0, w=1280, h=720)
 
     def fake_track(video, sample_fps=5.0):
-        return [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360),
-                rf.Center(2.0, 980, 360)]
+        return [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360), rf.Center(2.0, 980, 360)]
 
     monkeypatch.setattr(rf, "track_faces", fake_track)
     dest = tmp_path / "reframed.mp4"

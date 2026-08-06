@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from config import settings
 from worker import captions as cap
@@ -54,9 +54,7 @@ class _SampleWord:
     probability: float = 1.0
 
 
-def sample_words(
-    text: str = SAMPLE_TEXT, duration: float = PREVIEW_SECONDS
-) -> list[_SampleWord]:
+def sample_words(text: str = SAMPLE_TEXT, duration: float = PREVIEW_SECONDS) -> list[_SampleWord]:
     """Evenly-spaced synthetic word timings across ``duration``.
 
     Evenly spaced on purpose: a preview is a comparison between presets, and irregular timings would
@@ -79,10 +77,10 @@ def render_preview(
     *,
     text: str = SAMPLE_TEXT,
     aspect: str = "9:16",
-    position: Optional[str] = None,
+    position: str | None = None,
     duration: float = PREVIEW_SECONDS,
-    highlight_index: Optional[int] = 2,
-    brand: Optional[Any] = None,
+    highlight_index: int | None = 2,
+    brand: Any | None = None,
 ) -> Path:
     """Render a caption sample to ``dest`` and return the path.
 
@@ -130,15 +128,22 @@ def render_preview(
     )
 
     try:
-        _run([
-            settings.ffmpeg_binary, "-y",
-            "-f", "lavfi",
-            "-i", f"color=c={PREVIEW_BACKGROUND}:s={width}x{height}:r=25:d={duration:.2f}",
-            "-vf", cap.subtitles_filter(ass_path),
-            *h264_args(),
-            "-movflags", "+faststart",
-            str(dest),
-        ])
+        _run(
+            [
+                settings.ffmpeg_binary,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={PREVIEW_BACKGROUND}:s={width}x{height}:r=25:d={duration:.2f}",
+                "-vf",
+                cap.subtitles_filter(ass_path),
+                *h264_args(),
+                "-movflags",
+                "+faststart",
+                str(dest),
+            ]
+        )
     finally:
         # The ASS is an intermediate; leaving it beside the preview would accumulate one per
         # preview per preset in whatever directory the caller chose.

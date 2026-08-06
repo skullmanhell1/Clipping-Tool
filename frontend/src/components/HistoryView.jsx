@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
-const fmt=t=>t?new Date(t*1000).toLocaleString():"—";
-const colors={published:"text-emerald-400",private:"text-blue-400",draft:"text-blue-400",failed:"text-rose-400",review_required:"text-amber-400",scheduled:"text-violet-400",queued:"text-slate-300",uploading:"text-cyan-400"};
+const fmt = (t) => (t ? new Date(t * 1000).toLocaleString() : "—");
+const colors = {
+  published: "text-emerald-400",
+  private: "text-blue-400",
+  draft: "text-blue-400",
+  failed: "text-rose-400",
+  review_required: "text-amber-400",
+  scheduled: "text-violet-400",
+  queued: "text-slate-300",
+  uploading: "text-cyan-400",
+};
 
 // PB2: which actions an attempt in a given state can take.
 //
@@ -67,17 +76,105 @@ function AttemptActions({ attempt, onDone }) {
   );
 }
 
-export default function HistoryView(){
- const [data,setData]=useState({clips:[],publish_attempts:[]});
- const [filter,setFilter]=useState("");
- // I11: `load` is memoised on `filter` and the effect depends on `load` itself. Previously it
- // was recreated every render and the effect listed only `[filter]`, so the interval closed over
- // whichever `load` existed when the filter last changed. That happened to work — the closure
- // captured the right filter — but it is the pattern that breaks silently as soon as `load`
- // depends on anything else, and the lint was pointing at exactly that.
- const load=useCallback(()=>api.history(filter).then(setData).catch(()=>{}),[filter]);
- useEffect(()=>{load();const i=setInterval(load,3000);return()=>clearInterval(i)},[load]);
+export default function HistoryView() {
+  const [data, setData] = useState({ clips: [], publish_attempts: [] });
+  const [filter, setFilter] = useState("");
+  // I11: `load` is memoised on `filter` and the effect depends on `load` itself. Previously it
+  // was recreated every render and the effect listed only `[filter]`, so the interval closed over
+  // whichever `load` existed when the filter last changed. That happened to work — the closure
+  // captured the right filter — but it is the pattern that breaks silently as soon as `load`
+  // depends on anything else, and the lint was pointing at exactly that.
+  const load = useCallback(
+    () =>
+      api
+        .history(filter)
+        .then(setData)
+        .catch(() => {}),
+    [filter],
+  );
+  useEffect(() => {
+    load();
+    const i = setInterval(load, 3000);
+    return () => clearInterval(i);
+  }, [load]);
 
- return <section className="space-y-6"><div className="flex items-center justify-between"><h2 className="text-xl font-semibold">History</h2><select value={filter} onChange={e=>setFilter(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm"><option value="">All platforms</option>{["whop","youtube","tiktok","instagram","x"].map(p=><option key={p}>{p}</option>)}</select></div>
- <div className="overflow-x-auto rounded-xl border border-slate-800"><table className="w-full text-left text-sm"><thead className="bg-slate-900 text-slate-400"><tr><th className="p-3">Time</th><th>Platform</th><th>Campaign / Account</th><th>Status</th><th>Message</th><th>Link</th><th>Actions</th></tr></thead><tbody>{data.publish_attempts.map(a=><tr key={a.id} className="border-t border-slate-800"><td className="p-3 text-slate-500">{fmt(a.created_at)}</td><td className="capitalize">{a.platform}</td><td>{a.campaign_id||"—"}<div className="text-xs text-slate-500">{a.account_id}</div></td><td className={colors[a.state]||""}>{a.state}</td><td className="max-w-xs text-slate-400">{a.error||a.message||"—"}</td><td>{a.url?<a className="text-brand-accent" href={a.url} target="_blank" rel="noreferrer">Open</a>:"—"}</td><td><AttemptActions attempt={a} onDone={load}/></td></tr>)}{!data.publish_attempts.length&&<tr><td colSpan="7" className="p-8 text-center text-slate-500">No publish attempts yet.</td></tr>}</tbody></table></div>
- <div><h3 className="mb-3 font-medium">Created clips ({data.clips.length})</h3><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data.clips.map(c=><div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3"><b>{c.title||c.filename}</b><div className="text-xs text-slate-500">{fmt(c.created_at)} · score {Math.round(c.score||0)}</div><div className="mt-1 text-xs text-slate-400">{(c.hashtags||[]).join(" ")}</div></div>)}</div></div></section>}
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">History</h2>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm"
+        >
+          <option value="">All platforms</option>
+          {["whop", "youtube", "tiktok", "instagram", "x"].map((p) => (
+            <option key={p}>{p}</option>
+          ))}
+        </select>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-900 text-slate-400">
+            <tr>
+              <th className="p-3">Time</th>
+              <th>Platform</th>
+              <th>Campaign / Account</th>
+              <th>Status</th>
+              <th>Message</th>
+              <th>Link</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.publish_attempts.map((a) => (
+              <tr key={a.id} className="border-t border-slate-800">
+                <td className="p-3 text-slate-500">{fmt(a.created_at)}</td>
+                <td className="capitalize">{a.platform}</td>
+                <td>
+                  {a.campaign_id || "—"}
+                  <div className="text-xs text-slate-500">{a.account_id}</div>
+                </td>
+                <td className={colors[a.state] || ""}>{a.state}</td>
+                <td className="max-w-xs text-slate-400">{a.error || a.message || "—"}</td>
+                <td>
+                  {a.url ? (
+                    <a className="text-brand-accent" href={a.url} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>
+                  <AttemptActions attempt={a} onDone={load} />
+                </td>
+              </tr>
+            ))}
+            {!data.publish_attempts.length && (
+              <tr>
+                <td colSpan="7" className="p-8 text-center text-slate-500">
+                  No publish attempts yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3 className="mb-3 font-medium">Created clips ({data.clips.length})</h3>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {data.clips.map((c) => (
+            <div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+              <b>{c.title || c.filename}</b>
+              <div className="text-xs text-slate-500">
+                {fmt(c.created_at)} · score {Math.round(c.score || 0)}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">{(c.hashtags || []).join(" ")}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}

@@ -33,17 +33,24 @@ from worker.ass_style import (
 
 def a_style(**overrides) -> AssStyle:
     """A fully specified style; every field without a default supplied."""
-    return AssStyle(**{
-        "name": "Default", "fontname": "Anton", "fontsize": 96,
-        "primary_colour": "&H00FFFFFF", "secondary_colour": "&H0000E5FF",
-        "outline_colour": "&H00000000", "back_colour": "&H64000000",
-        **overrides,
-    })
+    return AssStyle(
+        **{
+            "name": "Default",
+            "fontname": "Anton",
+            "fontsize": 96,
+            "primary_colour": "&H00FFFFFF",
+            "secondary_colour": "&H0000E5FF",
+            "outline_colour": "&H00000000",
+            "back_colour": "&H64000000",
+            **overrides,
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
 # The field-count guarantee                                                     #
 # --------------------------------------------------------------------------- #
+
 
 def test_the_style_record_has_one_field_per_declared_format_column():
     """The guarantee the module exists to provide, asserted directly.
@@ -77,7 +84,7 @@ def test_the_import_time_check_actually_fails_on_a_mismatch(monkeypatch):
 def test_a_serialised_style_has_exactly_the_declared_number_of_fields():
     line = a_style().serialise()
     assert line.startswith("Style: ")
-    assert len(line[len("Style: "):].split(",")) == len(STYLE_FIELD_NAMES)
+    assert len(line[len("Style: ") :].split(",")) == len(STYLE_FIELD_NAMES)
 
 
 def test_the_format_lines_declare_the_field_names_in_order():
@@ -85,15 +92,18 @@ def test_the_format_lines_declare_the_field_names_in_order():
     assert EVENT_FORMAT == "Format: " + ", ".join(EVENT_FIELD_NAMES)
 
 
-@pytest.mark.parametrize(("camel", "snake"), [
-    ("Name", "name"),
-    ("Fontname", "fontname"),
-    ("PrimaryColour", "primary_colour"),
-    ("ScaleX", "scale_x"),
-    ("BorderStyle", "border_style"),
-    ("MarginL", "margin_l"),
-    ("StrikeOut", "strike_out"),
-])
+@pytest.mark.parametrize(
+    ("camel", "snake"),
+    [
+        ("Name", "name"),
+        ("Fontname", "fontname"),
+        ("PrimaryColour", "primary_colour"),
+        ("ScaleX", "scale_x"),
+        ("BorderStyle", "border_style"),
+        ("MarginL", "margin_l"),
+        ("StrikeOut", "strike_out"),
+    ],
+)
 def test_snake_maps_each_format_column_to_its_field(camel, snake):
     assert _snake(camel) == snake
 
@@ -102,14 +112,17 @@ def test_snake_maps_each_format_column_to_its_field(camel, snake):
 # with_margins — what replaced index surgery                                    #
 # --------------------------------------------------------------------------- #
 
+
 def test_with_margins_replaces_the_three_margin_columns_and_nothing_else():
     original = a_style(margin_l=80, margin_r=80, margin_v=220)
     moved = original.with_margins(65, 70, 300)
 
     assert (moved.margin_l, moved.margin_r, moved.margin_v) == (65, 70, 300)
-    untouched = {
-        f.name for f in dataclasses.fields(AssStyle)
-    } - {"margin_l", "margin_r", "margin_v"}
+    untouched = {f.name for f in dataclasses.fields(AssStyle)} - {
+        "margin_l",
+        "margin_r",
+        "margin_v",
+    }
     for name in untouched:
         assert getattr(moved, name) == getattr(original, name), name
 
@@ -121,7 +134,7 @@ def test_with_margins_lands_on_the_columns_the_format_line_names():
     that the margins really are at those positions *according to the Format line*, which is the
     thing that made the old code correct — and which nothing previously verified.
     """
-    fields = a_style().with_margins(11, 22, 33).serialise()[len("Style: "):].split(",")
+    fields = a_style().with_margins(11, 22, 33).serialise()[len("Style: ") :].split(",")
     for column, expected in (("MarginL", "11"), ("MarginR", "22"), ("MarginV", "33")):
         assert fields[STYLE_FIELD_NAMES.index(column)] == expected, column
 
@@ -136,10 +149,11 @@ def test_a_style_is_immutable():
 # Events                                                                        #
 # --------------------------------------------------------------------------- #
 
+
 def test_a_dialogue_line_has_exactly_the_declared_number_of_fields():
     line = dialogue("HELLO", style="Default", start="0:00:00.00", end="0:00:01.00")
     assert line.startswith("Dialogue: ")
-    assert len(line[len("Dialogue: "):].split(",")) == len(EVENT_FIELD_NAMES)
+    assert len(line[len("Dialogue: ") :].split(",")) == len(EVENT_FIELD_NAMES)
 
 
 def test_commas_inside_the_text_field_do_not_add_fields():
@@ -151,24 +165,38 @@ def test_commas_inside_the_text_field_do_not_add_fields():
     """
     text = r"{\move(540,1740,540,1700,0,120)}WORD"
     line = dialogue(text, style="Default", start="0:00:00.00", end="0:00:01.00")
-    fields = line[len("Dialogue: "):].split(",", len(EVENT_FIELD_NAMES) - 1)
+    fields = line[len("Dialogue: ") :].split(",", len(EVENT_FIELD_NAMES) - 1)
     assert len(fields) == len(EVENT_FIELD_NAMES)
     assert fields[-1] == text
     # Naively splitting on every comma over-counts, which is the trap being avoided.
-    assert len(line[len("Dialogue: "):].split(",")) > len(EVENT_FIELD_NAMES)
+    assert len(line[len("Dialogue: ") :].split(",")) > len(EVENT_FIELD_NAMES)
 
 
 def test_the_event_field_order_is_the_one_the_format_line_declares():
     line = dialogue(
-        "TEXT", style="Hook", start="0:00:01.00", end="0:00:02.00",
-        layer=1, name="who", margin_l=1, margin_r=2, margin_v=3, effect="fx",
+        "TEXT",
+        style="Hook",
+        start="0:00:01.00",
+        end="0:00:02.00",
+        layer=1,
+        name="who",
+        margin_l=1,
+        margin_r=2,
+        margin_v=3,
+        effect="fx",
     )
-    fields = line[len("Dialogue: "):].split(",", len(EVENT_FIELD_NAMES) - 1)
-    assert dict(zip(EVENT_FIELD_NAMES, fields)) == {
-        "Layer": "1", "Start": "0:00:01.00", "End": "0:00:02.00",
-        "Style": "Hook", "Name": "who",
-        "MarginL": "1", "MarginR": "2", "MarginV": "3",
-        "Effect": "fx", "Text": "TEXT",
+    fields = line[len("Dialogue: ") :].split(",", len(EVENT_FIELD_NAMES) - 1)
+    assert dict(zip(EVENT_FIELD_NAMES, fields, strict=False)) == {
+        "Layer": "1",
+        "Start": "0:00:01.00",
+        "End": "0:00:02.00",
+        "Style": "Hook",
+        "Name": "who",
+        "MarginL": "1",
+        "MarginR": "2",
+        "MarginV": "3",
+        "Effect": "fx",
+        "Text": "TEXT",
     }
 
 
@@ -183,9 +211,11 @@ def test_dialogue_does_not_escape_its_text():
 # The header                                                                    #
 # --------------------------------------------------------------------------- #
 
+
 def test_the_header_declares_both_formats_and_carries_every_style():
     out = header(
-        play_res_x=1080, play_res_y=1920,
+        play_res_x=1080,
+        play_res_y=1920,
         styles=(a_style().serialise(), a_style(name="Hook").serialise()),
     )
     lines = out.splitlines()
@@ -217,6 +247,7 @@ def test_the_header_passes_a_shaping_scripts_wrap_style_through():
 # The documented non-behaviour                                                  #
 # --------------------------------------------------------------------------- #
 
+
 def test_serialise_does_not_coerce():
     """Pinned because it is a deliberate omission, not an oversight.
 
@@ -226,7 +257,7 @@ def test_serialise_does_not_coerce():
     caller's bug to see; libass reads `"96.0"` as malformed and falls back to a default.
     """
     line = a_style(fontsize=96.0, outline=4.5).serialise()
-    fields = line[len("Style: "):].split(",")
+    fields = line[len("Style: ") :].split(",")
     assert fields[STYLE_FIELD_NAMES.index("Fontsize")] == "96.0"
     assert fields[STYLE_FIELD_NAMES.index("Outline")] == "4.5"
 
@@ -234,22 +265,34 @@ def test_serialise_does_not_coerce():
 def test_the_defaults_are_the_legacy_karaoke_look():
     """So a partially specified style reproduces the v0.8.0 look, not libass' own defaults."""
     defaults = {
-        f.name: f.default for f in dataclasses.fields(AssStyle)
+        f.name: f.default
+        for f in dataclasses.fields(AssStyle)
         if f.default is not dataclasses.MISSING
     }
     assert defaults == {
-        "bold": -1, "italic": 0, "underline": 0, "strike_out": 0,
-        "scale_x": 100, "scale_y": 100, "spacing": 0, "angle": 0,
-        "border_style": 1, "outline": 2, "shadow": 1,
-        "alignment": 2, "margin_l": 80, "margin_r": 80, "margin_v": 200,
+        "bold": -1,
+        "italic": 0,
+        "underline": 0,
+        "strike_out": 0,
+        "scale_x": 100,
+        "scale_y": 100,
+        "spacing": 0,
+        "angle": 0,
+        "border_style": 1,
+        "outline": 2,
+        "shadow": 1,
+        "alignment": 2,
+        "margin_l": 80,
+        "margin_r": 80,
+        "margin_v": 200,
         "encoding": 1,
     }
-
 
 
 # --------------------------------------------------------------------------- #
 # Override spans                                                                #
 # --------------------------------------------------------------------------- #
+
 
 def test_the_shared_animations_are_the_intersection_of_the_two_vocabularies():
     """So a style added to one vocabulary and not the other cannot silently join the shared set.
@@ -264,7 +307,9 @@ def test_the_shared_animations_are_the_intersection_of_the_two_vocabularies():
     assert SHARED_ANIMATIONS == VALID_ANIMATIONS & set(KINETIC_STYLES)
     # The three the engine keeps to itself.
     assert set(KINETIC_STYLES) - SHARED_ANIMATIONS == {
-        "bounce", "highlight_sweep", "slide_up",
+        "bounce",
+        "highlight_sweep",
+        "slide_up",
     }
 
 
@@ -340,11 +385,12 @@ def test_typewriter_is_the_alpha_gate_at_the_typewriter_ramp():
 
 def test_emphasis_wraps_the_span_and_closes_both_attributes():
     out = emphasis_span(
-        "INNER", primary="&H00FFFFFF", highlight="&H0000E5FF", scale_pct=118,
+        "INNER",
+        primary="&H00FFFFFF",
+        highlight="&H0000E5FF",
+        scale_pct=118,
     )
-    assert out == (
-        r"{\c&H0000E5FF&\fscx118\fscy118}INNER{\c&H00FFFFFF&\fscx100\fscy100}"
-    )
+    assert out == (r"{\c&H0000E5FF&\fscx118\fscy118}INNER{\c&H00FFFFFF&\fscx100\fscy100}")
     # The documented contract: emphasis only *wraps* the span a plain word would produce.
     assert "INNER" in out
 

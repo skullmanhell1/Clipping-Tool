@@ -54,9 +54,10 @@ import math
 import os
 import struct
 import subprocess
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence, cast
+from typing import Any, Protocol, cast
 
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -385,16 +386,16 @@ class Stem_Options:
       picks", and it is preserved verbatim through the round-trip.
     """
 
-    mix_preset: str = _MIX_PRESET_DEFAULT       # one of MIX_PRESET_CHOICES
-    gain_vocals: float = GAIN_DEFAULT           # [GAIN_MIN, GAIN_MAX]
+    mix_preset: str = _MIX_PRESET_DEFAULT  # one of MIX_PRESET_CHOICES
+    gain_vocals: float = GAIN_DEFAULT  # [GAIN_MIN, GAIN_MAX]
     gain_music: float = GAIN_DEFAULT
     gain_other: float = GAIN_DEFAULT
-    repair_mode: str = _REPAIR_MODE_DEFAULT     # one of REPAIR_MODES
-    repair_window_ms: int = WINDOW_DEFAULT_MS   # [WINDOW_MIN_MS, WINDOW_MAX_MS]
+    repair_mode: str = _REPAIR_MODE_DEFAULT  # one of REPAIR_MODES
+    repair_window_ms: int = WINDOW_DEFAULT_MS  # [WINDOW_MIN_MS, WINDOW_MAX_MS]
     declick: bool = False
-    backend: str = _BACKEND_DEFAULT             # one of BACKEND_IDS
+    backend: str = _BACKEND_DEFAULT  # one of BACKEND_IDS
     model: str = _MODEL_DEFAULT
-    retain_stems: bool = False                  # durable per-stem WAVs (Req 11.3)
+    retain_stems: bool = False  # durable per-stem WAVs (Req 11.3)
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -450,7 +451,7 @@ class Stem_Options:
         return {key: record[key] for key in sorted(record)}
 
     @classmethod
-    def parse(cls, data: Mapping[str, Any] | None) -> "Stem_Options":
+    def parse(cls, data: Mapping[str, Any] | None) -> Stem_Options:
         """Total parser: never raises, ignores unknown keys (Req 9.5, 18.5).
 
         Named keys only — the mapping is read field by field, so any key that is not a
@@ -476,7 +477,7 @@ class Stem_Options:
     # -- projection from ProcessingOptions (task 4.3) -----------------------
 
     @classmethod
-    def from_processing_options(cls, options: Any) -> "Stem_Options":
+    def from_processing_options(cls, options: Any) -> Stem_Options:
         """Project Processing_Options onto Stem_Options (Req 1.3, 9.6, 20.2).
 
         Reads the ``stem_*`` attributes off ``options`` — already normalised by
@@ -676,9 +677,9 @@ class Repair_Window:
     tuple, which is what makes two equal plans serialise identically.
     """
 
-    start: float = 0.0                    # clip-relative seconds, sample-snapped
-    end: float = 0.0                      # clip-relative seconds, ``>= start``
-    seams: tuple[float, ...] = ()         # the Seam(s) merged into this window (Req 7.7)
+    start: float = 0.0  # clip-relative seconds, sample-snapped
+    end: float = 0.0  # clip-relative seconds, ``>= start``
+    seams: tuple[float, ...] = ()  # the Seam(s) merged into this window (Req 7.7)
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -755,21 +756,21 @@ class Stem_Plan:
     one of them is not a decision.
     """
 
-    backend: str                                     # "ml" | "ffmpeg" (Req 10.7)
-    model: str                                       # resolved model name (Req 10.7)
-    gains: dict[str, float]                          # keyed by STEM_NAMES, sorted
-    active_stems: tuple[str, ...]                     # gain > 0.0 only (Req 5.7)
-    repair_mode: str                                 # resolved, post-downgrade
-    repair_window_ms: int                            # [WINDOW_MIN_MS, WINDOW_MAX_MS]
-    seams: tuple[float, ...]                         # normalised, in-bounds (Req 6.6)
-    windows: tuple[Repair_Window, ...]               # sorted, disjoint (Req 6.8)
+    backend: str  # "ml" | "ffmpeg" (Req 10.7)
+    model: str  # resolved model name (Req 10.7)
+    gains: dict[str, float]  # keyed by STEM_NAMES, sorted
+    active_stems: tuple[str, ...]  # gain > 0.0 only (Req 5.7)
+    repair_mode: str  # resolved, post-downgrade
+    repair_window_ms: int  # [WINDOW_MIN_MS, WINDOW_MAX_MS]
+    seams: tuple[float, ...]  # normalised, in-bounds (Req 6.6)
+    windows: tuple[Repair_Window, ...]  # sorted, disjoint (Req 6.8)
     sample_rate: int
     channels: int
     duration: float
     declick: bool
-    needs_separation: bool                           # gain != 1.0 or spectral repair
+    needs_separation: bool  # gain != 1.0 or spectral repair
     missing_capabilities: tuple[str, ...]
-    downgraded_from: str = ""                        # "spectral" when rung 9 fired
+    downgraded_from: str = ""  # "spectral" when rung 9 fired
     bridged_windows: int = 0
     notched_windows: int = 0
 
@@ -888,7 +889,6 @@ class Stem_Plan:
         return {key: record[key] for key in sorted(record)}
 
 
-
 # --------------------------------------------------------------------------- #
 # The pure planner (tasks 5.1-5.5)                                            #
 # --------------------------------------------------------------------------- #
@@ -941,7 +941,7 @@ def resolve_gains(opts: Stem_Options) -> dict[str, float]:
         _MIX_PRESET_DEFAULT,
     )
     bundle = MIX_PRESETS.get(preset)
-    if bundle is None:                       # "custom" — the individual fields
+    if bundle is None:  # "custom" — the individual fields
         bundle = {
             "music": getattr(opts, "gain_music", GAIN_DEFAULT),
             "other": getattr(opts, "gain_other", GAIN_DEFAULT),
@@ -982,15 +982,15 @@ def parse_seam_notes(notes: Sequence[str], duration: float) -> list[float]:
     for note in notes:
         if not isinstance(note, str) or not note.startswith(SEAM_NOTE_PREFIX):
             continue
-        text = note[len(SEAM_NOTE_PREFIX):].strip()
+        text = note[len(SEAM_NOTE_PREFIX) :].strip()
         try:
             value = float(text)
         except (TypeError, ValueError):
-            continue                          # malformed payload (Req 6.5)
+            continue  # malformed payload (Req 6.5)
         if not math.isfinite(value):
-            continue                          # "nan"/"inf" spelled as a float literal
+            continue  # "nan"/"inf" spelled as a float literal
         if value < 0.0 or value > limit:
-            continue                          # out of bounds for this clip (Req 6.6)
+            continue  # out of bounds for this clip (Req 6.6)
         seams.add(value)
     return sorted(seams)
 
@@ -1036,13 +1036,14 @@ def repair_windows(
 
     time_base = tb if isinstance(tb, Time_Base) else Time_Base()
     half = coerce_int(window_ms, WINDOW_DEFAULT_MS, lo=WINDOW_MIN_MS, hi=WINDOW_MAX_MS)
-    half_s = half / 2000.0                     # milliseconds -> seconds, symmetric
+    half_s = half / 2000.0  # milliseconds -> seconds, symmetric
 
     def _snap(value: float) -> float:
         """Clamp into ``[0, duration]``, then snap to the nearest sample boundary."""
         bounded = min(max(value, 0.0), limit)
-        return min(max(time_base.sample_to_seconds(
-            time_base.seconds_to_sample(bounded)), 0.0), limit)
+        return min(
+            max(time_base.sample_to_seconds(time_base.seconds_to_sample(bounded)), 0.0), limit
+        )
 
     records = [
         {"start": _snap(seam - half_s), "end": _snap(seam + half_s)}
@@ -1055,12 +1056,9 @@ def repair_windows(
     windows: list[Repair_Window] = []
     for segment in merged:
         held = tuple(
-            seam for seam in ordered
-            if segment.start - tolerance <= seam <= segment.end + tolerance
+            seam for seam in ordered if segment.start - tolerance <= seam <= segment.end + tolerance
         )
-        windows.append(
-            Repair_Window(start=segment.start, end=segment.end, seams=held)
-        )
+        windows.append(Repair_Window(start=segment.start, end=segment.end, seams=held))
     return windows
 
 
@@ -1128,14 +1126,16 @@ def resolve_backend(
 
     Pure: the only outside contact is the injected report (see the epic note above).
     """
-    requested = coerce_choice(getattr(opts, "backend", _BACKEND_DEFAULT), BACKEND_IDS,
-                              _BACKEND_DEFAULT)
+    requested = coerce_choice(
+        getattr(opts, "backend", _BACKEND_DEFAULT), BACKEND_IDS, _BACKEND_DEFAULT
+    )
     if not coerce_bool(needs_separation, False) or requested == "ffmpeg":
         return "ffmpeg", ()
 
     required = ("python_pkg:demucs", "model:" + resolve_model(opts))
     missing = tuple(
-        capability_id for capability_id in required
+        capability_id
+        for capability_id in required
         if not _capability_available(caps, capability_id)
     )
     if missing:
@@ -1231,9 +1231,7 @@ def plan_stems(
     seams = parse_seam_notes(notes, limit)
     windows: tuple[Repair_Window, ...] = ()
     if repair_mode != "off":
-        windows = tuple(
-            repair_windows(seams, options.repair_window_ms, limit, time_base)
-        )
+        windows = tuple(repair_windows(seams, options.repair_window_ms, limit, time_base))
 
     if repair_mode == "spectral":
         bridged = min(len(windows), MAX_BRIDGE_WINDOWS)
@@ -1357,7 +1355,6 @@ def plan_is_noop(plan: Stem_Plan) -> bool:
     if getattr(plan, "repair_mode", "") != "off":
         return False
     return all(_coerce_gain(gains[name]) == GAIN_DEFAULT for name in STEM_NAMES)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1655,13 +1652,24 @@ def _silence_command(dest: Path, fmt: Audio_Format, duration: float) -> list[str
     channels = max(int(fmt.channels), 1)
     layout = "mono" if channels == 1 else "stereo"
     return [
-        _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi",
-        "-i", f"anullsrc=channel_layout={layout}:sample_rate={int(fmt.sample_rate)}",
-        "-t", f"{max(coerce_float(duration, 0.0), 0.0):.6f}",
-        "-c:a", "pcm_s16le",
-        "-ar", str(int(fmt.sample_rate)),
-        "-ac", str(channels),
+        _ffmpeg_binary(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anullsrc=channel_layout={layout}:sample_rate={int(fmt.sample_rate)}",
+        "-t",
+        f"{max(coerce_float(duration, 0.0), 0.0):.6f}",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        str(int(fmt.sample_rate)),
+        "-ac",
+        str(channels),
         str(dest),
     ]
 
@@ -1685,10 +1693,14 @@ def _sum_command(sources: Sequence[Path], dest: Path, fmt: Audio_Format) -> list
     argv += [
         "-filter_complex",
         f"{labels}amix=inputs={len(sources)}:normalize=0:dropout_transition=0[sum]",
-        "-map", "[sum]",
-        "-c:a", "pcm_s16le",
-        "-ar", str(int(fmt.sample_rate)),
-        "-ac", str(max(int(fmt.channels), 1)),
+        "-map",
+        "[sum]",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        str(int(fmt.sample_rate)),
+        "-ac",
+        str(max(int(fmt.channels), 1)),
         str(dest),
     ]
     return argv
@@ -1749,9 +1761,9 @@ def assemble_stem_set(
     for backend_stem in sorted(str(key) for key in source):
         target = STEM_MAPPING.get(backend_stem)
         if target is None and backend_stem in STEM_NAMES:
-            target = backend_stem              # identity fallback (see STEM_MAPPING)
+            target = backend_stem  # identity fallback (see STEM_MAPPING)
         if target is None:
-            continue                           # unknown name contributes to nothing
+            continue  # unknown name contributes to nothing
         path = source.get(backend_stem)
         if path is None:
             continue
@@ -1782,7 +1794,6 @@ def assemble_stem_set(
         stem_set[name] = resolved_path
 
     return stem_set, tuple(details)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -1865,13 +1876,13 @@ def _write_pcm_wav(dest: Path, payload: bytes, fmt: Audio_Format) -> Path:
         handle.write(
             struct.pack(
                 "<IHHIIHH",
-                16,                              # fmt chunk size
-                1,                               # WAVE_FORMAT_PCM
+                16,  # fmt chunk size
+                1,  # WAVE_FORMAT_PCM
                 channels,
                 rate,
-                rate * block_align,              # byte rate
+                rate * block_align,  # byte rate
                 block_align,
-                _SAMPLE_WIDTH * 8,               # bits per sample
+                _SAMPLE_WIDTH * 8,  # bits per sample
             )
         )
         handle.write(b"data")
@@ -1958,11 +1969,11 @@ def _pin_torch(torch: Any, seed: int) -> None:
     entirely, and refusing to run on those would be a worse trade than losing the last
     increment of determinism, so the failure is swallowed.
     """
-    torch.set_num_threads(ML_THREAD_COUNT)              # pinned (Req 10.3)
+    torch.set_num_threads(ML_THREAD_COUNT)  # pinned (Req 10.3)
     torch.set_grad_enabled(False)
-    torch.manual_seed(int(seed) & 0xFFFFFFFF)           # seeded (Req 10.2, 10.3)
+    torch.manual_seed(int(seed) & 0xFFFFFFFF)  # seeded (Req 10.2, 10.3)
     try:
-        torch.use_deterministic_algorithms(True)        # best effort
+        torch.use_deterministic_algorithms(True)  # best effort
     except Exception:
         pass
 
@@ -2077,9 +2088,7 @@ class ML_Separator_Backend:
         destination = Path(str(dest_dir))
         written: dict[str, Path] = {}
         for name in sorted(separated):
-            written[name] = _write_pcm_wav(
-                destination / f"{name}.wav", separated[name], fmt
-            )
+            written[name] = _write_pcm_wav(destination / f"{name}.wav", separated[name], fmt)
         return written
 
     # -- inference ----------------------------------------------------------
@@ -2117,9 +2126,9 @@ class ML_Separator_Backend:
             channels = max(int(fmt.channels), 1)
             flat = numpy.frombuffer(frames, dtype="<i2").astype("float32") / _FULL_SCALE
             usable = (flat.size // channels) * channels
-            planar = flat[:usable].reshape(-1, channels).T          # (channels, samples)
+            planar = flat[:usable].reshape(-1, channels).T  # (channels, samples)
 
-            model = get_model(name=str(checkpoint))                 # local path ONLY
+            model = get_model(name=str(checkpoint))  # local path ONLY
             model.cpu().eval()
             batch = torch.from_numpy(numpy.ascontiguousarray(planar)).unsqueeze(0)
             stacked = apply_model(model, batch, device="cpu", progress=False)[0]
@@ -2129,7 +2138,7 @@ class ML_Separator_Backend:
 
         out: dict[str, bytes] = {}
         for index, name in enumerate(names):
-            channel_first = stacked[index].numpy()                  # (channels, samples)
+            channel_first = stacked[index].numpy()  # (channels, samples)
             interleaved = channel_first.T.reshape(-1)
             clamped = numpy.clip(interleaved, -1.0, 1.0 - 1.0 / _FULL_SCALE)
             out[str(name)] = (clamped * _FULL_SCALE).astype("<i2").tobytes()
@@ -2205,11 +2214,7 @@ class Ffmpeg_Separator_Backend:
         * the vocal chain is labelled once and split, rather than labelled ``[voc]`` and
           then re-split, which is the same graph with one fewer label.
         """
-        mid = (
-            "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,"
-            if max(int(channels), 1) > 1
-            else ""
-        )
+        mid = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1," if max(int(channels), 1) > 1 else ""
         return (
             "[0:a]asplit=2[x1][x2];"
             f"[x1]{mid}highpass=f={_SPEECH_HIGHPASS_HZ},"
@@ -2232,14 +2237,27 @@ class Ffmpeg_Separator_Backend:
         channels = max(int(fmt.channels), 1)
         rate = str(int(fmt.sample_rate))
         argv = [
-            _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-i", str(source),
-            "-filter_complex", self.build_graph(channels),
+            _ffmpeg_binary(),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-filter_complex",
+            self.build_graph(channels),
         ]
         for label, dest in (("[voc_out]", vocals), ("[mus]", music)):
             argv += [
-                "-map", label,
-                "-c:a", "pcm_s16le", "-ar", rate, "-ac", str(channels),
+                "-map",
+                label,
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                rate,
+                "-ac",
+                str(channels),
                 str(dest),
             ]
         return argv
@@ -2266,9 +2284,7 @@ class Ffmpeg_Separator_Backend:
             worker.ffmpeg_utils.FFmpegError: the invocation failed (via :func:`_run`).
         """
         if not isinstance(fmt, Audio_Format):
-            raise Invalid_Audio_Format(
-                "Ffmpeg_Separator_Backend requires a probed Audio_Format"
-            )
+            raise Invalid_Audio_Format("Ffmpeg_Separator_Backend requires a probed Audio_Format")
         destination = Path(str(dest_dir))
         vocals = _prepared(destination / "vocals.wav")
         music = _prepared(destination / "music.wav")
@@ -2292,7 +2308,7 @@ def _default_runner() -> Command_Runner:
     than as a bare ``CalledProcessError``.
     """
 
-    def run(argv: Sequence[str], timeout_s: float) -> "subprocess.CompletedProcess":
+    def run(argv: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess:
         return subprocess.run(
             list(argv),
             check=False,
@@ -2302,7 +2318,6 @@ def _default_runner() -> Command_Runner:
         )
 
     return run
-
 
 
 # --------------------------------------------------------------------------- #
@@ -2397,15 +2412,18 @@ def probe_audio_format(
         worker.ffmpeg_utils.FFmpegError: the invocation itself failed (via :func:`_run`).
     """
     argv = [
-        _ffprobe_binary(), "-v", "error",
-        "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate,channels,codec_name,start_time",
-        "-of", "json",
+        _ffprobe_binary(),
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=sample_rate,channels,codec_name,start_time",
+        "-of",
+        "json",
         str(path),
     ]
-    completed = _run(
-        runner if runner is not None else _default_runner(), argv, timeout_s
-    )
+    completed = _run(runner if runner is not None else _default_runner(), argv, timeout_s)
 
     raw = getattr(completed, "stdout", "") or ""
     if isinstance(raw, bytes):
@@ -2417,7 +2435,7 @@ def probe_audio_format(
 
     streams = payload.get("streams") if isinstance(payload, Mapping) else None
     if not isinstance(streams, Sequence) or not streams:
-        return None                      # no audio stream (Req 4.8)
+        return None  # no audio stream (Req 4.8)
     stream = streams[0]
     if not isinstance(stream, Mapping):
         return None
@@ -2496,13 +2514,25 @@ def extract_command(clip: Any, dest: Path, fmt: Audio_Format) -> list[str]:
     :func:`_verify_stem_file` check has something exact to compare against (Req 4.6).
     """
     return [
-        _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(clip),
-        "-vn", "-map", "0:a:0",
-        "-c:a", "pcm_s16le",
-        "-ar", str(int(fmt.sample_rate)),
-        "-ac", str(max(int(fmt.channels), 1)),
-        "-f", "wav",
+        _ffmpeg_binary(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(clip),
+        "-vn",
+        "-map",
+        "0:a:0",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        str(int(fmt.sample_rate)),
+        "-ac",
+        str(max(int(fmt.channels), 1)),
+        "-f",
+        "wav",
         str(dest),
     ]
 
@@ -2634,16 +2664,11 @@ def resolve_peak_guard(
     """
     source: Mapping[str, Any] = gains if isinstance(gains, Mapping) else {}
     resolved = {
-        name: _coerce_gain(source[name]) if name in source else GAIN_DEFAULT
-        for name in STEM_NAMES
+        name: _coerce_gain(source[name]) if name in source else GAIN_DEFAULT for name in STEM_NAMES
     }
-    if alimiter_available or not any(
-        value > GAIN_DEFAULT for value in resolved.values()
-    ):
+    if alimiter_available or not any(value > GAIN_DEFAULT for value in resolved.values()):
         return resolved, ()
-    clamped = {
-        name: min(value, GAIN_DEFAULT) for name, value in resolved.items()
-    }
+    clamped = {name: min(value, GAIN_DEFAULT) for name, value in resolved.items()}
     return clamped, (f"degraded:{ALIMITER_CAPABILITY}",)
 
 
@@ -2703,7 +2728,7 @@ def build_mix_graph(
     for name in STEM_NAMES:
         gain = _coerce_gain(bundle.get(name, GAIN_DEFAULT))
         if gain <= GAIN_MIN:
-            continue                      # muted: not an input at all (Req 5.7)
+            continue  # muted: not an input at all (Req 5.7)
         path = stem_set.get(name) if isinstance(stem_set, Mapping) else None
         if path is None:
             continue
@@ -2731,7 +2756,7 @@ def build_mix_graph(
             label = f"g_{name}"
             parts.append(f"[{index}:a]{','.join(chain)}[{label}]")
         else:
-            label = f"{index}:a"        # nothing to do: feed the input straight through
+            label = f"{index}:a"  # nothing to do: feed the input straight through
         labels.append(label)
 
     if not labels:
@@ -2749,9 +2774,7 @@ def build_mix_graph(
         current = labels[0]
     else:
         joined = "".join(f"[{label}]" for label in labels)
-        parts.append(
-            f"{joined}amix=inputs={len(labels)}:normalize=0:dropout_transition=0[mix]"
-        )
+        parts.append(f"{joined}amix=inputs={len(labels)}:normalize=0:dropout_transition=0[mix]")
         current = "mix"
 
     tail: list[str] = []
@@ -2760,8 +2783,7 @@ def build_mix_graph(
     if plan.declick and plan.duration > 2 * _DECLICK_S:
         tail.append(f"afade=t=in:st=0:d={_fixed(_DECLICK_S)}")
         tail.append(
-            f"afade=t=out:st={_fixed(plan.duration - _DECLICK_S)}"
-            f":d={_fixed(_DECLICK_S)}"
+            f"afade=t=out:st={_fixed(plan.duration - _DECLICK_S)}" f":d={_fixed(_DECLICK_S)}"
         )
     if alimiter:
         tail.append(f"alimiter=limit={_ALIMITER_LIMIT}:level=disabled")
@@ -2795,11 +2817,16 @@ def mix_command(
     for path in inputs:
         argv += ["-i", str(path)]
     argv += [
-        "-filter_complex", graph,
-        "-map", f"[{out_label}]",
-        "-c:a", "pcm_s16le",
-        "-ar", str(int(plan.sample_rate)),
-        "-ac", str(max(int(plan.channels), 1)),
+        "-filter_complex",
+        graph,
+        "-map",
+        f"[{out_label}]",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        str(int(plan.sample_rate)),
+        "-ac",
+        str(max(int(plan.channels), 1)),
         str(dest),
     ]
     return argv
@@ -2838,7 +2865,6 @@ def render_mix(
         timeout_s,
     )
     return target, details
-
 
 
 # --------------------------------------------------------------------------- #
@@ -2896,9 +2922,7 @@ def partition_bridge_windows(
     return tuple(bridged), tuple(notched)
 
 
-def build_bridge_graph(
-    bridged: Sequence[Repair_Window], duration: float
-) -> tuple[str, str]:
+def build_bridge_graph(bridged: Sequence[Repair_Window], duration: float) -> tuple[str, str]:
     """The duration-exact ``acrossfade`` + ``concat`` bridge graph (Req 7.3, 7.9).
 
     Returns ``(filter_complex, out_label)``. Pure.
@@ -2972,8 +2996,7 @@ def build_bridge_graph(
 
     tail = f"k{count}"
     parts.append(
-        f"[{sources[pick]}]atrim=start={_fixed(cursor)}:end={_fixed(limit)},"
-        f"{_ASETPTS}[{tail}]"
+        f"[{sources[pick]}]atrim=start={_fixed(cursor)}:end={_fixed(limit)}," f"{_ASETPTS}[{tail}]"
     )
     order.append(tail)
 
@@ -3022,13 +3045,24 @@ def bridge_music_stem(
     graph, out_label = build_bridge_graph(bridged, duration)
     target = _prepared(Path(str(dest)))
     argv = [
-        _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(source),
-        "-filter_complex", graph,
-        "-map", f"[{out_label}]",
-        "-c:a", "pcm_s16le",
-        "-ar", str(int(fmt.sample_rate)),
-        "-ac", str(max(int(fmt.channels), 1)),
+        _ffmpeg_binary(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-filter_complex",
+        graph,
+        "-map",
+        f"[{out_label}]",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        str(int(fmt.sample_rate)),
+        "-ac",
+        str(max(int(fmt.channels), 1)),
         str(target),
     ]
     _run(runner if runner is not None else _default_runner(), argv, timeout_s)
@@ -3094,18 +3128,34 @@ def remux_command(
     offset = coerce_float(getattr(fmt, "start_time", 0.0), 0.0)
     bound = coerce_float(duration, 0.0)
     argv = [
-        _ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(clip),
+        _ffmpeg_binary(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(clip),
     ]
     if offset:
         argv += ["-itsoffset", _fixed(offset)]
     argv += [
-        "-i", str(mixed),
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", remux_codec(fmt), "-b:a", _REMUX_BITRATE,
-        "-ar", str(int(fmt.sample_rate)),
-        "-ac", str(max(int(fmt.channels), 1)),
+        "-i",
+        str(mixed),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        remux_codec(fmt),
+        "-b:a",
+        _REMUX_BITRATE,
+        "-ar",
+        str(int(fmt.sample_rate)),
+        "-ac",
+        str(max(int(fmt.channels), 1)),
     ]
     if bound > 0.0:
         argv += ["-t", _fixed(bound)]
@@ -3142,7 +3192,6 @@ def remux_replacement(
         timeout_s,
     )
     return target
-
 
 
 # --------------------------------------------------------------------------- #
@@ -3206,7 +3255,9 @@ def _stream_duration(stream: Mapping[str, Any], fallback: float) -> float:
     return coerce_float(value, fallback)
 
 
-def probe_media(path: Any, runner: Any = None, timeout_s: float = MIN_STEP_TIMEOUT_S) -> Media_Probe:
+def probe_media(
+    path: Any, runner: Any = None, timeout_s: float = MIN_STEP_TIMEOUT_S
+) -> Media_Probe:
     """Probe **every** stream of ``path`` for the integrity comparison (Req 17.1-17.4).
 
     An ``ffprobe``, not a media pass. Unlike :func:`probe_audio_format` this selects no
@@ -3221,14 +3272,16 @@ def probe_media(path: Any, runner: Any = None, timeout_s: float = MIN_STEP_TIMEO
     ``failed``.
     """
     argv = [
-        _ffprobe_binary(), "-v", "error",
-        "-show_streams", "-show_format",
-        "-of", "json",
+        _ffprobe_binary(),
+        "-v",
+        "error",
+        "-show_streams",
+        "-show_format",
+        "-of",
+        "json",
         str(path),
     ]
-    completed = _run(
-        runner if runner is not None else _default_runner(), argv, timeout_s
-    )
+    completed = _run(runner if runner is not None else _default_runner(), argv, timeout_s)
 
     raw = getattr(completed, "stdout", "") or ""
     if isinstance(raw, bytes):
@@ -3258,18 +3311,12 @@ def probe_media(path: Any, runner: Any = None, timeout_s: float = MIN_STEP_TIMEO
     return Media_Probe(
         audio_streams=len(audio),
         video_streams=len(video),
-        audio_duration=(
-            _stream_duration(first_audio, container_duration) if audio else 0.0
-        ),
-        video_duration=(
-            _stream_duration(first_video, container_duration) if video else 0.0
-        ),
+        audio_duration=(_stream_duration(first_audio, container_duration) if audio else 0.0),
+        video_duration=(_stream_duration(first_video, container_duration) if video else 0.0),
         video_frames=coerce_int(first_video.get("nb_frames"), 0, lo=0),
         sample_rate=coerce_int(first_audio.get("sample_rate"), 0, lo=0),
         channels=coerce_int(first_audio.get("channels"), 0, lo=0),
-        audio_start_time=(
-            0.0 if start in (None, "N/A", "") else coerce_float(start, 0.0)
-        ),
+        audio_start_time=(0.0 if start in (None, "N/A", "") else coerce_float(start, 0.0)),
     )
 
 
@@ -3341,8 +3388,7 @@ def verify_replacement(
         )
     if produced.channels != int(fmt.channels):
         raise Integrity_Error(
-            f"Replacement_Media has {produced.channels} channels, "
-            f"expected {int(fmt.channels)}"
+            f"Replacement_Media has {produced.channels} channels, " f"expected {int(fmt.channels)}"
         )
 
     # 3. Audio duration, within one audio frame (Req 17.1).
@@ -3368,8 +3414,7 @@ def verify_replacement(
     if produced.video_frames and original.video_frames:
         if produced.video_frames != original.video_frames:
             raise Integrity_Error(
-                f"video frame count changed: {produced.video_frames} vs "
-                f"{original.video_frames}"
+                f"video frame count changed: {produced.video_frames} vs " f"{original.video_frames}"
             )
 
     # 5. A/V alignment (Req 17.4).
@@ -3381,7 +3426,6 @@ def verify_replacement(
         )
 
     return produced
-
 
 
 # --------------------------------------------------------------------------- #
@@ -3450,12 +3494,12 @@ class Stem_Inpainting_Engine(AV_Engine):
     optional_capabilities = (
         "python_pkg:demucs",
         "model:htdemucs",
-        "ffmpeg_filter:acrossfade",    # spectral music bridging
-        "ffmpeg_filter:afade",         # declick at clip head/tail
-        "ffmpeg_filter:pan",           # ffmpeg-backend mid extraction
-        "ffmpeg_filter:highpass",      # ffmpeg-backend speech band
-        "ffmpeg_filter:lowpass",       # ffmpeg-backend speech band
-        "ffmpeg_filter:alimiter",      # optional soft peak guard
+        "ffmpeg_filter:acrossfade",  # spectral music bridging
+        "ffmpeg_filter:afade",  # declick at clip head/tail
+        "ffmpeg_filter:pan",  # ffmpeg-backend mid extraction
+        "ffmpeg_filter:highpass",  # ffmpeg-backend speech band
+        "ffmpeg_filter:lowpass",  # ffmpeg-backend speech band
+        "ffmpeg_filter:alimiter",  # optional soft peak guard
     )
     requires_network = False
     requires_model_download = True
@@ -3602,9 +3646,7 @@ class Stem_Inpainting_Engine(AV_Engine):
         if bool(getattr(ctx, "permissibility", False)) and bool(
             getattr(backend, "requires_network", False)
         ):
-            return self._result(
-                Engine_Status.DEGRADED, plan, ["permissibility_blocked"]
-            )
+            return self._result(Engine_Status.DEGRADED, plan, ["permissibility_blocked"])
 
         # --- rung 6: not enough budget to finish at all -------------------
         # Repair plus remux is the minimum that could still produce media; below it there is
@@ -3614,26 +3656,18 @@ class Stem_Inpainting_Engine(AV_Engine):
 
         # --- rungs 4 and 5: the audio format ------------------------------
         try:
-            fmt = self._prober_for(ctx)(
-                ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S)
-            )
+            fmt = self._prober_for(ctx)(ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S))
         except Invalid_Audio_Format:
-            return self._result(
-                Engine_Status.DEGRADED, plan, ["degraded:audio_format"]
-            )
+            return self._result(Engine_Status.DEGRADED, plan, ["degraded:audio_format"])
         except subprocess.TimeoutExpired as exc:
-            return self._result(
-                Engine_Status.DEGRADED, plan, ["timeout"], detail=str(exc)
-            )
+            return self._result(Engine_Status.DEGRADED, plan, ["timeout"], detail=str(exc))
         except FFmpegError as exc:
             # Rung 13 reaches the probe too: ``ffprobe`` is an ffmpeg invocation, and one
             # that will not run is a failure rather than a degradation — we have no format,
             # so there is nothing to fall back *to*. Without this the exception escaped to
             # the host, which would still have reported ``failed`` but with the traceback of
             # an apparently-unhandled error rather than a named rung.
-            return self._result(
-                Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
-            )
+            return self._result(Engine_Status.FAILED, plan, ["failed"], detail=str(exc))
         if fmt is None:
             # No audio stream at all. Not a degradation and **not marked**: there was
             # nothing to repair, so reporting one would be noise (Req 4.8).
@@ -3663,9 +3697,7 @@ class Stem_Inpainting_Engine(AV_Engine):
         # --- rung 10: a filter the resolved path cannot do without --------
         missing_filter = self._missing_filter(caps, plan)
         if missing_filter is not None:
-            return self._result(
-                Engine_Status.DEGRADED, plan, [f"unavailable:{missing_filter}"]
-            )
+            return self._result(Engine_Status.DEGRADED, plan, [f"unavailable:{missing_filter}"])
 
         return self._execute(ctx, plan, options, fmt, backend, runner, caps)
 
@@ -3725,9 +3757,7 @@ class Stem_Inpainting_Engine(AV_Engine):
             # become a named rung like any other invocation, not escape to the host as an
             # apparently-unhandled error. Placing it above the try is a mistake the ladder
             # tests catch immediately.
-            baseline = probe_media(
-                ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S)
-            )
+            baseline = probe_media(ctx.clip_path, runner, step_timeout(ctx, EXTRACT_RESERVE_S))
 
             # ---- media pass 1: extract ----------------------------------
             extracted = extract_clip_audio(
@@ -3760,9 +3790,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                 # extracted audio is the single mix input (Req 13.4).
                 stem_set = {"vocals": extracted}
             else:
-                need = SEPARATION_MIN_S.get(
-                    plan.backend, SEPARATION_MIN_S["ffmpeg"]
-                )
+                need = SEPARATION_MIN_S.get(plan.backend, SEPARATION_MIN_S["ffmpeg"])
                 if step_remaining(ctx) < need + REPAIR_MIN_S + REMUX_MIN_S:
                     # ---- rung 7: separation unaffordable ----------------
                     # Degraded_With_Media: fall back to repairing the un-separated audio,
@@ -3790,9 +3818,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                         # reason to run, and they are exactly what this rung gives up. Return
                         # without media rather than spend a remux producing an identical clip.
                         self._discard(created)
-                        return self._result(
-                            Engine_Status.DEGRADED, plan, ["degraded:budget"]
-                        )
+                        return self._result(Engine_Status.DEGRADED, plan, ["degraded:budget"])
                     stem_set = {"vocals": extracted}
                 else:
                     # ---- rung 8: the backend actually used --------------
@@ -3892,9 +3918,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                 )
             except Integrity_Error as exc:
                 self._discard(created)
-                return self._result(
-                    Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
-                )
+                return self._result(Engine_Status.FAILED, plan, ["failed"], detail=str(exc))
 
         except subprocess.TimeoutExpired as exc:
             # ---- rung 11 (raised form) ---------------------------------
@@ -3915,16 +3939,16 @@ class Stem_Inpainting_Engine(AV_Engine):
             # invocation. Nothing usable was produced, so no media and the clip keeps the
             # preceding stage's file.
             self._discard(created)
-            return self._result(
-                Engine_Status.FAILED, plan, ["failed"], detail=str(exc)
-            )
+            return self._result(Engine_Status.FAILED, plan, ["failed"], detail=str(exc))
 
         # ---- workspace lifecycle (tasks 15.1, 15.2) --------------------
         artifacts = self._declare_artifacts(workspace, candidate, stem_set, options)
         cleanup_details = self._reclaim(
-            created, keep={Path(str(candidate)), *(
-                Path(str(item.path)) for item in artifacts if item.durable
-            )}
+            created,
+            keep={
+                Path(str(candidate)),
+                *(Path(str(item.path)) for item in artifacts if item.durable),
+            },
         )
         details.extend(cleanup_details)
 
@@ -3935,9 +3959,7 @@ class Stem_Inpainting_Engine(AV_Engine):
         if plan.windows:
             details.append(f"repair:{plan.repair_mode}:{len(plan.windows)}")
 
-        degraded = any(
-            item.startswith(("degraded:", "unavailable:")) for item in details
-        )
+        degraded = any(item.startswith(("degraded:", "unavailable:")) for item in details)
         return self._result(
             Engine_Status.DEGRADED if degraded else Engine_Status.APPLIED,
             plan,
@@ -4007,9 +4029,7 @@ class Stem_Inpainting_Engine(AV_Engine):
         artifacts: list[Any] = []
         try:
             artifacts.append(
-                workspace.artifact(
-                    Path(str(candidate)).name, media_type="video", durable=False
-                )
+                workspace.artifact(Path(str(candidate)).name, media_type="video", durable=False)
             )
             if options.retain_stems:
                 for name in STEM_NAMES:

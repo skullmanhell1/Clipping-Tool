@@ -94,8 +94,13 @@ def build_case(name: str, monkeypatch, tmp_path: Path) -> str:
         template, position = rest.split("/")
         stub_fonts(monkeypatch)
         dest = captions.build_ass(
-            cues(), tmp_path / "out.ass", video_width=1080, video_height=1920,
-            template=template, position=position, hook_text="WAIT FOR IT",
+            cues(),
+            tmp_path / "out.ass",
+            video_width=1080,
+            video_height=1920,
+            template=template,
+            position=position,
+            hook_text="WAIT FOR IT",
         )
         return dest.read_text(encoding="utf-8")
 
@@ -103,9 +108,14 @@ def build_case(name: str, monkeypatch, tmp_path: Path) -> str:
         preset_name, position = rest.split("/")
         stub_fonts(monkeypatch)
         dest = captions.build_ass(
-            cues(), tmp_path / "out.ass", video_width=1080, video_height=1920,
-            position=position, hook_text="WAIT FOR IT",
-            preset=BUILTIN_PRESETS[preset_name], keyword_indices={2},
+            cues(),
+            tmp_path / "out.ass",
+            video_width=1080,
+            video_height=1920,
+            position=position,
+            hook_text="WAIT FOR IT",
+            preset=BUILTIN_PRESETS[preset_name],
+            keyword_indices={2},
             clip_duration=2.5,
         )
         return dest.read_text(encoding="utf-8")
@@ -114,8 +124,12 @@ def build_case(name: str, monkeypatch, tmp_path: Path) -> str:
         stub_fonts(monkeypatch, substitute="Liberation Sans")
         notes: list[str] = []
         dest = captions.build_ass(
-            cues(), tmp_path / "out.ass", position="bottom", hook_text="WAIT",
-            preset=BUILTIN_PRESETS[rest], notes=notes,
+            cues(),
+            tmp_path / "out.ass",
+            position="bottom",
+            hook_text="WAIT",
+            preset=BUILTIN_PRESETS[rest],
+            notes=notes,
         )
         # The note is part of the observable output: it is what tells an operator which font a
         # clip was actually rendered in.
@@ -124,8 +138,12 @@ def build_case(name: str, monkeypatch, tmp_path: Path) -> str:
     if kind == "end_card":
         stub_fonts(monkeypatch)
         dest = captions.write_end_card_ass(
-            tmp_path / "card.ass", 20.0, video_width=1080, video_height=1920,
-            text="FOLLOW FOR MORE", seconds=float(rest),
+            tmp_path / "card.ass",
+            20.0,
+            video_width=1080,
+            video_height=1920,
+            text="FOLLOW FOR MORE",
+            seconds=float(rest),
         )
         if dest is None:
             return "# write_end_card_ass returned None\n"
@@ -140,7 +158,9 @@ def build_case(name: str, monkeypatch, tmp_path: Path) -> str:
         # `_fallback_style_line` and `_hook_style_line`'s default bold. Built by emptying a real
         # plan rather than by hand, so this case cannot drift out of the plan's own shape.
         plan = dataclasses.replace(
-            _kinetic_plan("karaoke", "karaoke_fill"), style_line="", hook_style="",
+            _kinetic_plan("karaoke", "karaoke_fill"),
+            style_line="",
+            hook_style="",
         )
         return kinetic.emit_ass(plan)
 
@@ -155,12 +175,18 @@ def _kinetic_plan(preset_name: str, style: str) -> kinetic.Kinetic_Plan:
     do not need :func:`stub_fonts`.
     """
     return kinetic.plan_kinetic(
-        [FakeWord(0.2, 0.6, "This"), FakeWord(0.7, 1.1, "is"),
-         FakeWord(1.2, 1.6, "fire"), FakeWord(1.7, 2.2, "money")],
+        [
+            FakeWord(0.2, 0.6, "This"),
+            FakeWord(0.7, 1.1, "is"),
+            FakeWord(1.2, 1.6, "fire"),
+            FakeWord(1.7, 2.2, "money"),
+        ],
         2.5,
         Time_Base(fps=30.0),
         kinetic.Kinetic_Options(
-            style=style, preset_name=preset_name, hook_enabled=True,
+            style=style,
+            preset_name=preset_name,
+            hook_enabled=True,
             preset_font=BUILTIN_PRESETS[preset_name].font,
         ),
         BUILTIN_PRESETS[preset_name].font,
@@ -232,11 +258,13 @@ def test_the_document_is_unchanged(name, golden, monkeypatch, tmp_path):
         # Line-by-line so a failure names the field that moved instead of dumping two documents.
         produced_lines = produced.splitlines()
         expected_lines = expected.splitlines()
-        for index, (got, want) in enumerate(zip(produced_lines, expected_lines), start=1):
+        for index, (got, want) in enumerate(
+            zip(produced_lines, expected_lines, strict=False), start=1
+        ):
             assert got == want, f"{name}: line {index} changed\n  was:  {want}\n  now:  {got}"
-        assert len(produced_lines) == len(expected_lines), (
-            f"{name}: line count changed from {len(expected_lines)} to {len(produced_lines)}"
-        )
+        assert len(produced_lines) == len(
+            expected_lines
+        ), f"{name}: line count changed from {len(expected_lines)} to {len(produced_lines)}"
         raise AssertionError(f"{name}: document differs only in trailing whitespace")
 
 
@@ -252,7 +280,7 @@ def test_every_line_carries_the_field_count_its_format_declares(name, monkeypatc
     document = build_case(name, monkeypatch, tmp_path)
     for line in document.splitlines():
         if line.startswith("Style: "):
-            fields = line[len("Style: "):].split(",")
+            fields = line[len("Style: ") :].split(",")
             assert len(fields) == STYLE_FIELDS, (
                 f"{name}: Style line has {len(fields)} fields, "
                 f"the Format: line declares {STYLE_FIELDS}\n  {line}"
@@ -260,7 +288,7 @@ def test_every_line_carries_the_field_count_its_format_declares(name, monkeypatc
         elif line.startswith("Dialogue: "):
             # Exactly nine commas before the text, which may itself contain commas (a
             # `\move(x,y,x,y,t)` tag has four), so this splits with a bound rather than fully.
-            fields = line[len("Dialogue: "):].split(",", EVENT_FIELDS - 1)
+            fields = line[len("Dialogue: ") :].split(",", EVENT_FIELDS - 1)
             assert len(fields) == EVENT_FIELDS, (
                 f"{name}: Dialogue line has {len(fields)} fields, "
                 f"the Format: line declares {EVENT_FIELDS}\n  {line}"
@@ -272,15 +300,16 @@ def test_every_dialogue_names_a_declared_style(name, monkeypatch, tmp_path):
     """An event naming an undeclared style renders in libass' built-in default, silently."""
     document = build_case(name, monkeypatch, tmp_path)
     declared = {
-        line[len("Style: "):].split(",")[0]
-        for line in document.splitlines() if line.startswith("Style: ")
+        line[len("Style: ") :].split(",")[0]
+        for line in document.splitlines()
+        if line.startswith("Style: ")
     }
     for line in document.splitlines():
         if line.startswith("Dialogue: "):
-            style = line[len("Dialogue: "):].split(",")[3]
-            assert style in declared, (
-                f"{name}: event names style {style!r}, which is not in {sorted(declared)}"
-            )
+            style = line[len("Dialogue: ") :].split(",")[3]
+            assert (
+                style in declared
+            ), f"{name}: event names style {style!r}, which is not in {sorted(declared)}"
 
 
 @pytest.mark.parametrize("name", CONFIGURATIONS)
@@ -290,7 +319,7 @@ def test_every_override_block_is_balanced(name, monkeypatch, tmp_path):
     for line in document.splitlines():
         if not line.startswith("Dialogue: "):
             continue
-        text = line[len("Dialogue: "):].split(",", EVENT_FIELDS - 1)[-1]
+        text = line[len("Dialogue: ") :].split(",", EVENT_FIELDS - 1)[-1]
         depth = 0
         for char in text:
             if char == "{":
@@ -306,8 +335,7 @@ def test_the_golden_file_covers_every_configuration(golden):
     """So a case cannot be added to the matrix and silently never checked."""
     missing = sorted(set(CONFIGURATIONS) - set(golden))
     assert not missing, (
-        f"{missing} have no frozen document. Generate with "
-        "`python scripts/freeze_ass_styles.py`"
+        f"{missing} have no frozen document. Generate with " "`python scripts/freeze_ass_styles.py`"
     )
     stale = sorted(set(golden) - set(CONFIGURATIONS))
     assert not stale, (

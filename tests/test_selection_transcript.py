@@ -98,7 +98,7 @@ def test_s7_an_unanswered_question_scores_below_a_passage_with_no_structure_at_a
 
 
 def test_s7_a_trailing_conversational_tag_is_not_an_unanswered_question():
-    """"..., you know?" ends thousands of ordinary sentences.
+    """ "..., you know?" ends thousands of ordinary sentences.
 
     Treating it as an opened-and-unclosed loop would penalise normal conversational speech
     everywhere it appears, which is most speech.
@@ -110,7 +110,7 @@ def test_s7_a_trailing_conversational_tag_is_not_an_unanswered_question():
 
 
 def test_s7_a_sentence_that_is_nothing_but_a_tag_asks_nothing():
-    """"Right?" and "Does that make sense?" are check-ins, not opened loops.
+    """ "Right?" and "Does that make sense?" are check-ins, not opened loops.
 
     A question mark is the only thing separating these from a statement, and an unanswered
     question is the lowest-scoring shape here - so reading them literally applies a penalty to
@@ -203,9 +203,10 @@ def test_s8_is_a_density_so_padding_a_passage_cannot_raise_its_intensity():
     """
     core = "That was absolutely insane."
     padding = " We then walked to the car and drove home along the usual road." * 6
-    assert discourse.emotional_intensity(core).score > discourse.emotional_intensity(
-        core + padding
-    ).score
+    assert (
+        discourse.emotional_intensity(core).score
+        > discourse.emotional_intensity(core + padding).score
+    )
 
 
 def test_s8_intensity_is_lexical_and_therefore_independent_of_loudness():
@@ -221,7 +222,7 @@ def test_s8_intensity_is_lexical_and_therefore_independent_of_loudness():
 
 
 def test_s8_a_strong_word_counts_for_more_than_a_merely_emphatic_one():
-    """"Devastating" and "massive" are not the same measurement.
+    """ "Devastating" and "massive" are not the same measurement.
 
     The two lists exist because grouping by strength is the only defensible resolution on a
     vocabulary this short - but a grouping that does not affect the score is two lists pretending
@@ -251,9 +252,12 @@ def test_s8_score_is_bounded_even_for_wall_to_wall_superlatives():
 
 
 def test_s12_a_complete_thought_scores_the_maximum():
-    assert discourse.standalone_completeness(
-        "The reason nobody noticed is that the logs were being written to a deleted file."
-    ).score == 1.0
+    assert (
+        discourse.standalone_completeness(
+            "The reason nobody noticed is that the logs were being written to a deleted file."
+        ).score
+        == 1.0
+    )
 
 
 def test_s12_penalties_are_ordered_back_reference_worst_then_conjunction_then_demonstrative():
@@ -323,7 +327,7 @@ def test_annotation_attaches_all_three_signals_without_touching_the_score():
 
 
 def test_annotation_leaves_a_textless_candidate_unmeasured_rather_than_average():
-    """"Not measured" has to stay distinguishable from "measured as average".
+    """ "Not measured" has to stay distinguishable from "measured as average".
 
     Filling in 0.5 would make a clip over music indistinguishable from one whose text was
     measured and found unremarkable - and the ranker's own default already handles the former.
@@ -337,7 +341,7 @@ def test_annotation_survives_a_candidate_with_no_features_dict():
     class Bare:
         text = "Why did it fail? The disk filled up overnight."
 
-    discourse.annotate_candidates([Bare()])       # must not raise
+    discourse.annotate_candidates([Bare()])  # must not raise
 
 
 def test_ranking_uses_the_three_new_signals():
@@ -348,9 +352,11 @@ def test_ranking_uses_the_three_new_signals():
     """
     good = Cand(0.0, 30.0, text="x")
     poor = Cand(0.0, 30.0, text="x")
-    good.features.update(discourse.describe(
-        "Why did the whole thing collapse? Because absolutely nobody was watching the queue."
-    ))
+    good.features.update(
+        discourse.describe(
+            "Why did the whole thing collapse? Because absolutely nobody was watching the queue."
+        )
+    )
     poor.features.update(discourse.describe("and then it was completely, you know, like the"))
 
     ranked_good = candidate_ranking.score_candidate(good, target=30.0, min_len=10.0, max_len=60.0)
@@ -362,14 +368,16 @@ def test_unmeasured_text_signals_default_to_neutral_not_to_zero():
     """A source with no usable text must not rank below one that was measurable and bad."""
     unmeasured = Cand(0.0, 30.0)
     measured_badly = Cand(0.0, 30.0)
-    measured_badly.features.update({
-        "structure_score": 0.25, "standalone_score": 0.1, "intensity_score": 0.2,
-    })
+    measured_badly.features.update(
+        {
+            "structure_score": 0.25,
+            "standalone_score": 0.1,
+            "intensity_score": 0.2,
+        }
+    )
     assert candidate_ranking.score_candidate(
         unmeasured, target=30.0, min_len=10.0, max_len=60.0
-    ) > candidate_ranking.score_candidate(
-        measured_badly, target=30.0, min_len=10.0, max_len=60.0
-    )
+    ) > candidate_ranking.score_candidate(measured_badly, target=30.0, min_len=10.0, max_len=60.0)
 
 
 def test_prompt_note_describes_only_departures():
@@ -388,9 +396,12 @@ def test_prompt_note_describes_only_departures():
 
 def test_prompt_note_uses_words_not_numbers():
     """A raw score invites the model to invent a formula from a scale it cannot calibrate."""
-    note = discourse.prompt_note(
-        "Here's why that is absolutely insane: nobody ever checked the backups."
-    ) or ""
+    note = (
+        discourse.prompt_note(
+            "Here's why that is absolutely insane: nobody ever checked the backups."
+        )
+        or ""
+    )
     assert note
     assert not any(char.isdigit() for char in note)
 
@@ -499,12 +510,13 @@ def test_t9_han_script_yields_no_language_because_it_cannot_be_narrowed():
 
 
 def test_t9_latin_script_languages_are_separated_by_function_words():
-    assert language.detect(
-        "the whole thing is that you was never going to see it with the others"
-    ).language == "en"
-    assert language.detect(
-        "der die das und ist nicht ein eine mit auch der"
-    ).language == "de"
+    assert (
+        language.detect(
+            "the whole thing is that you was never going to see it with the others"
+        ).language
+        == "en"
+    )
+    assert language.detect("der die das und ist nicht ein eine mit auch der").language == "de"
 
 
 def test_t9_a_short_latin_passage_gets_no_reading_rather_than_a_guess():
@@ -590,6 +602,7 @@ def test_t9_code_switching_accepts_a_generator():
     Given a generator, a second walk over an exhausted iterator reports no switches at all,
     which looks exactly like "this content isn't bilingual".
     """
+
     def gen():
         yield Seg(0.0, 3.0, "the whole thing is that you was never going to see it with them")
         yield Seg(3.0, 6.0, "and the other one is that this was the best of the two options")
@@ -615,8 +628,8 @@ def _highlight_words():
     """A cue whose most *salient* mapped word is not the one the caption highlights."""
     return [
         W(0.0, 0.4, "the"),
-        W(0.4, 1.2, "money"),          # mapped, and the stronger salience candidate
-        W(1.2, 2.0, "fire"),           # mapped, but this is the highlighted one
+        W(0.4, 1.2, "money"),  # mapped, and the stronger salience candidate
+        W(1.2, 2.0, "fire"),  # mapped, but this is the highlighted one
     ]
 
 
@@ -631,9 +644,7 @@ def test_c19_a_highlighted_word_outranks_a_more_salient_unhighlighted_one():
     """
     words = _highlight_words()
     unconstrained = emoji.plan_emoji(words, duration=8.0, intensity="subtle")
-    steered = emoji.plan_emoji(
-        words, duration=8.0, intensity="subtle", keyword_indices={2}
-    )
+    steered = emoji.plan_emoji(words, duration=8.0, intensity="subtle", keyword_indices={2})
     assert len(unconstrained) == 1 and len(steered) == 1
     assert steered[0].start == pytest.approx(1.2)
     assert steered[0].char != unconstrained[0].char
@@ -721,8 +732,13 @@ def test_c19_spread_and_caption_placement_produce_different_overlay_geometry(tmp
         cues, "v0", "vout", duration=8.0, resolver=resolver, placement="spread"
     )
     _in_b, graph_caption = emoji.build_overlay(
-        cues, "v0", "vout", duration=8.0, resolver=resolver,
-        placement="caption", caption_position="bottom",
+        cues,
+        "v0",
+        "vout",
+        duration=8.0,
+        resolver=resolver,
+        placement="caption",
+        caption_position="bottom",
     )
     assert graph_spread and graph_caption
     assert graph_spread != graph_caption
@@ -796,9 +812,21 @@ def test_t10_two_subtitle_tracks_are_muxed_with_distinct_language_labels(tmp_pat
     fu.mux_subtitle_tracks(src, [(es, "spa"), (en, "eng")], out)
 
     langs = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "s",
-         "-show_entries", "stream_tags=language", "-of", "csv=p=0", str(out)],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream_tags=language",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.split()
     assert langs == ["spa", "eng"]
 
@@ -819,9 +847,22 @@ def test_t10_the_original_language_track_comes_first_so_a_player_defaults_to_it(
     out = tmp_path / "two.mp4"
     fu.mux_subtitle_tracks(src, [(es, "spa"), (en, "eng")], out)
     first = subprocess.run(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(out),
-         "-map", "0:s:0", "-f", "srt", "-"],
-        check=True, capture_output=True, text=True,
+        [
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(out),
+            "-map",
+            "0:s:0",
+            "-f",
+            "srt",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     assert "hola mundo" in first
 
@@ -840,9 +881,24 @@ def test_t10_muxing_two_tracks_still_does_not_re_encode_the_video(tmp_path, make
 
     def video_md5(path):
         return subprocess.run(
-            [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(path),
-             "-map", "0:v", "-c", "copy", "-f", "md5", "-"],
-            check=True, capture_output=True, text=True,
+            [
+                FFMPEG,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:v",
+                "-c",
+                "copy",
+                "-f",
+                "md5",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
 
     assert video_md5(out) == video_md5(src)
@@ -862,16 +918,27 @@ def test_t10_a_track_with_no_language_is_labelled_und(tmp_path, make_video):
         out = tmp_path / f"one_{index}.mp4"
         fu.mux_subtitle_tracks(src, [(srt, value)], out)
         langs = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "s",
-             "-show_entries", "stream_tags=language", "-of", "csv=p=0", str(out)],
-            check=True, capture_output=True, text=True,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream_tags=language",
+                "-of",
+                "csv=p=0",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         assert langs == "und", (value, langs)
 
 
 def test_t10_is_off_by_default_because_it_costs_a_second_asr_pass():
     assert settings.subtitle_translation is False
-
 
 
 # --------------------------------------------------------------------------- #
@@ -918,16 +985,13 @@ def test_t10_the_original_language_captions_survive_the_translation(
     src = make_video("es.mp4", duration=4.0, w=640, h=360)
     monkeypatch.setattr(pl, "transcribe", _spanish_and_english_transcribers())
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="el mundo entero")],
     )
 
-    opts = options_all_off(
-        captions=False, metadata=False, aspect="9:16", subtitle_sidecar=True
-    )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16", subtitle_sidecar=True)
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     stem = (tmp_path / "clips" / clips[0].filename).with_suffix("")
     original = stem.with_name(f"{stem.name}.srt").read_text(encoding="utf-8")
@@ -952,19 +1016,30 @@ def test_t10_the_translation_arrives_as_a_second_selectable_track(
     src = make_video("es2.mp4", duration=4.0, w=640, h=360)
     monkeypatch.setattr(pl, "transcribe", _spanish_and_english_transcribers())
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="el mundo entero")],
     )
 
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     out = tmp_path / "clips" / clips[0].filename
     langs = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "s",
-         "-show_entries", "stream_tags=language", "-of", "csv=p=0", str(out)],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream_tags=language",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.split()
     # Source language first, then the translation - and the source track labelled `spa`, not the
     # fixed `eng` the single-track path used to hard-code.
@@ -994,22 +1069,25 @@ def test_t10_an_english_source_is_skipped_rather_than_translated_into_itself(
         calls.append(translate)
         return Transcript(
             language="en",
-            segments=[TranscriptSegment(
-                0.0, 4.0, "hello there friend",
-                [Word(0.3, 0.8, "hello"), Word(0.9, 1.5, "there")],
-            )],
+            segments=[
+                TranscriptSegment(
+                    0.0,
+                    4.0,
+                    "hello there friend",
+                    [Word(0.3, 0.8, "hello"), Word(0.9, 1.5, "there")],
+                )
+            ],
         )
 
     monkeypatch.setattr(pl, "transcribe", _transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="hello there")],
     )
 
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert calls == [False]
     assert "subtitle_translation:skipped_english" in clips[0].effects_applied
 
@@ -1033,24 +1111,25 @@ def test_t10_a_translated_main_pass_is_not_translated_a_second_time(
         calls.append(translate)
         return Transcript(
             language="es",
-            segments=[TranscriptSegment(
-                0.0, 4.0, "the whole world",
-                [Word(0.3, 0.8, "the"), Word(0.9, 1.5, "whole")],
-            )],
+            segments=[
+                TranscriptSegment(
+                    0.0,
+                    4.0,
+                    "the whole world",
+                    [Word(0.3, 0.8, "the"), Word(0.9, 1.5, "whole")],
+                )
+            ],
         )
 
     monkeypatch.setattr(pl, "transcribe", _transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="the whole world")],
     )
 
-    opts = options_all_off(
-        captions=False, metadata=False, aspect="9:16", translate=True
-    )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16", translate=True)
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert calls == [True]
     assert "subtitle_translation:skipped_already_translated" in clips[0].effects_applied
 
@@ -1075,22 +1154,25 @@ def test_t10_a_failed_translation_pass_does_not_cost_the_job(make_video, tmp_pat
             raise RuntimeError("model weights missing")
         return Transcript(
             language="es",
-            segments=[TranscriptSegment(
-                0.0, 4.0, "el mundo entero",
-                [Word(0.3, 0.8, "el"), Word(0.9, 1.5, "mundo")],
-            )],
+            segments=[
+                TranscriptSegment(
+                    0.0,
+                    4.0,
+                    "el mundo entero",
+                    [Word(0.3, 0.8, "el"), Word(0.9, 1.5, "mundo")],
+                )
+            ],
         )
 
     monkeypatch.setattr(pl, "transcribe", _transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="el mundo entero")],
     )
 
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     assert (tmp_path / "clips" / clips[0].filename).exists()
     assert "subtitle_translation:failed" in clips[0].effects_applied
@@ -1115,21 +1197,17 @@ def test_t10_off_by_default_means_no_second_pass_and_no_extra_track(
 
     monkeypatch.setattr(pl, "transcribe", _transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="el mundo entero")],
     )
 
-    opts = options_all_off(
-        captions=False, metadata=False, aspect="9:16", subtitle_sidecar=True
-    )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    opts = options_all_off(captions=False, metadata=False, aspect="9:16", subtitle_sidecar=True)
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert calls == [False]
     assert not any("subtitle_translation" in marker for marker in clips[0].effects_applied)
     stem = (tmp_path / "clips" / clips[0].filename).with_suffix("")
     assert not stem.with_name(f"{stem.name}.en.srt").exists()
-
 
 
 @requires_ffmpeg
@@ -1157,23 +1235,23 @@ def test_t10_the_translated_track_follows_every_cut_made_to_the_timeline(
         else:
             words = [Word(0.3, 0.8, "el"), Word(0.9, 1.5, "um"), Word(1.6, 2.2, "mundo")]
             text = "el um mundo"
-        return Transcript(
-            language="es", segments=[TranscriptSegment(0.0, 4.0, text, words)]
-        )
+        return Transcript(language="es", segments=[TranscriptSegment(0.0, 4.0, text, words)])
 
     monkeypatch.setattr(pl, "transcribe", _transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=60.0, text="el um mundo")],
     )
 
     opts = options_all_off(
-        captions=False, metadata=False, aspect="9:16",
-        subtitle_sidecar=True, filler_removal=True,
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        subtitle_sidecar=True,
+        filler_removal=True,
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     stem = (tmp_path / "clips" / clips[0].filename).with_suffix("")
     original = stem.with_name(f"{stem.name}.srt").read_text(encoding="utf-8")
     translated = stem.with_name(f"{stem.name}.en.srt").read_text(encoding="utf-8")

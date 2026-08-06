@@ -60,10 +60,7 @@ export default [
       "react-hooks/exhaustive-deps": "warn",
       // An unused variable is usually a leftover or a typo'd identifier. Argument
       // patterns prefixed with _ are conventionally intentional.
-      "no-unused-vars": [
-        "error",
-        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
-      ],
+      "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   {

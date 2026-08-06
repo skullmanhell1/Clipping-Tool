@@ -40,18 +40,43 @@ from dataclasses import dataclass, fields
 #: :data:`STYLE_FORMAT` is rendered from it and :class:`AssStyle`'s fields are checked against it,
 #: so the declaration and the records can no longer disagree.
 STYLE_FIELD_NAMES: tuple[str, ...] = (
-    "Name", "Fontname", "Fontsize",
-    "PrimaryColour", "SecondaryColour", "OutlineColour", "BackColour",
-    "Bold", "Italic", "Underline", "StrikeOut",
-    "ScaleX", "ScaleY", "Spacing", "Angle",
-    "BorderStyle", "Outline", "Shadow",
-    "Alignment", "MarginL", "MarginR", "MarginV", "Encoding",
+    "Name",
+    "Fontname",
+    "Fontsize",
+    "PrimaryColour",
+    "SecondaryColour",
+    "OutlineColour",
+    "BackColour",
+    "Bold",
+    "Italic",
+    "Underline",
+    "StrikeOut",
+    "ScaleX",
+    "ScaleY",
+    "Spacing",
+    "Angle",
+    "BorderStyle",
+    "Outline",
+    "Shadow",
+    "Alignment",
+    "MarginL",
+    "MarginR",
+    "MarginV",
+    "Encoding",
 )
 
 #: The ``[Events]`` field names, in order.
 EVENT_FIELD_NAMES: tuple[str, ...] = (
-    "Layer", "Start", "End", "Style", "Name",
-    "MarginL", "MarginR", "MarginV", "Effect", "Text",
+    "Layer",
+    "Start",
+    "End",
+    "Style",
+    "Name",
+    "MarginL",
+    "MarginR",
+    "MarginV",
+    "Effect",
+    "Text",
 )
 
 #: The two ``Format:`` lines, rendered from the schemas above.
@@ -169,8 +194,18 @@ def dialogue(
     measured layout depends on.
     """
     return "Dialogue: " + ",".join(
-        str(part) for part in (
-            layer, start, end, style, name, margin_l, margin_r, margin_v, effect, text,
+        str(part)
+        for part in (
+            layer,
+            start,
+            end,
+            style,
+            name,
+            margin_l,
+            margin_r,
+            margin_v,
+            effect,
+            text,
         )
     )
 
@@ -196,21 +231,23 @@ def header(
     ``ScaledBorderAndShadow: yes`` makes outline and shadow widths scale with ``PlayRes``, so a
     preset's outline width means the same thing at 1080x1920 as at 720x1280.
     """
-    return "\n".join((
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {play_res_x}",
-        f"PlayResY: {play_res_y}",
-        f"WrapStyle: {wrap_style}",
-        "ScaledBorderAndShadow: yes",
-        "",
-        "[V4+ Styles]",
-        STYLE_FORMAT,
-        *styles,
-        "",
-        "[Events]",
-        EVENT_FORMAT,
-    ))
+    return "\n".join(
+        (
+            "[Script Info]",
+            "ScriptType: v4.00+",
+            f"PlayResX: {play_res_x}",
+            f"PlayResY: {play_res_y}",
+            f"WrapStyle: {wrap_style}",
+            "ScaledBorderAndShadow: yes",
+            "",
+            "[V4+ Styles]",
+            STYLE_FORMAT,
+            *styles,
+            "",
+            "[Events]",
+            EVENT_FORMAT,
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #

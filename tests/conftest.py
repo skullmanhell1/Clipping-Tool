@@ -4,6 +4,7 @@ Storage and the history database are redirected into a per-session temporary
 directory *before* the application settings are imported, so tests never touch
 real project storage or a developer's SQLite history file.
 """
+
 from __future__ import annotations
 
 import os
@@ -111,12 +112,24 @@ requires_ffmpeg = pytest.mark.skipif(
 )
 
 
-def _make_video(dest: Path, duration: float = 3.0, w: int = 1280, h: int = 720,
-                audio: bool = True, rate: int = 30) -> Path:
+def _make_video(
+    dest: Path,
+    duration: float = 3.0,
+    w: int = 1280,
+    h: int = 720,
+    audio: bool = True,
+    rate: int = 30,
+) -> Path:
     """Generate a small synthetic test clip with ffmpeg (testsrc + sine)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [FFMPEG, "-y", "-f", "lavfi",
-           "-i", f"testsrc=size={w}x{h}:rate={rate}:duration={duration}"]
+    cmd = [
+        FFMPEG,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=size={w}x{h}:rate={rate}:duration={duration}",
+    ]
     if audio:
         cmd += ["-f", "lavfi", "-i", f"sine=frequency=330:duration={duration}", "-shortest"]
     cmd += ["-pix_fmt", "yuv420p", "-c:v", "libx264"]
@@ -130,6 +143,7 @@ def _make_video(dest: Path, duration: float = 3.0, w: int = 1280, h: int = 720,
 @pytest.fixture
 def make_video(tmp_path):
     """Factory fixture returning ``fn(name, duration, w, h, audio) -> Path``."""
+
     def _factory(name="src.mp4", duration=3.0, w=1280, h=720, audio=True):
         return _make_video(tmp_path / name, duration, w, h, audio)
 
@@ -139,32 +153,60 @@ def make_video(tmp_path):
 def probe_duration(path) -> float:
     """Return the duration (s) of a media file via ffprobe."""
     out = subprocess.run(
-        [FFPROBE, "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
-        check=True, capture_output=True, text=True,
+        [FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     return float(out)
 
 
 def probe_size(path) -> tuple[int, int]:
     """Return the (width, height) of a video's first video stream."""
-    out = subprocess.run(
-        [FFPROBE, "-v", "error", "-select_streams", "v", "-show_entries",
-         "stream=width,height", "-of", "csv=p=0", str(path)],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip().split(",")
+    out = (
+        subprocess.run(
+            [
+                FFPROBE,
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .split(",")
+    )
     return int(out[0]), int(out[1])
 
 
 @pytest.fixture
 def png_asset(tmp_path):
     """Create a small opaque PNG (stands in for a Twemoji asset) via ffmpeg."""
+
     def _factory(name="emoji.png", color="red"):
         path = tmp_path / name
         subprocess.run(
-            [FFMPEG, "-y", "-f", "lavfi", "-i", f"color=c={color}:s=72x72:d=1,format=rgba",
-             "-frames:v", "1", str(path)],
-            check=True, capture_output=True,
+            [
+                FFMPEG,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s=72x72:d=1,format=rgba",
+                "-frames:v",
+                "1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
         )
         return path
 
@@ -179,7 +221,6 @@ class FakeWord:
         self.end = end
         self.text = text
         self.probability = 1.0
-
 
 
 # --------------------------------------------------------------------------- #

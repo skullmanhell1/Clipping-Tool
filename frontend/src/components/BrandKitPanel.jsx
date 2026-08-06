@@ -30,7 +30,9 @@ function Row({ label, hint, children }) {
     <label className="block text-xs text-slate-400">
       <span className="font-medium text-slate-300">{label}</span>
       {children}
-      {hint ? <span className="mt-1 block text-[10px] leading-snug text-slate-500">{hint}</span> : null}
+      {hint ? (
+        <span className="mt-1 block text-[10px] leading-snug text-slate-500">{hint}</span>
+      ) : null}
     </label>
   );
 }
@@ -43,8 +45,8 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
       <header className="mb-3">
         <h3 className="text-sm font-semibold text-slate-100">Brand kit</h3>
         <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-          Applied on top of whichever caption style you pick — the style decides how captions
-          move, the kit decides whose they look like. Save it as a profile to reuse it.
+          Applied on top of whichever caption style you pick — the style decides how captions move,
+          the kit decides whose they look like. Save it as a profile to reuse it.
         </p>
       </header>
 
@@ -67,7 +69,10 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
           </select>
         </Row>
 
-        <Row label="Standing call to action" hint="Also used as the end card, replacing the per-clip wording the model would otherwise invent each time.">
+        <Row
+          label="Standing call to action"
+          hint="Also used as the end card, replacing the per-clip wording the model would otherwise invent each time."
+        >
           <input
             type="text"
             value={settings.brand_cta || ""}
@@ -143,7 +148,9 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
           </select>
         </Row>
 
-        <Row label={`Logo size — ${Math.round((settings.brand_logo_scale ?? 0.16) * 100)}% of width`}>
+        <Row
+          label={`Logo size — ${Math.round((settings.brand_logo_scale ?? 0.16) * 100)}% of width`}
+        >
           <input
             type="range"
             min={0.04}

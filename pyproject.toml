@@ -91,6 +91,26 @@ disallow_untyped_defs = true
 module = ["tests.*"]
 ignore_errors = true
 
+[tool.black]
+# `black` had been a declared dev dependency since before this file existed and had never
+# run: no configuration, no CI step, 187 of 211 files unformatted. A formatter nobody runs
+# is worse than none, because it makes every diff a negotiation about whitespace.
+#
+# 100 rather than black's default 88, to match `line-length` under `[tool.ruff]` below.
+# The two have to agree or they fight: black would split a line to 88 and ruff's E501
+# would be satisfied, but any line black *joined* up to 88 that ruff wanted differently
+# would churn on every run. 100 is the width this codebase was already written to.
+line-length = 100
+target-version = ["py311"]
+# `storage` holds runtime artefacts, not source. `frontend` is JavaScript (Prettier owns it).
+extend-exclude = '''
+/(
+  | \.venv
+  | storage
+  | frontend
+)/
+'''
+
 [tool.ruff]
 # Previously there was no ruff configuration at all, so the enforced rule set was
 # whatever the installed ruff version happened to default to — 857 findings on ruff 0.16
@@ -102,11 +122,10 @@ line-length = 100
 exclude = ["frontend", ".venv", "storage"]
 
 [tool.ruff.lint]
-# Deliberately a focused set: rules that catch mistakes rather than rules that impose a
-# house style on 300 existing files. `UP` (pyupgrade, ~450 findings — mostly
-# `Optional[X]` -> `X | None`) and `B` (bugbear, ~30) are both worth adopting, but each
-# is a mechanical sweep of its own and does not belong in the same change as a set of
-# behavioural fixes.
+# Rules that catch mistakes, plus two mechanical sweeps each done in its own change:
+# `UP` (pyupgrade) and `B` (flake8-bugbear) were adopted together with `black`, separately
+# from any behavioural fix, so that a 200-file whitespace-and-annotations diff never has to
+# be read alongside a logic change.
 select = [
     "F",   # pyflakes: undefined names, unused imports/variables — real bugs
     "E4",  # import placement/shadowing
@@ -114,6 +133,8 @@ select = [
     "E9",  # syntax and IO errors
     "I",   # import sorting, so import blocks stop churning between contributors
     "S",   # bandit: security findings. Three rules are ignored below, with reasons.
+    "UP",  # pyupgrade: the target is py311, so pre-3.11 spellings are noise
+    "B",   # bugbear. B023 (closure over a loop variable) is a real bug class, not style.
 ]
 
 # Three `S` rules are switched off wholesale rather than annotated ~50 times. Each is a rule that
@@ -139,6 +160,28 @@ ignore = [
     # ~30 degradation paths at once. Deliberately deferred, not overlooked.
     "S110",
     "S112",
+    # UP042 wants `class X(str, Enum)` rewritten as `class X(StrEnum)`. **That is a behaviour
+    # change, not a modernisation**, and the rule does not say so.
+    #
+    #     class A(str, Enum): x = "ex"     ->  str(A.x) == "A.x"
+    #     class B(StrEnum):   x = "ex"     ->  str(B.x) == "ex"
+    #
+    # Verified on this interpreter (3.11.15). `f"{...}"` and `"%s" %` follow `str()`, so every log
+    # line, exception message and non-`json` string interpolation of one of these five enums would
+    # change: LLMProvider, StorageBackend, PublishState, Engine_Stage, Engine_Status. `PublishState`
+    # is the one that matters most -- it is written into publish-attempt records that already exist
+    # on disk, and `Engine_Status` appears in the marker strings tests assert on.
+    #
+    # The codebase is already explicit where it wants the value (`settings.storage_backend.value`),
+    # which is the correct spelling under either base. So there is nothing to gain and a silent
+    # output change to lose. Refused rather than deferred.
+    "UP042",
+    # B008 forbids a function call in an argument default. FastAPI's file-upload and form
+    # declarations *are* that pattern -- `files: list[UploadFile] = File(...)` is how the framework
+    # is told this parameter comes from a multipart body -- so the one occurrence
+    # (`api/routers/jobs.py`) cannot be written any other way. Scoped to nothing narrower because
+    # there is exactly one site and a per-file ignore would go stale the moment it moved.
+    "B008",
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -74,7 +74,10 @@ describe("JobCard review workflow", () => {
       Promise.resolve(clip(clipId, { review_state: state })),
     );
     vi.spyOn(api, "reviewClips").mockImplementation((_jobId, ids, state) =>
-      Promise.resolve({ updated: ids.map((id) => clip(id, { review_state: state })), count: ids.length }),
+      Promise.resolve({
+        updated: ids.map((id) => clip(id, { review_state: state })),
+        count: ids.length,
+      }),
     );
   });
 
@@ -100,9 +103,7 @@ describe("JobCard review workflow", () => {
     setup();
     await userEvent.click(screen.getByLabelText(/select clip a for batch review/i));
     await userEvent.click(screen.getByLabelText(/select clip c for batch review/i));
-    await userEvent.click(
-      screen.getByRole("button", { name: /approve selected/i }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /approve selected/i }));
     await waitFor(() => expect(api.reviewClips).toHaveBeenCalledTimes(1));
     const [, ids, state] = api.reviewClips.mock.calls[0];
     expect(ids.sort()).toEqual(["a", "c"]);
@@ -211,7 +212,9 @@ describe("JobCard keyboard shortcuts (U11)", () => {
     setup();
     expect(screen.getByTestId("clip-a").className).toMatch(/ring-brand-accent/);
     await userEvent.keyboard("j");
-    await waitFor(() => expect(screen.getByTestId("clip-b").className).toMatch(/ring-brand-accent/));
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-b").className).toMatch(/ring-brand-accent/),
+    );
     expect(screen.getByTestId("clip-a").className).not.toMatch(/ring-brand-accent/);
   });
 

@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO
 
-Data = Union[bytes, BinaryIO]
+Data = bytes | BinaryIO
 
 
 class BaseStorage(ABC):

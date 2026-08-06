@@ -69,7 +69,7 @@ def test_a_reset_does_not_leak_backwards():
 def test_cut_times_map_to_the_first_sample_after_the_cut():
     samples = [Center(0.0, 1, 1), Center(0.5, 2, 2), Center(1.0, 3, 3), Center(1.5, 4, 4)]
     assert cut_indices(samples, [0.75]) == [2]
-    assert cut_indices(samples, [0.5]) == [1]      # a cut exactly on a sample time
+    assert cut_indices(samples, [0.5]) == [1]  # a cut exactly on a sample time
 
 
 def test_cuts_outside_the_sample_range_are_ignored():
@@ -103,14 +103,36 @@ def test_scan_cuts_finds_the_cuts_in_a_real_file(tmp_path):
     src = tmp_path / "cuts.mp4"
     subprocess.run(
         [
-            settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=black:s=160x120:r=10:d=2",
-            "-f", "lavfi", "-i", "color=c=white:s=160x120:r=10:d=2",
-            "-f", "lavfi", "-i", "color=c=black:s=160x120:r=10:d=2",
-            "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]",
-            "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src), "-y",
+            settings.ffmpeg_binary,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x120:r=10:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=white:s=160x120:r=10:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x120:r=10:d=2",
+            "-filter_complex",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]",
+            "-map",
+            "[v]",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+            "-y",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     cuts = scene_detect.scan_cuts(src)
     assert cuts, "no cuts detected in a black/white/black source"
@@ -215,9 +237,7 @@ def test_an_unknown_style_falls_back_to_the_shipped_behaviour():
 # --------------------------------------------------------------------------- #
 def test_the_default_progress_bar_is_unchanged():
     made = overlays.progress_bar_filter(10.0, 1080, 1920)
-    assert made == (
-        "drawbox=x=0:y=ih-12:w='iw*t/10.000':h=12:color=0x22D3EE@0.9:t=fill"
-    )
+    assert made == ("drawbox=x=0:y=ih-12:w='iw*t/10.000':h=12:color=0x22D3EE@0.9:t=fill")
 
 
 def test_top_position_draws_at_the_top():
@@ -369,12 +389,30 @@ def test_every_background_style_renders(style, tmp_path):
     src = tmp_path / "in.mp4"
     subprocess.run(
         [
-            settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc2=s=320x240:r=10:d=1",
-            "-f", "lavfi", "-i", "sine=frequency=300:duration=1:sample_rate=48000",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src), "-y",
+            settings.ffmpeg_binary,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:r=10:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=300:duration=1:sample_rate=48000",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(src),
+            "-y",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     out = tmp_path / f"out_{style}.mp4"
     # Renders whether or not the style's optional filter exists on this host: an unavailable
@@ -397,8 +435,9 @@ def test_the_default_resolution_is_the_shipped_one():
     assert settings.output_short_side == 1080
 
 
-@pytest.mark.parametrize("short,expected", [(720, (720, 1280)), (1440, (1440, 2560)),
-                                            (2160, (2160, 3840))])
+@pytest.mark.parametrize(
+    "short,expected", [(720, (720, 1280)), (1440, (1440, 2560)), (2160, (2160, 3840))]
+)
 def test_other_resolutions_scale_the_long_side_with_the_aspect(short, expected):
     assert fu.aspect_size("9:16", short) == expected
 
@@ -532,7 +571,9 @@ def test_no_words_writes_nothing_and_does_not_raise(tmp_path):
 
 def test_an_unknown_format_is_ignored(tmp_path):
     written = subtitle_export.write_sidecars(
-        [Word(0.0, 0.4, "hi there friend")], tmp_path / "c", formats=("srt", "ass"),
+        [Word(0.0, 0.4, "hi there friend")],
+        tmp_path / "c",
+        formats=("srt", "ass"),
     )
     assert [p.suffix for p in written] == [".srt"]
 
@@ -542,11 +583,13 @@ def test_an_unknown_format_is_ignored(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_a_sharper_candidate_wins(monkeypatch, tmp_path):
     """Sharpness is the component that matters: motion blur is unrecoverable."""
+
     # The sampler has to be stubbed as well as the scorer: without it the real ffmpeg call fails
     # on a non-existent source, every candidate is skipped, and the function correctly returns
     # the fallback - so the test would pass for the wrong reason if it asserted that.
     def fake_thumbnail(source, dest, at=0.0, width=0):
         from pathlib import Path as _P
+
         _P(dest).write_bytes(b"stub")
         return dest
 
@@ -578,9 +621,7 @@ def test_the_fallback_matches_the_previous_behaviour_exactly():
     for duration in (0.5, 1.0, 1.5, 3.0, 60.0):
         expected = min(1.0, duration / 2.0)
         assert thumbnail.choose_thumbnail_time.__doc__  # sanity: it is the documented seam
-        assert thumbnail.best_thumbnail_time(
-            "x.mp4", duration, scorer=lambda p: None
-        ) == expected
+        assert thumbnail.best_thumbnail_time("x.mp4", duration, scorer=lambda p: None) == expected
 
 
 def test_the_feature_can_be_switched_off(monkeypatch):
@@ -609,11 +650,24 @@ def test_a_blurred_frame_loses_to_a_detailed_one(tmp_path):
     for dest, extra in ((sharp, "null"), (blurred, "boxblur=luma_radius=20:luma_power=2")):
         subprocess.run(
             [
-                settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", "testsrc2=s=320x240:d=1",
-                "-frames:v", "1", "-vf", extra, str(dest), "-y",
+                settings.ffmpeg_binary,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=320x240:d=1",
+                "-frames:v",
+                "1",
+                "-vf",
+                extra,
+                str(dest),
+                "-y",
             ],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         )
     sharp_score = thumbnail._score_frame(sharp)
     blurred_score = thumbnail._score_frame(blurred)
@@ -625,16 +679,30 @@ def test_a_blurred_frame_loses_to_a_detailed_one(tmp_path):
 def test_a_black_frame_loses_to_an_exposed_one(tmp_path):
     pytest.importorskip("PIL")
     made = {}
-    for name, source in (("black", "color=c=black:s=320x240:d=1"),
-                         ("white", "color=c=white:s=320x240:d=1"),
-                         ("mid", "testsrc2=s=320x240:d=1")):
+    for name, source in (
+        ("black", "color=c=black:s=320x240:d=1"),
+        ("white", "color=c=white:s=320x240:d=1"),
+        ("mid", "testsrc2=s=320x240:d=1"),
+    ):
         path = tmp_path / f"{name}.jpg"
         subprocess.run(
             [
-                settings.ffmpeg_binary, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", source, "-frames:v", "1", str(path), "-y",
+                settings.ffmpeg_binary,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                source,
+                "-frames:v",
+                "1",
+                str(path),
+                "-y",
             ],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         )
         made[name] = thumbnail._score_frame(path)
     assert made["mid"] > made["black"], made

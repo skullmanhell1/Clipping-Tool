@@ -33,9 +33,7 @@ def test_a_bare_settings_decorator_inherits_no_deadline():
 
 def test_a_settings_decorator_with_health_checks_inherits_no_deadline():
     """The other unprotected form — six tests suppress a health check only."""
-    derived = settings(
-        max_examples=100, suppress_health_check=[HealthCheck.filter_too_much]
-    )
+    derived = settings(max_examples=100, suppress_health_check=[HealthCheck.filter_too_much])
     assert derived.deadline is None
 
 
@@ -47,6 +45,4 @@ def test_an_explicit_deadline_is_still_respected():
     """
     from datetime import timedelta
 
-    assert settings(deadline=timedelta(milliseconds=500)).deadline == timedelta(
-        milliseconds=500
-    )
+    assert settings(deadline=timedelta(milliseconds=500)).deadline == timedelta(milliseconds=500)

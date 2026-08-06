@@ -45,12 +45,13 @@ def iter_api_routes(routes=None) -> list[APIRoute]:
     come through here.
     """
     out: list[APIRoute] = []
-    for route in (app.routes if routes is None else routes):
+    for route in app.routes if routes is None else routes:
         if isinstance(route, APIRoute):
             out.append(route)
         elif isinstance(route, _IncludedRouter):
             out.extend(iter_api_routes(route.original_router.routes))
     return out
+
 
 #: Committed alongside this module. Regenerated deliberately, by running
 #: ``python scripts/freeze_route_table.py`` — never from inside the test run.
@@ -130,14 +131,19 @@ def capture() -> dict:
                 "name": route.name,
                 "tags": list(route.tags),
                 "dependencies": _dependency_names(route),
-                "response_class": type(route.response_class).__name__
-                if not isinstance(route.response_class, type)
-                else route.response_class.__name__,
+                "response_class": (
+                    type(route.response_class).__name__
+                    if not isinstance(route.response_class, type)
+                    else route.response_class.__name__
+                ),
                 "status_code": route.status_code,
                 # The declared return annotation is what FastAPI builds the response model
                 # from; a lost `-> FileResponse` changes the schema and the response headers.
-                "response_model": getattr(route.response_model, "__name__", None)
-                if route.response_model is not None else None,
+                "response_model": (
+                    getattr(route.response_model, "__name__", None)
+                    if route.response_model is not None
+                    else None
+                ),
             }
 
     for route in app.routes:
@@ -147,18 +153,22 @@ def capture() -> dict:
             # Its ordering requirement - the thing that actually matters - is asserted directly.
             if route.path == "":
                 continue
-            mounts.append({
-                "path": route.path,
-                "name": route.name,
-                "app": type(route.app).__name__,
-            })
+            mounts.append(
+                {
+                    "path": route.path,
+                    "name": route.name,
+                    "app": type(route.app).__name__,
+                }
+            )
         elif isinstance(route, Route):
             # FastAPI's own /openapi.json, /docs, /redoc.
-            builtin.append({
-                "path": route.path,
-                "methods": sorted((route.methods or set()) - {"HEAD"}),
-                "name": route.name,
-            })
+            builtin.append(
+                {
+                    "path": route.path,
+                    "methods": sorted((route.methods or set()) - {"HEAD"}),
+                    "name": route.name,
+                }
+            )
 
     return {"routes": api, "mounts": mounts, "builtin": builtin}
 
@@ -180,9 +190,7 @@ def test_no_endpoint_was_added_or_removed(golden):
     captured = capture()
     added = sorted(set(captured["routes"]) - set(golden["routes"]))
     removed = sorted(set(golden["routes"]) - set(captured["routes"]))
-    assert not added and not removed, (
-        f"endpoints added: {added}\nendpoints removed: {removed}"
-    )
+    assert not added and not removed, f"endpoints added: {added}\nendpoints removed: {removed}"
 
 
 def test_every_endpoint_keeps_its_tags_dependencies_and_response_shape(golden):
@@ -250,9 +258,7 @@ def test_the_spa_is_served_exactly_once_and_last():
     job builds no frontend. Which of the two is present is not a property worth freezing - that
     *exactly one* of them is, and that the greedy one cannot shadow anything, is.
     """
-    mounts = [
-        (index, route) for index, route in enumerate(app.routes) if isinstance(route, Mount)
-    ]
+    mounts = [(index, route) for index, route in enumerate(app.routes) if isinstance(route, Mount)]
     catch_all = [(index, route) for index, route in mounts if route.path == ""]
     fallback = [route for route in iter_api_routes() if _is_spa_fallback(route)]
 
@@ -278,9 +284,7 @@ def test_every_api_route_has_exactly_one_tag():
 
     Pinned so a route added later cannot land in `main.py` by default and stay there.
     """
-    untagged = [
-        route.path for route in iter_api_routes() if len(route.tags) != 1
-    ]
+    untagged = [route.path for route in iter_api_routes() if len(route.tags) != 1]
     assert not untagged, f"routes without exactly one tag: {untagged}"
 
 
@@ -291,7 +295,6 @@ def test_no_two_routes_share_a_path_and_method():
         for method in route.methods - {"HEAD"}:
             key = (route.path, method)
             assert key not in seen, (
-                f"{method} {route.path} is registered twice: "
-                f"{seen[key]} and {route.name}"
+                f"{method} {route.path} is registered twice: " f"{seen[key]} and {route.name}"
             )
             seen[key] = route.name

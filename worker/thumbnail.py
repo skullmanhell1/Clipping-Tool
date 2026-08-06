@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Optional, Sequence
 
 from config import settings
 from worker import ffmpeg_utils as fu
@@ -51,7 +51,7 @@ CANDIDATE_FRACTIONS: tuple[float, ...] = (0.3, 0.5, 0.7)
 SCORE_WIDTH = 320
 
 
-def _score_frame(path: str | Path) -> Optional[float]:
+def _score_frame(path: str | Path) -> float | None:
     """A ``[0, 1]`` quality score for one sampled frame, or ``None`` if it cannot be read.
 
     PIL is imported lazily and its absence is not an error - it is optional throughout this
@@ -85,7 +85,7 @@ def best_thumbnail_time(
     source: str | Path,
     duration: float,
     *,
-    scorer: Callable[[str | Path], Optional[float]] = _score_frame,
+    scorer: Callable[[str | Path], float | None] = _score_frame,
     fractions: Sequence[float] = CANDIDATE_FRACTIONS,
 ) -> float:
     """The timestamp of the best-scoring candidate frame (V17).
@@ -100,7 +100,7 @@ def best_thumbnail_time(
         total = float(duration)
     except (TypeError, ValueError):
         return 0.0
-    if total != total:      # NaN
+    if total != total:  # NaN
         return 0.0
     default = min(1.0, max(0.0, total) / 2.0)
     # Below a couple of seconds the candidates land within a few frames of each other, so the
