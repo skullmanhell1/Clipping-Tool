@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 from fontconfig and no `.venv` present — the environment CI actually has, rather than a prepared
 one.
 
+
 ### Added — modern face detection and measured detection confidence
 
 - **A second face-detector backend, opt-in.** `face_detector` accepts `haar` (the shipped
