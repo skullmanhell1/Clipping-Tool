@@ -50,6 +50,30 @@ HEBREW = "\u05e9\u05dc\u05d5\u05dd \u05dc\u05db\u05d5\u05dc\u05dd"
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture
+def no_system_fonts(monkeypatch):
+    """The "nothing on this machine covers the script" case, stated rather than hoped for.
+
+    Whether a script is renderable is a property of the *host's font inventory*, not of this code.
+    Three tests below are about what ``plan_for_text`` does when nothing covers the script - step 4,
+    the point of the whole module - and they used to reach that step only because the machine they
+    were written on happened to have no Arabic font. On a host that has one they failed while the
+    code was doing exactly the right thing: the GitHub Actions runner image ships DejaVu Sans, which
+    covers both Arabic and Hebrew, so ``plan_for_text(ARABIC, "Anton")`` correctly substituted
+    ``DejaVu Sans`` via step 3 and three assertions that expected tofu blew up. A test that depends
+    on which fonts the operating system happens to install is asserting the host, not the feature.
+
+    So the precondition is imposed instead. ``_system_families_for`` is looked up as a module global
+    by both ``plan_for_text`` and ``unsupported_scripts``, so replacing it covers both. Its
+    ``lru_cache`` needs no clearing - the whole function object is swapped out, and the real one's
+    cache is left intact for the tests that want the true host answer.
+
+    The step it disables is not left untested: see
+    ``test_c21_a_system_family_is_used_when_nothing_vendored_covers_the_script``.
+    """
+    monkeypatch.setattr(ss, "_system_families_for", lambda script: ())
+
+
 def test_c21_coverage_is_read_from_the_font_not_asked_of_fontconfig():
     """``fc-match`` is a *best match*, not a coverage test - it always answers.
 
@@ -95,7 +119,9 @@ def test_c21_a_requested_font_that_covers_the_script_is_kept():
 def test_c21_a_requested_font_that_cannot_render_the_script_is_substituted():
     plan = ss.plan_for_text(DEVANAGARI, "Anton")
     assert plan.font != "Anton"
-    assert ss.font_covers(cap.FONT_MANIFEST.parent / "fonts" / _file_for(plan.font), "devanagari")
+    assert ss.font_covers(
+        cap.FONT_MANIFEST.parent / "fonts" / _file_for(plan.font), "devanagari"
+    )
     assert plan.marker.startswith("caption_font_substituted:devanagari:")
 
 
@@ -122,8 +148,7 @@ def test_c21_a_vendored_face_is_preferred_over_a_system_one():
 
     manifest = json.loads(cap.FONT_MANIFEST.read_text(encoding="utf-8"))
     expected = next(
-        entry["name"]
-        for entry in manifest["fonts"]
+        entry["name"] for entry in manifest["fonts"]
         if ss.font_covers(cap.FONT_MANIFEST.parent / "fonts" / entry["file"], "devanagari")
     )
     plan = ss.plan_for_text(DEVANAGARI, "Anton")
@@ -133,7 +158,26 @@ def test_c21_a_vendored_face_is_preferred_over_a_system_one():
     )
 
 
-def test_c21_an_unrenderable_script_is_reported_rather_than_silently_boxed():
+def test_c21_a_system_family_is_used_when_nothing_vendored_covers_the_script(monkeypatch):
+    """Step 3: a verified system family beats reporting the script as unrenderable.
+
+    This used to be exercised only by accident - on a host with an Arabic font it happened, on one
+    without it did not, and either way nothing asserted it. Now that ``no_system_fonts`` deliberately
+    switches the step off for the step-4 tests, this is what keeps it live: a substitution is
+    strictly better than tofu, so the fallback order must be "system font, *then* give up".
+    """
+    monkeypatch.setattr(ss, "_system_families_for", lambda script: ("Fake Arabic Face",))
+
+    plan = ss.plan_for_text(ARABIC, "Anton")
+    assert plan.font == "Fake Arabic Face"
+    assert plan.marker == "caption_font_substituted:arabic:Fake Arabic Face"
+    assert plan.can_render is True
+    # The script's other properties are unaffected by where the font came from.
+    assert plan.needs_shaping is True
+    assert plan.rtl is True
+
+
+def test_c21_an_unrenderable_script_is_reported_rather_than_silently_boxed(no_system_fonts):
     """The point of the whole module.
 
     Tofu is invisible to every piece of code in the pipeline. Substituting a *different* Latin face
@@ -179,7 +223,12 @@ def test_c21_hebrew_is_rtl_but_not_a_shaping_script():
     assert ss.wrap_style(plan) == 2
 
 
-def test_c21_build_ass_uses_the_planned_font_and_wrap_style(tmp_path):
+def test_c21_build_ass_uses_the_planned_font_and_wrap_style(tmp_path, no_system_fonts):
+    # The ARABIC and HAN cases below assert the *unsupported* outcome, which is only reachable when
+    # no system font covers them - hence `no_system_fonts`. Without it this asserted the runner's
+    # font inventory: DejaVu Sans covers Arabic, so `font` came back as DejaVu Sans rather than the
+    # kept-as-requested Anton. HAN passed on the same runner only because no CJK font was installed,
+    # which is the same accident waiting to happen the day one is.
     from worker.effects.caption_presets import BUILTIN_PRESETS
     from worker.transcribe import Word
 
@@ -194,10 +243,8 @@ def test_c21_build_ass_uses_the_planned_font_and_wrap_style(tmp_path):
         notes: list[str] = []
         words = [Word(i * 0.4, i * 0.4 + 0.3, w) for i, w in enumerate(text.split())]
         out = cap.build_ass(
-            [cap.Cue(0.0, 2.0, words)],
-            tmp_path / f"{abs(hash(text))}.ass",
-            preset=preset,
-            notes=notes,
+            [cap.Cue(0.0, 2.0, words)], tmp_path / f"{abs(hash(text))}.ass",
+            preset=preset, notes=notes,
         )
         body = out.read_text(encoding="utf-8")
         wrap = int(re.search(r"^WrapStyle:\s*(\d+)", body, re.M).group(1))
@@ -221,10 +268,8 @@ def test_c21_the_shared_preset_is_never_mutated(tmp_path):
     before = BUILTIN_PRESETS["hormozi"].font
     words = [Word(0.0, 0.4, w) for w in DEVANAGARI.split()]
     cap.build_ass(
-        [cap.Cue(0.0, 2.0, words)],
-        tmp_path / "x.ass",
-        preset=BUILTIN_PRESETS["hormozi"],
-        notes=[],
+        [cap.Cue(0.0, 2.0, words)], tmp_path / "x.ass",
+        preset=BUILTIN_PRESETS["hormozi"], notes=[],
     )
     assert BUILTIN_PRESETS["hormozi"].font == before
 
@@ -235,14 +280,25 @@ def test_c21_punctuation_only_text_is_not_a_script_decision():
     assert plan.marker == ""
 
 
-def test_c21_unsupported_scripts_are_enumerable_without_rendering_a_clip():
-    """ "Which scripts can this install caption?" was previously unanswerable.
+def test_c21_unsupported_scripts_are_enumerable_without_rendering_a_clip(no_system_fonts):
+    """"Which scripts can this install caption?" was previously unanswerable.
 
     The only way to find out was to render a clip and look at it.
+
+    Pinned to the *vendored* inventory via ``no_system_fonts``, because the answer is per-machine by
+    design: this repository vendors nothing for Arabic, so a minimal install cannot caption it, while
+    a host with DejaVu Sans installed can - and on the GitHub runner, which has it, the real
+    ``unsupported_scripts()`` correctly returned ``['han', 'hiragana', 'katakana', 'hangul', 'thai']``
+    with Arabic absent. What is being asserted here is that the enumeration reflects coverage at all
+    (Latin never appears, an unvendored script does), not which fonts the CI image happens to ship.
     """
     missing = ss.unsupported_scripts()
     assert "arabic" in missing
     assert "latin" not in missing
+    # Also true of the real host answer, and the invariant that actually matters: every script the
+    # vendored faces do cover is excluded, whatever the system has.
+    report = ss.coverage_report()
+    assert [script for script in missing if report[script]] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -373,10 +429,7 @@ def test_v15_is_inert_when_disabled(monkeypatch):
     """Off by default: it costs a face pass, and it changes placement on the clips it acts on."""
     assert settings.caption_avoid_faces is False
     plan = cp.plan_for_clip(
-        "unused.mp4",
-        requested="bottom",
-        frame_height=H,
-        font_size=84,
+        "unused.mp4", requested="bottom", frame_height=H, font_size=84,
         face_boxes=[Box(y=1300, h=500)],
     )
     assert plan.position == "bottom"
@@ -387,10 +440,7 @@ def test_v15_acts_when_enabled_using_boxes_the_caller_already_has(monkeypatch):
     """The reframe path detects faces anyway, so on a reframed clip this should cost nothing."""
     monkeypatch.setattr(settings, "caption_avoid_faces", True, raising=False)
     plan = cp.plan_for_clip(
-        "unused.mp4",
-        requested="bottom",
-        frame_height=H,
-        font_size=84,
+        "unused.mp4", requested="bottom", frame_height=H, font_size=84,
         face_boxes=[Box(y=1300, h=500)],
     )
     assert plan.position == "top"
@@ -407,7 +457,9 @@ def test_v15_a_failed_face_pass_captions_where_the_user_asked(monkeypatch):
     monkeypatch.setattr(
         reframe, "detect_faces", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no cv2"))
     )
-    plan = cp.plan_for_clip("unused.mp4", requested="bottom", frame_height=H, font_size=84)
+    plan = cp.plan_for_clip(
+        "unused.mp4", requested="bottom", frame_height=H, font_size=84
+    )
     assert plan.position == "bottom"
     assert plan.marker == "caption_face_detect_failed"
 
@@ -417,9 +469,8 @@ def test_v15_a_failed_face_pass_captions_where_the_user_asked(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_au9_a_pop_is_synthesised_because_a_pop_really_is_a_filtered_noise_burst(
-    tmp_path, monkeypatch
-):
+def test_au9_a_pop_is_synthesised_because_a_pop_really_is_a_filtered_noise_burst(tmp_path,
+                                                                                monkeypatch):
     """No degradation marker, because there is no degradation.
 
     This is the distinction A15 recorded for the music bed: two sine tones are not music, but a
@@ -455,19 +506,9 @@ def test_au9_a_user_file_always_wins_over_the_synthesised_version(tmp_path, monk
     directory.mkdir()
     mine = directory / "pop.wav"
     subprocess.run(
-        [
-            FFMPEG,
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=880:duration=0.1",
-            str(mine),
-        ],
-        check=True,
-        capture_output=True,
+        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "sine=frequency=880:duration=0.1", str(mine)],
+        check=True, capture_output=True,
     )
     monkeypatch.setattr(settings, "sfx_dir", directory, raising=False)
     sting, marker = sfx.resolve_sting("pop", tmp_path)
@@ -560,70 +601,26 @@ def test_au9_the_mix_graph_is_accepted_and_leaves_the_speech_level_alone(tmp_pat
     pop, _m = sfx.resolve_sting("pop", tmp_path)
     speech = tmp_path / "speech.wav"
     subprocess.run(
-        [
-            FFMPEG,
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=300:duration=6",
-            "-ar",
-            "48000",
-            "-ac",
-            "1",
-            str(speech),
-        ],
-        check=True,
-        capture_output=True,
+        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "sine=frequency=300:duration=6", "-ar", "48000", "-ac", "1", str(speech)],
+        check=True, capture_output=True,
     )
     args, graph = sfx.build_mix(
         [sfx.SfxHit(1.0, pop, "emoji"), sfx.SfxHit(4.5, pop, "emoji")],
-        "0:a",
-        "aout",
-        input_offset=1,
-        volume=0.35,
+        "0:a", "aout", input_offset=1, volume=0.35,
     )
     out = tmp_path / "mixed.wav"
     subprocess.run(
-        [
-            FFMPEG,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(speech),
-            *args,
-            "-filter_complex",
-            graph,
-            "-map",
-            "[aout]",
-            str(out),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-i", str(speech), *args,
+         "-filter_complex", graph, "-map", "[aout]", str(out)],
+        check=True, capture_output=True, text=True,
     )
 
     def rms(path, start, dur):
         proc = subprocess.run(
-            [
-                FFMPEG,
-                "-hide_banner",
-                "-nostats",
-                "-i",
-                str(path),
-                "-af",
-                f"atrim=start={start}:duration={dur},astats=metadata=1:reset=0",
-                "-f",
-                "null",
-                "-",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
+            [FFMPEG, "-hide_banner", "-nostats", "-i", str(path), "-af",
+             f"atrim=start={start}:duration={dur},astats=metadata=1:reset=0", "-f", "null", "-"],
+            capture_output=True, text=True, check=True,
         )
         return float(re.findall(r"RMS level dB:\s*(-?[\d.]+)", proc.stderr)[-1])
 
@@ -649,18 +646,9 @@ def test_o8_the_default_output_is_byte_identical_to_before():
 
     assert settings.video_encoder == "libx264"
     assert h264_args() == [
-        "-c:v",
-        "libx264",
-        "-preset",
-        str(settings.x264_preset),
-        "-crf",
-        str(settings.x264_crf),
-        "-pix_fmt",
-        "yuv420p",
-        "-profile:v",
-        "high",
-        "-level",
-        "4.0",
+        "-c:v", "libx264", "-preset", str(settings.x264_preset),
+        "-crf", str(settings.x264_crf),
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0",
     ]
 
 
@@ -689,8 +677,8 @@ def test_o8_videotoolbox_quality_is_inverted_and_rescaled():
     Passing a CRF value straight through asks for near-worst quality, and it does so silently.
     """
     vt = ve.KNOWN_ENCODERS["h264_videotoolbox"]
-    assert vt.quality_args(0) == ["-q:v", "100"]  # best CRF -> best q
-    assert vt.quality_args(51) == ["-q:v", "1"]  # worst CRF -> worst q
+    assert vt.quality_args(0) == ["-q:v", "100"]        # best CRF -> best q
+    assert vt.quality_args(51) == ["-q:v", "1"]         # worst CRF -> worst q
     best = int(vt.quality_args(10)[1])
     worst = int(vt.quality_args(40)[1])
     assert best > worst, "the mapping is not inverted"
@@ -811,24 +799,13 @@ def test_o8_the_software_argv_actually_encodes(tmp_path):
 
     out = tmp_path / "x.mp4"
     subprocess.run(
-        [
-            FFMPEG,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=320x240:rate=25:duration=0.5",
-            *h264_args(normalise_fps=True),
-            str(out),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+        [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=0.5",
+         *h264_args(normalise_fps=True), str(out)],
+        check=True, capture_output=True, text=True,
     )
     assert out.stat().st_size > 0
+
 
 
 def test_au9_the_synthesisable_flag_and_the_generator_cannot_disagree():
@@ -855,10 +832,9 @@ def test_au9_an_unrecognised_mode_behaves_as_off():
     asked for, on a setting they got slightly wrong.
     """
     for mode in ("", "on", "yes", "nonsense", "OFF"):
-        assert (
-            sfx.plan_hits(emoji_starts=[1.0, 5.0], transition_times=[0.0], duration=10.0, mode=mode)
-            == []
-        ), mode
+        assert sfx.plan_hits(
+            emoji_starts=[1.0, 5.0], transition_times=[0.0], duration=10.0, mode=mode
+        ) == [], mode
 
 
 def test_o8_the_default_reads_the_setting_rather_than_probing(monkeypatch):
