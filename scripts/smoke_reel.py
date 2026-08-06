@@ -93,6 +93,111 @@ def _synthetic_source(dest: Path, ffmpeg: str, seconds: float = 7.0) -> Path:
     return dest
 
 
+def _face_frames(dest_dir: Path, seconds: float, fps: int) -> Path:
+    """Draw a frame sequence containing a profile turn and a two-shot.
+
+    The face-detection upgrade needs a source with faces in it, and this script's docstring
+    already records why the plain test pattern is not enough: *face-tracked reframing has no
+    face to find*. Drawn rather than vendored because a photograph of a real person is a
+    licensing and privacy question a smoke reel does not need to answer.
+
+    Three acts, so the two things a better detector is supposed to fix are both on screen:
+
+    1. **frontal, drifting** -- the easy case, and the baseline both backends should manage;
+    2. **profile turn** -- the face narrows and its features slide to one side. A frontal Haar
+       cascade characteristically loses this, which is visible as the crop freezing;
+    3. **two-shot** -- two faces at once, where the interesting question is which one the crop
+       follows and whether it swaps between them.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = 1280, 720
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    total = int(seconds * fps)
+
+    def draw_face(draw, cx, cy, scale=1.0, profile=0.0):
+        """``profile`` 0 = frontal, 1 = fully turned; features slide and the oval narrows."""
+        rx = int(95 * scale * (1.0 - 0.45 * profile))
+        ry = int(125 * scale)
+        shift = int(28 * scale * profile)
+        draw.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], fill=(226, 190, 160))
+        draw.ellipse(
+            [cx - rx - 6, cy - ry - int(30 * scale), cx + rx + 6, cy - ry + int(55 * scale)],
+            fill=(60, 42, 32),
+        )
+        for offset in (-38, 38):
+            if profile > 0.75 and offset < 0:
+                continue  # the far eye disappears as the head turns
+            ex = cx + int(offset * scale * (1.0 - 0.6 * profile)) + shift
+            draw.ellipse(
+                [ex - int(16 * scale), cy - int(32 * scale),
+                 ex + int(16 * scale), cy - int(10 * scale)],
+                fill=(250, 250, 250),
+            )
+            draw.ellipse(
+                [ex - int(7 * scale), cy - int(27 * scale),
+                 ex + int(7 * scale), cy - int(13 * scale)],
+                fill=(35, 28, 24),
+            )
+            draw.rectangle(
+                [ex - int(18 * scale), cy - int(46 * scale),
+                 ex + int(18 * scale), cy - int(40 * scale)],
+                fill=(60, 42, 32),
+            )
+        nose_x = cx + shift
+        draw.polygon(
+            [(nose_x, cy - int(8 * scale)),
+             (nose_x - int(11 * scale), cy + int(26 * scale)),
+             (nose_x + int(11 * scale), cy + int(26 * scale))],
+            fill=(203, 165, 138),
+        )
+        draw.ellipse(
+            [nose_x - int(34 * scale), cy + int(45 * scale),
+             nose_x + int(34 * scale), cy + int(72 * scale)],
+            fill=(150, 70, 70),
+        )
+
+    for index in range(total):
+        t = index / fps
+        frac = t / seconds
+        image = Image.new("RGB", (width, height), (58, 74, 96))
+        draw = ImageDraw.Draw(image)
+        # A little background structure, so the crop's movement is visible on screen.
+        for gx in range(0, width, 160):
+            draw.line([(gx, 0), (gx, height)], fill=(48, 62, 82), width=2)
+
+        if frac < 0.4:                       # act 1: frontal, drifting right
+            draw_face(draw, int(380 + 340 * (frac / 0.4)), 360)
+        elif frac < 0.7:                     # act 2: profile turn
+            draw_face(draw, 760, 360, profile=(frac - 0.4) / 0.3)
+        else:                                # act 3: two-shot
+            draw_face(draw, 330, 380, scale=0.85)
+            draw_face(draw, 950, 350, scale=0.85)
+
+        image.save(dest_dir / f"f{index:05d}.png")
+    return dest_dir
+
+
+def _face_source(dest: Path, ffmpeg: str, seconds: float = 7.0, fps: int = 30) -> Path:
+    """Encode the drawn frames into a source with the same speech-shaped audio track."""
+    frames = _face_frames(dest.parent / "smoke_faces", seconds, fps)
+    gate = "+".join(
+        f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS
+    )
+    subprocess.run(
+        [
+            ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-framerate", str(fps), "-i", str(frames / "f%05d.png"),
+            "-f", "lavfi", "-i", f"sine=f=220:d={seconds}:sample_rate=48000",
+            "-af", f"volume='0.35*({gate})':eval=frame",
+            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-y", str(dest),
+        ],
+        check=True, capture_output=True, timeout=600,
+    )
+    return dest
+
+
 def _options(profile: str | None) -> ProcessingOptions:
     """Everything on: the shipped defaults, plus what they deliberately leave off.
 
@@ -142,6 +247,15 @@ def main() -> int:
         "--profile", choices=sorted(BUILTIN_PROFILES),
         help="render with a built-in profile instead of everything-on",
     )
+    parser.add_argument(
+        "--face-detector", choices=["haar", "mediapipe"], default=None,
+        help="which face detector to reframe with (default: the configured backend)",
+    )
+    parser.add_argument(
+        "--faces", action="store_true",
+        help="synthesise a source WITH faces (a profile turn and a two-shot) instead of a "
+             "plain test pattern, so face-tracked reframing has something to follow",
+    )
     args = parser.parse_args()
 
     ffmpeg = shutil.which(settings.ffmpeg_binary) or shutil.which("ffmpeg")
@@ -157,13 +271,23 @@ def main() -> int:
         if not source.exists():
             print(f"source does not exist: {source}", file=sys.stderr)
             return 1
+    elif args.faces:
+        print("no --source given; synthesising a source with faces")
+        print("  three acts: frontal drift, a profile turn, then a two-shot")
+        source = _face_source(work / "smoke_source_faces.mp4", ffmpeg)
     else:
         print("no --source given; synthesising a test pattern")
         print("  note: no face to track, and captions come from a fixed word list")
+        print("  pass --faces for a source the reframe path can actually follow")
         source = _synthetic_source(work / "smoke_source.mp4", ffmpeg)
 
     words = [_Word(text, start, end) for text, start, end in SMOKE_WORDS]
     options = _options(args.profile)
+    if args.face_detector:
+        from dataclasses import replace as _replace
+
+        options = _replace(options, face_detector=args.face_detector)
+        print(f"  face detector: {args.face_detector}")
 
     before = audio.measure_loudness(source)
     result = compositor.render_clip(

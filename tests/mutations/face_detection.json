@@ -1,0 +1,203 @@
+{
+  "_comment": [
+    "Face-detection upgrade. Spec task 7.3.",
+    "",
+    "This feature is the strongest case in the repository for mutation testing, because its",
+    "central failure mode is invisible everywhere except the pixels. If a normalised box leaks",
+    "through as pixels you get a one-pixel face at the frame origin, and nothing objects:",
+    "pick_main_face returns a centre, FaceBox validates, build_face_tracks builds tracks,",
+    "build_sendcmd clamps to a valid window, ffmpeg encodes successfully, and the clip record",
+    "says `reframe`. Every clip is cropped to the frame's left edge and the only evidence is the",
+    "output. A suite of fake detectors returning pixel tuples cannot catch that - the fakes",
+    "would be right and the real backend wrong - which is why the coordinate mutations below are",
+    "checked against tests that run the real library.",
+    "",
+    "Groups: the coordinate conversion, the marker vocabulary (where a swapped operand says the",
+    "opposite of the truth), backend resolution (where a label naming the wrong backend is how",
+    "font_substituted:Arial got frozen into a golden as correct), the coverage arithmetic, and",
+    "the wiring that carries any of it to the clip record."
+  ],
+  "command": [
+    ".venv/bin/python",
+    "-m",
+    "pytest",
+    "tests/test_face_detection.py",
+    "tests/test_face_detection_real_binary.py",
+    "tests/test_face_detection_markers.py",
+    "tests/test_effects_reframe.py",
+    "-q",
+    "-x"
+  ],
+  "mutations": [
+    {
+      "name": "return_the_box_unconverted",
+      "file": "worker/effects/reframe.py",
+      "old": "    normalised = all(abs(v) <= 1.0 for v in values)",
+      "new": "    normalised = False",
+      "why": "the central hazard: a normalised box passed through as pixels is a one-pixel face at the frame origin, and every clip is cropped to the left edge with nothing anywhere reporting a problem"
+    },
+    {
+      "name": "treat_every_box_as_normalised",
+      "file": "worker/effects/reframe.py",
+      "old": "    normalised = all(abs(v) <= 1.0 for v in values)",
+      "new": "    normalised = True",
+      "why": "the same defect from the other side - scaling an already-absolute box by the frame size sends every detection far outside it, where the clamp then collapses it"
+    },
+    {
+      "name": "drop_the_clamp",
+      "file": "worker/effects/reframe.py",
+      "old": "    fx0 = max(0.0, min(float(width), min(x0, x1)))\n    fy0 = max(0.0, min(float(height), min(y0, y1)))\n    fx1 = max(0.0, min(float(width), max(x0, x1)))\n    fy1 = max(0.0, min(float(height), max(y0, y1)))",
+      "new": "    fx0, fy0 = min(x0, x1), min(y0, y1)\n    fx1, fy1 = max(x0, x1), max(y0, y1)",
+      "why": "MediaPipe reports boxes past the frame edge for a partially visible face; unclamped they produce a crop window outside the picture"
+    },
+    {
+      "name": "test_degeneracy_before_clamping",
+      "file": "worker/effects/reframe.py",
+      "old": "    if (fx1 - fx0) < 1.0 or (fy1 - fy0) < 1.0:\n        return None",
+      "new": "    if (max(x0, x1) - min(x0, x1)) < 1.0 or (max(y0, y1) - min(y0, y1)) < 1.0:\n        return None",
+      "why": "the documented order is convert, clamp, then test: measuring before the clamp admits a box lying entirely off-frame, which is non-degenerate until it is clipped"
+    },
+    {
+      "name": "accept_sub_pixel_boxes",
+      "file": "worker/effects/reframe.py",
+      "old": "    if (fx1 - fx0) < 1.0 or (fy1 - fy0) < 1.0:",
+      "new": "    if (fx1 - fx0) < 0.0 or (fy1 - fy0) < 0.0:",
+      "why": "rounding a tenth of a pixel outward manufactures a one-pixel 'detection' out of nothing, which then anchors the crop"
+    },
+    {
+      "name": "accept_non_finite_values",
+      "file": "worker/effects/reframe.py",
+      "old": "    if not all(math.isfinite(v) for v in values):",
+      "new": "    if False:",
+      "why": "DECLARED EQUIVALENT, and understood rather than waved through. Removing the guard changes no return value, because the clamp already neutralises non-finite input by accident: every comparison against NaN is False, so min(width, nan) returns width and max(0.0, nan) returns 0.0, collapsing the box to zero extent, which the degeneracy test then rejects. +/-inf collapses the same way. There is therefore no input on which the guard is observable, and no test can be written for it. The guard is kept anyway because that neutralisation depends on the operand order of two min/max calls -- reorder the clamp and NaN reaches an ffmpeg crop argument as the literal string 'nan'. Correctness should not rest on an accident of argument order, so the check stays and this mutation is expected to escape.",
+      "equivalent": true
+    },
+    {
+      "name": "facebox_no_longer_readable",
+      "file": "worker/effects/reframe.py",
+      "old": "    if all(hasattr(item, attr) for attr in (\"x\", \"y\", \"w\", \"h\")):",
+      "new": "    if False:",
+      "why": "FaceBox carries a leading `t` so it is not a 4-tuple; without this branch every FaceBox is silently dropped and the speaker-aware path reports coverage 0.0 for footage it just tracked successfully. This was a real defect, caught by a test rather than by review."
+    },
+    {
+      "name": "swap_the_substitution_operands",
+      "file": "worker/effects/reframe.py",
+      "old": "    return f\"face_detector_substituted:{requested}:{resolved}\"",
+      "new": "    return f\"face_detector_substituted:{resolved}:{requested}\"",
+      "why": "the marker then says Haar was requested and MediaPipe ran - the exact opposite of the truth, in a string an operator reads to diagnose a clip, and it still looks perfectly well-formed"
+    },
+    {
+      "name": "report_the_requested_backend_not_the_resolved_one",
+      "file": "worker/effects/reframe.py",
+      "old": "        haar = _haar()\n        return haar, \"substituted:mediapipe:haar\"",
+      "new": "        haar = _haar()\n        return haar, \"mediapipe\"",
+      "why": "a clip framed by Haar reporting face_detector:mediapipe is precisely how font_substituted:Arial got frozen into a golden file as correct"
+    },
+    {
+      "name": "injected_borrows_a_backend_name",
+      "file": "worker/effects/reframe.py",
+      "old": "    if injected is not None:\n        return injected, \"injected\"",
+      "new": "    if injected is not None:\n        return injected, \"haar\"",
+      "why": "a test double is not evidence that a backend works; every fake in the suite would produce clip records claiming Haar ran"
+    },
+    {
+      "name": "coverage_comparison_inverted",
+      "file": "worker/effects/reframe.py",
+      "old": "    if coverage > 0.0 and coverage < float(settings.reframe_coverage_floor):",
+      "new": "    if coverage > 0.0 and coverage > float(settings.reframe_coverage_floor):",
+      "why": "every well-framed clip is then flagged low-confidence and every badly framed one is not, which is worse than no signal because it is trusted"
+    },
+    {
+      "name": "low_confidence_on_zero_coverage",
+      "file": "worker/effects/reframe.py",
+      "old": "    if coverage > 0.0 and coverage < float(settings.reframe_coverage_floor):",
+      "new": "    if coverage < float(settings.reframe_coverage_floor):",
+      "why": "zero coverage is already reported by the existing no-faces degradation, so this adds a second name for one condition - the duplicated-fact pattern this harness has caught twice before"
+    },
+    {
+      "name": "coverage_counts_frames_not_hits",
+      "file": "worker/effects/reframe.py",
+      "old": "    hit = sum(1 for _t, boxes in samples if boxes)",
+      "new": "    hit = len(samples)",
+      "why": "coverage becomes 1.0 always, so the confidence signal exists, is reported, and means nothing"
+    },
+    {
+      "name": "sampling_marker_always_emitted",
+      "file": "worker/effects/reframe.py",
+      "old": "        return self.effective_fps < (self.requested_fps - 0.05)",
+      "new": "        return True",
+      "why": "the marker exists to explain a REDUCED rate; emitted on every clip it is noise, and noise is what stops a marker being read"
+    },
+    {
+      "name": "cap_tolerance_removed",
+      "file": "worker/effects/reframe.py",
+      "old": "        return self.effective_fps < (self.requested_fps - 0.05)",
+      "new": "        return self.effective_fps < self.requested_fps",
+      "why": "the effective rate is a division of two measured quantities, so an uncapped clip lands a hair either side of the requested value and a bare comparison reports the cap as binding on roughly half of them"
+    },
+    {
+      "name": "markers_recorded_before_the_render_succeeds",
+      "file": "worker/effects/reframe.py",
+      "old": "    if notes is not None:\n        notes.extend(detector_notes(sample_report))\n    return dest\n\n\ndef _aspect_ratio_parts(aspect: str) -> tuple[int, int]:",
+      "new": "    return dest\n\n\ndef _aspect_ratio_parts(aspect: str) -> tuple[int, int]:",
+      "why": "the single-speaker path stops reporting entirely, so a clip framed by a detector says nothing about which one"
+    },
+    {
+      "name": "score_ignored_in_selection",
+      "file": "worker/effects/reframe.py",
+      "old": "            key=lambda d: (1.0 if d.score is None else max(0.0, d.score)) * math.sqrt(d.area),",
+      "new": "            key=lambda d: d.area,",
+      "why": "the largest box wins regardless of confidence, so a bookshelf captures the framing - which is the requirement's own example"
+    },
+    {
+      "name": "area_dominates_confidence",
+      "file": "worker/effects/reframe.py",
+      "old": "            key=lambda d: (1.0 if d.score is None else max(0.0, d.score)) * math.sqrt(d.area),",
+      "new": "            key=lambda d: (1.0 if d.score is None else max(0.0, d.score)) * d.area,",
+      "why": "weighting by area rather than linear extent makes confidence nearly irrelevant: a 400x400 box at 0.10 beats an 80x80 face at 0.95 by more than two to one. This is the version the first implementation had, and a test caught it."
+    },
+    {
+      "name": "no_scores_branch_stops_being_largest_area",
+      "file": "worker/effects/reframe.py",
+      "old": "    else:\n        best = max(items, key=lambda d: d.area)",
+      "new": "    else:\n        best = min(items, key=lambda d: d.area)",
+      "why": "the no-scores branch is the v0.11.0 behaviour verbatim and is what makes the byte-identical default achievable; changing it moves the crop on every existing clip"
+    },
+    {
+      "name": "a_raising_frame_aborts_sampling",
+      "file": "worker/effects/reframe.py",
+      "old": "        try:\n            raw = detector(frame)\n        except Exception:\n            logger.debug(\"face detector raised on sampled frame %d\", idx, exc_info=True)\n            return []",
+      "new": "        raw = detector(frame)",
+      "why": "one bad frame is not a broken backend, and aborting discards every frame that worked"
+    },
+    {
+      "name": "the_native_graph_is_never_released",
+      "file": "worker/effects/reframe.py",
+      "old": "        cap.release()\n        # Requirement 2.9: MediaPipe holds a native graph. Released here rather than by the\n        # caller, and in a `finally` so it happens even when sampling raises.\n        _release_detector(resolved_detector)",
+      "new": "        cap.release()",
+      "why": "MediaPipe holds a native graph; leaked, it is finalised at interpreter shutdown after its own C shim is gone, which surfaces as a TypeError from a teardown handler long after the run reported success"
+    },
+    {
+      "name": "a_wrong_sized_model_is_accepted",
+      "file": "worker/face_models.py",
+      "old": "        if not path.is_file() or path.stat().st_size != entry.size_bytes:\n            return None",
+      "new": "        if not path.is_file():\n            return None",
+      "why": "a truncated download is a file that exists with a plausible size, and constructing against it fails deep inside the native graph at the first frame of a render rather than degrading to Haar"
+    },
+    {
+      "name": "the_model_digest_is_not_checked",
+      "file": "worker/face_models.py",
+      "old": "        actual = digest(path)\n        if actual != entry.sha256:",
+      "new": "        actual = entry.sha256\n        if actual != entry.sha256:",
+      "why": "--check then passes on any file of the right length, which is the one thing a manifest exists to rule out"
+    },
+    {
+      "name": "bgr_passed_to_mediapipe_as_rgb",
+      "file": "worker/effects/reframe.py",
+      "old": "        rgb = np.ascontiguousarray(frame[:, :, ::-1])",
+      "new": "        rgb = np.ascontiguousarray(frame)",
+      "why": "not a crash: the model sees a blue-skinned face, detects fewer of them, and the symptom reads as 'this footage is hard' rather than 'the channels are backwards'. Declared equivalent-risk rather than expected-caught is NOT acceptable here - the real-library test should notice.",
+      "equivalent": false
+    }
+  ]
+}

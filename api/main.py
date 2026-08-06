@@ -288,6 +288,7 @@ class OptionsModel(BaseModel):
     speaker_reframe: bool = False
     reframe_layout: str = "follow_active"
     reframe_intensity: str = "standard"
+    face_detector: str = "haar"
     # Kinetic typography engine (default OFF). Same fields and same defaults as
     # ``ProcessingOptions``; unrecognised *choice* values are not rejected here
     # but coerced by the engine's ``resolve_options`` (Reqs 17.4, 17.7).
@@ -513,6 +514,11 @@ def info() -> dict[str, object]:
             # Reqs 7.4, 10.6, 17.5, 18.1). Sourced from the ProcessingOptions
             # known-value sets so the API stays in lockstep with the model.
             "reframe_layouts": list(ProcessingOptions._REFRAME_LAYOUTS),
+            # Requirement 1.5: advertise which detectors this build understands, and which
+            # are actually usable here. `available` is what the container smoke test reads:
+            # a model missing from the image makes mediapipe unavailable while the value is
+            # still offered, which is precisely the state worth being able to see.
+            "face_detectors": _face_detector_domains(),
             "reframe_intensities": list(ProcessingOptions._REFRAME_INTENSITIES),
         },
         "broll_available": bool(
@@ -675,6 +681,46 @@ def _llm_available_safe() -> bool:
         return llm_available()
     except Exception:
         return False
+
+
+def _face_detector_domains() -> list[dict]:
+    """The Face_Detector_Backend values this build offers, and which are usable here.
+
+    Requirement 1.5 wants the *values* advertised; ``available`` is the extra half that makes
+    the answer diagnostic rather than decorative. ``haar`` is available whenever ``cv2``
+    imports; ``mediapipe`` additionally needs its vendored model present and the right size, so
+    an image built without ``assets/models/`` reports the value as offered but unavailable —
+    which is exactly the state the container smoke test asserts against, and exactly the state
+    that would otherwise show up only as every clip silently framed by Haar.
+
+    Never raises: this feeds ``/api/info``, and a probe failure must not take the endpoint down.
+    """
+    domains: list[dict] = []
+    for name in ("haar", "mediapipe"):
+        available = False
+        detail = ""
+        try:
+            if name == "haar":
+                import cv2  # noqa: F401
+
+                available = True
+            else:
+                from worker.face_models import resolve_model
+
+                model = resolve_model("mediapipe")
+                if model is None:
+                    detail = "vendored model missing or wrong size"
+                else:
+                    import mediapipe  # noqa: F401
+
+                    available = True
+        except Exception as exc:  # noqa: BLE001 - report per backend, never fail the endpoint
+            detail = f"{type(exc).__name__}"
+        entry: dict = {"name": name, "available": available}
+        if detail:
+            entry["detail"] = detail
+        domains.append(entry)
+    return domains
 
 
 # ---------------------------------------------------------------------------
@@ -864,6 +910,10 @@ async def upload(
     speaker_reframe: bool = Form(False),
     reframe_layout: str = Form("follow_active"),
     reframe_intensity: str = Form("standard"),
+    # A loose optional string, per the existing convention for these enum-like fields: an
+    # unrecognised value falls back to the documented default in ProcessingOptions.from_dict
+    # rather than 422-ing an upload that is otherwise fine.
+    face_detector: str = Form("haar"),
     # Kinetic typography engine (default OFF; Reqs 17.4, 17.7).
     #
     # Declared as loose optional strings on purpose: form values arrive as text,
@@ -986,6 +1036,7 @@ async def upload(
             "speaker_reframe": speaker_reframe,
             "reframe_layout": reframe_layout,
             "reframe_intensity": reframe_intensity,
+            "face_detector": face_detector,
             **{key: value for key, value in kinetic_form.items() if value is not None},
         }
     )

@@ -225,14 +225,38 @@ def _mediapipe_detector(
     """
 ```
 
-Detections arrive as `FaceDetectorResult.detections[].bounding_box`. **Verify whether
-the tasks API returns absolute pixels or a normalised box before implementing the
-conversion** — the legacy `solutions` API returned `relative_bounding_box` in `[0, 1]`,
-and the tasks API's `BoundingBox` carries integer `origin_x`/`origin_y`/`width`/`height`
-which appear to be pixels. If they are already pixels, `relative_box_to_pixels` becomes a
-clamp-and-validate step rather than a conversion, and Requirement 2.4 is satisfied
-trivially — but the real-library test in Requirement 11 is what establishes which, and it
-must be written before the conversion is trusted either way.
+Detections arrive as `FaceDetectorResult.detections[].bounding_box`.
+
+### MEASURED (task 3.0): the tasks API returns absolute pixels
+
+Run against the vendored model on a 640×480 synthetic face, mediapipe 0.10.35:
+
+```
+detections: 1
+  [0] bounding_box: origin_x=225 origin_y=165 width=191 height=191   (type: int)
+      categories: [(None, 0.89)]
+      hasattr(detection, "relative_bounding_box") -> False
+      dir(detection) -> ['bounding_box', 'categories', 'from_ctypes', 'keypoints']
+```
+
+So:
+
+- **`bounding_box` is absolute pixels, as `int`.** 225 + 191 = 416 ≤ 640 and 165 + 191 = 356
+  ≤ 480, and the values are far too large to be normalised. `relative_box_to_pixels` is
+  therefore a **clamp-and-validate** step on this path, not a conversion, and Requirement
+  2.4 is satisfied trivially.
+- **`relative_bounding_box` does not exist on the tasks-API detection object at all.** The
+  normalised box belonged to the removed `solutions` API. Code written against a tutorial
+  would raise `AttributeError` here rather than silently mis-scale — but only because the
+  attribute is gone; had it been retained the failure would have been silent.
+- **The Detection_Score lives at `detection.categories[0].score`**, with
+  `category_name` of `None`. There is no `score` on the bounding box.
+
+`relative_box_to_pixels` is nevertheless kept as a **dual-mode** function that scales when
+all four values are ≤ 1.0 and clamps otherwise. This is not hedging: the conversion is the
+one piece of this feature whose failure is invisible in every test that uses a fake detector,
+the library has already moved this API once, and a function that is correct for either
+convention cannot be broken by it moving again. The cost is one comparison per box.
 
 Two constants are settings rather than literals, because both are legitimately
 content-dependent: the minimum Detection_Score (Requirement 2.8) and the Coverage_Floor
