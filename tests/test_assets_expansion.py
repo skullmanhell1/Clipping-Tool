@@ -538,13 +538,12 @@ def test_a17_selection_does_not_use_python_s_salted_hash(tmp_path, monkeypatch):
     )
     outs = set()
     for seed in ("0", "1", "12345"):
-        # `sys.executable`, not `.venv/bin/python`. A hard-coded venv path assumes one particular
-        # way of setting the project up: CI installs into the interpreter `actions/setup-python`
-        # provides and has no `.venv` at all, so this raised
-        # `FileNotFoundError: '.venv/bin/python'` on every run — a test about hash seeds failing
-        # over a layout detail. `sys.executable` is the interpreter running the suite, which is
-        # the one whose behaviour is being asserted.
         proc = subprocess.run(
+            # ``sys.executable``, not a hard-coded ``.venv/bin/python``. The subject here is
+            # hash-seed stability, so the interpreter wanted is the one already running the
+            # suite — and requiring a venv at a particular path made this fail anywhere it was
+            # not laid out that way, CI included: the workflow installs via ``setup-python`` and
+            # ``pip install``, creating no ``.venv``, so this raised FileNotFoundError there.
             [sys.executable, "-c", script],
             capture_output=True, text=True, check=True,
             env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin:/usr/local/bin"},

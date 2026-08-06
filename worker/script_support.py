@@ -168,7 +168,7 @@ def _system_families_for(script: str) -> tuple[str, ...]:
         return ()
     try:
         proc = subprocess.run(
-            ["fc-list", f":lang={lang}", "--format", "%{family[0]}\\t%{file}\\n"],
+            ["fc-list", f":lang={lang}", "--format", "%{family[0]}\\t%{file}\\n"],  # noqa: S607 - resolved via PATH on purpose; the binary name is operator-configurable
             capture_output=True, text=True, timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):

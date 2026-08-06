@@ -152,7 +152,7 @@ def backoff_seconds(retry_count: int, *, jitter: Optional[float] = None) -> floa
 
     delay = base * (2 ** (step - 1))
     delay = min(delay, ceiling)
-    fraction = random.random() if jitter is None else max(0.0, min(1.0, float(jitter)))
+    fraction = random.random() if jitter is None else max(0.0, min(1.0, float(jitter)))  # noqa: S311 - retry jitter; spreading retries needs no cryptographic randomness
     return delay + delay * 0.25 * fraction
 
 

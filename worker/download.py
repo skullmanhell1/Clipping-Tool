@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
+#: Schemes yt-dlp may be handed. Anything else - `file://` most importantly - is refused
+#: before yt-dlp sees it, because its generic extractor will happily read a local path.
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
 ProgressCallback = Callable[[float, str], None]
 """A callback ``fn(fraction, message)`` where fraction is in ``[0, 1]``."""
 
@@ -31,99 +35,121 @@ class DownloadError(RuntimeError):
 
 
 class UnsafeURLError(DownloadError):
-    """Raised when a URL resolves somewhere ingest is not allowed to reach."""
+    """Raised when a URL points somewhere ingest must not reach.
 
-
-def _is_blocked_address(ip: ipaddress._BaseAddress) -> bool:
-    """Whether ``ip`` is somewhere a user-supplied URL must not reach.
-
-    ``link_local`` is the one worth naming: ``169.254.169.254`` is the cloud instance
-    metadata endpoint on AWS, GCP and Azure, and on a hosted deployment it will happily
-    hand out credentials to anything that asks. The rest close the obvious neighbours -
-    loopback, RFC1918, CGNAT, and IPv6 unique-local.
+    Deliberately a :class:`DownloadError` subclass: every existing caller already handles that
+    type, so adding this cannot turn a rejected URL into an unhandled 500. Callers that want to
+    distinguish "you may not fetch that" from "fetching that failed" can catch it specifically -
+    ``api.main`` does, to answer 400 rather than 422.
     """
-    return bool(
-        ip.is_loopback
-        or ip.is_link_local
-        or ip.is_private
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
 
 
-def assert_safe_url(url: str, *, allow_private: Optional[bool] = None) -> None:
-    """Raise :class:`UnsafeURLError` unless ``url`` is safe to hand to yt-dlp.
+def _is_disallowed_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> Optional[str]:
+    """Return why ``ip`` is not a legitimate ingest target, or ``None`` if it is fine.
 
-    ``/api/jobs/url`` and ``/api/preview`` take their target from the request body and
-    pass it to a downloader that will fetch anything. Without this, a request for
-    ``http://169.254.169.254/latest/meta-data/iam/security-credentials/`` is a server-side
-    request forgery with the host's own credentials as the payload, and
-    ``http://192.168.1.1/`` is a port scan of the operator's LAN.
+    ``is_global`` alone is not enough. It is False for the ranges wanted here but also False for
+    some that need naming in the error, and on IPv6 it does not see through an IPv4-mapped
+    address - ``::ffff:127.0.0.1`` is a loopback wearing a hat. Unwrapping first is what makes
+    the IPv6 answers agree with the IPv4 ones.
+    """
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if ip.is_loopback:
+        return "a loopback address"
+    if ip.is_link_local:
+        # 169.254.0.0/16 is where every major cloud serves instance credentials.
+        return "a link-local address (cloud instance metadata lives here)"
+    if ip.is_private:
+        return "a private address"
+    if ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        return "a reserved, multicast or unspecified address"
+    return None
 
-    Every hostname is resolved and **every** address it resolves to is checked, not just
-    the first: a name with one public and one private A record would otherwise pass the
-    check and then connect to the private one. DNS rebinding between this check and the
-    fetch remains possible - closing that needs the connection itself to be pinned to a
-    vetted address, which is not reachable through yt-dlp's interface - so this is a guard
-    against the accidental and the opportunistic, not against a determined attacker who
-    controls DNS.
 
-    ``allow_private`` defaults to ``settings.allow_private_url_ingest``, which exists
-    because clipping from a media server on your own LAN is a legitimate thing to want.
+def validate_public_url(url: str, *, allow_private: Optional[bool] = None) -> str:
+    """Return ``url`` unchanged, or raise :class:`UnsafeURLError`.
+
+    yt-dlp fetches whatever it is given, so a URL endpoint is a request forwarder into whatever
+    network the deployment sits in. The dangerous target is not an obscure one: every major cloud
+    serves instance credentials from ``169.254.169.254`` over plain HTTP with no authentication.
+
+    Checks, in order: the scheme is http/https; a host is present; and no address the host
+    resolves to is loopback, link-local, private, reserved, multicast or unspecified. *Every*
+    resolved address is checked rather than the first, because a name that returns one public and
+    one private address would otherwise pass and then connect to either.
+
+    ``allow_private`` defaults to ``settings.url_ingest_allow_private``. It is a parameter as well
+    as a setting so the rules can be tested as a pure function, and so a caller that genuinely
+    means to fetch from a LAN host can say so at the call site.
+
+    **Two limits worth stating plainly, because this is not a complete SSRF defence:**
+
+    * *Redirects.* A permitted host may redirect to a forbidden one. yt-dlp performs its own
+      requests, so only the submitted URL passes through here.
+    * *DNS rebinding.* The name is resolved here and resolved again by yt-dlp; a record with a
+      one-second TTL can differ between the two.
+
+    Closing either means owning the socket layer rather than the URL, which is a much larger
+    change than this. What this does close is the direct attack - the one an unauthenticated
+    endpoint makes trivial - and it refuses non-HTTP schemes outright.
     """
     if allow_private is None:
-        from config import settings
+        from config import settings  # local import: this module must stay import-cheap
 
-        allow_private = settings.allow_private_url_ingest
+        allow_private = settings.url_ingest_allow_private
 
-    parts = urlsplit(url.strip())
-    if parts.scheme.lower() not in ("http", "https"):
+    candidate = (url or "").strip()
+    parts = urlsplit(candidate)
+    scheme = (parts.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
         raise UnsafeURLError(
-            f"Only http and https URLs are accepted (got {parts.scheme or 'no'} scheme)."
+            f"Only http and https URLs can be ingested, not {scheme or 'a scheme-less path'!r}."
         )
-    host = parts.hostname
-    if not host:
-        raise UnsafeURLError("URL has no host.")
-    if allow_private:
-        return
 
-    # A bare IP literal never reaches the resolver, so check it directly first.
+    try:
+        host = parts.hostname
+    except ValueError as exc:  # malformed IPv6 literal, e.g. http://[::1
+        raise UnsafeURLError(f"Could not read the host from that URL: {exc}") from exc
+    if not host:
+        raise UnsafeURLError("That URL has no host.")
+
+    if allow_private:
+        return candidate
+
+    # An IP literal needs no DNS, and must not be given a free pass just because resolution of a
+    # bare address could fail on a host with unusual name services.
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
         literal = None
     if literal is not None:
-        if _is_blocked_address(literal):
-            raise UnsafeURLError(
-                f"Refusing to fetch {host}: private, loopback or link-local address. "
-                "Set ALLOW_PRIVATE_URL_INGEST=true to permit this."
-            )
-        return
+        reason = _is_disallowed_address(literal)
+        if reason:
+            raise UnsafeURLError(f"Refusing to fetch {host!r}: it is {reason}.")
+        return candidate
 
     try:
-        infos = socket.getaddrinfo(host, parts.port or None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        # A name that does not resolve is NOT an SSRF risk: there is nothing for the
-        # downloader to reach, and the fetch that follows will fail on its own with a
-        # message about the actual problem. Refusing here instead would replace yt-dlp's
-        # accurate "not found" with a security error that misdescribes the situation, and
-        # would make this guard require working DNS in order for *any* ingest to proceed -
-        # including in tests that mock the downloader entirely.
-        return
+        resolved = socket.getaddrinfo(host, parts.port or None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError):
+        # A name that does not resolve reaches nothing, so it is not a route into the network -
+        # and rejecting it here would replace yt-dlp's accurate "no such host" with a security
+        # error, which sends someone with a typo looking in the wrong place.
+        return candidate
 
-    for info in infos:
-        address = info[4][0]
-        try:
-            resolved = ipaddress.ip_address(address)
-        except ValueError:  # pragma: no cover - getaddrinfo returned something odd
+    for family, _type, _proto, _canonname, sockaddr in resolved:
+        if family not in (socket.AF_INET, socket.AF_INET6):
             continue
-        if _is_blocked_address(resolved):
+        try:
+            address = ipaddress.ip_address(sockaddr[0])
+        except ValueError:  # pragma: no cover - getaddrinfo returning a non-address
+            continue
+        reason = _is_disallowed_address(address)
+        if reason:
             raise UnsafeURLError(
-                f"Refusing to fetch {host}: resolves to {address}, which is a private, "
-                "loopback or link-local address. Set ALLOW_PRIVATE_URL_INGEST=true to "
-                "permit this."
+                f"Refusing to fetch {host!r}: it resolves to {address}, which is {reason}."
             )
+    return candidate
 
 
 @dataclass
@@ -146,14 +172,17 @@ def fetch_metadata(url: str) -> VideoMeta:
     """Fetch metadata for ``url`` without downloading the media.
 
     Raises:
-        UnsafeURLError: if the URL resolves somewhere ingest may not reach.
+        UnsafeURLError: if the URL points somewhere ingest must not reach.
         DownloadError: if info extraction fails.
     """
     import yt_dlp
 
-    # Checked here as well as in download_video because this is reachable on its own from
-    # /api/preview, and an SSRF that only reports a title is still an SSRF.
-    assert_safe_url(url)
+    # Guarded here rather than only in the API layer. This is the cheaper of the two yt-dlp
+    # entry points and therefore the more attractive probe: it makes a real request, returns
+    # promptly, and its error text is handed straight back to the caller as a 422 - a blind-SSRF
+    # oracle. Validating inside the module covers every caller, including any future ingest
+    # path that never passes through `api.main`.
+    validate_public_url(url)
 
     opts = {"quiet": True, "no_warnings": True, "skip_download": True}
     try:
@@ -210,12 +239,14 @@ def download_video(
         max_height: Cap the downloaded resolution (keeps processing fast).
 
     Raises:
-        UnsafeURLError: if the URL resolves somewhere ingest may not reach.
+        UnsafeURLError: if the URL points somewhere ingest must not reach.
         DownloadError: on any download failure.
     """
     import yt_dlp
 
-    assert_safe_url(url)
+    # `worker.jobs` calls this with the URL held on the job record, which nothing re-checks
+    # between submission and execution - so the guard belongs here, not only at the endpoint.
+    validate_public_url(url)
 
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
