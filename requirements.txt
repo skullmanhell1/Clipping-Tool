@@ -1,12 +1,23 @@
 # =============================================================================
 # Python dependencies for the AI Video Clipper backend + worker.
-# Pinned to compatible minimum versions; refine/lock in later phases.
+#
+# This file states *ranges* — what the project is compatible with. It is not what a
+# build installs. `requirements.lock` holds the exact resolved versions with hashes,
+# and that is what the Dockerfile and CI install. Change a range here, then run
+# `scripts/lock_requirements.sh` to re-resolve; CI fails if the two disagree.
+#
+# Every range has an upper bound except one, and that exception is explained where it
+# appears. An unbounded requirement means the next major release of a dependency
+# arrives in the next `docker build` — untested, unreviewed, and indistinguishable
+# from a change of ours.
 # =============================================================================
 
 # --- Web API ---
 fastapi>=0.111,<1.0
 uvicorn[standard]>=0.30,<1.0
-python-multipart>=0.0.9          # multipart form / file uploads
+# Bounded at <1.0 even though it is a 0.0.x series: pre-1.0 projects break API on
+# minor bumps, and this one parses untrusted multipart bodies on the upload path.
+python-multipart>=0.0.9,<1.0     # multipart form / file uploads
 
 # --- Configuration ---
 pydantic>=2.7,<3.0
@@ -18,7 +29,18 @@ redis>=5.0,<6.0
 rq>=1.16,<2.0
 
 # --- Video / media ---
-ffmpeg-python>=0.2.0
+# 0.2.0 is the last release (2019) and the project is unmaintained; the bound is here so a
+# revival with a different API cannot land silently.
+ffmpeg-python>=0.2.0,<1.0
+
+# **Deliberately unbounded, and the only one.** yt-dlp's job is to keep working as sites
+# change their players, which it does by shipping constantly — often several releases a week,
+# each an extractor fix. An upper bound here would cap how new an extractor set a fresh build
+# can get, so the pin would gradually stop the tool doing the one thing it is for, and the
+# failure would look like "that site is broken" rather than "our pin is stale".
+#
+# Reproducibility comes from `requirements.lock` instead, which pins it exactly. Bumping it is
+# then a deliberate, reviewable act: re-run `scripts/lock_requirements.sh`.
 yt-dlp>=2024.7.1
 
 # --- Transcription ---

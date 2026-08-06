@@ -12,15 +12,31 @@
 # Node 22: vite 8 requires ^20.19.0 || >=22.12.0 (I10). Pinned to the major rather than left on
 # node:20-slim, where the requirement is satisfied only by the newest 20.x patch releases - so a
 # base-image refresh could quietly stop satisfying it.
-FROM node:22-slim AS frontend
+# `-bookworm-slim` rather than bare `-slim`: `-slim` follows Debian's *current* stable, so a
+# Debian major release would change glibc and every system library under the build without a
+# change here. Note the component order differs between these two images -- node publishes
+# `22-bookworm-slim` while python publishes `3.11-slim-bookworm`, and the other spelling of
+# either does not exist. Both were checked against the registry rather than assumed.
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /ui
+# Both files: the glob matches package-lock.json, which `npm ci` requires.
 COPY frontend/package*.json ./
-RUN npm install
+# `npm ci`, not `npm install`. CI already used `npm ci` while the image used `npm install`, so the
+# two installed different trees from the same commit: `npm install` is free to resolve a newer
+# version that satisfies the range and to rewrite the lockfile, `npm ci` installs the lockfile
+# exactly and fails if it disagrees with package.json. The image was the one build nobody could
+# reproduce.
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: python runtime -------------------------------------------------
-FROM python:3.11-slim
+# `-bookworm` for the same reason as the frontend stage, and here it also fixes **ffmpeg's**
+# version: ffmpeg is installed from Debian's archive below, and a Debian release is the thing that
+# decides which ffmpeg that is. Within bookworm it stays on the 5.1.x series; on `-slim` alone the
+# next Debian stable would silently move it to 7.x, which changes filter defaults. `scripts/
+# docker_smoke.sh` renders through the image so a jump that alters output is visible.
+FROM python:3.11-slim-bookworm
 
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
@@ -74,8 +90,17 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install Python dependencies first for better layer caching.
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+#
+# From the **lockfile**, with `--require-hashes`. `requirements.txt` states ranges, so installing
+# it directly meant every rebuild re-resolved and could pick up a new minor of anything — the
+# image was not reproducible from a commit. `--require-hashes` goes further than pinning
+# versions: pip verifies the bytes it downloaded match what was resolved, so a re-uploaded or
+# tampered index entry for a pinned version is rejected rather than installed.
+#
+# `requirements.txt` is copied too, only so `scripts/lock_requirements.sh --check` can run inside
+# the image if needed; nothing installs from it.
+COPY requirements.txt requirements.lock ./
+RUN pip install --upgrade pip && pip install --require-hashes -r requirements.lock
 
 # Optional: real source separation for the `stem_inpainting` engine (torch + demucs).
 # Off by default because torch adds several hundred megabytes to the image, and the
@@ -92,10 +117,10 @@ RUN if [ "$INSTALL_ML" = "true" ]; then \
     fi
 
 # Install the Whop publisher bridge (Node @whop/sdk) with its own layer cache. Skipped along with
-# Node itself unless INSTALL_WHOP_BRIDGE=true (I7) - `npm install` needs npm.
+# Node itself unless INSTALL_WHOP_BRIDGE=true (I7) - `npm ci` needs npm.
 COPY publisher_bridge/package*.json ./publisher_bridge/
 RUN if [ "$INSTALL_WHOP_BRIDGE" = "true" ]; then \
-        cd publisher_bridge && npm install --omit=dev ; \
+        cd publisher_bridge && npm ci --omit=dev ; \
     fi
 
 # Copy the application source.

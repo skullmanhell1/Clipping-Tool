@@ -36,7 +36,15 @@ echo "==> booting $IMAGE and probing it"
 docker run --rm --entrypoint sh "$IMAGE" -c '
 uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/uv.log 2>&1 &
 SERVER=$!
-python - <<PY
+# <<"PY", quoted. An unquoted heredoc is shell-expanded, and this one is Python source, so
+# backticks in it were command substitutions: the comment below mentioning fc-match had been
+# silently running `fc-match Anton` in the container on every smoke run, and any $ would have
+# been interpolated away. Quoting the delimiter passes the program through literally.
+#
+# Double quotes around the delimiter, not single: the whole program already sits inside a
+# single-quoted sh -c string, and an apostrophe anywhere in here closes that quote and hands the
+# remainder of the file to the outer shell. Double quotes disable heredoc expansion just as well.
+python - <<"PY"
 import json, time, urllib.request
 
 def get(path, tries=60):
@@ -80,6 +88,22 @@ import os
 count = len([n for n in os.listdir("/app/assets/emoji") if n.endswith(".png")])
 assert count >= 300, f"only {count} emoji vendored in the image"
 print("emoji vendored:", count)
+
+# ffmpeg is installed from the Debian archive, so the base image tag decides its version. The
+# Dockerfile pins `python:3.11-slim-bookworm` rather than `-slim` for exactly that reason, and
+# printing the version here is what makes a change to it visible: filter defaults move between
+# major versions, so an ffmpeg jump can alter rendered output with no code change at all.
+#
+# Reported, not asserted. Pinning an exact version here would fail the build the day Debian ships
+# a security patch, which is a change we want -- and a gate that fires on wanted changes gets
+# deleted. The number is here so a shift shows up as a diff in the smoke log.
+
+import subprocess
+ffmpeg = subprocess.run(
+    ["ffmpeg", "-version"], capture_output=True, text=True, check=True
+).stdout.splitlines()[0]
+assert ffmpeg.startswith("ffmpeg version"), ffmpeg
+print("ffmpeg:", ffmpeg.split(" Copyright")[0])
 
 print("I12 OK")
 PY
