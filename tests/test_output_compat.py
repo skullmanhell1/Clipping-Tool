@@ -207,3 +207,112 @@ def test_o8_the_quality_flag_is_never_hand_rolled_as_crf_outside_the_builder():
         "these sites spell the rate control themselves; -crf only means anything to libx264:\n"
         + "\n".join(offenders)
     )
+
+
+
+# --------------------------------------------------------------------------- #
+# -threads: a lever that must be invisible until it is set                      #
+# --------------------------------------------------------------------------- #
+def test_the_default_emits_no_threads_flag_at_all(monkeypatch):
+    """``0`` must leave the argv byte-identical to what it was before the setting existed.
+
+    ``-threads 0`` and no ``-threads`` are equivalent to ffmpeg, so this is not a
+    behavioural claim - it is the one form of "unchanged" a test can actually verify, and
+    the reason the flag is omitted rather than passed as zero.
+    """
+    monkeypatch.setattr(app_settings, "ffmpeg_threads", 0)
+    monkeypatch.setattr(app_settings, "video_encoder", "libx264", raising=False)
+
+    args = h264_args()
+
+    assert "-threads" not in args
+    assert args == [
+        "-c:v", "libx264", "-preset", app_settings.x264_preset,
+        "-crf", str(app_settings.x264_crf), *H264_COMPAT_ARGS,
+    ]
+
+
+def test_a_configured_thread_count_appears_exactly_once(monkeypatch):
+    """Once, not twice: a duplicated ``-threads`` lets the last one silently win."""
+    monkeypatch.setattr(app_settings, "ffmpeg_threads", 6)
+    monkeypatch.setattr(app_settings, "video_encoder", "libx264", raising=False)
+
+    args = h264_args(normalise_fps=True, vbv_cap=True)
+
+    assert args.count("-threads") == 1
+    assert args[args.index("-threads") + 1] == "6"
+
+
+def test_a_nonsensical_thread_count_is_treated_as_unset(monkeypatch):
+    """A negative value has no meaning to ffmpeg, so it takes the ``0`` path."""
+    monkeypatch.setattr(app_settings, "ffmpeg_threads", -4)
+
+    assert "-threads" not in h264_args()
+
+
+def test_threads_is_not_spelled_out_anywhere_but_the_builders():
+    """The same boundary the libx264 and -crf guards enforce, for the same reason.
+
+    Those two flags were once duplicated across seven call sites, which is how three of them
+    came to be missing from all seven. A ``-threads`` appended at a call site would be a
+    fourth flag with no single home and would contradict the setting on whichever paths it
+    reached.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    builder_modules = {"ffmpeg_utils.py", "video_encoders.py"}
+    offenders: list[str] = []
+    for path in sorted((root / "worker").rglob("*.py")):
+        if path.name in builder_modules:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r'["\']-threads["\']', line) and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
+    assert not offenders, (
+        "these sites set -threads themselves, so FFMPEG_THREADS would not control them:\n"
+        + "\n".join(offenders)
+    )
+
+
+@requires_ffmpeg
+@pytest.mark.real_binary
+def test_a_configured_thread_count_is_accepted_by_the_real_encoder(tmp_path):
+    """The flag ffmpeg is actually given must not be rejected by it.
+
+    An argv assertion proves the string is spelled the way the code intends and nothing
+    more. ``-threads`` sits in the output options and ffmpeg is unforgiving about where a
+    codec option may appear, so this runs a real encode with it in place - which is the
+    working agreement's rule about testing against the real program rather than a model of
+    the argument list.
+    """
+    from config import settings
+
+    src = tmp_path / "src.mp4"
+    subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+         "-i", "testsrc2=size=320x240:rate=25:duration=1", "-y", str(src)],
+        check=True, capture_output=True, timeout=120,
+    )
+
+    out = tmp_path / "out.mp4"
+    original = settings.ffmpeg_threads
+    settings.ffmpeg_threads = 2
+    try:
+        args = h264_args()
+    finally:
+        settings.ffmpeg_threads = original
+    assert "-threads" in args
+
+    proc = subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(src),
+         *args, "-y", str(out)],
+        capture_output=True, text=True, timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert out.exists() and out.stat().st_size > 0
+    # And the output is still a compliant deliverable - the new flag must not have
+    # displaced the compatibility ones.
+    probed = _probe(out)
+    assert probed["pix_fmt"] == "yuv420p"

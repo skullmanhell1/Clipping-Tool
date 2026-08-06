@@ -54,6 +54,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
 
+      # A2: register the bundled caption faces with fontconfig, exactly as the Dockerfile and
+      # `scripts/setup_dev_env.sh` already do.
+      #
+      # Without this, `captions.font_available` asks fontconfig whether a face this repository
+      # *ships* exists, fontconfig has never been told about `assets/fonts`, and the answer is no —
+      # so all fourteen presets resolve to a substituted face. That is 17 failures in
+      # `tests/test_fonts_real_binary.py`, `test_caption_polish.py`, `test_review_ux.py` and
+      # `test_script_and_placement.py`, on a machine where nothing is wrong with the code. It is
+      # also precisely why they passed for everyone locally: the dev-environment script and the
+      # image both run `fc-cache` over that directory, and only CI did not.
+      #
+      # Verified: with these three lines, `fc-match Anton` resolves to Anton-Regular.ttf and all
+      # 215 tests in those four files pass.
+      - name: Register the bundled caption faces (A2)
+        run: |
+          sudo mkdir -p /usr/share/fonts/clipping-tool
+          sudo cp assets/fonts/*.ttf /usr/share/fonts/clipping-tool/
+          sudo fc-cache -f
+          fc-match Anton | grep -q Anton
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip

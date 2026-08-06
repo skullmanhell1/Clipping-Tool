@@ -245,3 +245,96 @@ def test_the_volume_figures_are_never_cached(monkeypatch):
     retention.disk_usage()
     retention.disk_usage()
     assert len(calls) == 2
+
+
+
+# --------------------------------------------------------------------------- #
+# The sweep must not delete the directories of a job that is still running     #
+# --------------------------------------------------------------------------- #
+def _isolate_storage(tmp_path, monkeypatch):
+    """Point every storage area at ``tmp_path`` and return the root."""
+    from config import settings
+
+    root = tmp_path / "storage"
+    for area in ("clips", "uploads", "temp"):
+        (root / area).mkdir(parents=True)
+    monkeypatch.setattr(settings, "storage_root", root)
+    monkeypatch.setattr(settings, "clips_dir", root / "clips")
+    monkeypatch.setattr(settings, "temp_dir", root / "temp")
+    monkeypatch.setattr(settings, "uploads_dir", root / "uploads")
+    return root
+
+
+def test_sweep_leaves_a_freshly_created_empty_directory_alone(tmp_path, monkeypatch):
+    """A young empty directory survives the sweep.
+
+    ``JobManager._execute`` creates ``clips/<job_id>/`` and ``temp/<job_id>/`` empty, and
+    they stay empty until the first clip is written — roughly twenty seconds into a real
+    render. The sweeper's first sweep fires **five seconds** after startup. The directory
+    branch of ``cleanup_expired`` used to have no age check at all, so it removed both,
+    and the render then failed at ``geo.replace(final)`` with a ``FileNotFoundError``
+    naming the *source* path first — which is not the file that was missing.
+
+    Uses the ``now=`` injection point rather than sleeping: the window is real seconds
+    wide and a test that waits for it would be both slow and flaky.
+    """
+    from storage_backends import retention
+
+    root = _isolate_storage(tmp_path, monkeypatch)
+    live_clips = root / "clips" / "job-in-flight"
+    live_temp = root / "temp" / "job-in-flight"
+    live_clips.mkdir()
+    live_temp.mkdir()
+
+    result = retention.cleanup_expired(retention_days=30, now=time.time())
+
+    assert live_clips.is_dir(), "the running job's clips directory was swept"
+    assert live_temp.is_dir(), "the running job's temp directory was swept"
+    assert result["removed"] == 0
+
+
+def test_sweep_still_removes_an_old_empty_directory_and_counts_it(tmp_path, monkeypatch):
+    """An genuinely expired empty directory is removed *and* reported.
+
+    Two assertions, because the original code had two defects. The age check must not be
+    so cautious that abandoned directories accumulate forever, and the removal must be
+    counted: ``removed`` was only incremented in the file branch, so the sweep deleted
+    directories and reported ``{'removed': 0}``. A destructive operation that reports
+    doing nothing is worse than one that fails, because nobody looks for it.
+    """
+    from storage_backends import retention
+
+    root = _isolate_storage(tmp_path, monkeypatch)
+    abandoned = root / "clips" / "job-abandoned"
+    abandoned.mkdir()
+    old = time.time() - 40 * 86400
+    os.utime(abandoned, (old, old))
+
+    result = retention.cleanup_expired(retention_days=30, now=time.time())
+
+    assert not abandoned.exists(), "an expired empty directory was left behind"
+    assert result["removed"] == 1, "the directory removal was not counted"
+
+
+def test_sweep_boundary_is_the_retention_cutoff_not_emptiness(tmp_path, monkeypatch):
+    """The discriminator is age, evaluated against the same cutoff files use.
+
+    Pins the two directories either side of the window in one test so a future change
+    that reintroduces "empty means deletable" cannot pass by satisfying only one half.
+    """
+    from storage_backends import retention
+
+    root = _isolate_storage(tmp_path, monkeypatch)
+    now = time.time()
+    just_inside = root / "clips" / "kept"
+    just_outside = root / "clips" / "swept"
+    just_inside.mkdir()
+    just_outside.mkdir()
+    os.utime(just_inside, (now - 29 * 86400, now - 29 * 86400))
+    os.utime(just_outside, (now - 31 * 86400, now - 31 * 86400))
+
+    result = retention.cleanup_expired(retention_days=30, now=now)
+
+    assert just_inside.is_dir()
+    assert not just_outside.exists()
+    assert result["removed"] == 1

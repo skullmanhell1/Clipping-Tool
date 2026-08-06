@@ -95,6 +95,27 @@ def _compat_args(encoder) -> list[str]:
     return args
 
 
+def _threads_args() -> list[str]:
+    """``["-threads", "N"]`` when :data:`config.settings.ffmpeg_threads` is set, else ``[]``.
+
+    There was no ``-threads`` anywhere in this codebase. That is not a bug - libx264 picks a
+    thread count from the host's CPU count and its guess is usually fine - but it was not
+    *tunable*, and the one place the guess is reliably wrong is a container with a CPU quota,
+    where ffmpeg counts the host's cores and not the cgroup's share.
+
+    ``0`` emits nothing at all rather than ``-threads 0``. The two are equivalent to ffmpeg
+    (``0`` means "auto"), and emitting nothing keeps the default argv byte-identical to every
+    release before this setting existed - which is a thing a test can assert, where
+    "equivalent" is not.
+
+    Lives here, next to the encoder/preset/quality flags, because those are centralised for a
+    reason: they were once spread across seven call sites, and three of them ended up missing
+    the flag from all seven. ``tests/test_output_compat.py`` enforces the boundary.
+    """
+    threads = int(getattr(settings, "ffmpeg_threads", 0) or 0)
+    return ["-threads", str(threads)] if threads > 0 else []
+
+
 def escape_filter_path(path: str | Path) -> str:
     """Escape a filesystem path for use inside an ffmpeg filter argument.
 
@@ -154,6 +175,7 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     encoder = choice.encoder
 
     args = ["-c:v", encoder.name]
+    args += _threads_args()
     args += encoder.preset_args(str(settings.x264_preset))
     # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
     # different scale. See worker/video_encoders.py for the table.

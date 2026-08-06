@@ -166,6 +166,29 @@ class Settings(BaseSettings):
     whisper_compute_type: str = Field(
         default="int8", description="faster-whisper compute type (e.g. int8, float16)."
     )
+    # CTranslate2's two parallelism knobs, neither of which was ever passed to
+    # ``WhisperModel``. ``0`` means "library default" and is passed through as *absence*
+    # rather than as a value, so an unconfigured install passes no thread count at all.
+    #
+    # Measured before documenting, because the obvious assumption is wrong: CTranslate2's
+    # own default already picks the physical core count, so on a 4-core/8-thread host
+    # `small`/int8 over a 44s source took 13.7-14.0s at 0, 13.8-14.8s at 4 (identical
+    # within noise) and 33.1-34.3s at 8 - two and a half times *slower*, because 8 is the
+    # SMT sibling count rather than a real core count. This is a lever for a host where the
+    # library guesses wrong, not a speedup.
+    whisper_cpu_threads: int = Field(
+        default=0,
+        description="Threads CTranslate2 uses per transcription (0 = library default, "
+                    "which is what every release up to 0.11.0 used and is usually right). "
+                    "Only meaningful on CPU. Use the PHYSICAL core count, never the SMT "
+                    "count - oversubscribing SMT siblings measured 2.4x slower.",
+    )
+    whisper_num_workers: int = Field(
+        default=1,
+        description="Concurrent CTranslate2 workers (1 = library default). Raising this "
+                    "helps only when several transcriptions run at once, which with "
+                    "max_workers=1 they do not - it costs memory for no gain.",
+    )
     # T4: a prompt prepended to the decode, which is how Whisper is told about words it has
     # no reason to expect - people's names, product names, jargon, brands. Without it a
     # recurring proper noun is mis-transcribed the same way every time it is said, and that
@@ -307,7 +330,11 @@ class Settings(BaseSettings):
     delete_local_after_publish: bool = Field(
         default=False, description="Delete the local clip after a successful publish."
     )
-    # How often the background retention sweeper runs.
+    # How often the background retention sweeper runs. Note this is the *interval between*
+    # sweeps, not a delay before the first one: ``RetentionSweeper._loop`` sweeps five
+    # seconds after startup and only then waits this long. A job submitted right after
+    # startup is therefore swept over while it is still running, which is what made the
+    # empty-directory bug in ``cleanup_expired`` reachable.
     retention_sweep_hours: float = Field(default=6.0, description="Retention sweep interval (hours).")
     # Low-disk warning thresholds surfaced in the UI.
     disk_warn_free_gb: float = Field(default=2.0, description="Warn when free space drops below this (GB).")
@@ -352,6 +379,28 @@ class Settings(BaseSettings):
     # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
     x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
+    # There was no `-threads` anywhere in the codebase. libx264 auto-detects a reasonable
+    # count, so this was never *broken* - it was simply not tunable, and a container with a
+    # CPU quota is exactly where ffmpeg's guess (based on the host's core count, not the
+    # cgroup's) is wrong. ``0`` omits the flag entirely, which is what every release up to
+    # 0.11.0 emitted.
+    #
+    # Emitted from ``worker/ffmpeg_utils.h264_args`` only, alongside the encoder, preset and
+    # quality flags: `tests/test_output_compat.py` forbids naming those outside
+    # ffmpeg_utils/video_encoders because they were once spread over seven call sites, which
+    # is how three of them came to be missing from all seven.
+    # Measured before documenting, and it makes no difference on a host that can see its
+    # cores: the crop_blur reformat of a 44s 720p source took 17.4s at 0, 17.3s at 2, 18.2s
+    # at 4, 17.7s at 8 and 18.8s at *one* thread - all within 8%, because that pass is
+    # filter-bound (gblur) and `-threads` is the codec thread count. Note also that x264's
+    # output bytes move with its thread count, so a non-zero value shifts the M1 goldens.
+    ffmpeg_threads: int = Field(
+        default=0,
+        description="Encoder threads passed to ffmpeg as -threads (0 = omit the flag and "
+                    "let ffmpeg decide, which is the pre-0.12 behaviour). Worth setting "
+                    "inside a CPU-quota'd container, where ffmpeg counts the host's cores; "
+                    "measured to make no difference otherwise.",
+    )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
