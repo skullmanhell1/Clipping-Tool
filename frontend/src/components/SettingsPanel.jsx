@@ -156,6 +156,17 @@ const REFRAME_INTENSITY_LABELS = {
   heavy: "Heavy",
 };
 
+// Which detector finds the faces the crop follows. `haar` is the shipped default, so the
+// picker opens on the behaviour an existing install already has.
+const FACE_DETECTORS = [
+  { value: "haar", label: "Haar cascade (default)" },
+  { value: "mediapipe", label: "MediaPipe BlazeFace" },
+];
+const FACE_DETECTOR_LABELS = {
+  haar: "Haar cascade (default)",
+  mediapipe: "MediaPipe BlazeFace",
+};
+
 // Build a labelled option list from a raw list of values advertised by
 // /api/info's effects object, falling back to the known values when the info
 // payload has not loaded (or omits the list) so the control still renders.
@@ -322,6 +333,22 @@ export default function SettingsPanel({
     REFRAME_INTENSITY_LABELS,
     REFRAME_INTENSITIES
   );
+  // /api/info advertises face detectors as `{name, available}` rather than bare strings,
+  // because "offered" and "usable here" are different facts: an image built without
+  // assets/models/ still offers `mediapipe` and cannot run it. Saying so in the label is the
+  // difference between a user choosing it and wondering why nothing changed, and a user
+  // knowing the model is missing.
+  const faceDetectorOptions = (
+    Array.isArray(effects?.face_detectors) && effects.face_detectors.length
+      ? effects.face_detectors
+      : FACE_DETECTORS.map((option) => ({ name: option.value, available: true }))
+  ).map((entry) => {
+    const base = FACE_DETECTOR_LABELS[entry.name] || entry.name;
+    return {
+      value: entry.name,
+      label: entry.available === false ? `${base} — unavailable` : base,
+    };
+  });
   const engineRows = Array.isArray(engines) ? engines : [];
   // Kinetic typography: the option domains ride in /api/info's `capabilities`
   // block under the Engine_Id, while availability is reported on the engine row
@@ -896,6 +923,12 @@ export default function SettingsPanel({
                 value={settings.reframe_intensity}
                 onChange={set("reframe_intensity")}
                 options={reframeIntensityOptions}
+              />
+              <Dropdown
+                label="Face detector"
+                value={settings.face_detector}
+                onChange={set("face_detector")}
+                options={faceDetectorOptions}
               />
             </div>
           </div>

@@ -46,13 +46,26 @@ jobs:
       # its degraded branch here even though the packages were installed — CI was installing
       # opencv and getting no coverage from it. The Dockerfile has always installed these.
       #
+      # libegl1 / libgles2 are a *second* pair, and importing mediapipe does not need them —
+      # which is exactly why they were missed. `mediapipe/tasks/c/libmediapipe.so` declares
+      # `NEEDED libGLESv2.so.2` and `NEEDED libEGL.so.1`, and that library is dlopen'd only when
+      # a task graph is constructed. So `import mediapipe` succeeds, the version assertion in
+      # tests/test_vision_runtime.py passes, and then
+      # `vision.FaceDetector.create_from_options` raises
+      # `OSError: libGLESv2.so.2: cannot open shared object file` — six failures and three
+      # collection errors across tests/test_face_detection_markers.py and
+      # tests/test_face_detection_real_binary.py that no import smoke test can predict.
+      # `scripts/setup_dev_env.sh` already installs the equivalent (`mesa-libGLES`) on its dnf
+      # path; this is the apt half that was never written.
+      # Verify with:  objdump -p .../mediapipe/tasks/c/libmediapipe.so | grep NEEDED
+      #
       # ffmpeg is likewise not optional: ~90 tests skip without it, and the real-binary
       # capability tests (tests/test_capabilities_real_binary.py) exist specifically to catch
       # probe bugs that every mocked test misses, so they must actually run.
-      - name: Install system dependencies (FFmpeg + fonts + opencv runtime libs)
+      - name: Install system dependencies (FFmpeg + fonts + opencv/mediapipe runtime libs)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0
+          sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0 libegl1 libgles2
 
       - name: Install Python dependencies
         run: |
@@ -83,6 +96,14 @@ jobs:
       # it checks the working tree, it does not fetch.
       - name: Emoji assets are vendored
         run: python scripts/fetch_emoji.py --check
+
+      # Same guarantee for the face-detector model, and for the same reason: the `mediapipe`
+      # backend loads a vendored `.tflite` by path, so an absent or truncated file means the
+      # backend silently substitutes Haar on every render. This is a digest check rather than
+      # an existence check because a half-downloaded model is a file that exists, has a
+      # plausible size, and fails deep inside the native graph at the first frame.
+      - name: Detector models are vendored
+        run: python scripts/fetch_models.py --check
 
       # A1/A2: same guarantee for the caption faces. A missing font is why captions
       # rendered in whatever the host substituted.

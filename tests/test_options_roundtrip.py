@@ -522,3 +522,58 @@ def test_p35_engine_option_fields_round_trip(mapping, engine_id):
         reset_registry()
         reset_report()
     assert len(get_registry()) == 0
+
+
+
+# --------------------------------------------------------------------------- #
+# 5.5 — Property 6 (face-detection-upgrade)                                    #
+# --------------------------------------------------------------------------- #
+# Feature: face-detection-upgrade, Property 6: face_detector round-trips and unknown values default
+@settings(max_examples=100)
+@given(
+    value=st.one_of(
+        st.sampled_from(["haar", "mediapipe"]),
+        st.text(max_size=12),
+        st.integers(),
+        st.none(),
+        st.booleans(),
+        st.lists(st.text(max_size=3), max_size=2),
+    )
+)
+def test_p6_face_detector_round_trips_and_unknown_values_default(value):
+    """Validates: Requirements 10.2, 1.4
+
+    Any recognised value survives ``from_dict(asdict(...))`` unchanged; anything else resolves
+    to ``haar`` without raising. The malformed half matters as much as the round-trip: this
+    field arrives from an upload form as a free-text string, so a typo must cost the user the
+    better detector rather than the whole job.
+    """
+    options = ProcessingOptions.from_dict({"face_detector": value})
+    assert options.face_detector in ("haar", "mediapipe")
+    if value in ("haar", "mediapipe"):
+        assert options.face_detector == value
+    else:
+        assert options.face_detector == "haar"
+
+    # And it survives a full serialise/deserialise cycle.
+    again = ProcessingOptions.from_dict(asdict(options))
+    assert again.face_detector == options.face_detector
+
+
+def test_face_detector_defaults_to_haar():
+    """The single line the whole byte-parity argument rests on."""
+    assert ProcessingOptions().face_detector == "haar"
+
+
+def test_the_option_domain_matches_the_detector_modules_domain():
+    """The two lists are declared separately; a test is what keeps them equal.
+
+    ``worker/models.py`` holds the tuple as a literal rather than importing it from
+    ``worker.effects.reframe``, so that the options and API layers do not drag the reframe
+    module (and its config import) in behind them. That is a deliberate duplication, which
+    means it needs a pin: adding a backend in one place and not the other would either offer a
+    value the resolver rejects or hide one it accepts.
+    """
+    from worker.effects.reframe import FACE_DETECTOR_BACKENDS
+
+    assert tuple(ProcessingOptions._FACE_DETECTORS) == tuple(FACE_DETECTOR_BACKENDS)

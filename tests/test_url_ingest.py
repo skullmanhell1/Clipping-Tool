@@ -65,8 +65,19 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @pytest.fixture
-def media_server(tmp_path):
-    """Serve ``tmp_path`` over HTTP and yield ``base_url``."""
+def media_server(tmp_path, monkeypatch):
+    """Serve ``tmp_path`` over HTTP and yield ``base_url``.
+
+    The SSRF guard in ``download.validate_public_url`` refuses loopback, link-local and
+    private addresses, which is exactly what this fixture serves from. Serving locally is
+    deliberate (see the module docstring) - it exercises the whole yt-dlp path without making
+    CI depend on the public internet - so the guard has to be opted out of, not worked around.
+    That opt-in is the module-wide ``_allow_loopback_ingest`` fixture above rather than a
+    second one here, so there is one place that says "this module may reach 127.0.0.1".
+
+    The guard's default-deny behaviour is covered directly in ``tests/test_url_guard.py``,
+    including the loopback and cloud-metadata cases, so relaxing it here loses no coverage.
+    """
     handler = functools.partial(_QuietHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

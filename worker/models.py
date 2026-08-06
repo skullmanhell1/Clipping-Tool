@@ -163,6 +163,11 @@ class ProcessingOptions:
     speaker_reframe: bool = False          # speaker-aware reframe toggle
     reframe_layout: str = "follow_active"  # follow_active | split_screen
     reframe_intensity: str = "standard"    # subtle | standard | heavy
+    # Which detector finds the faces the crop follows. ``haar`` is the shipped v0.11.0
+    # cascade and stays the default, so an unchanged configuration reproduces existing
+    # output exactly - switching it would change the crop path, and therefore the pixels,
+    # in every golden and parity render.
+    face_detector: str = "haar"            # haar | mediapipe
 
     # --- Kinetic typography engine (default OFF) --------------------------
     # ``kinetic_typography_enabled`` is the Feature_Flag the engine's inherited
@@ -241,6 +246,11 @@ class ProcessingOptions:
     _ASSET_SOURCING_MODES = ("off", "local_only", "local_then_external")
     _REFRAME_LAYOUTS = ("follow_active", "split_screen")
     _REFRAME_INTENSITIES = ("subtle", "standard", "heavy")
+    # Kept as a literal here rather than imported from worker.effects.reframe: models.py is
+    # imported by the options round-trip and API layers, and reaching into the effects package
+    # for a tuple of two strings would drag the reframe module (and its config import) into
+    # every one of them. A test pins the two lists against each other.
+    _FACE_DETECTORS = ("haar", "mediapipe")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
@@ -328,6 +338,7 @@ class ProcessingOptions:
             ("asset_sourcing_mode", cls._ASSET_SOURCING_MODES, "off"),
             ("reframe_layout", cls._REFRAME_LAYOUTS, "follow_active"),
             ("reframe_intensity", cls._REFRAME_INTENSITIES, "standard"),
+            ("face_detector", cls._FACE_DETECTORS, "haar"),
         ):
             if enum_field in valid:
                 v = valid[enum_field]

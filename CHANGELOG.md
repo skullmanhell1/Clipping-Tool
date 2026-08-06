@@ -98,6 +98,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 from fontconfig and no `.venv` present — the environment CI actually has, rather than a prepared
 one.
 
+
+### Added — modern face detection and measured detection confidence
+
+- **A second face-detector backend, opt-in.** `face_detector` accepts `haar` (the shipped
+  OpenCV cascade) or `mediapipe` (BlazeFace, via the vendored model). **`haar` stays the
+  default**, so an unchanged configuration reproduces v0.11.0 output exactly — which matters
+  more than it sounds: the golden and parity renders only detect an *accidental* change while
+  they are not re-frozen each release, and switching the default detector would move the crop
+  path, and therefore the pixels, in every one of them.
+
+  Measured on a synthetic source containing a frontal drift, a profile turn and a two-shot:
+  Haar reaches **0.886** detection coverage overall and **0.60** across the profile turn;
+  BlazeFace reaches **0.971** and **0.90**. The profile turn is the case the upgrade exists
+  for — a frontal cascade loses the face as the head rotates, which on screen is the crop
+  freezing while the subject keeps moving. Both figures come from drawn faces rather than
+  photographs, so they are a controlled comparison and a demonstration that the measurement
+  works, not a claim about real-world accuracy.
+
+- **Detection coverage is now measured and reported**, which is the first quantitative
+  statement this subsystem has made about itself. `reframe_low_confidence:<coverage>` lands on
+  a clip whose framing was built from sparse detections, so a batch review can concentrate on
+  those and trust the rest. Below-floor *and* at least one detection: zero coverage is already
+  reported by the existing no-faces degradation, and emitting both would be two names for one
+  condition — the duplicated-fact pattern mutation testing has caught twice here.
+  `reframe_sample_rate:<fps>` appears only when the sampling cap actually reduced the rate,
+  because a marker emitted on every clip is noise, and noise is what stops a marker being read.
+
+- **The marker names the backend that ran, never the one that was asked for.**
+  `face_detector:haar|mediapipe|injected`, and `face_detector_substituted:mediapipe:haar` when
+  MediaPipe was requested and Haar ran. The resolver returns the label from the branch that
+  succeeded rather than letting the caller infer it, because inference is exactly how
+  `font_substituted:Arial` got frozen into a golden file as correct. An injected detector
+  reports `injected` rather than borrowing a backend name: a test double is not evidence that a
+  backend works.
+
+- **The BlazeFace model is vendored, licensed and verified offline**, following the
+  `assets/emoji/` precedent exactly — `assets/models/blaze_face_short_range.tflite` (229,746
+  bytes, Apache-2.0) with its licence and provenance alongside, and
+  `scripts/fetch_models.py --check` verifying it by SHA-256 against a manifest with no network
+  access, wired into CI. This is what moves the item out of the weights-blocked bucket: a
+  quarter-megabyte graph under a permissive licence can live in a git repository, where an
+  active-speaker or body-detection checkpoint cannot. Neither MediaPipe nor OpenCV ships a
+  model in its wheel — verified, not assumed — so without vendoring the backend has nothing to
+  load. A digest rather than an existence check, because a half-downloaded `.tflite` is a file
+  that exists, has a plausible size, and fails deep inside the native graph at the first frame
+  of a render.
+
+- **A coordinate-conversion function with its own tests, verified against the real library.**
+  This is the part of the feature that would have failed silently. Measured on mediapipe
+  0.10.35, the tasks API returns **absolute pixels** and has no `relative_bounding_box` at all
+  — the normalised box belonged to the `mediapipe.solutions` namespace, which was **removed**.
+  Had a normalised box leaked through as pixels, the result is a one-pixel face at the frame
+  origin and *nothing objects*: `pick_main_face` returns a centre, `FaceBox` validates,
+  `build_face_tracks` builds tracks, `build_sendcmd` clamps to a valid window, ffmpeg encodes,
+  and the clip record says `reframe`. Every clip would be cropped to the frame's left edge and
+  the only evidence would be the pixels. A suite of fake detectors returning pixel tuples
+  cannot catch that, because the fakes would be right and the real backend wrong — so
+  `tests/test_face_detection_real_binary.py` runs the real library against a real image with no
+  mocking, and cross-checks the conversion through arithmetic written out in the test that
+  shares no code with the function under test.
+
+- **Confidence-aware main-face selection.** Where a backend supplies scores, the main face is
+  ranked on `score × sqrt(area)` so a large low-confidence box loses to a smaller confident
+  face — the crop should follow a face rather than a bookshelf, and a bookshelf is usually
+  bigger. Linear extent rather than area because weighting by area makes confidence nearly
+  irrelevant: a 400×400 false positive at 0.10 beats an 80×80 face at 0.95 by more than two to
+  one on `score × area`. Where no scores are available — Haar supplies none, and inventing one
+  from reject levels would be false precision — selection is largest-area *verbatim*, which is
+  what makes the byte-identical default achievable rather than merely likely.
+
+- **Fixed: the speaker-aware path reported coverage 0.0 for every clip.** `FaceBox` carries a
+  leading `t`, so it is not a 4-tuple, and the detection coercion silently rejected it — which
+  meant footage the same run had just tracked successfully was reported as having no faces.
+  Found by a test written for the marker, not by review.
+
 ### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
 
 - **`C21` — a caption font that can actually render what was said.** Captions were drawn in a Latin
