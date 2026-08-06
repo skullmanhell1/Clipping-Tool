@@ -166,10 +166,25 @@ describe("while a request is in flight", () => {
   it("re-enables the controls when the request fails", async () => {
     // The `finally` is what guarantees this: without it a single failed save would leave the
     // whole bar dead until reload.
+    //
+    // No `.catch()` on the click any more. That swallowed a rejection the *component* was
+    // letting escape - these are onClick handlers, so React drops the returned promise and it
+    // surfaced as an unhandled rejection that failed the whole vitest run while every
+    // individual test still reported green.
     const onSave = vi.fn().mockRejectedValue(new Error("nope"));
     setup({ onSave, activeId: "p1" });
     const save = screen.getByRole("button", { name: "Save current" });
-    await userEvent.click(save).catch(() => {});
+    await userEvent.click(save);
     await vi.waitFor(() => expect(save).toBeEnabled());
+  });
+
+  it("tells the user when the request fails", async () => {
+    // Re-enabling the button is not enough on its own: a bar that looks exactly like it did
+    // before the click is indistinguishable from one where the save succeeded.
+    const onSave = vi.fn().mockRejectedValue(new Error("nope"));
+    setup({ onSave, activeId: "p1" });
+    await userEvent.click(screen.getByRole("button", { name: "Save current" }));
+    const alert = await vi.waitFor(() => screen.getByRole("alert"));
+    expect(alert).toHaveTextContent("nope");
   });
 });

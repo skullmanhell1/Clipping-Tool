@@ -16,28 +16,24 @@ export default function ProfilesBar({
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const active = profiles.find((p) => p.id === activeId);
 
+  // The `finally` re-enables the controls, but the rejection used to keep travelling: these
+  // are `onClick` handlers, so React discards the promise they return and a failed save
+  // became an *unhandled rejection* - the user watched the button come back and was told
+  // nothing at all about why their profile had not been saved. Catching it is what turns
+  // three silent failure paths (save, set-default, delete) into a visible message.
   const run =
     (fn) =>
     async (...args) => {
       setBusy(true);
+      setError("");
       try {
         await fn(...args);
       } catch (err) {
-        // `try`/`finally` with no `catch` re-throws, and every one of these actions awaits an API
-        // request through a parent handler in `App.jsx` that does not catch either — so a rejected
-        // save, delete or set-default became an *unhandled* promise rejection. In the browser that
-        // is a console error nobody sees; under vitest it is a run-level failure, which is how CI
-        // reported `Error: nope` from the "re-enables the controls when the request fails" test
-        // while all 384 tests passed and the job still went red.
-        //
-        // Caught and logged, not reported in the UI: showing the failure to the user is a real
-        // improvement and a bigger change (an alert region, one message per silent path, tests for
-        // each), and it belongs in a frontend change rather than in this one, which is about
-        // dependency locking. The sibling lineage does it in `8107942`.
-        console.error("profile action failed", err);
+        setError(err?.message ? `Could not do that: ${err.message}` : "Could not do that.");
       } finally {
         setBusy(false);
       }
@@ -117,6 +113,11 @@ export default function ProfilesBar({
           </button>
         </div>
       </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-rose-300">
+          {error}
+        </p>
+      )}
       <p className="mt-2 text-xs text-slate-500">
         Save the full current configuration (clip length, aspect, captions, effects, publishing) as
         a named profile. Selecting one pre-fills every setting for the next run.
