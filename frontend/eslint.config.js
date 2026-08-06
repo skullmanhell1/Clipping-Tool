@@ -47,8 +47,21 @@ export default [
       // and JSX-scope/import-React rules would be false positives.
       "react/react-in-jsx-scope": "off",
       "react/jsx-uses-react": "off",
-      // Props are not typed with propTypes anywhere in this project; requiring them
-      // would produce hundreds of findings that say nothing about correctness.
+      // Deliberately off, and the reason is not "it is noisy".
+      //
+      // `propTypes` is a runtime check that React **removed in 19**. Annotating twenty
+      // components with a mechanism that the next major deletes would be work with a known
+      // expiry date, and it would add `prop-types` as a production dependency to buy a
+      // development-time guarantee.
+      //
+      // The risk it addresses — a component handed the wrong prop shape — is now covered more
+      // directly: every component is rendered under test with real props, and frontend coverage
+      // is 91%. A test that renders `<StorageSettings />` against a malformed payload says
+      // something a `propTypes` warning in a console nobody reads does not.
+      //
+      // The upgrade path when this stops being enough is JSDoc annotations plus `checkJs`, which
+      // typechecks without a runtime dependency and without renaming every file. Not TypeScript
+      // for its own sake, and not `propTypes`.
       "react/prop-types": "off",
       // Narrowed rather than disabled. By default this rule also flags ' and " in JSX
       // text, which are ordinary prose here ("don't", quoted names) and render
@@ -57,7 +70,20 @@ export default [
       "react/no-unescaped-entities": ["error", { forbid: [">", "}"] }],
       // The two rules that catch genuine bugs rather than style.
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      // Promoted from "warn". `eslint` exits 0 on warnings, and `npm run lint` passes no
+      // `--max-warnings`, so as a warning this rule **could not fail CI** — it was advice in a
+      // log nobody reads on a green build.
+      //
+      // Its findings here have been real bugs, not noise. Two are documented in the code it
+      // governs: App's poll interval depended on `jobs.length`, which does not change when a job
+      // goes from processing to completed, so the fast 1.2s poll continued forever after
+      // everything had finished; and HistoryView's `load` was recreated every render while the
+      // effect listed only `[filter]`. Both were suppressions of this rule.
+      //
+      // The suite is at zero warnings, so this costs nothing today and stops the next one.
+      // A genuine exception gets an inline disable with a comment saying why —
+      // `hooks/useProfiles.js` has the one current example.
+      "react-hooks/exhaustive-deps": "error",
       // An unused variable is usually a leftover or a typo'd identifier. Argument
       // patterns prefixed with _ are conventionally intentional.
       "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],

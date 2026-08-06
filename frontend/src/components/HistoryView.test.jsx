@@ -158,3 +158,21 @@ describe("publish attempt actions", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled());
   });
 });
+
+describe("a malformed history payload", () => {
+  it("renders an empty view instead of taking the whole app down", async () => {
+    // A component that throws during render unmounts the entire tree, so one endpoint answering
+    // without `clips` used to white-screen the app rather than show an empty table.
+    vi.spyOn(api, "history").mockResolvedValue({ publish_attempts: [] });
+    render(<HistoryView />);
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+    expect(screen.getByText("Created clips (0)")).toBeInTheDocument();
+  });
+
+  it("survives a payload that is not an object at all", async () => {
+    vi.spyOn(api, "history").mockResolvedValue(null);
+    render(<HistoryView />);
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+    expect(screen.getByText(/No publish attempts yet/)).toBeInTheDocument();
+  });
+});

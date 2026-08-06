@@ -44,13 +44,25 @@ export default function InputBar({ onChange, onPreview }) {
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
       <div className="flex flex-col gap-3 sm:flex-row">
-        <input
-          type="text"
+        {/*
+          A textarea, not `<input type="text">`, and the reason is the placeholder.
+
+          The HTML value-sanitisation algorithm for text inputs *strips* CR and LF, so pasting a
+          newline-separated list of URLs into one produced a single concatenated string --
+          "https://a/1https://a/2" -- which parsed as one unusable URL and was then submitted.
+          The control could not honour the behaviour it advertised, and the failure was silent up
+          to the point the backend rejected the address.
+
+          Kept to one visible row so the layout is unchanged for the common single-URL case;
+          `resize-y` lets someone pasting a column of twenty expand it.
+        */}
+        <textarea
+          rows={1}
           value={urlText}
           onChange={handleUrlChange}
           onBlur={() => urls.length === 1 && onPreview?.(urls[0])}
           placeholder="Paste a video URL (or several, separated by space / new lines)"
-          className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 placeholder-slate-500 outline-none transition focus:border-brand-accent"
+          className="flex-1 resize-y rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 placeholder-slate-500 outline-none transition focus:border-brand-accent"
         />
         <button
           type="button"

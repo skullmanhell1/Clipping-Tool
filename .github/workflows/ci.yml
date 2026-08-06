@@ -65,6 +65,12 @@ jobs:
       # older releases). The rule set is now pinned in pyproject.toml, which is what makes
       # blocking on it meaningful.
       #
+      # Blocking, and it runs before the lint steps because a stale lock invalidates everything
+      # after it: the versions the rest of this job tested are then not the versions a build
+      # installs. Re-resolves requirements*.txt and compares against the committed locks.
+      - name: Dependency locks are in step with their inputs
+        run: scripts/lock_requirements.sh --check
+
       - name: Lint (ruff)
         run: ruff check .
 
