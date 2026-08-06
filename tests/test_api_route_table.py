@@ -89,12 +89,11 @@ def _is_spa_fallback(route: APIRoute) -> bool:
     says whether somebody has run `npm run build` - it says nothing about the API - so neither
     belongs in a frozen table.
 
-    Leaving them in is what broke this suite: the golden was captured on a checkout with the
-    frontend built, and the backend CI job never builds it, so `test_no_endpoint_was_added_or_removed`
-    reported `GET /` as an *added* endpoint, the mount list came up one short, and the catch-all
-    assertion found nothing - three failures on every run of a job whose Python code was fine.
-    Phase 7 reached the same conclusion for the OpenAPI document and marked this route
-    `include_in_schema=False` for exactly this reason.
+    Leaving them in is what broke this suite. The table was frozen on a checkout with the frontend
+    built; the Backend CI job installs no Node and builds nothing, so there it reported
+    ``endpoints added: ['GET /']``, a mount list one item short, and
+    ``expected exactly one catch-all mount, got []`` - three failures out of seven in a job whose
+    Python was fine, and the whole reason this freeze looked broken rather than useful.
 
     Both are excluded from `capture()` and asserted directly, in both states, by
     :func:`test_the_spa_is_served_exactly_once_and_last`.
@@ -255,10 +254,9 @@ def test_the_spa_is_served_exactly_once_and_last():
 
     Written for both states of `frontend/dist` on purpose. `api/main.py` registers the mount when
     the SPA has been built and a `GET /` fallback page when it has not, and asserting only the
-    first made this test a statement about the working tree: it passed locally and failed in CI,
-    where the backend job installs no Node and builds nothing. Which of the two is present is not
-    a property worth freezing - that *exactly one* of them is, and that the greedy one cannot
-    shadow anything, is.
+    first made this a statement about the working tree: green locally, red in CI, where the backend
+    job builds no frontend. Which of the two is present is not a property worth freezing - that
+    *exactly one* of them is, and that the greedy one cannot shadow anything, is.
     """
     mounts = [(index, route) for index, route in enumerate(app.routes) if isinstance(route, Mount)]
     catch_all = [(index, route) for index, route in mounts if route.path == ""]
