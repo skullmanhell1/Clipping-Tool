@@ -1,25 +1,30 @@
 # Session Handoff
 
-Rewritten after the Phase 1–4 improvement pass. The previous version described the five completed
-specs and said "no PRs are open", which is no longer true of either half — it has been replaced
-rather than amended, because a handoff document that is wrong is worse than none.
+Current as of `VERSION` **0.11.0**, with `main` at PR **#83**.
+
+Maintained on the principle that a handoff document which is wrong is worse than none — so where a
+section has stopped being true it is **replaced**, not amended, and the correction says what it used
+to claim. §1 has been through that twice now: it once described five completed specs and "no PRs are
+open", then described a Phase 1–4 stack stranded off `main`. Both were true when written. Neither
+is now.
 
 ## Start here
 
-**1. Check that `main` has the work before building on it.** See
-[§1](#1-where-the-work-is). One PR carries the whole Phase 1–4 pass onto `main`; until it
-lands, branching off `main` means rebuilding things that already exist.
+**1. `main` has the work. Branch off it.** See [§1](#1-where-the-work-is). The Phase 1–4 pass is
+merged; there is nothing stranded and nothing to check before starting.
 
-```bash
-git fetch origin
-git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
-  || echo "main is BEHIND - see section 1"
-```
+The previous version of this section gave a `git cat-file` probe to prove `main` might be behind.
+It has been removed rather than updated, because it could only ever return one answer now, and a
+check that cannot fail teaches the reader to skip checks.
 
 **2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
-a priority and effort estimate each, every current value quoted from the code. **140 are now
-implemented.** The 14 that remain are listed in [§3](#3-what-is-actually-left), and most are blocked
-on something other than effort.
+a priority and effort estimate each. **141 are now implemented**, and the 13 that remain are listed
+in [§3](#3-what-is-actually-left); most are blocked on something other than effort.
+
+> Read the plan as an **audit of v0.10.0**, which is what it says it is. Its "Current:" lines and
+> "current value" tables describe 0.10.0 and most are now wrong — §6 in particular now asserts the
+> opposite of the truth about loudness. The *item tables* are the backlog; the prose around them is
+> history, and each affected section carries a marker saying so.
 
 > If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
 > figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
@@ -34,35 +39,24 @@ when a constant changes, and one module reports "I cannot do this" rather than d
 
 ## 1. Where the work is
 
-Version `0.11.0`. The Phase 1–4 pass was built as a stack of PRs and they have all been merged —
-but into **each other**, not into `main`. Consolidated onto one branch (`integrate/main-sync`) which
-is what carries the lot onto `main`:
+**On `main`. All of it.** Version `0.11.0`.
 
-| Merged PR | Items | Backend tests |
-| --- | --- | --- |
-| #61 | T4, T5, T7, M3 | 1028 |
-| #62 | V4, V9, V11, V13, V17, O5, O9, O11 | — |
-| #63 | I4, I6, M5, U8, U10, U13, I11 | — |
-| #64–#70 | the caption, asset, audio, publishing, review and infra batches | 1266 → 1686 |
-| #71 | C19, S7, S8, S12, T9, T10 | 1751 |
-| #72 | A5, A9, A13, A17, A19, A22 | 1808 |
-| #73 | I7, I10, I12, I13 | 1827 |
-| #74 | C21, V15, AU9, O8 | 1880 |
-| #75 | the mutation harness and this document | — |
+This section used to say the Phase 1–4 pass had been merged "into **each other**, not into
+`main`", and named `integrate/main-sync` as the branch that would carry it across. That was true
+when it was written and is not true now: **PR #76 merged `integrate/main-sync`**, and `main` has
+advanced well past it — PR **#83** (`spec/face-detection-upgrade`) and several others have landed
+since. None of the `integrate/*` or `feat/*` branches described here still exist.
 
-**Why one branch rather than a chain.** Each PR was based on the previous one, so merging them
-bottom-up landed #72 in `feat/selection-transcript`, #73 in `feat/assets-expansion` and #74 in
-`feat/infra-verification` — none of which is `main`. Only #71 reached
-`integrate/phase4-base`. The consolidation merges both `integrate/phase4-base` *and* the chain tip,
-so nothing is taken on trust: the only conflict was `CHANGELOG.md`, and the incoming version was
-verified to be a strict superset of `main`'s (every `###` heading present, released history
-byte-identical) before it was taken.
+The rewrite is deliberate rather than an amendment. This document opens by saying a handoff that
+is wrong is worse than none, and the old §1 was the most costly kind of wrong: it instructed the
+reader to redo completed work.
 
-**#10** (`docs: campaign-briefs spec`) is an older, unrelated documentation PR and is not part of
-this.
+**What this means in practice:** branch off `main`, and trust it. The historical PR table has been
+removed — `CHANGELOG.md` is the record of what landed, and it is maintained; a second, staler copy
+of the same history in here was only ever going to drift again.
 
 Note that the sandbox cannot `git push` or `git fetch` with ordinary credentials — only the GitHub
-tooling authenticates. Retargeting or merging from the UI is a human step.
+tooling authenticates. That part is still true, and still the thing that surprises people.
 
 ## 2. Test baselines
 
@@ -71,7 +65,8 @@ because it looks like success.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
+| `pytest` | **2076 passed, 0 skipped, 0 warnings** |
+| `mypy .` | clean (99 modules) |
 | `npm run test:run` | **141 passed** |
 | `ruff check .` | clean |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
@@ -79,17 +74,66 @@ because it looks like success.
 | `npm audit --audit-level=critical` | exits 0 |
 
 **Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
-README's Testing section. The full backend suite takes about five minutes.
+README's Testing section. The full backend suite takes about five to six minutes.
 
-`npm audit` still reports **9 high advisories** and that is a decision, not an oversight: a
-`brace-expansion` DoS reachable only through eslint's own `minimatch` chain. Both available fixes
-were tried and both are worse than the finding — `npm audit fix --force` *downgrades*
-`eslint-plugin-react` to 7.22.0, and overriding `brace-expansion` to a patched 5.x breaks
-`minimatch@3` so eslint crashes outright. Hence the gate is `--audit-level=critical`.
+**Run `scripts/setup_dev_env.sh` first.** Without ffmpeg the suite does not fail, it *skips* — and
+a skip is what the gate below exists to catch.
+
+**The no-skip gate reads the JUnit XML**, not pytest's summary text. Same rule — any skip fails the
+build — but it no longer depends on prose pytest is free to reword, and it also catches
+`xfail`/`xpass`.
+
+**`mypy` is blocking.** It had never been run before; the first run found 69 errors in 17 files and
+all of them are now fixed or covered by one of two narrow per-module overrides in `pyproject.toml`,
+each carrying its reason. `disallow_untyped_defs` is ratcheted on `worker/models.py`,
+`worker/selection.py`, `worker/candidate_ranking.py`, `publishers/base.py` and
+`storage_backends/base.py`.
+
+### Coverage
+
+Measured and **reported**, not gated — a threshold picked before anyone has seen the number either
+passes by accident or blocks the first honest measurement.
+
+| Surface | Coverage |
+| --- | --- |
+| Backend | **90%** (13,213 statements) |
+| Frontend | **36.81%** statements (1,438 / 3,906) |
+
+The frontend figure is the honest headline: `App.jsx` (614 lines) and six components including
+`SettingsPanel.jsx` (969 lines) have no tests at all.
+
+**Do not add `--cov` to `addopts`.** Coverage instrumentation changes garbage-collection timing,
+which is enough to move an unclosed-socket `ResourceWarning` raised inside yt-dlp out of teardown
+and into the middle of a test — where `filterwarnings = error` correctly fails it. CI runs coverage
+as a separate pass so the run that gates the build is the same one you run locally.
+
+**Do not install `pip-audit` (or anything else pulling `requests`) into the test venv.** yt-dlp
+prefers its `requests`-based request handler when the package is importable, and that handler leaks
+a socket. Measured: with `requests` present, 3–4 of the `tests/test_url_ingest.py` I13 tests fail
+non-deterministically under `--cov`; uninstalling it makes the identical run green. CI audits in an
+isolated venv for this reason, and `requirements-dev.txt` records it.
+
+### npm advisories: the 9 high findings are gone
+
+This section previously recorded **9 high advisories** as a deliberate decision — a
+`brace-expansion` DoS reachable only through eslint's own `minimatch` chain, where
+`npm audit fix --force` *downgraded* `eslint-plugin-react` to 7.22.0 and pinning
+`brace-expansion` broke `minimatch@3` so eslint crashed outright.
+
+**`npm audit` now reports `found 0 vulnerabilities`** (verified on the committed lockfile). The
+chain was resolved upstream. The gate stays at `--audit-level=critical`: the reasoning for *why*
+it is set there is still sound, and lowering it now would be gambling that the next advisory is
+also fixable without breaking the build.
 
 ## 3. What is actually left
 
 13 items. Only two are a matter of effort.
+
+**This list is authoritative; the count is not.** 154 − 141 = 13, but the total depends on a
+judgement: `M4`/`S1` are one gating item carrying two IDs, and `S16`/`S18` are consequences of it
+rather than independent work. `docs/IMPROVEMENT_PLAN.md` once said "14 remain" while this section
+said 13, purely because the plan's header had not yet counted `U4` as done. If you need to know
+what is left, read the list below rather than reconciling the arithmetic.
 
 **`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
 knowing where the seams ended up, because the next person to touch trimming will meet them:
@@ -105,7 +149,7 @@ second pass.
 | Item | What | Why it was left |
 | --- | --- | --- |
 | **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
-| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
+| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Own branch, nothing else in flight.** It touches nearly every file. The "after the chain merges / conflicts with all four open PRs" note that used to be here is obsolete — the chain merged at PR #76 and those PRs are closed — but the underlying advice stands for the ordinary reason: do not mix a mechanical sweep with a behavioural change. `black --check` has never run; `ci.yml` documents the waiver. |
 
 ### Blocked on model weights CI cannot have
 
