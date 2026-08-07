@@ -177,7 +177,13 @@ def escape_filter_path(path: str | Path) -> str:
     return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
-def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str]:
+def h264_args(
+    *,
+    normalise_fps: bool = False,
+    vbv_cap: bool = False,
+    delivered_fps: Optional[int] = None,
+    keyframe_seconds: Optional[float] = None,
+) -> list[str]:
     """The standard libx264 arguments for an encode.
 
     Centralised because these flags were duplicated at eight call sites across five
@@ -227,7 +233,28 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     args += encoder.quality_args(int(settings.x264_crf))
     args += _compat_args(encoder)
     if normalise_fps:
-        args += ["-r", str(int(settings.output_fps))]
+        # O18: the delivered rate, which is not always the configured one any more.
+        #
+        # `delivered_fps` comes from `worker.frame_rate.plan_frame_rate`, which preserves a CFR
+        # source already at a platform rate instead of resampling it. Absent, this falls back to
+        # `output_fps` -- the pre-O18 behaviour verbatim, so a caller that has not been taught the
+        # policy keeps the blanket guarantee rather than silently losing it.
+        rate = int(delivered_fps) if delivered_fps else int(settings.output_fps)
+        args += ["-r", str(rate)]
+        if keyframe_seconds:
+            # O19: `-g`, derived from the rate actually being delivered (R6.2).
+            #
+            # Final renders only, which is why this is an explicit parameter rather than something
+            # inferred from `normalise_fps`: constraining an encoder whose output is about to be
+            # re-encoded costs quality for no delivered benefit, the same reasoning `vbv_cap`
+            # already applies.
+            #
+            # Deliberately **no** `-sc_threshold 0` (R6.5). Forcing a fixed GOP would put an
+            # I-frame in the wrong place on every cut, which is worse for both quality and seeking
+            # than the uneven spacing scene detection produces.
+            from worker.frame_rate import keyframe_interval_frames
+
+            args += ["-g", str(keyframe_interval_frames(rate, keyframe_seconds))]
     if vbv_cap:
         # O7: the platform profile's ceiling when one is active, else the configured value.
         from worker import output_profiles
@@ -405,6 +432,14 @@ class MediaInfo:
     video_codec: str = ""
     audio_codec: str = ""
     size_bytes: int = 0
+    # O18: the container's *base* rate, alongside the average `fps` above. Both come from the
+    # same ffprobe call that was already being made -- for a CFR file they agree, and for VFR
+    # `r_frame_rate` reports the base while `avg_frame_rate` reports what the file contains.
+    # That divergence is the whole CFR/VFR signal, and it was being discarded.
+    #
+    # Appended last and defaulted, for the reason the comment above records: several tests
+    # construct MediaInfo positionally.
+    base_fps: float = 0.0
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -473,6 +508,20 @@ def _run(
     return proc
 
 
+def _fraction(value: object) -> float:
+    """Parse ffprobe's ``"30000/1001"`` rate notation. Returns 0.0 when unreadable.
+
+    Extracted because `probe()` now reads two rate fields and parsing them differently is exactly
+    the duplicated-fact defect mutation testing keeps finding here: the CFR/VFR decision compares
+    them, so a discrepancy in the parsing would read as a discrepancy in the file.
+    """
+    try:
+        num, _, den = str(value or "0/0").partition("/")
+        return float(num) / float(den) if float(den) else 0.0
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
 def probe(path: str | Path) -> MediaInfo:
     """Return :class:`MediaInfo` for ``path`` via ffprobe.
 
@@ -526,6 +575,7 @@ def probe(path: str | Path) -> MediaInfo:
         height=int(video.get("height") or 0),
         fps=round(fps, 3),
         has_audio=audio is not None,
+        base_fps=_fraction(video.get("r_frame_rate")),
         video_codec=str(video.get("codec_name") or ""),
         audio_codec=str((audio or {}).get("codec_name") or ""),
         size_bytes=size_bytes,

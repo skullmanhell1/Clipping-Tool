@@ -1349,7 +1349,12 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         rec.events.append("cut")
         return av_touch(dest)
 
-    def fake_filler(source, keeps, dest):
+    def fake_filler(source, keeps, dest, **_kw):
+        # `**_kw` absorbs O18/O19's `delivered_fps`/`keyframe_seconds`. This double stands
+        # in for the real concat to assert clip accounting, so the encode argv is not its
+        # subject -- but a stub narrower than the function it replaces fails on the call
+        # rather than on the assertion, which is a confusing way to learn a parameter was
+        # added.
         rec.events.append("filler")
         return av_touch(dest)
 

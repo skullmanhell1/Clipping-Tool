@@ -29,6 +29,7 @@ from config import settings
 from worker import captions as cap
 from worker import (
     diarization,
+    frame_rate,
     intermediate_cache,
     segmentation,
     subtitle_export,
@@ -170,6 +171,25 @@ def run_pipeline(
     info = fu.probe(source)
     if info.duration <= 0:
         raise ValueError("Source video has zero duration")
+
+    # O18/O19: decide the delivered frame rate once, from the probe just taken.
+    #
+    # The previous blanket `-r 30` was right about VFR and wrong about CFR 24, which it resampled
+    # into 3:2 judder. `plan_frame_rate` narrows the rule rather than removing it -- VFR and
+    # undeterminable sources still normalise, for the reason `config.py` documented.
+    #
+    # Gated on M11 (R8.9): `tests/test_frame_rate_policy.py` verifies A/V sync at every rate this
+    # can deliver, because frame-rate handling is the likeliest place to introduce drift and drift
+    # desynchronises every burned caption.
+    _rate_plan = frame_rate.plan_frame_rate(
+        avg_fps=info.fps,
+        base_fps=getattr(info, "base_fps", 0.0) or info.fps,
+        configured_fps=int(settings.output_fps),
+        always_normalise=str(settings.frame_rate_policy).lower() == "always",
+        ceiling_fps=None,
+    )
+    delivered_fps = _rate_plan.delivered_fps
+    keyframe_seconds = float(settings.keyframe_seconds)
 
     # SOURCE-stage engines run at most once per source, reusing the probe just
     # performed to build the job's shared Time_Base — no additional ffprobe pass
@@ -399,6 +419,9 @@ def run_pipeline(
 
         # 1. cut the selected segment
         fu.cut_segment(source, c.start, c.end, raw)
+        # O18: record what was delivered and whether it was resampled (R8.10).
+        if _rate_plan.marker:
+            applied.append(_rate_plan.marker)
 
         # 2. AI metadata first, so the hook title is available to the renderer.
         clip_text = c.text or cap_text(transcript, c.start, c.end)
@@ -444,7 +467,10 @@ def run_pipeline(
         if pending is not None:
             trimmed = temp_dir / f"trim_{clip_id}.mp4"
             try:
-                filler.apply_keep_intervals(raw, pending, trimmed)
+                filler.apply_keep_intervals(
+                    raw, pending, trimmed,
+                    delivered_fps=delivered_fps, keyframe_seconds=keyframe_seconds,
+                )
                 raw.unlink(missing_ok=True)
                 raw = trimmed
                 words = filler.rebase_words(words, pending)
@@ -577,6 +603,7 @@ def run_pipeline(
                 hook_text=md.hook_text, llm_client=llm_client,
                 broll_resolver=broll_resolver,
                 engine_contributions=(compose.contributions if compose is not None else None),
+                delivered_fps=delivered_fps, keyframe_seconds=keyframe_seconds,
                 # A17: which music track this clip gets, when the mood has several. Built from
                 # facts that survive a re-run - the source's name, the clip's ordinal and its
                 # source-relative start - so the same job produces the same beds while ten clips
