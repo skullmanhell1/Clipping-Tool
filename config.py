@@ -351,7 +351,34 @@ class Settings(BaseSettings):
     # x264 quality/speed. Previously hard-coded at eight call sites across five modules.
     # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
-    x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
+    x264_preset: str = Field(
+        default="veryfast",
+        description="x264 speed/efficiency preset. MEASURED and deliberately unchanged (O16): "
+        "on a 4K->1080x1920 downscale, slower presets beat veryfast by +0.68..+1.14 VMAF on one "
+        "source and LOST by -0.19..-0.59 VMAF on another. What they reliably bought was a smaller "
+        "file at equal CRF, not fidelity. See eval/baselines/encode_presets_v0.11.0.json.",
+    )
+
+    # O17: resampling algorithm, applied uniformly to every scale in a job.
+    #
+    # Default `bicubic` is swscale's own default, so this changes no pixels. That is the *measured*
+    # outcome, not caution -- lanczos came in within noise on the downscale R5.5 nominates, so
+    # R5.6 applies: keep the default, record the finding.
+    scaler_flags: str = Field(
+        default="bicubic",
+        description="swscale resampling algorithm: bicubic | bilinear | lanczos | spline | "
+        "neighbor | area | gauss (O17). MEASURED: lanczos is within noise of bicubic on a "
+        "4K->1080x1920 downscale (VMAF -0.07, SSIM +0.0009), bilinear is measurably worse "
+        "(VMAF -2.80). Default unchanged; the same value applies to every scale in a job.",
+    )
+
+    # O20: delivered audio bitrate.
+    audio_bitrate_kbps: int = Field(
+        default=128,
+        description="AAC bitrate for delivered clips, in kbps (O20). UNMEASURED and therefore "
+        "unchanged: this project has no audio-fidelity instrument, so 128 is the shipped value "
+        "rather than a justified one. Raise it if you can hear the difference under a music bed.",
+    )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most

@@ -75,6 +75,56 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
     "-level", OUTPUT_LEVEL,
 )
 
+#: Resampling algorithms swscale accepts, for O17's ``scaler_flags`` setting.
+#:
+#: ``neighbor`` is included for completeness and is a bad choice: it *scores* +0.75 VMAF on a
+#: 4K downscale while losing 1.02 dB of PSNR, which is VMAF being fooled by nearest-neighbour's
+#: false sharpening rather than a real improvement. A useful reminder that a single metric is
+#: not a verdict.
+SCALER_FLAGS: tuple[str, ...] = (
+    "bicubic", "bilinear", "lanczos", "spline", "neighbor", "area", "gauss",
+)
+
+#: Default resampling algorithm (O17).
+#:
+#: ``bicubic`` is swscale's own default, so this changes **no pixels** relative to v0.11.0 -- and
+#: that is the measured outcome rather than caution. Measured on a 4K -> 1080x1920 downscale, the
+#: exact case R5.5 nominates as where a difference should appear:
+#:
+#:     bilinear   VMAF -2.796   SSIM -0.002307   PSNR -0.21
+#:     lanczos    VMAF -0.071   SSIM +0.000896   PSNR +0.03
+#:     spline     VMAF -0.758   SSIM +0.000368   PSNR +0.02
+#:     neighbor   VMAF +0.749   SSIM -0.005048   PSNR -1.02
+#:
+#: ``lanczos`` is the algorithm usually recommended for downscaling and it is **within noise**
+#: here: three thousandths of a dB and nine ten-thousandths of SSIM, with VMAF marginally
+#: negative. R5.6 is explicit about what to do with that -- keep the current default and record
+#: the finding -- so the default stays ``bicubic`` and the setting exists for anyone whose footage
+#: separates them. `bilinear` is the one clear result: measurably worse, and worth knowing because
+#: it is what several ffmpeg wrappers pass by default.
+DEFAULT_SCALER_FLAGS = "bicubic"
+
+
+def scaler_args() -> list[str]:
+    """``-sws_flags`` for one ffmpeg invocation (O17, R5.1-R5.3).
+
+    **One flag per invocation, covering every ``scale=`` in that graph**, which is what satisfies
+    R5.3's "the same flags on every scale in a single job". That requirement is independent of
+    which algorithm wins the measurement: with three passes and nine scaling sites, two stages
+    resampling differently produces compounding softness that cannot be attributed to any one
+    stage. Uniformity is the deliverable; the algorithm is a setting.
+
+    Emitted as a global option rather than per-filter for the same reason `H264_COMPAT_ARGS` is
+    one constant: a per-`scale=` `flags=` argument would have to be threaded to all nine sites,
+    and the failure mode of reaching eight of them is silent.
+    """
+    value = str(settings.scaler_flags or DEFAULT_SCALER_FLAGS)
+    if value not in SCALER_FLAGS:
+        # An unrecognised algorithm applies the documented default rather than raising: swscale
+        # errors out on an unknown name, which would turn a typo in a setting into a failed job.
+        value = DEFAULT_SCALER_FLAGS
+    return ["-sws_flags", value]
+
 
 def _compat_args(encoder: "VideoEncoder") -> list[str]:
     """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
@@ -165,7 +215,12 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     choice = video_encoders.resolve_encoder()
     encoder = choice.encoder
 
-    args = ["-c:v", encoder.name]
+    # O17: uniform resampling for every `scale=` in this invocation. Placed here rather than at
+    # the nine call sites because that is what makes "identical flags on every scale in a job"
+    # (R5.3) true by construction instead of by review -- the same argument that centralised these
+    # encoder flags after a missing `-pix_fmt` reached seven of eight sites.
+    args = scaler_args()
+    args += ["-c:v", encoder.name]
     args += encoder.preset_args(str(settings.x264_preset))
     # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
     # different scale. See worker/video_encoders.py for the table.
@@ -257,9 +312,24 @@ def aac_args() -> list[str]:
     side on some players, and a surround layout is silently downmixed by whatever decoder
     gets it first, if at all.
     """
+    # O20: the bitrate is now configurable, and the default is **unchanged at 128k**.
+    #
+    # R7.5 requires a measured justification before the default moves, and this repository has no
+    # audio-fidelity instrument. M9 measures video only -- SSIM, PSNR and VMAF are all image
+    # metrics -- so there is nothing here that could compare 128k against 192k except an opinion.
+    # Adding a setting is honest; changing the default on the strength of "128k is thin under a
+    # music bed" would be the unmeasured-default substitution O16's measurement just argued
+    # against. An operator who can hear the difference can now change it; the project does not
+    # claim to know.
+    #
+    # Clamped to the platform profile's ceiling where one is active, for the same reason `vbv_cap`
+    # is: an oversized upload is rejected after the render has already been paid for.
+    from worker import output_profiles
+
+    bitrate = output_profiles.resolve_audio_bitrate_kbps()
     return [
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", f"{bitrate}k",
         "-ar", str(int(settings.output_sample_rate)),
         "-ac", str(int(settings.output_channels)),
     ]

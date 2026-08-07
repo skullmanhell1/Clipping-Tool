@@ -198,6 +198,29 @@ def resolve_max_bitrate_kbps() -> int:
     return profile.max_bitrate_kbps
 
 
+def resolve_audio_bitrate_kbps() -> int:
+    """The delivered AAC bitrate (O20, R7.1-R7.4).
+
+    Mirrors :func:`resolve_max_bitrate_kbps` exactly rather than inventing a second shape: the
+    configured value wins, and a platform ceiling applies only where the operator has not chosen
+    for themselves. Stating the rule twice differently is how two settings that look alike come to
+    behave differently, which is the kind of surprise nobody debugs quickly.
+
+    The default is **unchanged at 128k**. R7.5 wants a measurement first and this project has no
+    audio-fidelity instrument -- M9's three metrics are all image metrics -- so there is nothing
+    that could justify moving it beyond an assertion.
+    """
+    configured = int(getattr(settings, "audio_bitrate_kbps", 128) or 128)
+    # Never exceed the profile's audio ceiling where it defines one (R7.3), and never let an
+    # intermediate carry more than the final will (R7.6) -- intermediates use this same value, so
+    # that holds by construction.
+    profile = active_profile()
+    ceiling = getattr(profile, "max_audio_bitrate_kbps", None) if profile else None
+    if ceiling:
+        return min(configured, int(ceiling))
+    return configured
+
+
 def duration_ceiling_s() -> Optional[float]:
     """The active profile's duration ceiling, or ``None``."""
     profile = active_profile()
