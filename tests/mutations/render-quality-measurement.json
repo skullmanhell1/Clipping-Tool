@@ -1,0 +1,173 @@
+{
+  "_comment": [
+    "Mutation spec for the four measurement instruments: M9 fidelity, M10 caption alignment,",
+    "M11 A/V sync, M12 pairwise preference.",
+    "",
+    "A broken instrument is worse than no instrument, and the reason is specific to this spec: a",
+    "wrong measurement does not look wrong. It looks like a finding. Every mutation below produces",
+    "a number that is plausible, publishable, and about nothing -- which is exactly the shape of",
+    "the defect the whole `evaluation/` package exists to prevent.",
+    "",
+    "The highest-value ones, per the spec's task 7.4:",
+    "  mean_where_minimum_required  -- hides the single worst frame, which is the one a viewer sees",
+    "  invert_degradation           -- a worse encode scores better; every future comparison inverts",
+    "  absolute_alignment_error     -- destroys the lag/jitter distinction, the metric's only use",
+    "  skip_alignment_check         -- compares frame N against N+1 and reports it as fidelity loss",
+    "  absent_libvmaf_as_pass       -- 'could not measure' becomes 'measured fine'",
+    "  drop_declines                -- manufactures a preference out of 'nobody could tell'",
+    "",
+    "Note the command runs all four instruments' tests together. They share no code, but they do",
+    "share a failure mode -- an instrument agreeing with itself -- and running them as one batch",
+    "keeps that framing visible."
+  ],
+
+  "command": [
+    ".venv/bin/python", "-m", "pytest",
+    "tests/test_fidelity.py", "tests/test_caption_timing.py",
+    "tests/test_sync.py", "tests/test_preference.py",
+    "-q", "-x"
+  ],
+
+  "mutations": [
+    {
+      "name": "mean_where_minimum_required",
+      "file": "evaluation/fidelity.py",
+      "old": "        minimum=min(values),",
+      "new": "        minimum=sum(values) / len(values),",
+      "why": "R1.8's exact failure. The minimum becomes the mean, so the single worst frame disappears -- and a mean SSIM of 0.98 is entirely compatible with one frame at 0.4, which is what a scene-change encode decision produces and what a viewer notices. Both fields still look like measurements."
+    },
+    {
+      "name": "minimum_and_mean_swapped",
+      "file": "evaluation/fidelity.py",
+      "old": "        mean=mean,\n        minimum=min(values),",
+      "new": "        mean=min(values),\n        minimum=mean,",
+      "why": "Adjacent fields, same type, both plausible. Swapping them makes every reading look slightly better than it is, which is the direction nobody questions."
+    },
+    {
+      "name": "invert_degradation",
+      "file": "evaluation/fidelity.py",
+      "old": "    values = [float(m) for m in _SSIM_FRAME.findall(out)]",
+      "new": "    values = [1.0 - float(m) for m in _SSIM_FRAME.findall(out)]",
+      "why": "A worse encode scores better. Every comparison made with this instrument from now on points the wrong way, and a self-comparison alone cannot catch it -- which is precisely why task 2.6 exists as a separate test from 2.5."
+    },
+    {
+      "name": "ssim_summary_line_counted_as_a_frame",
+      "file": "evaluation/fidelity.py",
+      "old": "_SSIM_FRAME = re.compile(r\"^n:\\d+.*?\\bAll:\\s*([0-9.]+)\", re.MULTILINE)",
+      "new": "_SSIM_FRAME = re.compile(r\"\\bAll:\\s*([0-9.]+)\")",
+      "why": "The bug this module actually shipped with for an hour. ffmpeg prints an `ssim` summary line containing `All:`, so a bare pattern reports 51 readings for a 50-frame file and folds the summary into the mean. The self-comparison identity test does NOT catch it -- on identical input the summary is also 1.0. Only the cross-parser frame-count assertion does."
+    },
+    {
+      "name": "skip_alignment_check",
+      "file": "evaluation/fidelity.py",
+      "old": "    _require_aligned(reference, candidate)",
+      "new": "    pass",
+      "why": "R1.6. ffmpeg happily compares frame N against N+1 for the whole remainder and returns a number that is plausible, terrible and about nothing. Somebody then acts on it. A refusal is worth more than any reading here."
+    },
+    {
+      "name": "alignment_check_ignores_frame_count",
+      "file": "evaluation/fidelity.py",
+      "old": "    if ref_n != can_n or ref_n == 0:",
+      "new": "    if ref_n == 0:",
+      "why": "Keeps the resolution guard -- the one that would have errored inside ffmpeg anyway -- and drops the frame-count guard, which is the half that silently misaligns. The more tempting mutation of the two, because it still looks like a guard."
+    },
+    {
+      "name": "absent_libvmaf_as_pass",
+      "file": "evaluation/fidelity.py",
+      "old": "            readings.append(\n                Metric_Reading(metric=name, available=False, reason=entry.reason)\n            )\n            continue",
+      "new": "            continue",
+      "why": "R1.5, R7.9. 'Could not measure' becomes 'nothing wrong' for any caller doing `report.get(metric, ok)`, because the key is simply absent. Three distinguishable states collapse into two."
+    },
+    {
+      "name": "compare_across_ffmpeg_builds",
+      "file": "evaluation/fidelity.py",
+      "old": "    if b_ff != a_ff:",
+      "new": "    if False:",
+      "why": "R2.6/R2.7. The arithmetic works perfectly, which is the problem: differencing two builds yields a filter-implementation or libvmaf-model change dressed as a fidelity finding."
+    },
+    {
+      "name": "absolute_alignment_error",
+      "file": "evaluation/caption_timing.py",
+      "old": "        errors.append((event.start - flat[found][1].start) * 1000.0)",
+      "new": "        errors.append(abs(event.start - flat[found][1].start) * 1000.0)",
+      "why": "R3.3, and the single most valuable mutation in this file. A constant +150 ms lag and symmetric +/-150 ms jitter give identical absolute statistics and need completely different fixes -- one constant compensation versus forced alignment. Every summary number still looks reasonable."
+    },
+    {
+      "name": "unmatched_events_dropped",
+      "file": "evaluation/caption_timing.py",
+      "old": "            unmatched_events.append(event.text)\n            continue\n        errors.append(",
+      "new": "            continue\n        errors.append(",
+      "why": "R3.7. Exactly how a metric improves while the output gets worse: match three events of forty, report a beautiful 2 ms mean, and the count that would have revealed it is gone."
+    },
+    {
+      "name": "caption_timing_measures_the_word_list_not_the_render",
+      "file": "evaluation/caption_timing.py",
+      "old": "        spoken = _ASS_OVERRIDE.sub(\"\", body).replace(\"\\\\N\", \" \").replace(\"\\\\n\", \" \").strip()",
+      "new": "        spoken = body.strip()",
+      "why": "R3.4 in miniature: leaving `{\\kf80}` override blocks in the text breaks token matching for eleven of the fourteen caption presets, so the karaoke styles silently stop being measured at all while the non-karaoke ones keep reporting."
+    },
+    {
+      "name": "rounding_floor_forgotten",
+      "file": "evaluation/caption_timing.py",
+      "old": "ROUNDING_FLOOR_MS = 5.0",
+      "new": "ROUNDING_FLOOR_MS = 0.0",
+      "why": "`_ass_timestamp` rounds to centiseconds, so +/-5 ms is the format rather than drift. A zero floor invites someone to spend an afternoon chasing 3 ms."
+    },
+    {
+      "name": "sync_offset_unsigned",
+      "file": "evaluation/sync.py",
+      "old": "    offset_ms = (a - v) * 1000.0",
+      "new": "    offset_ms = abs(a - v) * 1000.0",
+      "why": "Audio late and audio early are different defects with different causes. Unsigned, they are the same reading."
+    },
+    {
+      "name": "sync_silence_reported_as_synchronised",
+      "file": "evaluation/sync.py",
+      "old": "    if peak == 0:\n        raise SyncError(f\"audio in {path} is silent; no event to locate\")",
+      "new": "    if peak == 0:\n        return 0.0",
+      "why": "The failure that reads as perfect sync. A silent file has no locatable event, and returning 0.0 turns 'I could not measure this' into a number indistinguishable from success."
+    },
+    {
+      "name": "sync_flash_threshold_removed",
+      "file": "evaluation/sync.py",
+      "old": "    if best_luma < FLASH_LUMA_MIN:",
+      "new": "    if False:",
+      "why": "Symmetric to the above: with no flash present the brightest frame is frame 0, so a missing visual event is silently located at t=0 and every offset becomes the audio onset."
+    },
+    {
+      "name": "drop_declines",
+      "file": "evaluation/preference.py",
+      "old": "        if judgement.choice == DECLINE:\n            declines += 1\n            continue",
+      "new": "        if judgement.choice == DECLINE:\n            continue",
+      "why": "R5.4. Manufactures a preference out of 'nobody could tell', which for a change costing render time is the most useful finding available and the one most convenient to lose."
+    },
+    {
+      "name": "randomise_per_set_instead_of_per_trial",
+      "file": "evaluation/preference.py",
+      "old": "        baseline_first = rng.random() < 0.5",
+      "new": "        baseline_first = True",
+      "why": "R5.3. Every baseline lands in slot A, so a judge who mildly prefers the left-hand video reads as preferring the baseline. Still 'randomised' if you only inspect one trial, and the reason Property 1 is a property test rather than an example."
+    },
+    {
+      "name": "tally_counts_slots_not_configurations",
+      "file": "evaluation/preference.py",
+      "old": "        chosen = trial.config_a if judgement.choice == CHOICE_A else trial.config_b",
+      "new": "        chosen = preference_set.baseline if judgement.choice == CHOICE_A else preference_set.candidate",
+      "why": "Defeats the blinding entirely by resolving 'the left one' to a fixed configuration. With order randomised, the result is noise reported as a preference -- and the counts still add up."
+    },
+    {
+      "name": "blinding_leaked_into_the_presented_view",
+      "file": "evaluation/preference.py",
+      "old": "            \"trials\": [t.presented() for t in self.trials],",
+      "new": "            \"trials\": [t.to_dict() for t in self.trials],",
+      "why": "R5.2. Puts the answer key in the file the judge opens. Knowing which render is 'the new one' produces the expected answer, and nothing downstream can detect that it happened."
+    },
+    {
+      "name": "significance_claim_introduced",
+      "file": "evaluation/preference.py",
+      "old": "        \" This is a directional signal, not a measurement:\"\n        \" a trial count this small cannot distinguish a real preference from noise,\"\n        \" and no significance test is applied or implied.\"",
+      "new": "        \" The result is statistically significant.\"",
+      "why": "R5.5, R5.6. With a handful of trials and usually one judge -- often the author of the change -- this is false precision dressed as rigour. The mutation is trivial to write and would be quoted in a PR."
+    }
+  ]
+}
