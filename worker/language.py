@@ -28,8 +28,9 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any
 
 #: Unicode script ranges that are disjoint enough to identify by character.
 #:
@@ -95,7 +96,7 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 class LanguageReading:
     """What language a passage appears to be in, and how much to trust it."""
 
-    language: Optional[str]
+    language: str | None
     script: str
     #: 0..1. High for a script identification, moderate for a function-word one, 0 for a guess
     #: declined.
@@ -109,7 +110,7 @@ class LanguageReading:
         }
 
 
-def _script_of(char: str) -> Optional[str]:
+def _script_of(char: str) -> str | None:
     code = ord(char)
     for name, ranges in _SCRIPT_RANGES:
         for low, high in ranges:
@@ -216,12 +217,14 @@ def code_switching(segments: Iterable[Any], *, min_confidence: float = 0.4) -> l
             continue
         if reading.language == majority:
             continue
-        switches.append({
-            "start": float(getattr(segment, "start", 0.0) or 0.0),
-            "end": float(getattr(segment, "end", 0.0) or 0.0),
-            "language": reading.language,
-            "script": reading.script,
-            "confidence": round(reading.confidence, 3),
-            "majority": majority,
-        })
+        switches.append(
+            {
+                "start": float(getattr(segment, "start", 0.0) or 0.0),
+                "end": float(getattr(segment, "end", 0.0) or 0.0),
+                "language": reading.language,
+                "script": reading.script,
+                "confidence": round(reading.confidence, 3),
+                "majority": majority,
+            }
+        )
     return switches

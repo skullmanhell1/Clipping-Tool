@@ -27,16 +27,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Animation styles
 # ---------------------------------------------------------------------------
 AnimationStyle = str  # "none" | "pop" | "typewriter" | "karaoke_fill"
 
-VALID_ANIMATIONS: frozenset[str] = frozenset(
-    {"none", "pop", "typewriter", "karaoke_fill"}
-)
+VALID_ANIMATIONS: frozenset[str] = frozenset({"none", "pop", "typewriter", "karaoke_fill"})
 VALID_POSITIONS: frozenset[str] = frozenset({"bottom", "center", "top"})
 
 
@@ -62,7 +60,7 @@ class CaptionColors:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CaptionColors":
+    def from_dict(cls, data: dict) -> CaptionColors:
         """Build from a plain dict, ignoring unknown keys (Req 6.2)."""
         data = data or {}
         defaults = cls()
@@ -217,7 +215,7 @@ class CaptionPreset:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CaptionPreset":
+    def from_dict(cls, data: dict) -> CaptionPreset:
         """Reconstruct a preset from :meth:`to_dict` output (round-trips)."""
         defaults = cls(name="")
         colors_data = data.get("colors")
@@ -234,12 +232,8 @@ class CaptionPreset:
             font_size=int(data.get("font_size", defaults.font_size)),
             colors=colors,
             position=str(data.get("position", defaults.position)),
-            highlight_keywords=bool(
-                data.get("highlight_keywords", defaults.highlight_keywords)
-            ),
-            highlight_scale=float(
-                data.get("highlight_scale", defaults.highlight_scale)
-            ),
+            highlight_keywords=bool(data.get("highlight_keywords", defaults.highlight_keywords)),
+            highlight_scale=float(data.get("highlight_scale", defaults.highlight_scale)),
             emoji_inline=bool(data.get("emoji_inline", defaults.emoji_inline)),
             border_style=int(data.get("border_style", defaults.border_style)),
             uppercase=bool(data.get("uppercase", defaults.uppercase)),
@@ -457,7 +451,7 @@ def resolve_preset(name: Any) -> tuple[CaptionPreset, bool]:
     return BUILTIN_PRESETS[FALLBACK_PRESET_NAME], True
 
 
-def load_preset(data: "dict | str") -> tuple[CaptionPreset, bool]:
+def load_preset(data: dict | str) -> tuple[CaptionPreset, bool]:
     """Load a preset from a name or a serialized dict.
 
     * A string delegates to :func:`resolve_preset`.
@@ -477,11 +471,7 @@ def load_preset(data: "dict | str") -> tuple[CaptionPreset, bool]:
             return BUILTIN_PRESETS[FALLBACK_PRESET_NAME], True
         # A well-formed serialized preset must carry a non-empty name plus a
         # valid animation and font; anything else is treated as malformed.
-        if (
-            not preset.name
-            or preset.animation not in VALID_ANIMATIONS
-            or not preset.font
-        ):
+        if not preset.name or preset.animation not in VALID_ANIMATIONS or not preset.font:
             return BUILTIN_PRESETS[FALLBACK_PRESET_NAME], True
         return preset, False
     return BUILTIN_PRESETS[FALLBACK_PRESET_NAME], True
@@ -493,29 +483,147 @@ def load_preset(data: "dict | str") -> tuple[CaptionPreset, bool]:
 DEFAULT_STOPWORDS: frozenset[str] = frozenset(
     {
         # Articles / determiners
-        "a", "an", "the", "this", "that", "these", "those", "some", "any",
-        "each", "every", "all", "no", "both", "few", "many", "much", "most",
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "some",
+        "any",
+        "each",
+        "every",
+        "all",
+        "no",
+        "both",
+        "few",
+        "many",
+        "much",
+        "most",
         # Pronouns
-        "i", "me", "my", "mine", "myself", "we", "us", "our", "ours",
-        "you", "your", "yours", "he", "him", "his", "she", "her", "hers",
-        "it", "its", "they", "them", "their", "theirs", "who", "whom",
-        "whose", "which", "what",
+        "i",
+        "me",
+        "my",
+        "mine",
+        "myself",
+        "we",
+        "us",
+        "our",
+        "ours",
+        "you",
+        "your",
+        "yours",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "hers",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "who",
+        "whom",
+        "whose",
+        "which",
+        "what",
         # Prepositions / conjunctions
-        "of", "in", "on", "at", "by", "for", "with", "about", "against",
-        "between", "into", "through", "during", "before", "after", "above",
-        "below", "to", "from", "up", "down", "out", "off", "over", "under",
-        "and", "but", "or", "nor", "so", "yet", "if", "then", "than",
-        "because", "as", "while", "where", "when",
+        "of",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "to",
+        "from",
+        "up",
+        "down",
+        "out",
+        "off",
+        "over",
+        "under",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "so",
+        "yet",
+        "if",
+        "then",
+        "than",
+        "because",
+        "as",
+        "while",
+        "where",
+        "when",
         # Auxiliary / common verbs
-        "is", "am", "are", "was", "were", "be", "been", "being", "have",
-        "has", "had", "do", "does", "did", "will", "would", "shall",
-        "should", "can", "could", "may", "might", "must", "get", "got",
+        "is",
+        "am",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "can",
+        "could",
+        "may",
+        "might",
+        "must",
+        "get",
+        "got",
         # Common fillers
-        "just", "like", "really", "very", "too", "also", "even", "well",
+        "just",
+        "like",
+        "really",
+        "very",
+        "too",
+        "also",
+        "even",
+        "well",
         # "no" is deliberately not repeated here; it is already listed above with the
         # quantifiers. 136 literals were written for 135 distinct words.
-        "okay", "ok", "yeah", "yes", "not", "now", "here", "there",
-        "um", "uh", "oh", "hey", "gonna", "wanna", "kinda", "sorta",
+        "okay",
+        "ok",
+        "yeah",
+        "yes",
+        "not",
+        "now",
+        "here",
+        "there",
+        "um",
+        "uh",
+        "oh",
+        "hey",
+        "gonna",
+        "wanna",
+        "kinda",
+        "sorta",
     }
 )
 
@@ -655,11 +763,11 @@ def _cue_index_groups(words: list) -> list[list[int]]:
     it is handed adversarial word objects by the property tests (missing ``start``, ``end``
     not a number) that ``words_to_cues`` has no reason to survive.
     """
-    from worker import captions  # noqa: PLC0415 - lazy by necessity, see above
+    from worker import captions  # lazy by necessity, see above
 
     try:
         cues = captions.words_to_cues(words)
-    except Exception:  # noqa: BLE001 - totality matters more than the reason
+    except Exception:  # totality matters more than the reason
         return [list(range(len(words)))]
 
     # Mapped by object identity: ``words_to_cues`` puts the caller's own word objects into
@@ -751,17 +859,11 @@ def _ai_indices(words: list, client: Any) -> set[int]:
         else:
             return set()
 
-        chosen_norm = {
-            _normalize_token(str(w)) for w in chosen_words if str(w).strip()
-        }
+        chosen_norm = {_normalize_token(str(w)) for w in chosen_words if str(w).strip()}
         chosen_norm.discard("")
         if not chosen_norm:
             return set()
-        return {
-            i
-            for i, w in enumerate(words)
-            if _normalize_token(_word_text(w)) in chosen_norm
-        }
+        return {i for i, w in enumerate(words) if _normalize_token(_word_text(w)) in chosen_norm}
     except Exception:
         return set()
 
@@ -770,7 +872,7 @@ def plan_keywords(
     words: list,
     *,
     use_ai: bool = False,
-    client: Optional[Any] = None,
+    client: Any | None = None,
 ) -> set[int]:
     """Return the set of word indices to highlight.
 

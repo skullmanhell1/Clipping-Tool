@@ -46,7 +46,9 @@ def _completed_job(**overrides) -> Job:
         input_type="file",
         source="/tmp/source.mp4",
         options=ProcessingOptions(
-            aspect="1:1", hashtag_count=9, topic="woodworking",
+            aspect="1:1",
+            hashtag_count=9,
+            topic="woodworking",
             publish_to=["youtube", "tiktok"],
         ),
         title="A source video",
@@ -56,9 +58,16 @@ def _completed_job(**overrides) -> Job:
     job.progress = 1.0
     job.clips = [
         ClipResult(
-            id="c1", filename="clip_c1.mp4", start=1.5, end=13.5, duration=12.0,
-            title="The good bit", description="why it is good",
-            hashtags=["#a", "#b"], score=77.5, effects_applied=["engine:x:applied"],
+            id="c1",
+            filename="clip_c1.mp4",
+            start=1.5,
+            end=13.5,
+            duration=12.0,
+            title="The good bit",
+            description="why it is good",
+            hashtags=["#a", "#b"],
+            score=77.5,
+            effects_applied=["engine:x:applied"],
         )
     ]
     for key, value in overrides.items():
@@ -117,8 +126,7 @@ def test_updates_are_written_through_not_just_held_in_memory(store, db_path):
     """A crash gives no chance to flush, so each mutation must already be durable."""
     job = _completed_job(status=JobStatus.QUEUED)
     store.add(job)
-    store.update(job.id, status=JobStatus.COMPLETED, stage="Completed - 2 clip(s)",
-                 progress=1.0)
+    store.update(job.id, status=JobStatus.COMPLETED, stage="Completed - 2 clip(s)", progress=1.0)
 
     restored = _restart(db_path).get(job.id)
     assert restored.status is JobStatus.COMPLETED
@@ -163,9 +171,7 @@ def test_ordering_is_newest_first_after_a_restart(store, db_path):
 
 
 @pytest.mark.parametrize("status", [JobStatus.QUEUED, JobStatus.PROCESSING])
-def test_an_interrupted_job_is_reported_as_failed_not_still_running(
-    store, db_path, status
-):
+def test_an_interrupted_job_is_reported_as_failed_not_still_running(store, db_path, status):
     """A job that was running when the process died is resolved, not left spinning.
 
     Restoring it as ``processing`` would leave a progress bar advancing toward nothing
@@ -261,8 +267,7 @@ def test_an_unknown_status_degrades_to_failed(db_path):
     backend.save(job)
     with backend._connect() as db:
         db.execute(
-            "UPDATE jobs SET data=REPLACE(data,'\"completed\"','\"teleporting\"') "
-            "WHERE id=?",
+            "UPDATE jobs SET data=REPLACE(data,'\"completed\"','\"teleporting\"') WHERE id=?",
             (job.id,),
         )
 

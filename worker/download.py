@@ -15,9 +15,9 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 from urllib.parse import urlsplit
 
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -44,7 +44,7 @@ class UnsafeURLError(DownloadError):
     """
 
 
-def _is_disallowed_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> Optional[str]:
+def _is_disallowed_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
     """Return why ``ip`` is not a legitimate ingest target, or ``None`` if it is fine.
 
     ``is_global`` alone is not enough. It is False for the ranges wanted here but also False for
@@ -67,7 +67,7 @@ def _is_disallowed_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) ->
     return None
 
 
-def validate_public_url(url: str, *, allow_private: Optional[bool] = None) -> str:
+def validate_public_url(url: str, *, allow_private: bool | None = None) -> str:
     """Return ``url`` unchanged, or raise :class:`UnsafeURLError`.
 
     yt-dlp fetches whatever it is given, so a URL endpoint is a request forwarder into whatever
@@ -157,10 +157,10 @@ class VideoMeta:
     """Lightweight metadata about a source video for preview cards."""
 
     title: str
-    duration: Optional[float] = None
-    thumbnail: Optional[str] = None
-    source: Optional[str] = None      # webpage URL or filename
-    uploader: Optional[str] = None
+    duration: float | None = None
+    thumbnail: str | None = None
+    source: str | None = None  # webpage URL or filename
+    uploader: str | None = None
 
 
 def is_url(value: str) -> bool:
@@ -227,7 +227,7 @@ def resolve_downloaded_path(prepared: Path) -> Path:
 def download_video(
     url: str,
     dest_dir: str | Path,
-    progress_cb: Optional[ProgressCallback] = None,
+    progress_cb: ProgressCallback | None = None,
     max_height: int = 1080,
 ) -> tuple[Path, VideoMeta]:
     """Download ``url`` into ``dest_dir`` and return ``(path, metadata)``.

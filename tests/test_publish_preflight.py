@@ -35,8 +35,15 @@ requires_ffmpeg = pytest.mark.skipif(
 
 def _make_clip(path, *, seconds=4.0, w=1080, h=1920, fps=30, audio=True, vcodec="libx264"):
     cmd = [
-        FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", f"testsrc=s={w}x{h}:d={seconds}:r={fps}",
+        FFMPEG,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=s={w}x{h}:d={seconds}:r={fps}",
     ]
     if audio:
         cmd += ["-f", "lavfi", "-i", f"sine=f=300:d={seconds}", "-c:a", "aac", "-shortest"]
@@ -143,7 +150,7 @@ def test_a_clip_over_a_duration_limit_is_rejected_for_that_platform_only(tmp_pat
 @pytest.mark.real_binary
 def test_a_clip_below_a_minimum_duration_is_rejected(tmp_path):
     clip = _make_clip(tmp_path / "tiny.mp4", seconds=1.5, w=540, h=960, fps=30)
-    report = preflight.validate_clip(clip, "instagram")   # 3 s minimum
+    report = preflight.validate_clip(clip, "instagram")  # 3 s minimum
     assert not report.ok
     assert any("below" in error for error in report.errors), report.errors
 
@@ -208,9 +215,7 @@ def test_a_rejected_clip_never_reaches_the_publisher(tmp_path, fake_clip, video_
 
     publisher = FakePublisher("tiktok")
     store = HistoryStore(tmp_path / "history.db")
-    manager = PublishManager(
-        publishers={"tiktok": publisher}, history=store, autostart=False
-    )
+    manager = PublishManager(publishers={"tiktok": publisher}, history=store, autostart=False)
 
     ids = manager.submit(
         job_id="j", clip=fake_clip, video_path=video_file, platforms=["tiktok"], mode="auto"
@@ -271,12 +276,25 @@ def test_edge_silence_is_detected_and_trimmed_on_real_audio(tmp_path):
     """
     source = tmp_path / "gappy.wav"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "sine=f=300:d=6:sample_rate=48000",
-         # audible only between 2 s and 4 s
-         "-af", "volume='if(between(t,2,4),1.0,0.0)':eval=frame",
-         "-y", str(source)],
-        check=True, capture_output=True, timeout=120,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=300:d=6:sample_rate=48000",
+            # audible only between 2 s and 4 s
+            "-af",
+            "volume='if(between(t,2,4),1.0,0.0)':eval=frame",
+            "-y",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
 
     silences = detect_silences(source)

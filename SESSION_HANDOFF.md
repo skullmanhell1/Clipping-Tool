@@ -17,9 +17,9 @@ git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
 ```
 
 **2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
-a priority and effort estimate each, every current value quoted from the code. **140 are now
-implemented.** The 14 that remain are listed in [§3](#3-what-is-actually-left), and most are blocked
-on something other than effort.
+a priority and effort estimate each, every current value quoted from the code. **142 are now
+implemented.** The 12 that remain are listed in [§3](#3-what-is-actually-left), and all but one are
+blocked on something other than effort.
 
 > If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
 > figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
@@ -71,9 +71,11 @@ because it looks like success.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
+| `pytest` | **2160 passed, 0 skipped, 0 warnings** |
 | `npm run test:run` | **141 passed** |
 | `ruff check .` | clean |
+| `ruff format --check .` | clean — 235 files (I9; blocking in CI) |
+| `mypy .` | clean — 101 source files |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
 | `npm audit --audit-level=critical` | exits 0 |
@@ -89,7 +91,7 @@ were tried and both are worse than the finding — `npm audit fix --force` *down
 
 ## 3. What is actually left
 
-13 items. Only two are a matter of effort.
+12 items. Only one is a matter of effort.
 
 **`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
 knowing where the seams ended up, because the next person to touch trimming will meet them:
@@ -105,7 +107,16 @@ second pass.
 | Item | What | Why it was left |
 | --- | --- | --- |
 | **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
-| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
+
+**`I9` is done** — `UP` and `B` are enabled, `ruff format` is enforced in CI, and `black` has been
+removed rather than left listed and unrun. Two consequences outlive the sweep. First, **`RUF100` is
+now on, and it is load-bearing rather than tidiness**: `ruff format` rewraps lines, and a `# noqa`
+does not travel with the code it was written for — four in `publishers/` were carried off their
+violation by the formatter in this very change. A suppression stranded on a line with no violation
+is invisible without `RUF100`, and hides a real finding the day that code changes. Second, **prose
+mentioning `noqa` is parsed as a directive**; a comment opening `# noqa on the message...` is read
+as a *blanket* suppression of the whole line. Two were found and reworded. If you write about
+suppressions in a comment, keep the token out of a parseable position.
 
 ### Blocked on model weights CI cannot have
 

@@ -75,7 +75,7 @@ def test_an_explicit_request_value_beats_the_profile():
     indistinguishable from a field nobody mentioned.
     """
     gaming = BUILTIN_PROFILES["gaming"]
-    assert gaming.settings["emoji"] == "heavy"          # the premise of the test
+    assert gaming.settings["emoji"] == "heavy"  # the premise of the test
 
     options = ProcessingOptions.from_dict({"profile": "gaming", "emoji": "subtle"})
     assert options.emoji == "subtle", "the explicit request lost to the profile"
@@ -145,8 +145,7 @@ def test_the_two_destructive_or_owning_features_appear_only_in_profiles():
 
     filler = {n for n, p in BUILTIN_PROFILES.items() if p.settings.get("filler_removal")}
     kinetic = {
-        n for n, p in BUILTIN_PROFILES.items()
-        if p.settings.get("kinetic_typography_enabled")
+        n for n, p in BUILTIN_PROFILES.items() if p.settings.get("kinetic_typography_enabled")
     }
     assert filler == {"podcast", "educational"}, "unscripted speech is where this earns its cost"
     assert kinetic == {"gaming"}, "the one audience that asks for animated captions"
@@ -208,10 +207,7 @@ def test_music_dir_ships_empty_so_the_fallback_is_the_normal_case():
     import pathlib
 
     music_dir = pathlib.Path(__file__).resolve().parents[1] / "assets" / "music"
-    tracks = [
-        path for path in music_dir.iterdir()
-        if path.suffix.lower() in audio._AUDIO_EXTS
-    ]
+    tracks = [path for path in music_dir.iterdir() if path.suffix.lower() in audio._AUDIO_EXTS]
     assert not tracks, (
         f"real beds have shipped ({[t.name for t in tracks]}); revisit whether music should "
         "still default off in ProcessingOptions"
@@ -227,7 +223,6 @@ def test_the_path_only_helper_still_works_for_callers_that_only_need_bytes(tmp_p
     path = audio.resolve_music("chill", 1.0, tmp_path / "w")
     assert bed is not None and path == bed.path
     assert audio.resolve_music("", 1.0, tmp_path / "w") is None
-
 
 
 # --------------------------------------------------------------------------- #

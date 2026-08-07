@@ -1,4 +1,5 @@
 """Tests for background-music resolution, synthesis, and mixing filters."""
+
 from __future__ import annotations
 
 from tests.conftest import probe_duration, requires_ffmpeg

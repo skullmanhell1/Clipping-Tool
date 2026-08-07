@@ -38,8 +38,7 @@ def _paced(duration, rate, *, fast_from=None, fast_to=None, fast_rate=5.0):
     words, t = [], 0.0
     while t < duration:
         current = fast_rate if (fast_from is not None and fast_from <= t < fast_to) else rate
-        words.append(Word(start=round(t, 3), end=round(t + 0.2, 3), text="word",
-                          probability=0.95))
+        words.append(Word(start=round(t, 3), end=round(t + 0.2, 3), text="word", probability=0.95))
         t += 1.0 / current
     return words
 
@@ -103,7 +102,7 @@ def test_the_baseline_is_a_median_not_a_mean():
     baseline = sf.source_median_rate(words, 180.0)
     assert baseline == pytest.approx(2.0, abs=0.3), baseline
 
-    mean_rate = len(words) / 180.0            # what a mean would have produced
+    mean_rate = len(words) / 180.0  # what a mean would have produced
     assert mean_rate < 1.2, "fixture no longer distinguishes median from mean"
 
 
@@ -146,7 +145,7 @@ def test_the_same_absolute_rate_is_relative_to_the_speaker():
 
 
 def test_a_window_too_short_or_too_sparse_is_marked_unreliable():
-    """"Not measurable" and "average pace" must be distinguishable.
+    """ "Not measurable" and "average pace" must be distinguishable.
 
     Both report a relative rate of 1.0, so a caller feeding these to a model or a weight needs
     the flag to tell them apart. Two words in 0.3 s is 6.7 words/sec, which describes a
@@ -186,9 +185,7 @@ def test_rate_counts_silence_in_the_window():
 def test_features_serialise_flat_for_a_prompt_or_a_report():
     result = sf.speech_rate(_paced(60.0, 2.0), 10.0, 40.0, baseline=2.0)
     payload = result.to_dict()
-    assert set(payload) == {
-        "word_count", "words_per_second", "relative_speech_rate", "reliable"
-    }
+    assert set(payload) == {"word_count", "words_per_second", "relative_speech_rate", "reliable"}
     assert all(isinstance(value, float) for value in payload.values())
 
 
@@ -203,8 +200,10 @@ def test_candidates_are_annotated_in_place():
     for candidate in candidates:
         assert "relative_speech_rate" in candidate.features
         assert "source_median_wps" in candidate.features
-    assert (candidates[1].features["relative_speech_rate"]
-            > candidates[0].features["relative_speech_rate"])
+    assert (
+        candidates[1].features["relative_speech_rate"]
+        > candidates[0].features["relative_speech_rate"]
+    )
 
 
 def test_annotating_never_changes_score_or_order():
