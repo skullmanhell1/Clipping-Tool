@@ -619,6 +619,7 @@ def review_client(monkeypatch):
     from fastapi.testclient import TestClient
 
     import api.main as main
+    from api.routers import metadata as metadata_router
     from worker.jobs import JobStore
 
     store = JobStore()
@@ -634,8 +635,11 @@ def review_client(monkeypatch):
 
     manager = _Manager()
     manager.store = store
-    monkeypatch.setattr(main, "get_manager", lambda: manager)
-    monkeypatch.setattr(main, "get_history", lambda: _NullHistory())
+    # Patched on the router module that holds the review routes, not on `api.main`: the
+    # routes moved there when the app was split into routers, and a name patched on
+    # `api.main` is no longer the one they resolve.
+    monkeypatch.setattr(metadata_router, "get_manager", lambda: manager)
+    monkeypatch.setattr(metadata_router, "get_history", lambda: _NullHistory())
     return TestClient(main.app), job
 
 

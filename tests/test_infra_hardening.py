@@ -400,6 +400,7 @@ def resume_client(monkeypatch):
     from fastapi.testclient import TestClient
 
     import api.main as main
+    from api.routers import jobs as jobs_router
     from worker.jobs import JobStore
 
     store = JobStore()
@@ -414,7 +415,10 @@ def resume_client(monkeypatch):
             return True
 
     manager = _Manager()
-    monkeypatch.setattr(main, "get_manager", lambda: manager)
+    # Patched on the router module that holds `/api/jobs/{job_id}/resume`, not on
+    # `api.main`: the route moved there when the app was split into routers, and a name
+    # patched on `api.main` is no longer the one it resolves.
+    monkeypatch.setattr(jobs_router, "get_manager", lambda: manager)
     return TestClient(main.app), store, manager
 
 

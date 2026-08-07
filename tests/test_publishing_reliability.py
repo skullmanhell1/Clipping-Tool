@@ -747,8 +747,12 @@ def client(monkeypatch, store):
     from fastapi.testclient import TestClient
 
     import api.main as main
+    from api.routers import publishing as publishing_router
 
-    monkeypatch.setattr(main, "get_history", lambda: store)
+    # Patched on the router module that holds these routes, not on `api.main`: the
+    # routes moved there when the app was split into routers, and a name patched on
+    # `api.main` is no longer the one they resolve.
+    monkeypatch.setattr(publishing_router, "get_history", lambda: store)
     return TestClient(main.app)
 
 

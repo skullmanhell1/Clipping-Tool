@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from api.routers import publishing as publishing_router
 from publishers import preflight
 from publishers.base import PublishState
 from publishers.manager import PublishManager
@@ -38,8 +39,9 @@ def resume_env(monkeypatch, history, clip_on_disk):
     """Wire the API's history store and publish manager to per-test doubles.
 
     Both are process-wide singletons reached through ``get_history`` /
-    ``get_publish_manager`` in ``api.main``, so they are patched at that module rather
-    than mutated in place — no test leaks a publisher or a SQLite file into another.
+    ``get_publish_manager`` in ``api.routers.publishing`` — the module that now holds
+    these routes — so they are patched at that module rather than mutated in place: no
+    test leaks a publisher or a SQLite file into another.
     """
     publishers = {
         # Approval granted: an approve may proceed.
@@ -55,8 +57,8 @@ def resume_env(monkeypatch, history, clip_on_disk):
         ),
     }
     manager = PublishManager(publishers=publishers, history=history, autostart=False)
-    monkeypatch.setattr(api_main, "get_history", lambda: history)
-    monkeypatch.setattr(api_main, "get_publish_manager", lambda: manager)
+    monkeypatch.setattr(publishing_router, "get_history", lambda: history)
+    monkeypatch.setattr(publishing_router, "get_publish_manager", lambda: manager)
     return manager, history, clip_on_disk
 
 

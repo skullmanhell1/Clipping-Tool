@@ -352,9 +352,25 @@ def test_the_stem_engine_adds_no_new_production_file() -> None:
 
     # No new engine module, and nothing named for this feature: the engine lives entirely
     # in the pre-existing worker/engines/stems.py.
+    #
+    # Matched on whole path *tokens* rather than with `"stem" in path.lower()`, which was a
+    # substring test and therefore had a false positive nobody had hit yet: `api/routers/system.py`
+    # contains "stem" (sy-stem), so splitting `api/main.py` into routers failed this guard with a
+    # message claiming the stem engine had added a production file. `filesystem.py` and
+    # `ecosystem.py` would have done the same.
+    #
+    # Splitting on non-alphanumerics rather than using a `\b` word boundary, because `_` is a word
+    # character to `re`: `\bstem\b` would have missed `stem_options.py` and `test_stems_parity.py`,
+    # trading a false positive for a false negative on exactly the names this is meant to catch.
+    def _names_the_stem_feature(path: str) -> bool:
+        return any(
+            token in ("stem", "stems")
+            for token in re.split(r"[^a-z0-9]+", path.lower())
+        )
+
     stem_related = [
         path for path in new_production
-        if "stem" in path.lower() or path.startswith("worker/engines/")
+        if _names_the_stem_feature(path) or path.startswith("worker/engines/")
     ]
     assert stem_related == [], (
         f"the stem engine should not add production files, but got: {stem_related}"

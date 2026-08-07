@@ -125,21 +125,21 @@
     },
     {
       "name": "api_drops_the_cuts",
-      "file": "api/main.py",
+      "file": "api/routers/metadata.py",
       "old": "            cuts=[(c.start, c.end) for c in req.cuts],",
       "new": "            cuts=[],",
       "why": "the request validates, the render succeeds, the response is 200, and the user's edit is gone"
     },
     {
       "name": "api_skips_the_cut_limit",
-      "file": "api/main.py",
+      "file": "api/routers/metadata.py",
       "old": "    if len(req.cuts) > trim.MAX_CUTS:",
       "new": "    if False:",
       "why": "an oversized list should be a 422 naming the limit, not a marker the caller has to go hunting for"
     },
     {
       "name": "trimmed_flag_by_prefix",
-      "file": "api/main.py",
+      "file": "api/routers/metadata.py",
       "old": "    trimmed = any(marker in (\"filler_removal\", trim_mod.MARKER) for marker in effects)",
       "new": "    trimmed = any(marker.startswith((\"filler_removal\", trim_mod.MARKER)) for marker in effects)",
       "why": "`transcript_trim_refused:*` shares the applied marker's prefix, so a prefix test reports the clip as trimmed in exactly the case where the trim did not happen"
