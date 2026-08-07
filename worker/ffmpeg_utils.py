@@ -127,7 +127,12 @@ def escape_filter_path(path: str | Path) -> str:
     return resolved.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
-def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str]:
+def h264_args(
+    *,
+    normalise_fps: bool = False,
+    vbv_cap: bool = False,
+    colour_tags: Sequence[str] = (),
+) -> list[str]:
     """The standard libx264 arguments for an encode.
 
     Centralised because these flags were duplicated at eight call sites across five
@@ -153,6 +158,17 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
     falls back to ``libx264`` whenever a configured hardware encoder is not usable on this
     machine - so the return value is always a working argv, and the quality flag always matches
     the encoder rather than being ``-crf`` regardless.
+
+    ``colour_tags`` (O14) appends ``-colorspace``/``-color_primaries``/``-color_trc``/
+    ``-color_range`` describing what is being delivered. Built by
+    :func:`worker.colour.colour_tag_args` and passed in rather than computed here, because this
+    function has no access to the source and R3.2 requires the tags to describe the *delivered*
+    content -- which only the caller, holding the :class:`worker.colour.Colour_Plan`, knows.
+
+    It defaults to empty for a specific reason rather than convenience:
+    ``tests/test_script_and_placement.py`` asserts the exact argv this returns, and that drift
+    pin is worth keeping. An unconditional addition here would have needed the pin re-frozen,
+    which is how a golden ends up frozen around a change nobody reviewed.
     """
     # O8: hardware encoding, when one is configured *and* proven to work on this machine.
     #
@@ -181,6 +197,13 @@ def h264_args(*, normalise_fps: bool = False, vbv_cap: bool = False) -> list[str
         # A two-second buffer, the usual pairing: large enough that a brief complex passage
         # is not visibly starved, small enough that the cap still means something.
         args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
+    # O14. Last, so a tag can never be read as an argument to one of the flags above.
+    #
+    # These are container/stream *metadata*, not encoder settings: they tell a player how to
+    # interpret the samples rather than changing them. That is why they are safe on an
+    # intermediate as well as a final render -- and why they are wanted there. Pass 2 reads the
+    # file pass 1 wrote, so an untagged intermediate is a pass that has to guess.
+    args += list(colour_tags)
     return args
 
 
@@ -335,6 +358,21 @@ class MediaInfo:
     video_codec: str = ""
     audio_codec: str = ""
     size_bytes: int = 0
+    # O13/O14/O15: the source's colour signalling. `probe()` already asks ffprobe for
+    # `-show_streams`, so **these fields were already in the JSON it parsed and were being
+    # thrown away** -- this is a field-reading change, not a new probe (R1.3).
+    #
+    # Appended last and defaulted for the same reason the O10 fields above were: several tests
+    # construct MediaInfo positionally, so inserting a field anywhere else silently shifts every
+    # one of their arguments by one.
+    #
+    # Empty string means "ffprobe did not report it", which is a distinct answer from any value
+    # it could have reported (R1.4). `worker.colour` is what interprets these; nothing here
+    # guesses.
+    color_transfer: str = ""
+    color_primaries: str = ""
+    color_space: str = ""
+    color_range: str = ""
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -459,6 +497,13 @@ def probe(path: str | Path) -> MediaInfo:
         video_codec=str(video.get("codec_name") or ""),
         audio_codec=str((audio or {}).get("codec_name") or ""),
         size_bytes=size_bytes,
+        # Lower-cased on the way in so callers compare against one vocabulary. Absent stays
+        # absent: `or ""` rather than a default value, because "the stream did not say" is the
+        # fact `worker.colour` needs in order to decline to tone-map (R1.4, R1.7).
+        color_transfer=str(video.get("color_transfer") or "").lower(),
+        color_primaries=str(video.get("color_primaries") or "").lower(),
+        color_space=str(video.get("color_space") or "").lower(),
+        color_range=str(video.get("color_range") or "").lower(),
     )
 
 
@@ -468,6 +513,9 @@ def cut_segment(
     end: float,
     dest: str | Path,
     reencode: bool = True,
+    *,
+    video_filters: str = "",
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Cut ``[start, end]`` (seconds) from ``source`` into ``dest``.
 
@@ -479,6 +527,12 @@ def cut_segment(
         reencode: When ``True`` (default) re-encode for frame-accurate cuts,
             which is what downstream captioning/reformatting needs. When
             ``False`` attempt a fast stream copy (keyframe-aligned, less exact).
+        video_filters: A ``-vf`` chain applied to this pass (O13). This is the only pass with no
+            geometry or grade of its own, which makes it the correct home for the colour
+            conversion: R2.2 requires the tone-map to run before any scale, and every later pass
+            scales. Empty by default, so an SDR source produces the identical argv it always did.
+        colour_tags: Output colour metadata (O14), from
+            :func:`worker.colour.colour_tag_args`.
 
     Returns:
         The ``dest`` path as a :class:`~pathlib.Path`.
@@ -493,7 +547,22 @@ def cut_segment(
     cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
            "-t", f"{duration:.3f}"]
     if reencode:
-        cmd += [*h264_args(), *aac_args()]
+        # O13: the colour conversion goes here, on the first pass, and nowhere else.
+        #
+        # This is the earliest point at which we hold the original samples, and R2.2 requires the
+        # tone-map to precede every colour-dependent operation *and* all scaling. The geometry
+        # pass scales; the composite pass grades. Both are downstream of this, so converting here
+        # is the only placement that satisfies both halves of that requirement.
+        if video_filters:
+            cmd += ["-vf", video_filters]
+        cmd += [*h264_args(colour_tags=colour_tags), *aac_args()]
+    elif video_filters:
+        # A stream copy cannot apply a filter. Rather than silently dropping the conversion --
+        # which would deliver an untone-mapped clip while the plan's marker claimed otherwise,
+        # the worst combination available -- the copy is abandoned in favour of honouring it.
+        # Callers asking for both are asking for something incoherent, and the colour is the
+        # part that shows.
+        cmd += ["-vf", video_filters, *h264_args(colour_tags=colour_tags), *aac_args()]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
@@ -599,6 +668,7 @@ def reformat_aspect(
     *,
     background: str = "blur",
     background_color: str = "0x0F172A",
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Reformat ``source`` to a target ``aspect`` ratio.
 
@@ -646,7 +716,7 @@ def reformat_aspect(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(source),
         "-vf", vf,
-        *h264_args(),
+        *h264_args(colour_tags=colour_tags),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(dest),

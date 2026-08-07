@@ -175,6 +175,7 @@ def render_clip(
     broll_resolver: Optional[Callable[[], list]] = None,
     engine_contributions: Optional[Sequence["Compose_Contribution"]] = None,
     music_select_key: str = "",
+    colour_tags: Sequence[str] = (),
 ) -> Optional[RenderResult]:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -765,7 +766,7 @@ def render_clip(
     # Codecs: re-encode only the streams we changed.
     if video_changed:
         # The clip a user receives: frame rate normalised (O3) and a VBV ceiling (O4).
-        cmd += h264_args(normalise_fps=True, vbv_cap=True)
+        cmd += h264_args(normalise_fps=True, vbv_cap=True, colour_tags=colour_tags)
     else:
         cmd += ["-c:v", "copy"]
     if info.has_audio:

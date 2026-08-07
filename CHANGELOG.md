@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — HDR sources were delivered grey and flat (O13, O14, O15)
+
+- **`O13` — HDR is tone-mapped to SDR Rec.709.** There was no `tonemap`, `zscale` or `colorspace`
+  anywhere in the repository, while `probe()` had been fetching `color_transfer` and discarding it
+  since it was written. So a PQ or HLG source went through the whole pipeline with its transfer
+  function ignored, and PQ-coded values interpreted as gamma render **too bright and desaturated**
+  — the "grey and flat" complaint, and the reason this group jumps ahead of the measurement gate in
+  the spec's own ordering. This is output that was wrong, not output that could be better.
+
+  Measured on a synthetic PQ/BT.2020 10-bit source through the real pipeline: mean saturation
+  **112 → 143**, mean luma **125 → 80**. A controlled demonstration on a drawn source, not a claim
+  about real footage — the same caveat the face-detection work recorded for its BlazeFace figures.
+
+  **Classification is tri-state and refuses to guess.** `HDR`, `SDR` and `UNKNOWN` are three
+  answers and the third is not a synonym for the second. HDR is read **only** from the transfer
+  function — never from bit depth, never from resolution — because 10-bit Rec.709 is ordinary and
+  4K SDR is the norm, so either inference would misfire on a large class of normal footage.
+  `bt2020-10` is classified SDR and has its own test: it is wide *gamut*, not high dynamic *range*,
+  and it contains the string "2020" that a reader scanning for HDR would flag. The asymmetry is
+  what drives all of this — tone-mapping a mislabelled SDR source visibly destroys it, while
+  failing to tone-map an HDR one leaves things exactly as they were.
+
+  **Converted once, at the cut.** The pipeline runs three passes. The cut is the only one with no
+  geometry and no grade of its own, which makes it the only placement satisfying R2.2's "before any
+  colour-dependent operation *and* before scaling" — the geometry pass scales, the composite pass
+  grades. `Colour_Plan.consumed()` spends the filter chain so no later pass can re-apply it:
+  tone-mapping twice compresses the range twice and delivers a flat, muddy picture that still looks
+  like a photograph of something, which makes it far harder to diagnose than no tone-map at all.
+
+  **Fails closed, deliberately opposite to `background_style_available`.** That helper answers
+  "available" when its probe breaks, which is right there because the fallback is another working
+  background. Here it is wrong: claiming `zscale` exists when we do not know emits a chain ffmpeg
+  cannot configure, which is a **failed job**, and R2.5 forbids failing a job over tone-mapping.
+  Routed through `worker.engines.capabilities` rather than probing locally — that module exists
+  because an earlier hand-rolled probe misparsed `ffmpeg -filters` and hid 124 of 486 filters.
+
+- **`O14` — delivered files declare their colour, and declare it honestly.** Nothing set
+  `-colorspace`, `-color_primaries` or `-color_trc`, so players guessed. The tags now describe
+  **what was delivered, not what arrived**: after a tone-map the file is Rec.709 and says so, and
+  the source's `smpte2084` is dropped rather than copied across. Copying it would be *worse than
+  writing no tags*, because a player reading it applies an HDR EOTF to SDR content and is
+  confidently wrong instead of falling back to a correct assumption.
+
+  The converse is also enforced: a Rec.601 source passed through untouched is tagged `smpte170m`,
+  not `bt709`. Tagging everything Rec.709 because almost everything is Rec.709 is the tempting
+  version and it makes the file assert something false. Absent source fields produce **no tag at
+  all** rather than an invented one.
+
+  Emitted through `h264_args`, so the `libx264`/`-crf` drift pin still holds. `colour_tags` defaults
+  to empty for a specific reason rather than convenience: `tests/test_script_and_placement.py`
+  asserts that function's exact argv, and re-freezing a pin as part of the change it exists to
+  catch is how `font_substituted:Arial` was once baked into a golden as correct.
+
+- **`O15` — full-range footage no longer crushes its blacks.** Phone footage is frequently
+  full-range; passing `pc` through to a player expecting `tv` crushes blacks and clips highlights.
+  It is now converted, and a source that declares no range records `colour_range_assumed:tv` — one
+  of the few *guards* that does emit a marker, because "we assumed limited" is the first fact worth
+  having when the blacks look wrong.
+
+  **The conversion uses `scale`, not `zscale`**, and that split is deliberate: `scale` is in every
+  ffmpeg build, so the more common defect is fixed unconditionally while only the rarer tone-map
+  degrades. Asserted, so unifying the two later for tidiness cannot pass quietly.
+
+- **Defaults ON, which breaks this project's own rule on purpose.** Every other new output setting
+  defaults to previously shipped behaviour, so the parity goldens can detect an *accidental*
+  change. That rule protects goldens, not defects, and the alternative here is knowingly delivering
+  incorrect colour (R2.11). It is only defensible because the conversion cannot fire on a source
+  that is not positively HDR — `test_an_sdr_source_produces_no_filters_at_all` pins exactly that,
+  and **no golden or parity fixture needed re-freezing**, because an SDR library renders
+  byte-identically.
+
+- **Found while building this: an injected capability prober is silently ignored.**
+  `get_report(prober)` honours its argument *only on first construction* — its own docstring says
+  so — and returns the process-wide singleton otherwise. In any process where something has already
+  probed a capability, a test that believes it has removed `zscale` gets the real answer and passes
+  for the wrong reason. Two tests here did exactly that before it was caught. `worker/colour.py`
+  builds a fresh `Capability_Report(prober)` when given one, and this is flagged in the close-out
+  because the wrong pattern is the one that is easy to copy from existing call sites.
+
+- **The mutation run's first result was 10 caught, 3 escaped, one wrongly declared equivalent.**
+  Recorded because the final 13/13 is the less useful number. The three escapes were all real gaps:
+  no test that switching tone-mapping *off* switched it off (the default is on, so nothing took that
+  branch); an inverted range conversion, which yields a washed rather than crushed picture that
+  reads as a grading choice and which the end-to-end test **cannot** catch because the tag would
+  still say `tv`; and a fail-open capability probe — which turned out to be a defect in a *test*,
+  since `Capability_Report._probe` swallows prober exceptions, so the `except` branch was
+  unreachable and the test named for it had been passing through the ordinary path all along.
+  Baseline **2160 → 2198 passed, 0 skipped, 0 warnings**; `mypy` clean over 102 files.
+
+**Not done, and blocked rather than skipped:** `O16`/`O17`/`O20` each require the default to be
+*measured* against a fidelity instrument before it moves (R4.1/R5.5/R7.5), and there is no `vmaf`,
+`psnr` or `ssim` in this repository — changing them now would substitute one unmeasured default for
+another. `O18` is gated on `render-quality-measurement`'s sync verification by R8.9, and `O19`
+derives from it. `V20`/`V21` are buildable but belong *before* the tone-map in the design's fixed
+filter order, and `V21` must hand its consumed margin to reframing or the crop drifts outside valid
+pixels — neither should ride along with a colour change. See
+`.kiro/specs/clip-signal-fidelity/CLOSE_OUT.md`.
+
+
 ### Added — transcript-based trimming (U4)
 
 - **`U4` — click words out of a clip.** The Descript-class feature: a clip's transcript is shown

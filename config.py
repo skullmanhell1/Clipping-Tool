@@ -353,6 +353,42 @@ class Settings(BaseSettings):
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
     x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
 
+    # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
+    #
+    # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
+    # new output setting defaults to previously shipped behaviour. That rule exists to keep the
+    # parity goldens able to detect an *accidental* change, and it is the right rule -- but it
+    # protects goldens, not defects. Shipping HDR footage through a pipeline with no tone-map
+    # delivers grey, flat, desaturated output; defaulting the fix to off would mean the default
+    # install keeps producing knowingly incorrect colour (R2.11).
+    #
+    # It costs nothing on SDR sources: the plan is empty unless the source's transfer function
+    # positively reports PQ or HLG, so an SDR library renders byte-identically to before.
+    tone_mapping: bool = Field(
+        default=True,
+        description="Tone-map HDR (PQ/HLG) sources to SDR Rec.709 for delivery (O13). "
+        "On by default: the alternative is knowingly delivering incorrect colour. "
+        "No effect on SDR sources, which are detected by transfer function only.",
+    )
+    tone_map_operator: str = Field(
+        default="hable",
+        description="Tone-mapping operator: hable | mobius | reinhard | clip | linear (O13). "
+        "'hable' preserves shadow and highlight detail at slight cost to contrast. "
+        "Provisional, not measured -- the right operator is content-dependent.",
+    )
+    tone_map_target_nits: int = Field(
+        default=100,
+        description="Target peak luminance in nits for tone-mapping (O13). 100 is the SDR "
+        "reference white most displays are calibrated near. Provisional, not measured.",
+    )
+    delivery_colour_range: str = Field(
+        default="tv",
+        description="Colour range for delivered files: tv (limited) or pc (full) (O15). "
+        "'tv' is what H.264 streaming means by default and what platforms expect; full-range "
+        "sources are converted rather than passed through, which is what stops phone footage "
+        "crushing its blacks.",
+    )
+
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
     # hard cuts and misses equiluminant ones - which is why every snap is capped and optional.

@@ -1389,6 +1389,7 @@ def apply_reframe(
     backend: Optional[str] = None,
     detector: Optional[Callable] = None,
     notes: Optional[list[str]] = None,
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1467,7 +1468,7 @@ def apply_reframe(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
         "-vf", vf,
-        *h264_args(),
+        *h264_args(colour_tags=colour_tags),
         "-c:a", "copy", "-movflags", "+faststart",
         str(dest),
     ]
@@ -2052,6 +2053,7 @@ def apply_speaker_reframe(
     sampler: Optional[Callable] = None,
     backend: Optional[str] = None,
     notes: Optional[list[str]] = None,
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -2139,7 +2141,7 @@ def apply_speaker_reframe(
             settings.ffmpeg_binary, "-y", "-i", str(video),
             "-filter_complex", graph,
             "-map", "[vout]", "-map", "0:a?",
-            *h264_args(),
+            *h264_args(colour_tags=colour_tags),
             "-c:a", "copy", "-movflags", "+faststart",
             str(dest),
         ]
@@ -2178,7 +2180,7 @@ def apply_speaker_reframe(
     cmd = [
         settings.ffmpeg_binary, "-y", "-i", str(video),
         "-vf", vf,
-        *h264_args(),
+        *h264_args(colour_tags=colour_tags),
         "-c:a", "copy", "-movflags", "+faststart",
         str(dest),
     ]
