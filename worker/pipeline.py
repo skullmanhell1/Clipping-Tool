@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from config import settings
 from worker import captions as cap
@@ -88,7 +88,7 @@ def _noop(fraction: float, stage: str) -> None:  # pragma: no cover
 
 
 def _filter_transcript_to_range(
-    transcript: Transcript, start: Optional[float], end: Optional[float]
+    transcript: Transcript, start: float | None, end: float | None
 ) -> Transcript:
     """Return a transcript containing only segments overlapping ``[start, end]``.
 
@@ -108,11 +108,11 @@ def run_pipeline(
     options: ProcessingOptions,
     clips_dir: str | Path,
     temp_dir: str | Path,
-    progress_cb: Optional[ProgressCallback] = None,
+    progress_cb: ProgressCallback | None = None,
     start_progress: float = 0.0,
-    llm_client: Optional[BaseLLMClient] = None,
-    explicit_candidates: Optional[list] = None,
-    on_plan: Optional[Callable[[list], None]] = None,
+    llm_client: BaseLLMClient | None = None,
+    explicit_candidates: list | None = None,
+    on_plan: Callable[[list], None] | None = None,
 ) -> list[ClipResult]:
     """Run the full pipeline on ``source`` and return the produced clips.
 
@@ -202,7 +202,7 @@ def run_pipeline(
     # Run once per source rather than per clip: it is a full ASR pass, and slicing it per clip
     # costs nothing. Skipped outright when it could not add anything, with a marker saying so,
     # because a silently-absent track is indistinguishable from a broken one.
-    translated: Optional[Transcript] = None
+    translated: Transcript | None = None
     translation_marker = ""
     if settings.subtitle_translation and transcript.segments:
         if options.translate:
@@ -220,7 +220,7 @@ def run_pipeline(
                     translate=True,
                     vocabulary=getattr(options, "vocabulary", "") or "",
                 )
-            except Exception as exc:      # noqa: BLE001 - see below
+            except Exception as exc:  # see below
                 # Deliberately broad: this is an extra track on a job whose expensive work is
                 # still ahead of it, and every failure mode of a model call (OOM, a missing
                 # weight file, a corrupt download) is a reason to ship the clips without the
@@ -242,9 +242,7 @@ def run_pipeline(
     report(_P_TRANSCRIBE_END, "Finding the best moments")
 
     # --- AI highlight selection (with process-range + fallback) -----------
-    ranged = _filter_transcript_to_range(
-        transcript, options.range_start, options.range_end
-    )
+    ranged = _filter_transcript_to_range(transcript, options.range_start, options.range_end)
     # The effective duration selection may span (respect an explicit range end).
     eff_duration = min(info.duration, options.range_end) if options.range_end else info.duration
 
@@ -255,7 +253,8 @@ def run_pipeline(
     # 15.4).
     # U7: an explicit window skips selection (and its LLM call) entirely.
     candidates = explicit_candidates or visual_selection.select_moments_visual(
-        ranged if (options.range_start is not None or options.range_end is not None)
+        ranged
+        if (options.range_start is not None or options.range_end is not None)
         else transcript,
         options,
         source,
@@ -303,9 +302,7 @@ def run_pipeline(
                 settings.broll_provider_api_key,
                 settings.broll_provider_base_url,
             )
-        broll_engine = broll.Broll_Engine(
-            options, local=broll.LocalProvider(), external=external
-        )
+        broll_engine = broll.Broll_Engine(options, local=broll.LocalProvider(), external=external)
 
     # --- speaker diarisation (ONCE per source) ---------------------------
     # Diarisation is needed when the diarisation toggle OR speaker-aware reframe
@@ -374,7 +371,7 @@ def run_pipeline(
         # Filler keep-plan for this clip (None unless filler removal tightened
         # the timeline). Used to rebase speaker turns onto the same tightened
         # timeline the rebased words already use (Reqs 13.4, 13.5).
-        keep_plan: Optional[list] = None
+        keep_plan: list | None = None
         # Final clip duration for b-roll planning; shrinks after filler removal.
         clip_duration = c.end - c.start
         # Best-effort visual-selection marker (Req 18.2): when visual selection
@@ -466,8 +463,13 @@ def run_pipeline(
         #     (Req 8.3).
         if host.active:
             out = host.run_stage(
-                Engine_Stage.AUDIO, clip_id=clip_id, source=source, clip_path=raw,
-                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                Engine_Stage.AUDIO,
+                clip_id=clip_id,
+                source=source,
+                clip_path=raw,
+                clip_start=c.start,
+                clip_end=c.end,
+                duration=clip_duration,
                 words=words,
                 # Seam publication (audio-stem-inpainting Reqs 6.1, 8.1): the keeps
                 # already in scope, read-only. ``None`` (no filler removal, or removal
@@ -493,11 +495,16 @@ def run_pipeline(
                 clip_turns = diarization.rebase_turns(clip_turns, keep_plan)
             try:
                 reframe.apply_speaker_reframe(
-                    raw, geo, turns=clip_turns, aspect=options.aspect,
+                    raw,
+                    geo,
+                    turns=clip_turns,
+                    aspect=options.aspect,
                     layout=options.reframe_layout,
                     intensity=options.reframe_intensity,
-                    detector=FACE_DETECTOR, sampler=FRAME_SAMPLER,
-                    backend=options.face_detector, notes=applied,
+                    detector=FACE_DETECTOR,
+                    sampler=FRAME_SAMPLER,
+                    backend=options.face_detector,
+                    notes=applied,
                 )
                 # Record the applied-layout marker (Req 14.5) and attach the
                 # per-source diarisation provenance notes (Reqs 4.2/4.4/16.5).
@@ -509,8 +516,11 @@ def run_pipeline(
                 applied.append("speaker_reframe_degraded")
                 try:
                     reframe.apply_reframe(
-                        raw, geo, aspect=options.aspect,
-                        backend=options.face_detector, detector=FACE_DETECTOR,
+                        raw,
+                        geo,
+                        aspect=options.aspect,
+                        backend=options.face_detector,
+                        detector=FACE_DETECTOR,
                         notes=applied,
                     )
                     applied.append("reframe")
@@ -519,8 +529,11 @@ def run_pipeline(
         elif options.reframe:
             try:
                 reframe.apply_reframe(
-                    raw, geo, aspect=options.aspect,
-                    backend=options.face_detector, detector=FACE_DETECTOR,
+                    raw,
+                    geo,
+                    aspect=options.aspect,
+                    backend=options.face_detector,
+                    detector=FACE_DETECTOR,
                     notes=applied,
                 )
                 applied.append("reframe")
@@ -534,8 +547,13 @@ def run_pipeline(
         #     actually succeeded; otherwise ``geo`` is kept (Req 8.3).
         if host.active:
             out = host.run_stage(
-                Engine_Stage.GEOMETRY, clip_id=clip_id, source=source, clip_path=geo,
-                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                Engine_Stage.GEOMETRY,
+                clip_id=clip_id,
+                source=source,
+                clip_path=geo,
+                clip_start=c.start,
+                clip_end=c.end,
+                duration=clip_duration,
                 words=words,
             )
             geo = out.media or geo
@@ -554,27 +572,36 @@ def run_pipeline(
             # arguments are load-bearing — they bind this iteration's words and duration
             # at definition time, so the resolver cannot pick up a later clip's values
             # when it is finally called.
-            def broll_resolver(w=words, d=clip_duration):  # noqa: E306
+            def broll_resolver(w=words, d=clip_duration):
                 return broll_engine.resolve(broll_engine.plan(w, d))
+
         # COMPOSE-stage engines contribute filter-graph fragments to that SAME
         # single pass — they never invoke ffmpeg themselves (Reqs 1.5, 23.3).
         compose = None
         if host.active:
             compose = host.run_stage(
-                Engine_Stage.COMPOSE, clip_id=clip_id, source=source, clip_path=geo,
-                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                Engine_Stage.COMPOSE,
+                clip_id=clip_id,
+                source=source,
+                clip_path=geo,
+                clip_start=c.start,
+                clip_end=c.end,
+                duration=clip_duration,
                 words=words,
                 clip_metadata={
                     "hook_text": md.hook_text,
-                    "clip_size": fu.ASPECT_PRESETS.get(
-                        options.aspect, fu.ASPECT_PRESETS["9:16"]
-                    ),
+                    "clip_size": fu.ASPECT_PRESETS.get(options.aspect, fu.ASPECT_PRESETS["9:16"]),
                 },
             )
         try:
             rendered = compositor.render_clip(
-                geo, final, options, words, temp_dir,
-                hook_text=md.hook_text, llm_client=llm_client,
+                geo,
+                final,
+                options,
+                words,
+                temp_dir,
+                hook_text=md.hook_text,
+                llm_client=llm_client,
                 broll_resolver=broll_resolver,
                 engine_contributions=(compose.contributions if compose is not None else None),
                 # A17: which music track this clip gets, when the mood has several. Built from
@@ -601,7 +628,7 @@ def run_pipeline(
         # when generation failed. Collapsing them into one made the failure assignment look like a
         # type error at the point of *use* rather than where the distinction is.
         thumb_path = clips_dir / f"clip_{clip_id}.jpg"
-        thumb: Optional[Path] = thumb_path
+        thumb: Path | None = thumb_path
         try:
             # V17: score a few candidate frames rather than taking a fixed position, which on a
             # clip opening on a cut or a blink chose exactly the wrong still.
@@ -653,13 +680,13 @@ def run_pipeline(
                 if srt:
                     # Labelled with the language actually spoken, not a fixed "eng": a track
                     # menu offering two entries both called English is worse than no menu.
-                    subtitle_tracks.append(
-                        (srt[0], subtitle_export.iso639_2(transcript.language))
-                    )
+                    subtitle_tracks.append((srt[0], subtitle_export.iso639_2(transcript.language)))
                     track_markers.append(f"caption_mode:{caption_mode}")
             if translated_words:
                 srt_en = subtitle_export.write_sidecars(
-                    translated_words, temp_dir / f"soft_{clip_id}", formats=("srt",),
+                    translated_words,
+                    temp_dir / f"soft_{clip_id}",
+                    formats=("srt",),
                     language="en",
                 )
                 if srt_en:
@@ -681,8 +708,13 @@ def run_pipeline(
         #     ``engine:<id>:artifact_failed`` marker (Reqs 17.1, 17.6, 17.7, 18.6).
         if host.active:
             out = host.run_stage(
-                Engine_Stage.POST, clip_id=clip_id, source=source, clip_path=final,
-                clip_start=c.start, clip_end=c.end, duration=clip_duration,
+                Engine_Stage.POST,
+                clip_id=clip_id,
+                source=source,
+                clip_path=final,
+                clip_start=c.start,
+                clip_end=c.end,
+                duration=clip_duration,
                 words=words,
             )
             applied.extend(out.markers)
@@ -723,8 +755,7 @@ def run_pipeline(
         for tmp in (raw, geo):
             tmp.unlink(missing_ok=True)
 
-        report(_P_SELECT_END + clip_span * ((idx + 1) / n),
-               f"Rendered clip {idx + 1} of {n}")
+        report(_P_SELECT_END + clip_span * ((idx + 1) / n), f"Rendered clip {idx + 1} of {n}")
 
     # Release the job's engine scratch space (and finalise the SOURCE stage,
     # which belongs to no clip). Job-level markers have no ClipResult to land in,

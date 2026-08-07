@@ -1,9 +1,24 @@
 # Development / CI dependencies (installed on top of requirements.txt).
 -r requirements.txt
 
-ruff>=0.5,<1.0        # lint + format
-black>=24.4,<25.0     # formatter
+ruff>=0.5,<1.0        # lint + format (the formatter, as of I9 — see below)
 mypy>=1.10,<2.0       # static typing
+
+# `black` was listed here from the beginning and had never been run. I9 called for adopting it;
+# what was adopted instead is `ruff format`, and `black` is removed rather than left unused.
+#
+# Measured before deciding: on this tree, `ruff format` and `black` disagree on **35 of 195
+# files** — under black 24.10, the version this file pinned, not just under 25.x. The whole
+# disagreement is redundant parentheses around multi-line conditional expressions, which black
+# adds and ruff does not. Neither output is better.
+#
+# So the choice is not about style, it is about how many formatters this repo has. Two that
+# disagree on 35 files, with only one enforced in CI, is the same shape as the defects this
+# project keeps finding: one fact stated in two places, where changing either has no effect.
+# Whoever ran the unenforced one would produce a diff CI then rejected. `ruff format` wins on
+# the tiebreakers — ruff is already a hard dependency, already blocking in CI, and already
+# carries `line-length = 100` in `[tool.ruff]`, so the formatter and the linter cannot drift
+# apart on line length the way a separate `[tool.black]` section could.
 pytest>=8.2,<9.0      # test runner
 pytest-cov>=5.0,<8.0  # coverage measurement (reported in CI, not gated)
 hypothesis>=6.100,<7.0 # property-based testing

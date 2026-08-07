@@ -26,8 +26,12 @@ def _segment(text, start=0.0, end=2.0, *, no_speech=0.0, logprob=0.0, probabilit
         for token in (text.split() or ["x"])
     ]
     return TranscriptSegment(
-        start=start, end=end, text=text, words=words,
-        no_speech_prob=no_speech, avg_logprob=logprob,
+        start=start,
+        end=end,
+        text=text,
+        words=words,
+        no_speech_prob=no_speech,
+        avg_logprob=logprob,
     )
 
 
@@ -49,11 +53,13 @@ def _enabled(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_a_segment_the_model_doubts_twice_over_is_dropped():
     """Both of Whisper's own indicators agreeing is the strongest signal available."""
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("real speech that stays", 0, 2),
-        _segment("Thanks for watching!", 2, 4, no_speech=0.9, logprob=-1.4),
-        _segment("more real speech", 4, 6),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("real speech that stays", 0, 2),
+            _segment("Thanks for watching!", 2, 4, no_speech=0.9, logprob=-1.4),
+            _segment("more real speech", 4, 6),
+        )
+    )
     assert _texts(result) == ["real speech that stays", "more real speech"]
     assert result.removed_count == 1
     assert "no_speech" in result.reasons[0]
@@ -61,11 +67,13 @@ def test_a_segment_the_model_doubts_twice_over_is_dropped():
 
 def test_a_decode_loop_is_dropped():
     """No speaker says the same word four times with nothing in between."""
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("you you you you you", 0, 8),
-        _segment("actual speech", 8, 10),
-        _segment("actual speech continues", 10, 12),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("you you you you you", 0, 8),
+            _segment("actual speech", 8, 10),
+            _segment("actual speech continues", 10, 12),
+        )
+    )
     assert "you you you you you" not in _texts(result)
     assert "repeated" in result.reasons[0]
 
@@ -75,16 +83,18 @@ def test_a_phrase_looping_across_segments_is_dropped():
 
     The first occurrence is kept: the speaker may well have said it once.
     """
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("opening line", 0, 2),
-        _segment("subscribe to my channel", 2, 4),
-        _segment("subscribe to my channel", 4, 6),
-        _segment("subscribe to my channel", 6, 8),
-        _segment("subscribe to my channel", 8, 10),
-        _segment("closing line", 10, 12),
-        _segment("and another closing thought", 12, 14),
-        _segment("and one more real sentence", 14, 16),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("opening line", 0, 2),
+            _segment("subscribe to my channel", 2, 4),
+            _segment("subscribe to my channel", 4, 6),
+            _segment("subscribe to my channel", 6, 8),
+            _segment("subscribe to my channel", 8, 10),
+            _segment("closing line", 10, 12),
+            _segment("and another closing thought", 12, 14),
+            _segment("and one more real sentence", 14, 16),
+        )
+    )
     kept = _texts(result)
     assert kept.count("subscribe to my channel") == 2, kept
     assert "opening line" in kept and "closing line" in kept
@@ -93,11 +103,13 @@ def test_a_phrase_looping_across_segments_is_dropped():
 def test_a_low_confidence_repetitive_segment_is_dropped():
     """The loop-over-music case: barely-confident words with almost no unique tokens."""
     segment = _segment("na na na na na na", 0, 6, probability=0.2)
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("clear speech here", 0, 2),
-        segment,
-        _segment("more clear speech", 6, 8),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("clear speech here", 0, 2),
+            segment,
+            _segment("more clear speech", 6, 8),
+        )
+    )
     assert "na na na na na na" not in _texts(result)
 
 
@@ -110,19 +122,21 @@ def test_quiet_speech_is_not_deleted():
     It runs high on whispered, distant or heavily-accented speech that is entirely real. Acting
     on it alone would delete exactly the dialogue a creator most wants captioned.
     """
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("a quietly delivered but real sentence", 0, 3,
-                 no_speech=0.95, logprob=-0.2),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("a quietly delivered but real sentence", 0, 3, no_speech=0.95, logprob=-0.2),
+        )
+    )
     assert result.removed_count == 0
 
 
 def test_low_confidence_alone_is_not_enough():
     """Nor is the other signal on its own: hard audio is not the same as invented audio."""
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("a difficult to hear but genuine sentence", 0, 3,
-                 no_speech=0.1, logprob=-1.8),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("a difficult to hear but genuine sentence", 0, 3, no_speech=0.1, logprob=-1.8),
+        )
+    )
     assert result.removed_count == 0
 
 
@@ -131,9 +145,11 @@ def test_deliberate_repetition_by_a_speaker_survives():
 
     "no, no, no" is three tokens - under the loop threshold - and said with confidence.
     """
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("no no no that is not what happened", 0, 3),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("no no no that is not what happened", 0, 3),
+        )
+    )
     assert result.removed_count == 0
 
 
@@ -144,9 +160,11 @@ def test_a_genuine_outro_survives():
     genuinely say - especially in the footage this tool is pointed at. A phrase list would
     delete the outro of every video that actually has one.
     """
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("so thanks for watching and I will see you next week", 0, 4),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("so thanks for watching and I will see you next week", 0, 4),
+        )
+    )
     assert result.removed_count == 0
 
 
@@ -161,18 +179,20 @@ def test_a_transcript_that_looks_mostly_invented_is_left_alone():
         _segment(f"invented line {i}", i * 2, i * 2 + 2, no_speech=0.9, logprob=-1.5)
         for i in range(4)
     ]
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("one real line", 100, 102), *suspect
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(_segment("one real line", 100, 102), *suspect)
+    )
     assert result.removed_count == 0, "the filter gutted the transcript"
     assert len(result.transcript.segments) == 5
 
 
 def test_filtering_can_be_disabled(monkeypatch):
     monkeypatch.setattr(settings, "transcript_filter_enabled", False)
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("you you you you you", 0, 8),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("you you you you you", 0, 8),
+        )
+    )
     assert result.removed_count == 0
 
 
@@ -196,11 +216,13 @@ def test_surviving_timings_are_untouched():
     A dropped segment takes its own words and leaves everything else where it was - it does not
     close the gap, because shifting timings would desynchronise the clip from its own audio.
     """
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("first", 0, 2),
-        _segment("you you you you", 2, 10),
-        _segment("second", 10, 12),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("first", 0, 2),
+            _segment("you you you you", 2, 10),
+            _segment("second", 10, 12),
+        )
+    )
     kept = result.transcript.segments
     assert [(s.start, s.end) for s in kept] == [(0.0, 2.0), (10.0, 12.0)]
 
@@ -226,11 +248,13 @@ def test_hostile_segments_do_not_raise():
 
 
 def test_reasons_name_the_time_so_a_log_is_actionable():
-    result = transcript_filter.filter_transcript(_transcript(
-        _segment("real one", 0, 2),
-        _segment("you you you you", 12.5, 20.0),
-        _segment("real two", 20, 22),
-    ))
+    result = transcript_filter.filter_transcript(
+        _transcript(
+            _segment("real one", 0, 2),
+            _segment("you you you you", 12.5, 20.0),
+            _segment("real two", 20, 22),
+        )
+    )
     assert result.reasons == ["token repeated 4x @ 12.50-20.00"]
 
 
@@ -264,12 +288,17 @@ def test_transcribe_filters_after_the_cache(tmp_path, monkeypatch):
 
     # What landed in the cache is unfiltered.
     key = transcript_cache.cache_key(
-        transcript_cache.hash_source(media), model=settings.whisper_model,
-        language=None, translate=False, beam_size=5,
+        transcript_cache.hash_source(media),
+        model=settings.whisper_model,
+        language=None,
+        translate=False,
+        beam_size=5,
     )
     cached = transcript_cache.load(key)
     assert [s.text for s in cached.segments] == [
-        "real speech", "you you you you", "more real speech"
+        "real speech",
+        "you you you you",
+        "more real speech",
     ], "the cache stored the filtered transcript, making it lossy"
 
     # And a cache hit is filtered on the way out too.
@@ -286,9 +315,7 @@ def test_the_cache_carries_the_signals_the_filter_reads(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "transcript_cache_dir", tmp_path / "cache")
     key = "k" * 32
-    transcript_cache.store(key, _transcript(
-        _segment("hmm", 0, 2, no_speech=0.77, logprob=-1.25)
-    ))
+    transcript_cache.store(key, _transcript(_segment("hmm", 0, 2, no_speech=0.77, logprob=-1.25)))
     loaded = transcript_cache.load(key)
     assert loaded.segments[0].no_speech_prob == pytest.approx(0.77)
     assert loaded.segments[0].avg_logprob == pytest.approx(-1.25)

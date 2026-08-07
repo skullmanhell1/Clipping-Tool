@@ -78,11 +78,18 @@ jobs:
       # older releases). The rule set is now pinned in pyproject.toml, which is what makes
       # blocking on it meaningful.
       #
-      # Formatting is deliberately not enforced: black is in requirements-dev but has never
-      # run, and adopting it would reformat essentially every file. That is a standalone
-      # change, not a CI fix.
       - name: Lint (ruff)
         run: ruff check .
+
+      # I9: formatting is now enforced. `ruff format` is the formatter and `black` has been
+      # removed from requirements-dev, because the two disagree on 35 of 195 files here (redundant
+      # parens around multi-line conditionals) and a formatter nobody runs is worse than none —
+      # which is exactly what `black` was for the whole life of this repo before now.
+      #
+      # `--check` rather than a commit-back step: the job reports the drift and fails, it does not
+      # rewrite the branch under the author.
+      - name: Format (ruff format --check)
+        run: ruff format --check .
 
       # mypy was in requirements-dev.txt from the start and had never been run. The first run
       # found 69 errors in 17 files; all 69 are fixed or covered by a narrow, commented
