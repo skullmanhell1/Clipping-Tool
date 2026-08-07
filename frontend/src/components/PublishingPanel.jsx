@@ -1,5 +1,7 @@
+import PropTypes from "prop-types";
 import { useState } from "react";
 import { api } from "../api.js";
+import { PUBLISHER_STATUSES_SHAPE, PUBLISHING_SHAPE } from "./shapes.js";
 
 const LABELS = {
   whop: "Whop",
@@ -213,3 +215,29 @@ export default function PublishingPanel({ value, onChange, statuses, campaigns, 
     </div>
   );
 }
+
+PublishingPanel.propTypes = {
+  // Required: this is a controlled panel with no state of its own for the routing, and every field
+  // reads `value.something` directly. Its `platforms` array is required within the shape because
+  // `value.platforms.includes` is called unguarded on render.
+  value: PUBLISHING_SHAPE.isRequired,
+  onChange: PropTypes.func.isRequired,
+  // Deliberately not required, and tolerant of null. `/api/publishers` is in flight on first paint,
+  // and "loading platform status…" is a different claim from "nothing is configured" — the second
+  // would be a lie told to every user for the first few hundred milliseconds.
+  statuses: PUBLISHER_STATUSES_SHAPE,
+  // Required, because `campaigns.find` and `campaigns.map` are both unguarded. An install with no
+  // saved campaigns passes an empty array, which renders as the manual-route option alone.
+  campaigns: PropTypes.arrayOf(
+    PropTypes.shape({
+      id: PropTypes.string.isRequired,
+      name: PropTypes.string,
+      // One route per platform. Read only for its key set, which is how selecting a campaign
+      // re-selects the platforms it was built for.
+      routes: PropTypes.object,
+    })
+  ).isRequired,
+  // Called with `?.` — a caller that does not track campaigns still gets a saved one applied to
+  // `value`, it just will not appear in the dropdown until the next load.
+  onCampaignSaved: PropTypes.func,
+};

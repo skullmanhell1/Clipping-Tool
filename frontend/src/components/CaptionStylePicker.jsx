@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useMemo } from "react";
 
 /**
@@ -28,6 +29,41 @@ const POSITION_CLASS = {
 };
 
 const SAMPLE = "This changed everything";
+
+/**
+ * One caption preset, as `/api/info` reports it under `effects.caption_preset_details`.
+ *
+ * Only `name` is required: it is the identity — the React key, the accessible label, the value
+ * reported on selection — while every visual field has a fallback in the swatch, because an older
+ * backend advertises fewer of them and a preset that renders in the app's default typography is
+ * more use than a preset that is not offered.
+ */
+const PRESET_SHAPE = PropTypes.shape({
+  name: PropTypes.string.isRequired,
+  font: PropTypes.string,
+  colors_hex: PropTypes.shape({
+    primary: PropTypes.string,
+    highlight: PropTypes.string,
+  }),
+  position: PropTypes.string,
+  font_weight: PropTypes.number,
+  uppercase: PropTypes.bool,
+  spacing: PropTypes.number,
+  scale_x: PropTypes.number,
+  border_style: PropTypes.number,
+});
+
+/**
+ * The brand-kit fields the preview honours.
+ *
+ * This is a *view* of the settings object — the whole blob is passed in, because the kit lives
+ * inside it — so the shape names only the three keys read here rather than restating the schema.
+ */
+const BRAND_SHAPE = PropTypes.shape({
+  brand_font: PropTypes.string,
+  brand_primary_color: PropTypes.string,
+  brand_highlight_color: PropTypes.string,
+});
 
 /** One preset rendered as a phone-shaped swatch. */
 function Swatch({ preset, active, onSelect, brand }) {
@@ -97,6 +133,14 @@ function Swatch({ preset, active, onSelect, brand }) {
   );
 }
 
+Swatch.propTypes = {
+  preset: PRESET_SHAPE.isRequired,
+  active: PropTypes.bool,
+  // Required: a swatch that cannot report its own selection is a picture of a control.
+  onSelect: PropTypes.func.isRequired,
+  brand: BRAND_SHAPE,
+};
+
 export default function CaptionStylePicker({ presets = [], value, onChange, brand }) {
   if (!presets.length) {
     return (
@@ -127,3 +171,14 @@ export default function CaptionStylePicker({ presets = [], value, onChange, bran
     </div>
   );
 }
+
+CaptionStylePicker.propTypes = {
+  // Not required: an empty list is the documented state for a backend that does not advertise the
+  // preset details, and it renders as the sentence saying so rather than as an empty grid.
+  presets: PropTypes.arrayOf(PRESET_SHAPE),
+  // The currently chosen preset name. Absent means none of the swatches reads as active, which is
+  // what a settings object predating the preset field should look like.
+  value: PropTypes.string,
+  onChange: PropTypes.func.isRequired,
+  brand: BRAND_SHAPE,
+};

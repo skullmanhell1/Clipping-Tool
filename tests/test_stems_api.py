@@ -5,11 +5,16 @@ Covers epic 17: the eleven ``ProcessingOptions`` fields (17.1), the ``OptionsMod
 (17.5) — headlined by **P21** (every option field survives the API surface).
 
 The panel assertions are deliberately *field-name* assertions against the JSX source rather
-than a rendered-DOM test: this repo has no JavaScript test tooling at all, and the failure
-mode worth catching here is a **name mismatch** between the panel, ``DEFAULT_ENGINE_SETTINGS``
-and the backend field list. A camelCase key or a typo in the panel would silently never reach
-the API — `App.jsx` forwards `DEFAULT_ENGINE_SETTINGS` keys verbatim as FormData — and that is
-exactly what these tests pin.
+than a rendered-DOM test. The failure mode worth catching is a **name mismatch** between the
+panel, ``SETTINGS_SCHEMA`` in ``App.jsx`` and the backend field list: a camelCase key or a typo
+would silently never reach the API, because ``App.jsx`` forwards those keys verbatim as
+FormData. That is a cross-language agreement, so it has to be checked from the side that owns
+the field list — a frontend test can only confirm the frontend agrees with itself.
+
+The original reason given here was that the repo had no JavaScript test tooling. That stopped
+being true in Phase 5 (there are now 394 frontend tests), but the assertions stay where they
+are: the tooling was never the argument that mattered, and these tests are the only thing that
+compares the two languages' spellings against each other.
 """
 
 from __future__ import annotations
@@ -369,18 +374,29 @@ def test_info_leaves_the_pre_existing_payload_untouched(client) -> None:
 def test_the_frontend_defaults_list_every_field_with_the_api_spelling() -> None:
     """A camelCase key or a typo here would silently never reach the backend.
 
-    ``App.jsx``'s ``engineOptions`` forwards ``DEFAULT_ENGINE_SETTINGS`` keys **verbatim** as
-    FormData field names, so the JS spelling has to equal the Python one exactly. That makes
-    this a real integration assertion rather than a style check.
+    ``App.jsx`` forwards these keys **verbatim** as FormData field names, so the JS spelling has to
+    equal the Python one exactly. That makes this a real integration assertion rather than a style
+    check, and it is why the pin reads the JSX as text instead of trusting a frontend test.
+
+    Retargeted from ``DEFAULT_ENGINE_SETTINGS`` to ``SETTINGS_SCHEMA`` in Phase 5.1. That phase
+    collapsed three parallel declarations of the settings list — the initial state, the defaults
+    object and the wire mapping — into one ``SETTINGS_SCHEMA`` whose keys *are* the wire names,
+    and which the other two are now derived from. So ``DEFAULT_ENGINE_SETTINGS`` no longer exists
+    and this assertion had nothing to read.
+
+    Deliberately retargeted rather than deleted, and it is stronger than it was: the name it now
+    reads is the *only* place a field is declared, so a field missing here is missing from the UI
+    state, the defaults and the request all at once, where before it could have been absent from
+    the defaults while still being sent.
     """
-    block = re.search(r"DEFAULT_ENGINE_SETTINGS\s*=\s*\{(.*?)\n\};", _APP_JSX, re.DOTALL)
-    assert block is not None, "DEFAULT_ENGINE_SETTINGS not found in App.jsx"
+    block = re.search(r"SETTINGS_SCHEMA\s*=\s*\{(.*?)\n\};", _APP_JSX, re.DOTALL)
+    assert block is not None, "SETTINGS_SCHEMA not found in App.jsx"
     body = block.group(1)
 
     for name in STEM_FIELDS:
         assert re.search(
             rf"^\s*{name}:", body, re.MULTILINE
-        ), f"{name} missing from DEFAULT_ENGINE_SETTINGS"
+        ), f"{name} missing from SETTINGS_SCHEMA"
 
     # No camelCase sibling snuck in alongside the snake_case key.
     assert "stemInpainting" not in _APP_JSX

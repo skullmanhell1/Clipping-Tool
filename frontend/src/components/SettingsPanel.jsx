@@ -1,7 +1,11 @@
+import PropTypes from "prop-types";
 import { useState } from "react";
 import BrandKitPanel from "./BrandKitPanel.jsx";
 import CaptionStylePicker from "./CaptionStylePicker.jsx";
 import Dropdown from "./Dropdown.jsx";
+// `Toggle` used to be defined privately in this file, which is why two other panels re-styled a
+// raw checkbox instead of reusing it. See components/ui/.
+import Toggle from "./ui/Toggle.jsx";
 
 // Option lists mirror the backend's accepted values (see /api/info).
 const LANGUAGES = [
@@ -267,29 +271,6 @@ const engineHint = (engine) => {
   }
   return engine?.requires_network ? "Requires network access (blocked in permissibility mode)" : "";
 };
-
-// A small labelled checkbox toggle used across the effects section.
-function Toggle({ label, checked, onChange, hint, disabled }) {
-  return (
-    <label
-      className={`flex items-start gap-2 text-sm text-slate-300 ${
-        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-      }`}
-    >
-      <input
-        type="checkbox"
-        checked={!!checked}
-        disabled={!!disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 accent-emerald-500"
-      />
-      <span>
-        {label}
-        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
-      </span>
-    </label>
-  );
-}
 
 /**
  * The settings panel: core dropdowns (Language, Clip Length, Aspect Ratio,
@@ -1038,3 +1019,50 @@ export default function SettingsPanel({
     </div>
   );
 }
+
+SettingsPanel.propTypes = {
+  /**
+   * The whole settings object — about seventy-five keys, read by about seventy controls.
+   *
+   * Deliberately **not** enumerated. `SETTINGS_SCHEMA` in `App.jsx` is the authoritative shape and
+   * the single declaration of that list; writing the keys out again here would be a second
+   * statement of it, which is exactly the duplication the schema refactor removed — and the one
+   * that let a setting exist in the UI and never reach the backend. A key added to the schema must
+   * not also have to be added here.
+   */
+  settings: PropTypes.object.isRequired,
+  // Required and called unguarded: the panel holds no state of its own, so without this every
+  // control on screen would appear to do nothing.
+  onChange: PropTypes.func.isRequired,
+  // Required: `watch.enabled` is read unguarded to drive the checkbox, and the folder is shown
+  // beside it when the mode is on.
+  watch: PropTypes.shape({
+    enabled: PropTypes.bool,
+    folder: PropTypes.string,
+  }).isRequired,
+  onToggleWatch: PropTypes.func.isRequired,
+  // `/api/info`'s `effects` block. Null until the request lands, and null on an older backend that
+  // does not advertise it — in both cases the controls fall back to their built-in option lists,
+  // which is what keeps this panel usable against a server it does not recognise.
+  effects: PropTypes.shape({
+    caption_fonts: PropTypes.array,
+    caption_preset_details: PropTypes.array,
+    reframe_layouts: PropTypes.arrayOf(PropTypes.string),
+    reframe_intensities: PropTypes.arrayOf(PropTypes.string),
+  }),
+  /**
+   * `/api/info`'s `engines` list: one row per advertised AV engine.
+   *
+   * Typed as `any` rather than as `arrayOf`, and that is not laziness. The panel coerces anything
+   * that is not an array to an empty list (`Array.isArray(engines) ? engines : []`) and a test pins
+   * that behaviour, because this value comes from a server whose version we do not control and the
+   * cost of getting it wrong is the whole settings screen failing to render. Declaring `arrayOf`
+   * would make the component warn about a case it handles on purpose. The rows it reads are
+   * `{ id, flag, available, missing, requires_network }`.
+   */
+  engines: PropTypes.any,
+  // `/api/info`'s `capabilities` block: probe results keyed by `<kind>:<name>` (e.g.
+  // `model:htdemucs`) plus per-engine option domains keyed by engine id. Null is the documented
+  // state for an install that reports none, and every lookup here is optional-chained.
+  capabilities: PropTypes.object,
+};

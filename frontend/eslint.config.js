@@ -47,9 +47,22 @@ export default [
       // and JSX-scope/import-React rules would be false positives.
       "react/react-in-jsx-scope": "off",
       "react/jsx-uses-react": "off",
-      // Props are not typed with propTypes anywhere in this project; requiring them
-      // would produce hundreds of findings that say nothing about correctness.
-      "react/prop-types": "off",
+      // Every component now declares its props, so this is an error rather than the blanket "off"
+      // it used to be. The old comment said requiring them would produce hundreds of findings that
+      // say nothing about correctness, and that was true of a codebase with no declarations at all
+      // — but the consequence was that *no* prop boundary in the app was checked by anything, while
+      // `App.jsx` threads a ~75-key settings object through a 969-line form and a job through two
+      // more components. A caller passing a string where a number was meant, or dropping a required
+      // callback, produced a silently wrong render.
+      //
+      // propTypes rather than TypeScript, and that is the smaller step on purpose. TypeScript would
+      // need a tsconfig, type packages for React and the test libraries, a `tsc` step in CI and
+      // `allowJs` interop, and it converts files one at a time — so most boundaries would stay
+      // unchecked for however long the migration took. propTypes validates all seventeen components
+      // at once, at runtime, inside the test suite that already exists, with no change to the build
+      // chain, and it is reversible by deleting the blocks. If this codebase later wants static
+      // types, nothing here is in the way.
+      "react/prop-types": "error",
       // Narrowed rather than disabled. By default this rule also flags ' and " in JSX
       // text, which are ordinary prose here ("don't", quoted names) and render
       // correctly. The characters worth catching are > and }, where a stray one is a
@@ -57,7 +70,13 @@ export default [
       "react/no-unescaped-entities": ["error", { forbid: [">", "}"] }],
       // The two rules that catch genuine bugs rather than style.
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      // Promoted from "warn" now that the count is zero. It was a warning because there were two
+      // outstanding violations (plan item I11) and both polling effects needed a real fix rather
+      // than a dependency added to silence the rule — depending on `jobs` directly rebuilt the
+      // interval on every poll, and depending on `jobs.length` missed the case that mattered,
+      // because a job going from processing to completed does not change the count. Those are
+      // fixed; a warning nobody has to act on is a warning that stops being read.
+      "react-hooks/exhaustive-deps": "error",
       // An unused variable is usually a leftover or a typo'd identifier. Argument
       // patterns prefixed with _ are conventionally intentional.
       "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],

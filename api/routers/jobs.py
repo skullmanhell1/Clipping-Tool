@@ -8,10 +8,16 @@ carries its own tag.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from api.routers._models import BatchRequest, PreviewRequest, UrlJobRequest
 from api.security import rate_limit
@@ -27,6 +33,17 @@ from worker.jobs import get_manager
 from worker.models import ProcessingOptions
 
 router = APIRouter()
+
+
+def _sse(event: str, data: Any) -> str:
+    """Format one Server-Sent Events frame.
+
+    ``json.dumps`` guarantees the payload is a single line — it escapes newlines inside strings
+    and emits none of its own — which matters because a bare newline in a ``data:`` value would
+    terminate the frame early and the client would parse the remainder as a new event. A clip's
+    ``transcript_text`` contains newlines, so this is a real case rather than a theoretical one.
+    """
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +389,99 @@ async def upload(
 @router.get("/api/jobs", tags=["jobs"])
 def list_jobs() -> dict:
     return {"jobs": [j.to_dict() for j in get_manager().store.all()]}
+
+
+# Registered before /api/jobs/{job_id} on purpose. Starlette matches routes in registration
+# order, so with the parameterised route first, "events" would bind as a job id and this
+# endpoint would answer 404 "Job not found" — a failure that looks like a missing job rather
+# than like route shadowing. The test suite pins this (test_job_events_is_not_shadowed).
+@router.get("/api/jobs/events", tags=["jobs"])
+async def job_events(request: Request) -> StreamingResponse:
+    """Stream job progress as Server-Sent Events (Phase 5.5).
+
+    Replaces the frontend poll loop, which refetched *every* job with all of its clips and its
+    ~100-field options object twice a second for as long as a tab was open, and did so whether
+    or not anything had changed. This sends a job only when its ``updated_at`` moves.
+
+    The protocol is two named events:
+
+    ``snapshot``
+        Every job, sent once immediately on connect. Authoritative: a client replaces its
+        state with this. That is what makes reconnection self-healing — a client that missed
+        updates while disconnected does not have to reason about the gap, because the next
+        snapshot supersedes whatever it held.
+    ``jobs``
+        Only the jobs whose ``updated_at`` changed since the last frame. A client merges these
+        by id.
+
+    Plus SSE comment frames (``: ping``) as an idle keepalive; see
+    ``settings.job_events_heartbeat_seconds``.
+
+    Incremental frames can be additive because nothing removes a job from the in-memory store
+    within a process lifetime — ``JobStore`` has no delete, and ``max_persisted_jobs`` prunes
+    the SQLite table, which only takes effect on the next restore. If a delete is ever added,
+    this needs a ``removed`` event; the snapshot-replaces/incremental-merges split above is
+    where that would go.
+
+    ``async def`` rather than ``def``: a sync route runs in Starlette's threadpool, which
+    defaults to 40 workers, and a sync generator would hold one for the entire life of the
+    connection. A handful of open tabs would then starve every other sync route in the app.
+
+    Authentication is inherited from the app-level ``require_api_token`` dependency, and this
+    route is deliberately *not* in ``api.security._QUERY_TOKEN_PATHS`` — the browser
+    ``EventSource`` API cannot set headers, but rather than widen the query-token allowance to
+    a long-lived connection whose URL would sit in access logs for the life of the stream, the
+    frontend reads this with ``fetch`` and a ``ReadableStream``, which can send the header
+    normally. See ``api.jobEvents`` in ``frontend/src/api.js``.
+    """
+
+    async def frames() -> AsyncIterator[str]:
+        manager = get_manager()
+        # id -> updated_at of what this connection has already sent.
+        sent: dict[str, float] = {}
+        first = True
+        last_heartbeat = time.monotonic()
+        poll = max(0.05, float(settings.job_events_poll_interval_seconds))
+        heartbeat = max(1.0, float(settings.job_events_heartbeat_seconds))
+        while True:
+            # Checked every tick rather than relying on the generator being closed. Starlette
+            # only discovers a vanished client when it next tries to write, so without this a
+            # stream with nothing to say would sit in this loop indefinitely after the tab
+            # closed, holding the connection and the task.
+            if await request.is_disconnected():
+                return
+            jobs = manager.store.all()
+            if first:
+                payload = [j.to_dict() for j in jobs]
+                sent = {j.id: j.updated_at for j in jobs}
+                yield _sse("snapshot", {"jobs": payload})
+                first = False
+                last_heartbeat = time.monotonic()
+            else:
+                changed = [j for j in jobs if sent.get(j.id) != j.updated_at]
+                if changed:
+                    for job in changed:
+                        sent[job.id] = job.updated_at
+                    yield _sse("jobs", {"jobs": [j.to_dict() for j in changed]})
+                    last_heartbeat = time.monotonic()
+                elif time.monotonic() - last_heartbeat >= heartbeat:
+                    yield ": ping\n\n"
+                    last_heartbeat = time.monotonic()
+            await asyncio.sleep(poll)
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            # Without this a caching layer can hold the whole response, which for a stream
+            # means the client receives nothing at all until it ends.
+            "Cache-Control": "no-cache",
+            # nginx buffers proxied responses by default, which has the same effect: progress
+            # arrives in one lump at the end. This is the documented opt-out and is ignored by
+            # anything that is not nginx.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/api/jobs/{job_id}", tags=["jobs"])

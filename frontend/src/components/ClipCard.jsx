@@ -1,7 +1,15 @@
+import PropTypes from "prop-types";
 import { useCallback, useEffect, useState } from "react";
 import { api, formatDuration } from "../api.js";
 import ClipPlayer from "./ClipPlayer.jsx";
 import TranscriptEditor from "./TranscriptEditor.jsx";
+import {
+  CLIP_SHAPE,
+  PUBLISHER_STATUSES_SHAPE,
+  PUBLISHING_SHAPE,
+  PUBLISH_ATTEMPT_SHAPE,
+  WIRE_OPTIONS_SHAPE,
+} from "./shapes.js";
 
 const PLATFORM_LABELS = {
   whop: "Whop",
@@ -59,6 +67,15 @@ function Field({ label, children, onRegenerate, busy }) {
     </div>
   );
 }
+
+Field.propTypes = {
+  label: PropTypes.node.isRequired,
+  children: PropTypes.node,
+  // Null rather than absent is the normal case: the caller passes `llmAvailable ? handler : null`,
+  // and the button is what disappears when there is no model to regenerate with.
+  onRegenerate: PropTypes.func,
+  busy: PropTypes.bool,
+};
 
 const toEpoch = (localDateTime) => {
   if (!localDateTime) return null;
@@ -567,3 +584,35 @@ export default function ClipCard({
     </div>
   );
 }
+
+ClipCard.propTypes = {
+  // Both required: every request this card makes — edit, regenerate, review, re-render, publish — is
+  // addressed by the pair, and the clip is also the entire content of the card.
+  jobId: PropTypes.string.isRequired,
+  clip: CLIP_SHAPE.isRequired,
+  // False disables the regenerate buttons and says why, so an install with no model key is a
+  // supported state rather than a broken one.
+  llmAvailable: PropTypes.bool,
+  // Read with `?.` throughout, because the per-clip publish controls are usable without the panel's
+  // state — they fall back to "post now", no campaign, review mode.
+  publishing: PUBLISHING_SHAPE,
+  // The platform checkboxes are built from this. Absent means no platforms are offered, which is
+  // the correct display while `/api/publishers` is in flight.
+  publisherStatuses: PUBLISHER_STATUSES_SHAPE,
+  // This clip's publish history, already filtered by the parent. Absent means none yet.
+  attempts: PropTypes.arrayOf(PUBLISH_ATTEMPT_SHAPE),
+  // Called with `?.`. A caller that ignores updates leaves the card showing its own optimistic
+  // state, which is legitimate for a preview but is why `JobCard` always passes one.
+  onUpdated: PropTypes.func,
+  onPublished: PropTypes.func,
+  // U9/U11. `onToggleSelected` is the switch for the batch checkbox: its absence removes the
+  // control entirely, which is how a single-clip view opts out of batch review.
+  selected: PropTypes.bool,
+  onToggleSelected: PropTypes.func,
+  // Passed only for the focused card, so the parent's keyboard handler drives one player.
+  onRegisterPlayer: PropTypes.func,
+  focused: PropTypes.bool,
+  // U7: the options a re-render should use, already in wire form. Absent means the request sends
+  // `{}` and the backend keeps the clip's original options.
+  settings: WIRE_OPTIONS_SHAPE,
+};

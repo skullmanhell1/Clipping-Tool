@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 /**
  * U6: the brand kit — font, colour pair, logo and standing call to action.
  *
@@ -36,6 +38,12 @@ function Row({ label, hint, children }) {
     </label>
   );
 }
+
+Row.propTypes = {
+  label: PropTypes.node.isRequired,
+  hint: PropTypes.node,
+  children: PropTypes.node,
+};
 
 export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
   const set = (key) => (value) => onChange({ ...settings, [key]: value });
@@ -181,3 +189,20 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
     </section>
   );
 }
+
+BrandKitPanel.propTypes = {
+  // The whole settings object, because the kit is stored inside it and every change is made by
+  // spreading it. Not enumerated: `SETTINGS_SCHEMA` in `App.jsx` is the authoritative shape and the
+  // single declaration of those ~75 keys, and listing the eight this panel reads would invite the
+  // list to drift from the eight it writes.
+  settings: PropTypes.object.isRequired,
+  // Required, and called with the full settings object: without it every control here is inert,
+  // and a brand kit that cannot be edited is worse than one that is not offered.
+  onChange: PropTypes.func.isRequired,
+  // The vendored faces `/api/info` reports. Strings or `{ name }` objects, because both spellings
+  // are read above, and an install whose info payload omits them shows the "use the style's font"
+  // option alone rather than an empty select.
+  fonts: PropTypes.arrayOf(
+    PropTypes.oneOfType([PropTypes.string, PropTypes.shape({ name: PropTypes.string })])
+  ),
+};

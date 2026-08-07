@@ -35,10 +35,92 @@ function authHeaders() {
   return token ? { "X-API-Token": token } : {};
 }
 
-// Every call goes through here so the header has one definition rather than 38.
-// That single seam is also where Phase 5 adds AbortController and timeouts.
+// --------------------------------------------------------------------------
+// Timeouts and cancellation.
+//
+// Every call goes through `apiFetch`, so the header, the timeout and the abort
+// plumbing each have one definition rather than 38.
+//
+// `fetch` has no timeout of its own. Without one, a request to a backend that
+// has stopped answering — a container being restarted, a laptop that has
+// suspended, a proxy holding the connection open — never settles, so the
+// caller's `await` never returns. Every poll in the app was written to survive
+// a *failure*; none of them survives a promise that simply never resolves,
+// which is the case that presents as the UI freezing rather than erroring.
+// --------------------------------------------------------------------------
+
+//: Default request deadline. Generous, because the slowest ordinary call is a
+//: yt-dlp metadata fetch on `/api/preview` and that legitimately takes seconds
+//: on a cold extractor.
+const DEFAULT_TIMEOUT_MS = 30000;
+
+//: Uploads get no timeout at all.
+//:
+//: A multi-gigabyte file over a slow connection is *supposed* to take minutes,
+//: and there is no duration that distinguishes "still uploading" from "stalled"
+//: without measuring throughput. Cancelling one on a clock would abort exactly
+//: the transfers that were closest to succeeding. Uploads are cancellable
+//: instead — pass a `signal`.
+const NO_TIMEOUT = 0;
+
+/**
+ * A DOMException-compatible error, distinguishable from a network failure.
+ *
+ * `fetch` rejects with a bare `TypeError` when the network is unreachable and
+ * with an `AbortError` when a signal fires, and callers need to tell a timeout
+ * apart from a user-initiated cancellation — one is worth reporting and the
+ * other is not.
+ */
+export class TimeoutError extends Error {
+  constructor(url, ms) {
+    super(`Request to ${url} timed out after ${ms}ms`);
+    this.name = "TimeoutError";
+  }
+}
+
 function apiFetch(url, init = {}) {
-  return fetch(url, { ...init, headers: { ...(init.headers || {}), ...authHeaders() } });
+  const { timeout = DEFAULT_TIMEOUT_MS, signal, ...rest } = init;
+
+  const headers = { ...(rest.headers || {}), ...authHeaders() };
+
+  // No timeout and no caller signal: nothing to wire up, so do not allocate a
+  // controller. This is the upload path.
+  if (!timeout && !signal) {
+    return fetch(url, { ...rest, headers });
+  }
+
+  const controller = new AbortController();
+  let timer = null;
+  let timedOut = false;
+
+  if (timeout) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeout);
+  }
+
+  // A caller's own signal (a component unmounting, a filter changing) is
+  // forwarded rather than replacing ours, so both can abort the same request.
+  const onCallerAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  return fetch(url, { ...rest, headers, signal: controller.signal })
+    .catch((error) => {
+      // Re-label our own abort so a timeout does not look like a cancellation.
+      // A caller's abort keeps its AbortError, which callers check for by name.
+      if (timedOut && error?.name === "AbortError") {
+        throw new TimeoutError(url, timeout);
+      }
+      throw error;
+    })
+    .finally(() => {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onCallerAbort);
+    });
 }
 
 // A URL a *browser* will load directly (<video src>, <a href>) cannot carry a
@@ -83,17 +165,114 @@ export const api = {
       body: JSON.stringify({ urls, options }),
     }).then(jsonOrThrow),
 
-  upload: (files, options) => {
+  upload: (files, options, { signal } = {}) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     Object.entries(options).forEach(([k, v]) => {
       if (v !== null && v !== undefined) fd.append(k, v);
     });
-    return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
+    // No timeout: see NO_TIMEOUT. `signal` is threaded so an upload can still be
+    // cancelled deliberately, which is what makes a slow one recoverable.
+    return apiFetch("/api/upload", {
+      method: "POST",
+      body: fd,
+      timeout: NO_TIMEOUT,
+      signal,
+    }).then(jsonOrThrow);
   },
 
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => apiFetch(`/api/jobs/${id}`).then(jsonOrThrow),
+
+  /**
+   * Stream job progress from `GET /api/jobs/events` (Phase 5.5).
+   *
+   * Resolves when the server closes the stream, rejects if it cannot be opened
+   * or dies mid-flight. It does not reconnect — the caller decides whether a
+   * dropped stream means retry or fall back to polling, because only the caller
+   * knows whether it still cares.
+   *
+   * `fetch` rather than `EventSource`, and that is the whole reason this is
+   * hand-rolled instead of three lines. `EventSource` cannot set a request
+   * header, so authenticating it would mean putting the API token in the query
+   * string — and unlike the `<video src>` case that allowance exists for, this
+   * connection stays open for an entire render, so the token would sit in every
+   * access log and proxy log for as long as the tab did. `fetch` sends the
+   * header normally, at the cost of parsing the frames here.
+   *
+   * @param {object} handlers
+   * @param {(jobs: object[]) => void} handlers.onSnapshot Full authoritative list.
+   * @param {(jobs: object[]) => void} handlers.onJobs Only the changed jobs; merge by id.
+   * @param {AbortSignal} [handlers.signal] Closes the stream.
+   */
+  jobEvents: async ({ onSnapshot, onJobs, signal } = {}) => {
+    // NO_TIMEOUT for the same reason uploads use it: the request is *supposed*
+    // to stay open indefinitely, so the 30s default deadline would abort a
+    // perfectly healthy stream mid-render. Liveness is the server's heartbeat's
+    // job, not a deadline's.
+    const response = await apiFetch("/api/jobs/events", {
+      headers: { Accept: "text/event-stream" },
+      timeout: NO_TIMEOUT,
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Event stream failed (${response.status})`);
+    }
+    // Guarded rather than assumed: `response.body` is absent in environments
+    // without streaming fetch. Throwing here is what lets the caller fall back
+    // to polling instead of silently receiving no updates forever.
+    if (!response.body?.getReader) {
+      throw new Error("Event stream unsupported: no readable response body");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // `stream: true` matters: a chunk boundary can fall inside a multi-byte
+        // UTF-8 sequence, and decoding each chunk independently would corrupt
+        // any non-ASCII character that straddled one — clip titles and
+        // transcripts are exactly where that shows up.
+        buffer += decoder.decode(value, { stream: true });
+
+        // Frames are separated by a blank line. Anything after the last
+        // separator is a partial frame and stays in the buffer.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const trimmed = frame.trim();
+          // A comment frame — the server's heartbeat. Nothing to deliver, but
+          // arriving at all is the signal that the connection is alive.
+          if (!trimmed || trimmed.startsWith(":")) continue;
+          let name = null;
+          let data = null;
+          for (const line of trimmed.split("\n")) {
+            if (line.startsWith("event:")) name = line.slice(6).trim();
+            else if (line.startsWith("data:")) data = line.slice(5).trim();
+          }
+          if (!name || !data) continue;
+          let payload;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            // One malformed frame must not kill a stream that is otherwise
+            // fine; the next update supersedes it anyway.
+            continue;
+          }
+          const jobs = payload.jobs || [];
+          if (name === "snapshot") onSnapshot?.(jobs);
+          else if (name === "jobs") onJobs?.(jobs);
+        }
+      }
+    } finally {
+      // Releasing the lock lets the body be cancelled by the abort signal
+      // rather than leaving a reader attached to a dead stream.
+      reader.releaseLock?.();
+    }
+  },
 
   // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
   // which jsonOrThrow surfaces as an error carrying the API's own explanation.
