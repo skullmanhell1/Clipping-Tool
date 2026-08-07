@@ -124,36 +124,71 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # The gate. When results upload, GitHub is what surfaces them and this step stays out of the
-      # way. When they cannot upload, nothing else is watching, so the job has to fail on findings
-      # itself — otherwise this workflow would report success no matter what CodeQL discovered,
-      # which is worse than not running it at all, because it looks like coverage.
-      - name: Fail the job on findings
+      # The gate. When results upload, GitHub decides what blocks a pull request and this step stays
+      # out of the way. When they cannot, the decision has to be made here — and made the *same*
+      # way, or the check means something different depending on whether Advanced Security is paid
+      # for.
+      #
+      # So GitHub's default is reproduced rather than invented: block on security alerts of high or
+      # critical severity, let quality findings through as information. The two obvious shortcuts
+      # are both wrong. Failing on any result would block this stack on 103 quality findings —
+      # unused imports, cyclic imports, empty `except` — none of which are what this workflow was
+      # added to catch. Failing on nothing would leave a green check that ignores its own output,
+      # which is worse than not running CodeQL at all, because it looks like coverage.
+      - name: Gate on high-severity security findings
         if: steps.code-scanning.outputs.available != 'true'
+        env:
+          # CodeQL's own cutoffs: 7.0 is "high", 9.0 "critical". Matching what GitHub blocks on by
+          # default keeps this step and the Security tab in agreement about what a failure means.
+          SECURITY_SEVERITY_THRESHOLD: "7.0"
         run: |
           set -euo pipefail
           shopt -s nullglob
           files=(sarif-results/*.sarif)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::CodeQL produced no SARIF for ${{ matrix.language }}; analysis did not run."
+            echo "::error::CodeQL produced no SARIF for ${{ matrix.language }}; the analysis did not run."
             exit 1
           fi
 
-          total=0
+          rows=$(mktemp)
           for f in "${files[@]}"; do
-            n=$(jq '[.runs[]?.results[]?] | length' "$f")
-            echo "${f}: ${n} result(s)"
-            total=$((total + n))
+            jq -r --arg threshold "$SECURITY_SEVERITY_THRESHOLD" -f .github/codeql-gate.jq "$f" >> "$rows"
           done
 
-          if [ "$total" -gt 0 ]; then
-            echo "::error::CodeQL reported ${total} finding(s) for ${{ matrix.language }}."
-            # Print enough to act on without needing to download the artifact.
-            for f in "${files[@]}"; do
-              jq -r '.runs[]?.results[]? |
-                "\(.ruleId): \(.message.text) [\(.locations[0].physicalLocation.artifactLocation.uri // "?"):\(.locations[0].physicalLocation.region.startLine // 0)]"' "$f"
-            done
+          blocking=$(grep -c '^BLOCK' "$rows" || true)
+          reported=$(grep -c '^REPORT' "$rows" || true)
+          echo "${{ matrix.language }}: ${blocking} blocking, ${reported} reported (threshold ${SECURITY_SEVERITY_THRESHOLD})."
+
+          # Quality findings are recorded, not enforced. Without a Security tab the job log and the
+          # step summary are the only places anyone will ever see them, so they get printed rather
+          # than dropped — a count per rule, which is enough to notice a number growing.
+          if [ "$reported" -gt 0 ]; then
+            echo "--- reported (not blocking) ---"
+            awk -F'\t' '$1=="REPORT" {print $2"\t"$4}' "$rows" | sort | uniq -c | sort -rn
+          fi
+
+          {
+            echo "### CodeQL — ${{ matrix.language }}"
+            echo
+            echo "Upload to code scanning unavailable, so results were gated in the workflow."
+            echo "Blocking (security-severity >= ${SECURITY_SEVERITY_THRESHOLD}): **${blocking}** · reported: ${reported}"
+            if [ "$blocking" -gt 0 ]; then
+              echo
+              echo "| severity | rule | location | message |"
+              echo "|---|---|---|---|"
+              awk -F'\t' '$1=="BLOCK" {print "| "$3" | "$4" | "$5" | "$6" |"}' "$rows"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$blocking" -gt 0 ]; then
+            echo "--- blocking ---"
+            awk -F'\t' '$1=="BLOCK" {print $4" ("$3") "$5": "$6}' "$rows"
+            while IFS=$'\t' read -r verdict _lvl sec rule loc msg; do
+              [ "$verdict" = "BLOCK" ] || continue
+              file=${loc%:*}; line=${loc##*:}
+              echo "::error file=${file},line=${line}::${rule} (security-severity ${sec}): ${msg}"
+            done < "$rows"
             exit 1
           fi
 
-          echo "CodeQL found no issues in ${{ matrix.language }} (${#files[@]} SARIF file(s) checked)."
+          echo "No security findings at or above ${SECURITY_SEVERITY_THRESHOLD} in ${{ matrix.language }}."
