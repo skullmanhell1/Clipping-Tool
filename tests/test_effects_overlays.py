@@ -1,4 +1,5 @@
 """Unit tests for the easy-effect ffmpeg filter builders."""
+
 from __future__ import annotations
 
 from worker.effects import overlays as ov
@@ -39,8 +40,14 @@ def test_build_video_chain_order_and_toggles():
     assert ov.build_video_chain(duration=10, fps=30, width=1080, height=1920) == []
 
     chain = ov.build_video_chain(
-        duration=10, fps=30, width=1080, height=1920,
-        color="warm", zoom=True, fades=True, progress_bar=True,
+        duration=10,
+        fps=30,
+        width=1080,
+        height=1920,
+        color="warm",
+        zoom=True,
+        fades=True,
+        progress_bar=True,
         subtitles="subtitles='x.ass'",
     )
     joined = ",".join(chain)

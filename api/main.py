@@ -273,6 +273,7 @@ def fallback_index_html() -> str:
     Every probe is individually guarded: this page must render when things are broken, since
     that is precisely when it is read.
     """
+
     def _row(label: str, value: str, ok: bool = True) -> str:
         colour = "#3fb950" if ok else "#f85149"
         return (
@@ -289,8 +290,9 @@ def fallback_index_html() -> str:
         # reader nothing, and a missing binary is the single most common reason a deploy of
         # this app does not work. shutil.which answers the question they actually have.
         resolved = shutil.which(str(settings.ffmpeg_binary))
-        rows.append(_row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})",
-                         bool(resolved)))
+        rows.append(
+            _row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})", bool(resolved))
+        )
     except Exception:
         rows.append(_row("ffmpeg", "could not be resolved", ok=False))
 
@@ -314,10 +316,12 @@ def fallback_index_html() -> str:
         # listed" on a perfectly healthy instance, the exact class of failure this page exists
         # to make visible.
         engines, _capabilities = _engines_info()
-        names = ", ".join(
-            f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}"
-            for e in engines
-        ) or "none registered"
+        names = (
+            ", ".join(
+                f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}" for e in engines
+            )
+            or "none registered"
+        )
         rows.append(_row("Engines", names))
     except Exception:
         rows.append(_row("Engines", "could not be listed", ok=False))

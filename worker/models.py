@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 def _as_bool(value: Any) -> bool:
@@ -41,38 +41,38 @@ class JobStatus(str, Enum):
 class ProcessingOptions:
     """User-selected processing options (mirrors the UI settings panel)."""
 
-    language: Optional[str] = None       # None = auto-detect
-    translate: bool = False              # translate speech to English
+    language: str | None = None  # None = auto-detect
+    translate: bool = False  # translate speech to English
     # T4: names, jargon and brands for *this* video, prepended to the ASR decode so Whisper
     # has a reason to expect them. A recurring proper noun is otherwise mis-transcribed the
     # same way every time it is said, and that mistake is burned into every clip's captions.
     # Free text rather than a list: it is fed to the model as a prompt, and a comma-separated
     # phrase reads as naturally to it as a sentence does.
     vocabulary: str = ""
-    clip_length: str = "auto"            # auto | <30s | 30-60s | 60-90s | 90s-3min
-    aspect: str = "9:16"                 # 9:16 | 1:1 | 16:9 | 4:5
-    num_clips: str = "auto"              # auto | 1 | 3 | 5 | 10 | max
-    strategy: str = "ai"                 # ai | silence | fixed
-    captions: bool = True                # burn captions
+    clip_length: str = "auto"  # auto | <30s | 30-60s | 60-90s | 90s-3min
+    aspect: str = "9:16"  # 9:16 | 1:1 | 16:9 | 4:5
+    num_clips: str = "auto"  # auto | 1 | 3 | 5 | 10 | max
+    strategy: str = "ai"  # ai | silence | fixed
+    captions: bool = True  # burn captions
     # O11: also write .srt/.vtt beside the clip. The burn-in is unchanged; this is
     # for platforms that accept uploaded captions, and for anyone who needs the
     # text rather than an image of it.
     subtitle_sidecar: bool = False
 
     # --- Phase 2: smart selection & metadata (Advanced settings) ----------
-    topic: str = ""                      # Clip Topic / Keywords to bias toward
-    vibe: str = ""                       # Vibe / Tone (e.g. "energetic", "educational")
-    platform: str = "generic"            # target platform for metadata tone/limits
-    hashtag_count: int = 5               # number of hashtags to generate
-    range_start: Optional[float] = None  # only process from this second...
-    range_end: Optional[float] = None    # ...to this second (Process Range)
-    metadata: bool = True                # generate AI metadata per clip
+    topic: str = ""  # Clip Topic / Keywords to bias toward
+    vibe: str = ""  # Vibe / Tone (e.g. "energetic", "educational")
+    platform: str = "generic"  # target platform for metadata tone/limits
+    hashtag_count: int = 5  # number of hashtags to generate
+    range_start: float | None = None  # only process from this second...
+    range_end: float | None = None  # ...to this second (Process Range)
+    metadata: bool = True  # generate AI metadata per clip
 
     # --- Phase 3: publishing ---------------------------------------------
     publish_to: list[str] = field(default_factory=list)
     campaign_id: str = ""
-    publish_mode: str = "review"         # auto | review
-    schedule_at: Optional[float] = None  # UTC epoch; None = now
+    publish_mode: str = "review"  # auto | review
+    schedule_at: float | None = None  # UTC epoch; None = now
 
     # --- Phase 4: visual effects (all individually toggleable) -----------
     #
@@ -85,33 +85,33 @@ class ProcessingOptions:
     # Three of the thirteen features the improvement plan lists are deliberately still off,
     # each because turning it on today would make output *worse* rather than better; see the
     # comments at ``music``, ``broll`` and ``kinetic_typography_enabled``.
-    reframe: bool = True                 # face-tracking auto-reframe (vs static crop)
-    zoom: bool = True                    # slow Ken-Burns zoom
-    transitions: bool = True             # subtle punch-in intro
-    hook_title: bool = True              # burn the AI hook text at the start
+    reframe: bool = True  # face-tracking auto-reframe (vs static crop)
+    zoom: bool = True  # slow Ken-Burns zoom
+    transitions: bool = True  # subtle punch-in intro
+    hook_title: bool = True  # burn the AI hook text at the start
     # Still off (U1 lists it, A14/A15 gate it): worker/effects/audio.py does not play music,
     # it synthesises two sine waves with tremolo per mood. assets/music is empty, so turning
     # this on by default would add a drone to every clip. It becomes a default once real
     # licence-clean beds ship (A14).
-    music: str = ""                      # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
-    music_volume: float = 0.12           # background-music level (0..1)
-    fades: bool = True                   # fade in/out (video + audio)
-    color: str = ""                      # "" (off) | vivid | warm | cool | cinematic | bw
-    progress_bar: bool = True            # growing progress bar along the bottom
-    emoji: str = "standard"              # off | subtle | standard | heavy
+    music: str = ""  # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
+    music_volume: float = 0.12  # background-music level (0..1)
+    fades: bool = True  # fade in/out (video + audio)
+    color: str = ""  # "" (off) | vivid | warm | cool | cinematic | bw
+    progress_bar: bool = True  # growing progress bar along the bottom
+    emoji: str = "standard"  # off | subtle | standard | heavy
     # AU1: normalise integrated loudness to the target platform's level. On by default and
     # costs no extra pass in the default configuration, because fades already re-encode the
     # audio; with every effect off the clip is stream-copied and there is nothing to
     # normalise. AU2: duck the music bed under speech instead of mixing it flat.
-    loudness_normalise: bool = True      # two-pass loudnorm to the platform LUFS target
-    music_duck: bool = True              # sidechain-duck music under speech
+    loudness_normalise: bool = True  # two-pass loudnorm to the platform LUFS target
+    music_duck: bool = True  # sidechain-duck music under speech
     # AU7: pull the cut points onto speech so a clip does not open on dead air. Unlike
     # filler_removal this only moves the clip's *boundaries*, and by at most 1.25 s per edge -
     # it cannot cut anything out of the middle, which is why it is a safe default and filler
     # removal is not.
-    trim_silence: bool = True            # trim leading/trailing silence from each clip
-    emoji_mode: str = "keyword"          # keyword | ai
-    emoji_animate: bool = True           # pop/scale (alpha) animation on appear
+    trim_silence: bool = True  # trim leading/trailing silence from each clip
+    emoji_mode: str = "keyword"  # keyword | ai
+    emoji_animate: bool = True  # pop/scale (alpha) animation on appear
     # Still off, and this one is a deliberate departure from U1's list.
     #
     # Every other item there restyles the clip; this one *removes content*, and it decides
@@ -120,49 +120,49 @@ class ProcessingOptions:
     # tests/test_pipeline_effects.py came out at 1.33 s with it on. A default that can
     # silently discard half a clip needs to be a choice, not an inherited one - the
     # cost of being wrong is asymmetric with the styling defaults around it.
-    filler_removal: bool = False         # cut "um"/"uh"/long pauses
-    caption_template: str = "karaoke"    # karaoke | boxed | minimal
-    caption_position: str = "bottom"     # bottom | center | top
+    filler_removal: bool = False  # cut "um"/"uh"/long pauses
+    caption_template: str = "karaoke"  # karaoke | boxed | minimal
+    caption_position: str = "bottom"  # bottom | center | top
 
     # --- Phase 6 / Tier 1: Creator Output Upgrade ------------------------
     # All new visual/audio/rights features default OFF so an "all-off" run
     # reproduces v0.6.0 behaviour. Existing fields/defaults above are unchanged.
     #
     # Feature A — animated caption presets
-    caption_preset: str = "karaoke"      # karaoke|boxed|minimal|pop|typewriter|hormozi
-    caption_animation: str = ""          # "" = use preset default; else override
+    caption_preset: str = "karaoke"  # karaoke|boxed|minimal|pop|typewriter|hormozi
+    caption_animation: str = ""  # "" = use preset default; else override
     # U1. Keyword highlighting is only worth defaulting on since C11 made it selective:
     # the old rule emphasised any word clearing Whisper probability 0.9, which on clean
     # audio is nearly all of them, and emphasis that applies to everything communicates
     # nothing. ``caption_keyword_ai`` stays off because it costs an LLM call per clip.
-    caption_keyword_highlight: bool = True   # highlight important words
-    caption_keyword_ai: bool = False     # AI-assisted keyword highlighting
-    caption_emoji: bool = True           # in-caption emoji glyphs
+    caption_keyword_highlight: bool = True  # highlight important words
+    caption_keyword_ai: bool = False  # AI-assisted keyword highlighting
+    caption_emoji: bool = True  # in-caption emoji glyphs
     #
     # Feature B — b-roll overlays
     # Still off (U1 lists it, A18/A21 gate it): broll.py matches keywords by
     # case-insensitive filename-stem substring against assets/broll, which is empty, and
     # the external downloader is explicitly not implemented. Enabling it by default would
     # add degradation markers to every clip and nothing else.
-    broll: bool = False                  # enable b-roll auto-insertion
-    broll_intensity: str = "standard"    # off|subtle|standard|heavy
-    asset_sourcing_mode: str = "off"     # off|local_only|local_then_external
-    broll_provider: str = ""             # external provider name ("" = none)
+    broll: bool = False  # enable b-roll auto-insertion
+    broll_intensity: str = "standard"  # off|subtle|standard|heavy
+    asset_sourcing_mode: str = "off"  # off|local_only|local_then_external
+    broll_provider: str = ""  # external provider name ("" = none)
     #
     # Feature C — prompt / visual selection
-    selection_prompt: str = ""           # free-text selection prompt
-    visual_selection: bool = True        # enable visual/keyframe-aided selection (U1)
+    selection_prompt: str = ""  # free-text selection prompt
+    visual_selection: bool = True  # enable visual/keyframe-aided selection (U1)
     #
     # Cross-cutting
-    permissibility_mode: bool = False    # forces local_only sourcing + no added audio
+    permissibility_mode: bool = False  # forces local_only sourcing + no added audio
 
     # --- v0.8.0: Speaker diarisation & multi-speaker reframe (default OFF) --
     # All new fields default OFF/standard so an "all-off" run reproduces
     # v0.7.0 behaviour exactly. Existing fields/defaults above are unchanged.
-    diarization: bool = False              # persisted diarisation toggle
-    speaker_reframe: bool = False          # speaker-aware reframe toggle
+    diarization: bool = False  # persisted diarisation toggle
+    speaker_reframe: bool = False  # speaker-aware reframe toggle
     reframe_layout: str = "follow_active"  # follow_active | split_screen
-    reframe_intensity: str = "standard"    # subtle | standard | heavy
+    reframe_intensity: str = "standard"  # subtle | standard | heavy
 
     # --- Kinetic typography engine (default OFF) --------------------------
     # ``kinetic_typography_enabled`` is the Feature_Flag the engine's inherited
@@ -177,17 +177,17 @@ class ProcessingOptions:
     # kind of default from "switch on an effect" - it swaps out the component that draws
     # captions - so it belongs to an opinionated profile (U2) rather than to the global
     # default, where it would silently override caption_preset for everyone.
-    kinetic_typography_enabled: bool = False   # Feature_Flag (flag_field())
-    kinetic_style: str = "karaoke_fill"        # bounce|highlight_sweep|karaoke_fill|
-                                               # none|pop|slide_up|typewriter
-    kinetic_reveal: str = "cumulative"         # cumulative | word_by_word
-    kinetic_font: str = ""                     # "" = inherit the caption preset font
-    kinetic_max_lines: int = 2                 # 1..4 text lines per cue
-    kinetic_max_line_width: int = 22           # 6..80 display-width units per line
-    kinetic_safe_area_x_pct: float = 6.0       # 0..25 % horizontal safe-area inset
-    kinetic_safe_area_y_pct: float = 10.0      # 0..40 % vertical safe-area inset
-    kinetic_motion_ms: int = 120               # 20..1000 ms per-word motion duration
-    kinetic_confidence_floor: float = 0.0      # 0..1 word-confidence emphasis floor
+    kinetic_typography_enabled: bool = False  # Feature_Flag (flag_field())
+    kinetic_style: str = "karaoke_fill"  # bounce|highlight_sweep|karaoke_fill|
+    # none|pop|slide_up|typewriter
+    kinetic_reveal: str = "cumulative"  # cumulative | word_by_word
+    kinetic_font: str = ""  # "" = inherit the caption preset font
+    kinetic_max_lines: int = 2  # 1..4 text lines per cue
+    kinetic_max_line_width: int = 22  # 6..80 display-width units per line
+    kinetic_safe_area_x_pct: float = 6.0  # 0..25 % horizontal safe-area inset
+    kinetic_safe_area_y_pct: float = 10.0  # 0..40 % vertical safe-area inset
+    kinetic_motion_ms: int = 120  # 20..1000 ms per-word motion duration
+    kinetic_confidence_floor: float = 0.0  # 0..1 word-confidence emphasis floor
 
     # --- Stem inpainting engine (default OFF) -----------------------------
     # Same arrangement as the kinetic block above, for the same reasons:
@@ -198,18 +198,18 @@ class ProcessingOptions:
     # the engine's ``resolve_options`` coerces every one of them against its
     # documented bounds, which is what keeps this module free of a
     # ``worker.engines`` import and keeps an unrecognised value from failing a job.
-    stem_inpainting_enabled: bool = False      # Feature_Flag (flag_field())
-    stem_mix_preset: str = "custom"            # custom|speech_focus|music_focus|
-                                               # clean_speech
-    stem_gain_vocals: float = 1.0              # 0.0..4.0 (0.0 mutes, >1.0 boosts)
-    stem_gain_music: float = 1.0               # 0.0..4.0
-    stem_gain_other: float = 1.0               # 0.0..4.0
-    stem_repair_mode: str = "crossfade"        # off | crossfade | spectral
-    stem_repair_window_ms: int = 12            # 2..120 ms symmetric seam window
-    stem_declick: bool = False                 # 1 ms fade at clip head/tail
-    stem_backend: str = "auto"                 # auto | ml | ffmpeg
-    stem_model: str = "htdemucs"               # separation checkpoint name
-    stem_retain_stems: bool = False            # keep per-stem WAVs as durable artifacts
+    stem_inpainting_enabled: bool = False  # Feature_Flag (flag_field())
+    stem_mix_preset: str = "custom"  # custom|speech_focus|music_focus|
+    # clean_speech
+    stem_gain_vocals: float = 1.0  # 0.0..4.0 (0.0 mutes, >1.0 boosts)
+    stem_gain_music: float = 1.0  # 0.0..4.0
+    stem_gain_other: float = 1.0  # 0.0..4.0
+    stem_repair_mode: str = "crossfade"  # off | crossfade | spectral
+    stem_repair_window_ms: int = 12  # 2..120 ms symmetric seam window
+    stem_declick: bool = False  # 1 ms fade at clip head/tail
+    stem_backend: str = "auto"  # auto | ml | ffmpeg
+    stem_model: str = "htdemucs"  # separation checkpoint name
+    stem_retain_stems: bool = False  # keep per-stem WAVs as durable artifacts
 
     # --- U6: brand kit ----------------------------------------------------
     #
@@ -219,14 +219,14 @@ class ProcessingOptions:
     #
     # All empty by default, and each is additive - an unset field leaves the preset's own value
     # alone rather than overwriting it with a default.
-    brand_font: str = ""                       # caption font, overriding the preset's
-    brand_primary_color: str = ""              # "#RRGGBB"; converted to ASS internally
-    brand_highlight_color: str = ""            # "#RRGGBB"
-    brand_cta: str = ""                        # standing call to action (also the V14 end card)
-    brand_logo: str = ""                       # path to a png/jpg/webp watermark
-    brand_logo_position: str = "top_right"     # top_left|top_right|bottom_left|bottom_right
-    brand_logo_scale: float = 0.16             # fraction of frame width
-    brand_logo_opacity: float = 0.85           # 0..1
+    brand_font: str = ""  # caption font, overriding the preset's
+    brand_primary_color: str = ""  # "#RRGGBB"; converted to ASS internally
+    brand_highlight_color: str = ""  # "#RRGGBB"
+    brand_cta: str = ""  # standing call to action (also the V14 end card)
+    brand_logo: str = ""  # path to a png/jpg/webp watermark
+    brand_logo_position: str = "top_right"  # top_left|top_right|bottom_left|bottom_right
+    brand_logo_scale: float = 0.16  # fraction of frame width
+    brand_logo_opacity: float = 0.85  # 0..1
 
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
@@ -243,7 +243,7 @@ class ProcessingOptions:
     _REFRAME_INTENSITIES = ("subtle", "standard", "heavy")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ProcessingOptions":
+    def from_dict(cls, data: dict[str, Any] | None) -> ProcessingOptions:
         """Build options from a (possibly partial) dict, ignoring unknown keys.
 
         A ``profile`` key naming a built-in profile (U2) supplies a whole coherent bundle of
@@ -291,29 +291,41 @@ class ProcessingOptions:
             except (TypeError, ValueError):
                 valid["hashtag_count"] = 5
         # Coerce boolean-ish effect flags that may arrive as strings.
-        for bool_field in ("reframe", "zoom", "transitions", "hook_title", "fades",
-                           "subtitle_sidecar",
-                           "progress_bar", "emoji_animate", "filler_removal",
-                           # Phase 6 / Tier 1 boolean flags
-                           "caption_keyword_highlight", "caption_keyword_ai",
-                           "caption_emoji", "broll", "visual_selection",
-                           "permissibility_mode",
-                           # v0.8.0 boolean flags
-                           "diarization", "speaker_reframe",
-                           # Kinetic typography Feature_Flag: normalised here so
-                           # a string payload ("false", "0") cannot read as
-                           # enabled, and so the flag survives both
-                           # ``from_dict`` and ``effective_options`` as a real
-                           # ``bool`` (Reqs 10.10, 17.1, 17.8)
-                           "kinetic_typography_enabled",
-                           # The stem engine's Feature_Flag and its two booleans, for the
-                           # same reason: the host reads the flag through ``coerce_bool``,
-                           # but ``effective_options`` and the parity gate compare options
-                           # by value, so ``"false"`` from a form field must become ``False``
-                           # here rather than a truthy string.
-                           "stem_inpainting_enabled",
-                           "stem_declick",
-                           "stem_retain_stems"):
+        for bool_field in (
+            "reframe",
+            "zoom",
+            "transitions",
+            "hook_title",
+            "fades",
+            "subtitle_sidecar",
+            "progress_bar",
+            "emoji_animate",
+            "filler_removal",
+            # Phase 6 / Tier 1 boolean flags
+            "caption_keyword_highlight",
+            "caption_keyword_ai",
+            "caption_emoji",
+            "broll",
+            "visual_selection",
+            "permissibility_mode",
+            # v0.8.0 boolean flags
+            "diarization",
+            "speaker_reframe",
+            # Kinetic typography Feature_Flag: normalised here so
+            # a string payload ("false", "0") cannot read as
+            # enabled, and so the flag survives both
+            # ``from_dict`` and ``effective_options`` as a real
+            # ``bool`` (Reqs 10.10, 17.1, 17.8)
+            "kinetic_typography_enabled",
+            # The stem engine's Feature_Flag and its two booleans, for the
+            # same reason: the host reads the flag through ``coerce_bool``,
+            # but ``effective_options`` and the parity gate compare options
+            # by value, so ``"false"`` from a form field must become ``False``
+            # here rather than a truthy string.
+            "stem_inpainting_enabled",
+            "stem_declick",
+            "stem_retain_stems",
+        ):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
         if "music_volume" in valid:
@@ -347,6 +359,7 @@ def _external_key_configured() -> bool:
     """
     try:
         from config import settings  # local import to avoid import cycles
+
         key = getattr(settings, "broll_provider_api_key", None)
         return bool(key)
     except Exception:
@@ -378,7 +391,7 @@ class BuiltinProfile:
 #: on features the global default leaves off: ``filler_removal`` (destructive, but expected
 #: in a rambling interview) and ``kinetic_typography_enabled`` (takes ownership of the
 #: caption layer, which is a swap you would only want if you asked for that look).
-BUILTIN_PROFILES: dict[str, "BuiltinProfile"] = {
+BUILTIN_PROFILES: dict[str, BuiltinProfile] = {
     "podcast": BuiltinProfile(
         name="podcast",
         label="Podcast",
@@ -500,7 +513,7 @@ BUILTIN_PROFILES: dict[str, "BuiltinProfile"] = {
 }
 
 
-def effective_options(o: "ProcessingOptions") -> "ProcessingOptions":
+def effective_options(o: ProcessingOptions) -> ProcessingOptions:
     """Return a normalised copy of ``o`` enforcing cross-cutting rules.
 
     Pure: never mutates the input and always returns a new instance; never
@@ -538,17 +551,17 @@ class ClipResult:
     thumbnail_url: str = ""
 
     # --- Phase 2: smart selection + metadata ------------------------------
-    score: float = 0.0                              # virality score 0..100
-    reason: str = ""                                # why this moment was picked
-    platform: str = "generic"                       # platform the metadata targets
+    score: float = 0.0  # virality score 0..100
+    reason: str = ""  # why this moment was picked
+    platform: str = "generic"  # platform the metadata targets
     title_alternatives: list[str] = field(default_factory=list)
-    description: str = ""                            # caption / description
+    description: str = ""  # caption / description
     hashtags: list[str] = field(default_factory=list)
-    hook_text: str = ""                             # on-screen opening hook
-    cta: str = ""                                   # call to action
+    hook_text: str = ""  # on-screen opening hook
+    cta: str = ""  # call to action
     mentions: list[str] = field(default_factory=list)  # @tags
-    thumbnail_text: str = ""                        # thumbnail text idea
-    transcript_text: str = ""                       # clip transcript (for regen)
+    thumbnail_text: str = ""  # thumbnail text idea
+    transcript_text: str = ""  # clip transcript (for regen)
 
     # --- Phase 4: which visual effects were applied to this clip ----------
     # ``effects_applied`` holds free-form string markers describing which
@@ -608,14 +621,14 @@ class ClipResult:
     #
     # ``pending`` is the default so every existing clip - and every clip a running job is
     # about to produce - reads as unreviewed rather than silently approved.
-    review_state: str = "pending"      # pending | approved | rejected
+    review_state: str = "pending"  # pending | approved | rejected
     review_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ClipResult":
+    def from_dict(cls, data: dict[str, Any] | None) -> ClipResult:
         """Rebuild a clip from its ``to_dict`` form, ignoring unknown keys.
 
         Unknown keys are dropped rather than raising so a record written by an older
@@ -639,8 +652,8 @@ class ClipResult:
 class Job:
     """A single video processing job, tracked live in the job store."""
 
-    input_type: str                       # "url" | "file"
-    source: str                           # URL or original filename
+    input_type: str  # "url" | "file"
+    source: str  # URL or original filename
     options: ProcessingOptions
     # U7: the resolved *local* file the pipeline actually read.
     #
@@ -656,14 +669,14 @@ class Job:
     # user would get a mix of two different selections.
     planned_clips: list[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    batch_id: Optional[str] = None
+    batch_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
-    progress: float = 0.0                 # 0..1
+    progress: float = 0.0  # 0..1
     stage: str = "Queued"
     title: str = ""
-    duration: Optional[float] = None
-    thumbnail: Optional[str] = None
-    error: Optional[str] = None
+    duration: float | None = None
+    thumbnail: str | None = None
+    error: str | None = None
     clips: list[ClipResult] = field(default_factory=list)
     # U8: progress was a single coarse fraction plus a free-text stage string, so the UI could
     # only ever show one bar and a sentence. These make the *structure* of the work visible:
@@ -702,7 +715,7 @@ class Job:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "Job":
+    def from_dict(cls, data: dict[str, Any] | None) -> Job:
         """Rebuild a job from its :meth:`to_dict` form.
 
         The inverse of ``to_dict``, used to restore jobs from the durable store on

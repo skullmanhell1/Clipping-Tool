@@ -8,6 +8,7 @@ property text and a ``Validates: Requirements ...`` docstring. Reuses the
 ``worker.llm_client``. All tests are fully offline: the deterministic paths use
 ``strategy="fixed"`` (no ffmpeg) and an injected keyframe ``sampler``.
 """
+
 from __future__ import annotations
 
 import json
@@ -194,9 +195,7 @@ def test_p23_degrades_to_transcript_only_and_passthrough_when_disabled(data):
     def _boom(source, t):
         raise RuntimeError("keyframe sampling failed")
 
-    got_raise = select_moments_visual(
-        transcript, opts_on, "fake.mp4", duration, sampler=_boom
-    )
+    got_raise = select_moments_visual(transcript, opts_on, "fake.mp4", duration, sampler=_boom)
     assert got_raise == expected
 
     # Sampler returns nothing (empty frames) -> transcript-only (Reqs 15.2, 15.3).
@@ -218,9 +217,17 @@ class _Opts:
     surface plus a ``__replace__``-compatible shape via ``clone``.
     """
 
-    def __init__(self, *, visual_selection=False, strategy="fixed",
-                 num_clips="auto", clip_length="auto", topic="", vibe="",
-                 selection_prompt=""):
+    def __init__(
+        self,
+        *,
+        visual_selection=False,
+        strategy="fixed",
+        num_clips="auto",
+        clip_length="auto",
+        topic="",
+        vibe="",
+        selection_prompt="",
+    ):
         self.visual_selection = visual_selection
         self.strategy = strategy
         self.num_clips = num_clips
@@ -257,9 +264,7 @@ def test_selection_prompt_reaches_llm_request():
         num_clips="max",
         selection_prompt="find every moment where the speaker laughs",
     )
-    select_moments_visual(
-        transcript, opts, "fake.mp4", 17.0, client=mock, sampler=_fake_sampler
-    )
+    select_moments_visual(transcript, opts, "fake.mp4", 17.0, client=mock, sampler=_fake_sampler)
     joined = " ".join(c["prompt"] for c in mock.calls)
     assert "find every moment where the speaker laughs" in joined
 
@@ -289,9 +294,7 @@ def test_sampler_called_at_most_once_per_source(monkeypatch):
 
     opts = _Opts(visual_selection=True, strategy="ai", num_clips="max")
     mock = _mock_from_segments(_SIX_SPECS)
-    select_moments_visual(
-        transcript, opts, "fake.mp4", 17.0, client=mock, sampler=_fake_sampler
-    )
+    select_moments_visual(transcript, opts, "fake.mp4", 17.0, client=mock, sampler=_fake_sampler)
     assert len(calls) == 1
 
 
@@ -299,9 +302,7 @@ def test_no_audio_ranking_path_works():
     """Validates: Requirements 14.3 — no-audio (empty transcript) still ranks."""
     transcript = Transcript(language="en", segments=[])  # no transcript / audio
     opts = _Opts(visual_selection=True, strategy="fixed", num_clips="max")
-    result = select_moments_visual(
-        transcript, opts, "fake.mp4", 30.0, sampler=_fake_sampler
-    )
+    result = select_moments_visual(transcript, opts, "fake.mp4", 30.0, sampler=_fake_sampler)
     assert isinstance(result, list)
     assert result  # visual-cue ranking still produces at least one candidate
     for c in result:
@@ -321,9 +322,7 @@ def test_catastrophic_failure_returns_empty(monkeypatch):
         raise RuntimeError("keyframe sampling failed")
 
     opts = _Opts(visual_selection=True, strategy="fixed", num_clips="max")
-    result = select_moments_visual(
-        transcript, opts, "fake.mp4", 17.0, sampler=_boom
-    )
+    result = select_moments_visual(transcript, opts, "fake.mp4", 17.0, sampler=_boom)
     assert result == []
 
 
@@ -351,7 +350,6 @@ def test_derive_visual_cues_degrades_without_imaging_libs():
     for f in enriched:
         assert f.brightness == 0.0
         assert f.motion == 0.0
-
 
 
 # --------------------------------------------------------------------------- #
@@ -433,7 +431,6 @@ def test_out_of_range_weights_are_clamped(given_weight, expected):
     assert merge_scores([cand], frames, weight=given_weight)[0].score == expected
 
 
-
 # --------------------------------------------------------------------------- #
 # Sampled keyframes do not leak a temp directory                                #
 # --------------------------------------------------------------------------- #
@@ -455,9 +452,7 @@ def test_sample_keyframes_uses_a_supplied_frames_dir(tmp_path):
     original = fu.generate_thumbnail
     fu.generate_thumbnail = fake_thumbnail
     try:
-        frames = sample_keyframes(
-            "source.mp4", 10.0, limit=3, frames_dir=str(tmp_path / "kf")
-        )
+        frames = sample_keyframes("source.mp4", 10.0, limit=3, frames_dir=str(tmp_path / "kf"))
     finally:
         fu.generate_thumbnail = original
 

@@ -20,7 +20,7 @@ const setup = (settings = {}) => {
       settings={settings}
       onChange={onChange}
       fonts={[{ name: "Anton" }, { name: "Bangers" }]}
-    />,
+    />
   );
   return { ...utils, onChange, settings };
 };
@@ -36,19 +36,14 @@ describe("BrandKitPanel", () => {
 
   it("reports a font choice without touching anything else", async () => {
     const { onChange } = setup({ brand_cta: "Follow" });
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /caption font/i }),
-      "Anton",
-    );
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /caption font/i }), "Anton");
     expect(onChange).toHaveBeenCalledWith({ brand_cta: "Follow", brand_font: "Anton" });
   });
 
   it("can clear a colour back to the style's default", async () => {
     // Without this the only way out of a chosen colour would be to guess the preset's own value.
     const { onChange } = setup({ brand_primary_color: "#ff0000" });
-    await userEvent.click(
-      screen.getAllByRole("button", { name: /use style default/i })[0],
-    );
+    await userEvent.click(screen.getAllByRole("button", { name: /use style default/i })[0]);
     expect(onChange).toHaveBeenCalledWith({ brand_primary_color: "" });
   });
 

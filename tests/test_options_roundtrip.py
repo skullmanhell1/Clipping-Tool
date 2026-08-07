@@ -9,6 +9,7 @@ Covers the new ``ProcessingOptions`` fields added in task 1.1:
   v0.6.0 fields keep their defaults, and ``effective_options`` enforces
   permissibility mode.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -163,11 +164,11 @@ def test_p26_malformed_values_apply_defaults(
 def test_output_shaping_features_default_on():
     """U1: the features that decide how a clip *looks* are on out of the box."""
     o = ProcessingOptions()
-    assert o.reframe is True            # V1: was a centre crop that decapitated speakers
+    assert o.reframe is True  # V1: was a centre crop that decapitated speakers
     assert o.zoom is True
     assert o.transitions is True
     assert o.fades is True
-    assert o.hook_title is True         # V12
+    assert o.hook_title is True  # V12
     assert o.progress_bar is True
     assert o.emoji == "standard"
     assert o.caption_keyword_highlight is True
@@ -198,9 +199,9 @@ def test_features_whose_assets_do_not_exist_yet_default_off():
 def test_costly_or_policy_features_default_off():
     """Defaults must not silently spend money or narrow what the tool will do."""
     o = ProcessingOptions()
-    assert o.caption_keyword_ai is False   # an LLM call per clip
+    assert o.caption_keyword_ai is False  # an LLM call per clip
     assert o.permissibility_mode is False  # a restriction, not a feature
-    assert o.diarization is False          # needs the ML extras to do better than degrade
+    assert o.diarization is False  # needs the ML extras to do better than degrade
     assert o.speaker_reframe is False
 
 
@@ -259,7 +260,6 @@ def test_effective_options_noop_when_permissibility_off_and_no_external():
     eff = effective_options(o)
     assert eff.asset_sourcing_mode == "off"
     assert eff.music == ""
-
 
 
 # ===========================================================================
@@ -414,13 +414,12 @@ def test_v080_additions_do_not_disturb_v070_defaults():
     # deliberately, and the per-default contract lives in the three tests above.
     assert base.aspect == "9:16"
     assert base.captions is True
-    assert base.reframe is True          # U1/V1
+    assert base.reframe is True  # U1/V1
     assert base.caption_template == "karaoke"
     assert base.caption_preset == "karaoke"
-    assert base.emoji == "standard"      # U1
-    assert base.music == ""              # still off: A14 has not shipped real beds
+    assert base.emoji == "standard"  # U1
+    assert base.music == ""  # still off: A14 has not shipped real beds
     assert base.permissibility_mode is False
-
 
 
 # ===========================================================================

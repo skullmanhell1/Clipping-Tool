@@ -60,7 +60,12 @@ describe("wordsToCuts (U4)", () => {
 
 describe("cutSeconds", () => {
   it("sums the cut durations", () => {
-    expect(cutSeconds([{ start: 1, end: 2 }, { start: 4, end: 4.5 }])).toBeCloseTo(1.5);
+    expect(
+      cutSeconds([
+        { start: 1, end: 2 },
+        { start: 4, end: 4.5 },
+      ])
+    ).toBeCloseTo(1.5);
   });
 
   it("is zero for no cuts", () => {

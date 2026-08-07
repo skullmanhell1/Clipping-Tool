@@ -83,8 +83,10 @@ def cmd_validate(args) -> int:
         reference = resolve_reference(entry, base)
         words = wer.normalise(reference)
         if len(words) < 20:
-            print(f"[{index}] reference has only {len(words)} words - too short to be a "
-                  f"meaningful measurement")
+            print(
+                f"[{index}] reference has only {len(words)} words - too short to be a "
+                f"meaningful measurement"
+            )
             problems += 1
     if problems:
         print(f"\n{problems} problem(s)")
@@ -126,7 +128,7 @@ def cmd_run(args) -> int:
                     transcript = tr.transcribe_uncached(
                         source, vocabulary=str(entry.get("vocabulary", "") or "")
                     )
-                except Exception as exc:                       # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     print(f"  [{index}] {source.name}: {type(exc).__name__}: {exc}")
                     failures += 1
                     continue
@@ -140,8 +142,10 @@ def cmd_run(args) -> int:
             continue
         pooled = wer.aggregate(results)
         rows.append((model, pooled))
-        print(f"{model}: WER {pooled.wer:.2%} over {pooled.reference_words} words "
-              f"in {elapsed:.1f}s" + (f" ({failures} skipped)" if failures else ""))
+        print(
+            f"{model}: WER {pooled.wer:.2%} over {pooled.reference_words} words "
+            f"in {elapsed:.1f}s" + (f" ({failures} skipped)" if failures else "")
+        )
 
     if not rows:
         return 1
@@ -166,8 +170,9 @@ def main(argv=None) -> int:
     sub.add_parser("template", parents=[common]).set_defaults(func=cmd_template)
     sub.add_parser("validate", parents=[common]).set_defaults(func=cmd_validate)
     run = sub.add_parser("run", parents=[common])
-    run.add_argument("--models", default="base,small",
-                     help="comma-separated faster-whisper model names")
+    run.add_argument(
+        "--models", default="base,small", help="comma-separated faster-whisper model names"
+    )
     run.set_defaults(func=cmd_run)
     args = parser.parse_args(argv)
     return args.func(args)

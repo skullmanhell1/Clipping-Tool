@@ -65,11 +65,20 @@ jobs:
       # older releases). The rule set is now pinned in pyproject.toml, which is what makes
       # blocking on it meaningful.
       #
-      # Formatting is deliberately not enforced: black is in requirements-dev but has never
-      # run, and adopting it would reformat essentially every file. That is a standalone
-      # change, not a CI fix.
       - name: Lint (ruff)
         run: ruff check .
+
+      # Formatting is now enforced. This step used to carry a waiver explaining that `black` was
+      # in requirements-dev but had never run, and that adopting it would reformat essentially
+      # every file — which it did: 180 of 204, in one commit with nothing else in flight.
+      #
+      # `--check` rather than a reformat-and-commit: CI reporting a diff is a fact the author can
+      # act on, whereas CI silently rewriting the branch means the code that was reviewed is not
+      # the code that was tested. Run `black .` locally; the line length is 100 in pyproject.toml
+      # to match ruff's, because two formatters disagreeing about where a line ends is worse than
+      # either answer.
+      - name: Format (black --check)
+        run: black --check --diff .
 
       # mypy was in requirements-dev.txt from the start and had never been run. The first run
       # found 69 errors in 17 files; all 69 are fixed or covered by a narrow, commented
@@ -268,6 +277,14 @@ jobs:
       # could not lint.
       - name: Lint (eslint)
         run: npm run lint
+
+      # The frontend counterpart to `black --check`. Adopted in the same commit and for the same
+      # reason: formatting arguments are not worth having, and `printWidth` is 100 to match both
+      # black and ruff so the two halves of the repo agree on where a line ends.
+      #
+      # `--check`, not `--write`, so CI reports rather than rewrites. Run `npm run format` locally.
+      - name: Format (prettier --check)
+        run: npm run format:check
 
       - name: Tests (vitest)
         run: npm run test:run

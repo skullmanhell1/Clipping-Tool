@@ -77,9 +77,7 @@ def test_the_timed_out_child_is_not_left_running():
     pgrep = shutil.which("pgrep")
     if pgrep is None:  # pragma: no cover - environment dependent
         pytest.skip("no 'pgrep' binary to verify reaping")
-    found = subprocess.run(
-        [pgrep, "-f", f"{SLEEP} {HANG_SECONDS}"], capture_output=True, text=True
-    )
+    found = subprocess.run([pgrep, "-f", f"{SLEEP} {HANG_SECONDS}"], capture_output=True, text=True)
     assert found.returncode != 0, f"child survived the timeout: {found.stdout!r}"
 
 

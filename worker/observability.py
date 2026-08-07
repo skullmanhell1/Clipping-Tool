@@ -37,33 +37,33 @@ import contextvars
 import logging
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
 
 #: The job whose work the current thread/task is doing, or ``None``.
-_current_job: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+_current_job: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "clipping_job_id", default=None
 )
 
 #: The stage within that job. Separate from the job id because a stage is entered and left many
 #: times per job, and nesting them in one variable would make either restoring or reading it
 #: awkward.
-_current_stage: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+_current_stage: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "clipping_stage", default=None
 )
 
 
-def current_job_id() -> Optional[str]:
+def current_job_id() -> str | None:
     return _current_job.get()
 
 
-def current_stage() -> Optional[str]:
+def current_stage() -> str | None:
     return _current_stage.get()
 
 
 @contextmanager
-def job_context(job_id: Optional[str]) -> Iterator[None]:
+def job_context(job_id: str | None) -> Iterator[None]:
     """Attribute everything logged inside this block to ``job_id``.
 
     The token is reset in a ``finally`` rather than the variable being reassigned, which is what
@@ -97,7 +97,7 @@ class Job_Context_Filter(logging.Filter):
 LOG_FORMAT = "%(asctime)s %(levelname)-7s job=%(job_id)s stage=%(stage)s %(name)s: %(message)s"
 
 
-def install(level: Optional[int] = None) -> None:
+def install(level: int | None = None) -> None:
     """Attach the filter and format to the root handlers (idempotent).
 
     Idempotent because it is called from the API's startup *and* is useful from a script, and
@@ -204,7 +204,7 @@ def metrics_for(job_id: str) -> Job_Metrics:
         return found
 
 
-def clear_metrics(job_id: Optional[str] = None) -> None:
+def clear_metrics(job_id: str | None = None) -> None:
     """Forget one job's metrics, or all of them (used by tests)."""
     with _metrics_lock:
         if job_id is None:
@@ -214,7 +214,7 @@ def clear_metrics(job_id: Optional[str] = None) -> None:
 
 
 @contextmanager
-def stage(name: str, job_id: Optional[str] = None) -> Iterator[None]:
+def stage(name: str, job_id: str | None = None) -> Iterator[None]:
     """Time a named stage and attribute log lines inside it (I6, M5).
 
     The timing is recorded in a ``finally``, so a stage that *fails* is still measured. That is

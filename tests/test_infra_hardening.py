@@ -53,7 +53,7 @@ def test_i3_a_second_call_does_not_recompute(cache_dir, source):
 
 
 def test_i3_an_empty_result_is_cached_too(cache_dir, source):
-    """"This file has no detectable silence" is a real and expensive answer.
+    """ "This file has no detectable silence" is a real and expensive answer.
 
     Treating it as a miss would re-decode the whole file on every run of exactly the sources where
     the measurement costs most and yields least.
@@ -269,8 +269,11 @@ def test_i3_a_zero_byte_frame_is_treated_as_missing(tmp_path, make_video):
 
 def _clip(index: int, start: float, end: float) -> ClipResult:
     return ClipResult(
-        id=f"{index:02d}_x", filename=f"clip_{index:02d}.mp4",
-        start=start, end=end, duration=end - start,
+        id=f"{index:02d}_x",
+        filename=f"clip_{index:02d}.mp4",
+        start=start,
+        end=end,
+        duration=end - start,
     )
 
 
@@ -280,7 +283,9 @@ def _planned(*windows) -> list[dict]:
 
 def test_i5_the_plan_survives_serialisation():
     job = Job(
-        input_type="file", source="a.mp4", options=ProcessingOptions(),
+        input_type="file",
+        source="a.mp4",
+        options=ProcessingOptions(),
         planned_clips=_planned((0.0, 5.0), (10.0, 15.0)),
     )
     assert len(Job.from_dict(job.to_dict()).planned_clips) == 2
@@ -472,9 +477,23 @@ def golden_clips(tmp_path):
     """A base clip plus three variants: re-encoded, caption bar burned in, and graded."""
     base = tmp_path / "base.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-f", "lavfi", "-i", "testsrc2=size=320x568:rate=25:duration=2",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "20", str(base)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x568:rate=25:duration=2",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "20",
+            str(base),
+        ],
+        check=True,
+        capture_output=True,
     )
     variants = {"base": base}
     for name, args in (
@@ -487,9 +506,20 @@ def golden_clips(tmp_path):
     ):
         out = tmp_path / f"{name}.mp4"
         subprocess.run(
-            [FFMPEG, "-y", "-i", str(base), *args, "-pix_fmt", "yuv420p", "-c:v", "libx264",
-             str(out)],
-            check=True, capture_output=True,
+            [
+                FFMPEG,
+                "-y",
+                "-i",
+                str(base),
+                *args,
+                "-pix_fmt",
+                "yuv420p",
+                "-c:v",
+                "libx264",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
         )
         variants[name] = out
     return variants

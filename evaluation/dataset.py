@@ -142,8 +142,7 @@ def load_label_file(path: str | Path) -> LabelledSource:
         raise DatasetError(f"{path}: 'moments' must be a non-empty list")
 
     moments = [
-        _parse_moment(item, f"{path} moment {index}")
-        for index, item in enumerate(moments_raw)
+        _parse_moment(item, f"{path} moment {index}") for index, item in enumerate(moments_raw)
     ]
     moments.sort(key=lambda moment: (moment.start, moment.end))
 

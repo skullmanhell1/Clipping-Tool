@@ -1,4 +1,3 @@
-
 /**
  * Labelled <select> styled for the dark theme.
  *

@@ -37,13 +37,13 @@ import dataclasses
 import logging
 import math
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _Future_Timeout
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from worker.engines.artifacts import (
     Engine_Workspace,
@@ -142,7 +142,7 @@ def _as_text(value: Any) -> str:
         return repr(type(value))
 
 
-def _coerce_stage(value: Any) -> Optional[Engine_Stage]:
+def _coerce_stage(value: Any) -> Engine_Stage | None:
     """Return ``value`` as an :class:`Engine_Stage`, or ``None`` when unrecognised."""
     if isinstance(value, Engine_Stage):
         return value
@@ -312,9 +312,9 @@ class Stage_Outcome:
     markers: list[str] = field(default_factory=list)
     artifacts: list[Engine_Artifact] = field(default_factory=list)
     contributions: list[Compose_Contribution] = field(default_factory=list)
-    media: Optional[Path] = None
+    media: Path | None = None
 
-    def result_for(self, engine_id: str) -> Optional[Engine_Result]:
+    def result_for(self, engine_id: str) -> Engine_Result | None:
         """The result recorded for ``engine_id``, or ``None``."""
         key = _as_text(engine_id)
         for result in self.results:
@@ -339,7 +339,7 @@ class Engine_Host:
         temp_dir: str | Path,
         registry: Engine_Registry | None = None,
         capabilities: Capability_Report | None = None,
-        storage: "BaseStorage | None" = None,
+        storage: BaseStorage | None = None,
         clock: Callable[[], float] = time.monotonic,
         logger: Any | None = None,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
@@ -374,7 +374,7 @@ class Engine_Host:
         self._logger = logger if logger is not None and hasattr(logger, "warning") else _LOGGER
         self._sample_rate = sample_rate
 
-        self._time_base: Optional[Time_Base] = None
+        self._time_base: Time_Base | None = None
         self._probed_fps: Any = None
         self._source_outcomes: dict[str, Stage_Outcome] = {}
         self._source_results: dict[str, Engine_Result] = {}
@@ -434,7 +434,7 @@ class Engine_Host:
 
     # --- timing -----------------------------------------------------------
 
-    def time_base(self, info: "MediaInfo | None" = None) -> Time_Base:
+    def time_base(self, info: MediaInfo | None = None) -> Time_Base:
         """Build (once) and cache the job's Time_Base from the source probe.
 
         Only ``info.fps`` is read, and only on the first call: every engine of
@@ -460,7 +460,7 @@ class Engine_Host:
 
     # --- invocation -------------------------------------------------------
 
-    def run_source(self, source: str | Path, info: "MediaInfo") -> Stage_Outcome:
+    def run_source(self, source: str | Path, info: MediaInfo) -> Stage_Outcome:
         """Invoke SOURCE-stage engines at most once per source (Reqs 3.5, 19.3).
 
         The job's Time_Base is established here from the probe the Pipeline has
@@ -490,7 +490,7 @@ class Engine_Host:
             self._source_results[result.engine_id] = result
         return outcome
 
-    def source_result(self, engine_id: str) -> Optional[Engine_Result]:
+    def source_result(self, engine_id: str) -> Engine_Result | None:
         """The cached SOURCE-stage result for ``engine_id``, reused by every clip."""
         return self._source_results.get(_as_text(engine_id))
 
@@ -500,12 +500,12 @@ class Engine_Host:
         *,
         clip_id: str,
         source: str | Path,
-        clip_path: Optional[Path],
+        clip_path: Path | None,
         clip_start: float,
         clip_end: float,
         duration: float,
         words: Sequence[Any] = (),
-        clip_metadata: Optional[Mapping[str, Any]] = None,
+        clip_metadata: Mapping[str, Any] | None = None,
         filler_plan: Any = None,
         notes: Sequence[str] = (),
     ) -> Stage_Outcome:
@@ -656,12 +656,12 @@ class Engine_Host:
         *,
         clip_id: Any,
         source: str | Path,
-        clip_path: Optional[Path],
+        clip_path: Path | None,
         clip_start: float,
         clip_end: float,
         duration: float,
         words: Sequence[Any] = (),
-        clip_metadata: Optional[Mapping[str, Any]] = None,
+        clip_metadata: Mapping[str, Any] | None = None,
         filler_plan: Any = None,
         notes: Sequence[str] = (),
     ) -> Stage_Outcome:
@@ -688,6 +688,7 @@ class Engine_Host:
         # A ``FillerPlan`` or, equivalently, its bare ``keeps`` sequence — the Pipeline
         # keeps the latter in scope for the whole clip, so both spellings are accepted.
         seams = filler_seam_notes(getattr(filler_plan, "keeps", filler_plan))
+
         # Bound through a named function rather than a `lambda bound=engine:` default argument.
         # Both capture the engine per iteration, but a lambda that takes an optional parameter is
         # not a `Callable[[], Engine_Context]`, so `_invoke`'s signature could not be checked
@@ -800,9 +801,7 @@ class Engine_Host:
         # 2 — permissibility.
         if self.permissibility and coerce_bool(getattr(engine, "requires_network", False), False):
             detail = "permissibility_blocked"
-            return Engine_Result.degraded(
-                engine_id, detail, markers=(marker(engine_id, detail),)
-            )
+            return Engine_Result.degraded(engine_id, detail, markers=(marker(engine_id, detail),))
 
         # 3 — required capabilities, in declaration order.
         report = self.capabilities
@@ -810,14 +809,14 @@ class Engine_Host:
         missing = report.first_missing(required) if required else None
         if missing is not None:
             detail = f"unavailable:{missing}"
-            return Engine_Result.degraded(
-                engine_id, detail, markers=(marker(engine_id, detail),)
-            )
+            return Engine_Result.degraded(engine_id, detail, markers=(marker(engine_id, detail),))
 
         # Optional capabilities: the engine still runs at reduced fidelity, and
         # the host guarantees the degradation is recorded even if the engine
         # forgets to (Req 7.2), capped at one marker per engine per clip (7.4).
-        optional_missing = report.missing(_declared_ids(getattr(engine, "optional_capabilities", ())))
+        optional_missing = report.missing(
+            _declared_ids(getattr(engine, "optional_capabilities", ()))
+        )
         degradation = (
             marker(engine_id, f"{DEGRADED_DETAIL_PREFIX}{optional_missing[0]}")
             if optional_missing
@@ -839,7 +838,7 @@ class Engine_Host:
         engine: AV_Engine,
         ctx: Engine_Context,
         *,
-        degradation: Optional[str],
+        degradation: str | None,
         started: float,
     ) -> Engine_Result:
         """Run ``engine`` on a single-worker thread and normalise its outcome.
@@ -902,7 +901,7 @@ class Engine_Host:
         engine_id: str,
         raw: Any,
         *,
-        degradation: Optional[str],
+        degradation: str | None,
         elapsed: float,
     ) -> Engine_Result:
         """Namespace, cap and attribute the markers of a returned result.
@@ -918,8 +917,11 @@ class Engine_Host:
         elif raw is None:
             result = Engine_Result(engine_id=engine_id, status=Engine_Status.SKIPPED)
         else:
-            result = Engine_Result(engine_id=engine_id, status=Engine_Status.FAILED,
-                                   detail=f"engine returned {type(raw).__name__}")
+            result = Engine_Result(
+                engine_id=engine_id,
+                status=Engine_Status.FAILED,
+                detail=f"engine returned {type(raw).__name__}",
+            )
 
         markers = _namespace_markers(engine_id, result.markers)
         if degradation is not None:
@@ -934,7 +936,7 @@ class Engine_Host:
         )
 
     def _failure(
-        self, engine_id: str, detail: str, exc: Optional[BaseException], elapsed: float
+        self, engine_id: str, detail: str, exc: BaseException | None, elapsed: float
     ) -> Engine_Result:
         """A ``failed`` result carrying exactly one ``engine:<id>:<detail>`` marker.
 
@@ -959,13 +961,13 @@ class Engine_Host:
         *,
         clip_id: str,
         source: str | Path,
-        clip_path: Optional[Path],
+        clip_path: Path | None,
         clip_start: float,
         clip_end: float,
         duration: float,
         words: Sequence[Any],
         first_input_index: int = 0,
-        clip_metadata: Optional[Mapping[str, Any]] = None,
+        clip_metadata: Mapping[str, Any] | None = None,
         seam_notes: Sequence[str] = (),
         caller_notes: Sequence[str] = (),
     ) -> Engine_Context:
@@ -998,9 +1000,7 @@ class Engine_Host:
         engine_id = _engine_id_of(engine)
         resolved = engine.resolve_options(self._options)
         digest = options_digest(resolved)
-        workspace = allocate_workspace(
-            self.temp_dir, self.job_id, clip_id, engine_id, digest
-        )
+        workspace = allocate_workspace(self.temp_dir, self.job_id, clip_id, engine_id, digest)
         self._workspaces.setdefault(clip_id, []).append(workspace)
 
         base = self.time_base()
@@ -1105,7 +1105,7 @@ class Engine_Host:
         )
         results[index] = dataclasses.replace(result, artifacts=artifacts)
 
-    def _backend(self) -> "BaseStorage":
+    def _backend(self) -> BaseStorage:
         """The Storage_Backend, resolved lazily on first durable artifact (Req 1.4)."""
         if self._storage is None:
             from storage_backends import get_storage  # lazy (Req 1.4)

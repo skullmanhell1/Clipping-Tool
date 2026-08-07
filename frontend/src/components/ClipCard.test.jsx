@@ -47,7 +47,7 @@ const setup = (clip = CLIP, props = {}) => {
       onPublished={vi.fn()}
       settings={{ color: "vivid" }}
       {...props}
-    />,
+    />
   );
   return { ...utils, onUpdated };
 };
@@ -56,7 +56,7 @@ describe("ClipCard review verdict (U9)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, "reviewClip").mockImplementation((_j, id, state) =>
-      Promise.resolve({ ...CLIP, id, review_state: state }),
+      Promise.resolve({ ...CLIP, id, review_state: state })
     );
   });
 
@@ -84,7 +84,7 @@ describe("ClipCard review verdict (U9)", () => {
     expect(screen.getByRole("button", { name: /reject/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /approve/i })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "false"
     );
   });
 
@@ -109,7 +109,7 @@ describe("ClipCard re-render (U7)", () => {
     // The trailing empty cut list is U4's: a plain re-render must send no cuts, or pressing
     // this button would silently re-apply whatever the transcript editor last had selected.
     await waitFor(() =>
-      expect(api.rerenderClip).toHaveBeenCalledWith("job1", "c1", { color: "vivid" }, []),
+      expect(api.rerenderClip).toHaveBeenCalledWith("job1", "c1", { color: "vivid" }, [])
     );
   });
 
@@ -117,9 +117,10 @@ describe("ClipCard re-render (U7)", () => {
     // A re-render is minutes of CPU that overwrites the clip file; two at once race to write it.
     let release;
     api.rerenderClip.mockImplementation(
-      () => new Promise((resolve) => {
-        release = resolve;
-      }),
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
     );
     setup();
     const button = screen.getByRole("button", { name: /re-render this clip/i });
@@ -138,7 +139,7 @@ describe("ClipCard re-render (U7)", () => {
 
   it("shows why a re-render failed", async () => {
     api.rerenderClip.mockRejectedValueOnce(
-      new Error("The original source file is no longer available"),
+      new Error("The original source file is no longer available")
     );
     setup();
     await userEvent.click(screen.getByRole("button", { name: /re-render this clip/i }));
@@ -180,12 +181,9 @@ describe("ClipCard transcript trimming (U4)", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
     await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
     await waitFor(() =>
-      expect(api.rerenderClip).toHaveBeenCalledWith(
-        "job1",
-        "c1",
-        { color: "vivid" },
-        [{ start: 0.6, end: 1.0 }],
-      ),
+      expect(api.rerenderClip).toHaveBeenCalledWith("job1", "c1", { color: "vivid" }, [
+        { start: 0.6, end: 1.0 },
+      ])
     );
     await waitFor(() => expect(onUpdated).toHaveBeenCalled());
   });
@@ -196,7 +194,7 @@ describe("ClipCard transcript trimming (U4)", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Cut “um”/ }));
     await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
     await waitFor(() =>
-      expect(screen.queryByTestId("transcript-editor-c1")).not.toBeInTheDocument(),
+      expect(screen.queryByTestId("transcript-editor-c1")).not.toBeInTheDocument()
     );
   });
 

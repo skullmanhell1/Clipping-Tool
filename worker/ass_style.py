@@ -52,19 +52,43 @@ from typing import Any
 #: checked at import time by the assertion below, so the two lists cannot drift in *length* or
 #: order even though they differ in spelling.
 STYLE_FIELD_NAMES: tuple[str, ...] = (
-    "Name", "Fontname", "Fontsize",
-    "PrimaryColour", "SecondaryColour", "OutlineColour", "BackColour",
-    "Bold", "Italic", "Underline", "StrikeOut",
-    "ScaleX", "ScaleY", "Spacing", "Angle",
-    "BorderStyle", "Outline", "Shadow",
-    "Alignment", "MarginL", "MarginR", "MarginV",
+    "Name",
+    "Fontname",
+    "Fontsize",
+    "PrimaryColour",
+    "SecondaryColour",
+    "OutlineColour",
+    "BackColour",
+    "Bold",
+    "Italic",
+    "Underline",
+    "StrikeOut",
+    "ScaleX",
+    "ScaleY",
+    "Spacing",
+    "Angle",
+    "BorderStyle",
+    "Outline",
+    "Shadow",
+    "Alignment",
+    "MarginL",
+    "MarginR",
+    "MarginV",
     "Encoding",
 )
 
 #: The ASS names of the 10 ``Dialogue:`` columns, in order.
 DIALOGUE_FIELD_NAMES: tuple[str, ...] = (
-    "Layer", "Start", "End", "Style", "Name",
-    "MarginL", "MarginR", "MarginV", "Effect", "Text",
+    "Layer",
+    "Start",
+    "End",
+    "Style",
+    "Name",
+    "MarginL",
+    "MarginR",
+    "MarginV",
+    "Effect",
+    "Text",
 )
 
 #: The ``[V4+ Styles]`` header row, generated from :data:`STYLE_FIELD_NAMES`.

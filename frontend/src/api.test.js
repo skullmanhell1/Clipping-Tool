@@ -14,15 +14,11 @@ describe("clipUrl", () => {
     // the signature cannot be reconstructed.
     const presigned = "https://bucket.s3.amazonaws.com/clip.mp4?X-Amz-Signature=abc";
     expect(api.clipUrl(presigned)).toBe(presigned);
-    expect(api.clipUrl("http://example.com/clip.mp4")).toBe(
-      "http://example.com/clip.mp4"
-    );
+    expect(api.clipUrl("http://example.com/clip.mp4")).toBe("http://example.com/clip.mp4");
   });
 
   it("is case-insensitive about the scheme", () => {
-    expect(api.clipUrl("HTTPS://cdn.example.com/a.mp4")).toBe(
-      "HTTPS://cdn.example.com/a.mp4"
-    );
+    expect(api.clipUrl("HTTPS://cdn.example.com/a.mp4")).toBe("HTTPS://cdn.example.com/a.mp4");
   });
 
   it("makes a relative clip path root-absolute", () => {
@@ -118,9 +114,7 @@ describe("response handling", () => {
         json: async () => ({ detail: "instagram cannot publish directly yet" }),
       })
     );
-    await expect(api.info()).rejects.toThrow(
-      "instagram cannot publish directly yet"
-    );
+    await expect(api.info()).rejects.toThrow("instagram cannot publish directly yet");
   });
 
   it("falls back to the status code when the body is not JSON", async () => {
@@ -164,7 +158,6 @@ describe("upload", () => {
     expect(captured.getAll("files")).toHaveLength(1);
   });
 });
-
 
 describe("transcript trimming requests (U4)", () => {
   beforeEach(() => {
@@ -218,7 +211,7 @@ describe("transcript trimming requests (U4)", () => {
         ok: false,
         status: 409,
         json: async () => ({ detail: "No cached transcript for this clip." }),
-      }),
+      })
     );
     await expect(api.clipTranscript("job1", "c1")).rejects.toThrow(/no cached transcript/i);
   });
@@ -293,12 +286,8 @@ describe("auth token", () => {
     // <video src>, poster and the two <a href> download links cannot carry a header.
     window.localStorage.setItem("clipper_token", "s3cret");
     expect(api.clipUrl("clips/j/c.mp4")).toBe("/clips/j/c.mp4?token=s3cret");
-    expect(api.downloadUrl("j", "c.mp4")).toBe(
-      "/api/clips/j/c.mp4/download?token=s3cret"
-    );
-    expect(api.videoDownloadUrl("j", "c.mp4")).toBe(
-      "/api/clips/j/c.mp4/video?token=s3cret"
-    );
+    expect(api.downloadUrl("j", "c.mp4")).toBe("/api/clips/j/c.mp4/download?token=s3cret");
+    expect(api.videoDownloadUrl("j", "c.mp4")).toBe("/api/clips/j/c.mp4/video?token=s3cret");
   });
 
   it("uses & when the media URL already has a query string", () => {
@@ -309,9 +298,7 @@ describe("auth token", () => {
   it("url-encodes the token", () => {
     // A token with a + or & in it would otherwise be silently truncated or mangled.
     window.localStorage.setItem("clipper_token", "a+b&c=d");
-    expect(api.clipUrl("/clips/j/c.mp4")).toBe(
-      "/clips/j/c.mp4?token=a%2Bb%26c%3Dd"
-    );
+    expect(api.clipUrl("/clips/j/c.mp4")).toBe("/clips/j/c.mp4?token=a%2Bb%26c%3Dd");
   });
 
   it("still passes absolute URLs through untouched", () => {

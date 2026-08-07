@@ -42,11 +42,7 @@ export default defineConfig({
       // excluded because covering them says nothing: main.jsx is three lines of mount code and
       // a config file executes on import whether or not anything asserts on it.
       include: ["src/**/*.{js,jsx}"],
-      exclude: [
-        "src/**/*.test.{js,jsx}",
-        "src/test/**",
-        "src/main.jsx",
-      ],
+      exclude: ["src/**/*.test.{js,jsx}", "src/test/**", "src/main.jsx"],
     },
   },
 });

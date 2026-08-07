@@ -24,8 +24,8 @@ sampling, and the LLM call is being paid for nothing.
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -77,8 +77,9 @@ def uniform_baseline(duration: float, labels: Sequence, k: int) -> list[Predicti
         start = max(0.0, start)
         end = min(duration, start + length)
         if end > start:
-            out.append(Prediction(start=round(start, 3), end=round(end, 3),
-                                  reason="uniform baseline"))
+            out.append(
+                Prediction(start=round(start, 3), end=round(end, 3), reason="uniform baseline")
+            )
     return out
 
 
@@ -94,11 +95,11 @@ def random_baseline(
     if duration <= length or k <= 0:
         return uniform_baseline(duration, labels, k)
 
-    rng = random.Random(seed)  # noqa: S311 - a reproducible baseline sampler; the fixed seed is the requirement
+    # A reproducible baseline sampler; the fixed seed is the requirement, not a weakness.
+    rng = random.Random(seed)  # noqa: S311
     starts = sorted(rng.uniform(0.0, duration - length) for _ in range(k))
     return [
-        Prediction(start=round(start, 3), end=round(start + length, 3),
-                   reason="random baseline")
+        Prediction(start=round(start, 3), end=round(start + length, 3), reason="random baseline")
         for start in starts
     ]
 
@@ -123,8 +124,7 @@ def longest_segment_baseline(
     """
     ranked = sorted(
         (
-            Prediction(start=float(s.start), end=float(s.end),
-                       reason="longest-segment baseline")
+            Prediction(start=float(s.start), end=float(s.end), reason="longest-segment baseline")
             for s in segments
             if float(s.end) - float(s.start) > min_duration
         ),

@@ -62,7 +62,10 @@ LICENCE_URLS: dict[str, tuple[str, str]] = {
 
 
 def _get(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "clipping-tool-build"})  # noqa: S310 - build-time fetch from a fixed https CDN base; not caller-supplied
+    # Build-time fetch from a fixed https CDN base; the URL is not caller-supplied.
+    request = urllib.request.Request(  # noqa: S310
+        url, headers={"User-Agent": "clipping-tool-build"}
+    )
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
         if response.status != 200:
             raise RuntimeError(f"{url} -> HTTP {response.status}")
@@ -98,7 +101,9 @@ def main() -> int:
     if args.check:
         missing = [g for g in glyphs if not (assets / emoji_filename(g)).exists()]
         if missing:
-            print(f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}")
+            print(
+                f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}"
+            )
             print(f"run: python scripts/fetch_emoji.py --style {style.name}")
             return 1
         print(f"all {len(glyphs)} {style.name} emoji vendored")
