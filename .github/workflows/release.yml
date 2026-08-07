@@ -1,0 +1,129 @@
+# Tag and publish a release when VERSION changes on main.
+#
+# This is not housekeeping — it fixes a shipped feature that cannot work.
+#
+# The repository has **zero** git tags and zero GitHub releases, while `updates.py` asks
+# `https://api.github.com/repos/{github_repo}/releases/latest` whether a newer version exists, and
+# the UI renders an "update available" banner from the answer. With no releases that endpoint 404s,
+# so the check has never been able to succeed: the feature is documented in the README, has an API
+# route, has tests, and is inert in production. `CHANGELOG.md` meanwhile documents eleven released
+# versions, so the project believes it has been releasing all along.
+#
+# Driven by the `VERSION` file rather than by pushing tags by hand, because `VERSION` is already the
+# single source of truth — `updates.get_current_version()` reads it and the API reports it. A human
+# tagging separately is a second source that can disagree, and a version mismatch between what the
+# app reports and what it compares against is exactly the bug that makes an update banner lie.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    # Only when the version actually changes. Without this filter every merge to main would run
+    # this workflow to discover it has nothing to do.
+    paths: ["VERSION"]
+  # Manual escape hatch: for re-running after a failure, or for tagging a version whose VERSION bump
+  # landed before this workflow existed (which is every version so far).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # The one elevated permission needed, and it is needed for two things: pushing the tag and
+      # creating the release. Scoped to this job rather than the workflow.
+      contents: write
+    steps:
+      # Full history: the tag is annotated against the commit, and `git tag --list` has to see every
+      # existing tag to decide whether this version is already released. A shallow clone fetches no
+      # tags, so the idempotence check below would think nothing had ever been released.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          set -eu
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$version" ]; then
+            echo "::error::VERSION is empty"
+            exit 1
+          fi
+          # Reject anything that is not a plain semver triple. The tag becomes a public identifier
+          # and `updates.parse_version` has to be able to compare it; a stray "v", suffix or typo
+          # would produce a release the running app cannot recognise as newer than itself.
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION '$version' is not a bare semver triple (e.g. 0.11.0)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      # Idempotent: re-running on the same version must do nothing rather than fail, so that a
+      # `workflow_dispatch` retry after a partial failure is safe.
+      - name: Skip if this version is already tagged
+        id: exists
+        run: |
+          set -eu
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.version.outputs.tag }} already exists; nothing to do."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The release notes are the CHANGELOG section for this version, not an auto-generated commit
+      # list. The changelog is written for a reader and the commit list is not, and a release whose
+      # notes are 40 "fix(ci):" subjects trains people to ignore release notes.
+      - name: Extract the changelog section
+        if: steps.exists.outputs.already == 'false'
+        id: notes
+        run: |
+          python - <<'PY' > release-notes.md
+          import pathlib, re, sys
+
+          version = "${{ steps.version.outputs.version }}"
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          # Match "## [0.11.0]" through to the next "## " heading (or end of file).
+          pattern = rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)"
+          match = re.search(pattern, text, re.DOTALL | re.MULTILINE)
+          if not match:
+              # A missing section is a real omission, but it must not block the tag — the tag is
+              # what `updates.py` needs, and an un-annotated release is better than no release.
+              print(f"No CHANGELOG.md section for {version}.")
+              print()
+              print("See CHANGELOG.md for the full history.")
+              sys.exit(0)
+          print(match.group(1).strip())
+          PY
+          echo "Extracted $(wc -l < release-notes.md) lines of notes"
+
+      - name: Create the tag
+        if: steps.exists.outputs.already == 'false'
+        run: |
+          set -eu
+          # Identify as the Actions bot rather than impersonating the last committer, so the tag's
+          # provenance is honest about what created it.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Annotated, not lightweight: an annotated tag carries a date and message of its own, which
+          # is what makes `git describe` and the GitHub releases API report it as a real release.
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Publish the release
+        if: steps.exists.outputs.already == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # `gh release create` rather than a REST call: it is preinstalled on the runner and it is
+          # the release object — not merely the tag — that `updates.py` reads via `releases/latest`.
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md \
+            --verify-tag

@@ -246,6 +246,23 @@ from worker.captions import (  # noqa: E402
 from worker.transcribe import Word  # noqa: E402
 
 
+def _tmp_ass_path() -> str:
+    """Allocate a private path for an ASS file the caller will overwrite.
+
+    ``tempfile.mktemp`` only *predicts* an unused name, so anything else on the machine can
+    take that path before ``build_ass`` opens it — the CWE-377 race that makes the function
+    deprecated, and what CodeQL reports as ``py/insecure-temporary-file`` (severity 7.0).
+    ``mkstemp`` closes the window by creating the file atomically with ``O_EXCL`` and mode
+    0600. ``build_ass`` writes through ``Path.write_text``, which truncates, so handing it an
+    existing empty file is equivalent to the absent one it used to get. Callers keep their own
+    ``os.remove``, so cleanup still happens per Hypothesis example instead of leaving one
+    temporary directory behind per generated case.
+    """
+    fd, path = tempfile.mkstemp(suffix=".ass")
+    os.close(fd)
+    return path
+
+
 def _parse_ass_ts(ts: str) -> float:
     """Parse an ASS ``H:MM:SS.cs`` timestamp into seconds."""
     hours, minutes, rest = ts.split(":")
@@ -291,7 +308,7 @@ def test_p4_per_word_animation_timed_and_bounded(data, anim):
 
     # Bounded: build the ASS and confirm all dialogue timestamps ∈ [0, D].
     cues = words_to_cues(words)
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(cues, dest, preset=preset, clip_duration=duration)
     text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
@@ -316,7 +333,7 @@ def test_p5_captions_use_ass_tags_only(data, name):
     """
     words, duration = data
     cues = words_to_cues(words)
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(
         cues,
         dest,
@@ -401,7 +418,7 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
     cap.font_available = lambda _n: True  # avoid host-dependent substitution
     try:
         # No override -> preset default position + preset font/colours.
-        dest = tempfile.mktemp(suffix=".ass")
+        dest = _tmp_ass_path()
         cap.build_ass(
             [Cue(0.0, 1.0, [Word(0.0, 0.5, "hi"), Word(0.5, 1.0, "yo")])],
             dest,
@@ -420,7 +437,7 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
         assert int(vals[18]) == _POSITION_ALIGN[preset.position][0]
 
         # Override -> alignment reflects the override, not the preset default.
-        dest2 = tempfile.mktemp(suffix=".ass")
+        dest2 = _tmp_ass_path()
         cap.build_ass(
             [Cue(0.0, 1.0, [Word(0.0, 0.5, "hi")])],
             dest2,
@@ -468,7 +485,7 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
         return glyph in allowed_glyphs
 
     words = [Word(float(i), float(i) + 0.4, kw) for i, kw in enumerate(_EMOJI_WORDS)]
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(
         [Cue(0.0, float(len(words)), words)],
         dest,

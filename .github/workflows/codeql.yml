@@ -1,0 +1,194 @@
+# CodeQL static analysis.
+#
+# This looks for a different class of defect than anything already in CI. `ruff` and `mypy` analyse
+# one module at a time and reason about style and types; `pip-audit` and `npm audit` only know about
+# *other people's* published vulnerabilities. Neither can see a taint path through this repo's own
+# code — and that is the shape of the bugs that matter most here, because the app takes a URL from a
+# caller, hands it to yt-dlp, builds ffmpeg filter arguments influenced by request data, and writes
+# files under a path derived from user input. Phase 1 fixed the SSRF and path cases it could find by
+# reading; this is what keeps finding them after the reading stops.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A weekly run matters for a static analyser in a way it does not for a test suite: the queries
+  # are updated by GitHub, so the same unchanged code can become a finding when a new query ships.
+  # Without this, that finding would wait for whoever next touched the file.
+  schedule:
+    - cron: "27 4 * * 1"
+
+# Same reasoning as ci.yml: without this, each push leaves the previous analysis running to
+# completion, and CodeQL runs are long enough for several to pile up competing for runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Least privilege, listed explicitly. `security-events: write` is the only elevated permission
+      # CodeQL needs — it is how findings are published to the Security tab. Everything else is read.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both halves of the repo. Analysing only Python would miss the frontend entirely, and the
+        # frontend is where the API token handling and the URL construction live.
+        language: ["python", "javascript-typescript"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Publishing findings to the Security tab needs the code scanning API, and on a *private*
+      # repository that API only exists with GitHub Advanced Security enabled. This repo is private
+      # and does not have it, so the upload at the end of `analyze` returned
+      #   "Code scanning is not enabled for this repository"
+      # and failed the job — after the analysis itself had completed cleanly across all 206 files.
+      # A green-or-red signal that depends on a billing setting tells you nothing about the code, so
+      # the availability of the API is treated as a fact to be discovered rather than assumed.
+      #
+      # This is a probe, not a hardcoded switch, deliberately: the day Advanced Security is turned
+      # on (or the repo is made public) the probe starts returning 200, uploads resume, and findings
+      # land in the Security tab with no edit to this file.
+      - name: Probe whether code scanning can accept results
+        id: code-scanning
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?per_page=1" || echo 000)
+
+          # 200 means the endpoint is live and will accept a SARIF upload. 403 is the documented
+          # answer when Advanced Security is off; 404 covers code scanning never having been
+          # enabled. Anything else (network, 5xx) is treated as unavailable too — erring that way
+          # only costs us the Security-tab copy of the results, and the gate below still runs, so
+          # the analysis is never silently skipped.
+          if [ "$status" = "200" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "upload=always" >> "$GITHUB_OUTPUT"
+            echo "Code scanning API reachable (HTTP 200); results will be uploaded."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "upload=never" >> "$GITHUB_OUTPUT"
+            echo "Code scanning API unavailable (HTTP ${status}); results stay in the build."
+          fi
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `security-and-quality` rather than the default `security-extended`/`default` set. The
+          # extra cost is tolerable on a repo this size, and the quality queries catch the same
+          # category of thing the drift pins in the test suite exist for: code that no longer does
+          # what it appears to.
+          queries: security-and-quality
+
+      # No build step. Python and JavaScript are both interpreted languages that CodeQL extracts
+      # directly from source, so `autobuild` would only add a chance of failing on a compilation
+      # step that does not exist. Installing dependencies is not needed either — and deliberately
+      # skipped, because `pip install` here would mean running arbitrary setup code from the index
+      # inside a job holding `security-events: write`.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Written into the workspace rather than the default `../results` so the SARIF is
+          # reachable by the artifact upload and the gate below.
+          output: sarif-results
+          upload: ${{ steps.code-scanning.outputs.upload }}
+          # The database upload goes to the same unavailable service; skip it in lockstep.
+          upload-database: ${{ steps.code-scanning.outputs.available }}
+
+      # Without the Security tab, the SARIF would exist only inside a finished runner. Keeping it as
+      # an artifact means a finding is still something a human can open and read, which is the part
+      # of code scanning that actually matters.
+      - name: Keep SARIF as a build artifact
+        # `always()` first so the SARIF is still captured when the analysis step itself failed —
+        # that is exactly the case where someone needs to read it. A bare condition would inherit an
+        # implicit success() and skip.
+        if: always() && steps.code-scanning.outputs.available != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: sarif-results/*.sarif
+          if-no-files-found: warn
+          retention-days: 30
+
+      # The gate. When results upload, GitHub decides what blocks a pull request and this step stays
+      # out of the way. When they cannot, the decision has to be made here — and made the *same*
+      # way, or the check means something different depending on whether Advanced Security is paid
+      # for.
+      #
+      # So GitHub's default is reproduced rather than invented: block on security alerts of high or
+      # critical severity, let quality findings through as information. The two obvious shortcuts
+      # are both wrong. Failing on any result would block this stack on 103 quality findings —
+      # unused imports, cyclic imports, empty `except` — none of which are what this workflow was
+      # added to catch. Failing on nothing would leave a green check that ignores its own output,
+      # which is worse than not running CodeQL at all, because it looks like coverage.
+      - name: Gate on high-severity security findings
+        if: steps.code-scanning.outputs.available != 'true'
+        env:
+          # CodeQL's own cutoffs: 7.0 is "high", 9.0 "critical". Matching what GitHub blocks on by
+          # default keeps this step and the Security tab in agreement about what a failure means.
+          SECURITY_SEVERITY_THRESHOLD: "7.0"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(sarif-results/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::CodeQL produced no SARIF for ${{ matrix.language }}; the analysis did not run."
+            exit 1
+          fi
+
+          rows=$(mktemp)
+          for f in "${files[@]}"; do
+            jq -r --arg threshold "$SECURITY_SEVERITY_THRESHOLD" -f .github/codeql-gate.jq "$f" >> "$rows"
+          done
+
+          blocking=$(grep -c '^BLOCK' "$rows" || true)
+          reported=$(grep -c '^REPORT' "$rows" || true)
+          echo "${{ matrix.language }}: ${blocking} blocking, ${reported} reported (threshold ${SECURITY_SEVERITY_THRESHOLD})."
+
+          # Quality findings are recorded, not enforced. Without a Security tab the job log and the
+          # step summary are the only places anyone will ever see them, so they get printed rather
+          # than dropped — a count per rule, which is enough to notice a number growing.
+          if [ "$reported" -gt 0 ]; then
+            echo "--- reported (not blocking) ---"
+            awk -F'\t' '$1=="REPORT" {print $2"\t"$4}' "$rows" | sort | uniq -c | sort -rn
+          fi
+
+          {
+            echo "### CodeQL — ${{ matrix.language }}"
+            echo
+            echo "Upload to code scanning unavailable, so results were gated in the workflow."
+            echo "Blocking (security-severity >= ${SECURITY_SEVERITY_THRESHOLD}): **${blocking}** · reported: ${reported}"
+            if [ "$blocking" -gt 0 ]; then
+              echo
+              echo "| severity | rule | location | message |"
+              echo "|---|---|---|---|"
+              awk -F'\t' '$1=="BLOCK" {print "| "$3" | "$4" | "$5" | "$6" |"}' "$rows"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$blocking" -gt 0 ]; then
+            echo "--- blocking ---"
+            awk -F'\t' '$1=="BLOCK" {print $4" ("$3") "$5": "$6}' "$rows"
+            while IFS=$'\t' read -r verdict _lvl sec rule loc msg; do
+              [ "$verdict" = "BLOCK" ] || continue
+              file=${loc%:*}; line=${loc##*:}
+              echo "::error file=${file},line=${line}::${rule} (security-severity ${sec}): ${msg}"
+            done < "$rows"
+            exit 1
+          fi
+
+          echo "No security findings at or above ${SECURITY_SEVERITY_THRESHOLD} in ${{ matrix.language }}."
