@@ -35,11 +35,22 @@ def _filter_runs(chain: str) -> tuple[bool, str]:
     """
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2",
-            "-af", chain, "-f", "null", "-",
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=0.2",
+            "-af",
+            chain,
+            "-f",
+            "null",
+            "-",
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return proc.returncode == 0, (proc.stderr or "").strip()
 
@@ -222,9 +233,12 @@ def test_the_repair_chain_reaches_the_compositor_graph(tmp_path, monkeypatch):
     monkeypatch.setattr(app_settings, "speech_denoise", "standard", raising=False)
     monkeypatch.setattr(app_settings, "deesser", "standard", raising=False)
     record = _parity_render(
-        compositor, tmp_path / "repair",
+        compositor,
+        tmp_path / "repair",
         options=_matrix_options(captions=True),
-        words=MATRIX_WORDS, hook_text=MATRIX_HOOK, contributions=None,
+        words=MATRIX_WORDS,
+        hook_text=MATRIX_HOOK,
+        contributions=None,
     )
     assert "afftdn" in record.graph
     assert "deesser" in record.graph
@@ -251,16 +265,18 @@ def test_speech_repair_precedes_the_music_mix(tmp_path, monkeypatch):
     bed.write_bytes(b"stub-music")
     monkeypatch.setattr(app_settings, "speech_denoise", "standard", raising=False)
     monkeypatch.setattr(
-        compositor.audio, "resolve_music_bed",
-        lambda *_a, **_k: audio.MusicBed(
-            path=bed, mood="chill", source=audio.SOURCE_USER_TRACK
-        ),
+        compositor.audio,
+        "resolve_music_bed",
+        lambda *_a, **_k: audio.MusicBed(path=bed, mood="chill", source=audio.SOURCE_USER_TRACK),
         raising=False,
     )
     record = _parity_render(
-        compositor, tmp_path / "order",
+        compositor,
+        tmp_path / "order",
         options=_matrix_options(captions=True, music="chill"),
-        words=MATRIX_WORDS, hook_text="", contributions=None,
+        words=MATRIX_WORDS,
+        hook_text="",
+        contributions=None,
     )
     graph = record.graph
     assert "music:chill" in record.effects_applied, "the music branch did not run"
@@ -284,9 +300,12 @@ def test_no_repair_leaves_the_audio_graph_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(app_settings, "speech_denoise", "off", raising=False)
     monkeypatch.setattr(app_settings, "deesser", "off", raising=False)
     record = _parity_render(
-        compositor, tmp_path / "clean",
+        compositor,
+        tmp_path / "clean",
         options=_matrix_options(captions=True),
-        words=MATRIX_WORDS, hook_text="", contributions=None,
+        words=MATRIX_WORDS,
+        hook_text="",
+        contributions=None,
     )
     assert "afftdn" not in record.graph
     assert "aclean" not in record.graph
@@ -462,9 +481,12 @@ def test_o12_soft_mode_stops_the_burn_in(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_settings, "caption_mode", "soft", raising=False)
     record = _parity_render(
-        compositor, tmp_path / "soft",
+        compositor,
+        tmp_path / "soft",
         options=_matrix_options(captions=True),
-        words=MATRIX_WORDS, hook_text="", contributions=None,
+        words=MATRIX_WORDS,
+        hook_text="",
+        contributions=None,
     )
     assert "subtitles=" not in record.graph
 
@@ -480,9 +502,12 @@ def test_o12_burned_and_both_still_burn(tmp_path, monkeypatch):
     for mode in ("burned", "both"):
         monkeypatch.setattr(app_settings, "caption_mode", mode, raising=False)
         record = _parity_render(
-            compositor, tmp_path / f"mode-{mode}",
+            compositor,
+            tmp_path / f"mode-{mode}",
             options=_matrix_options(captions=True),
-            words=MATRIX_WORDS, hook_text="", contributions=None,
+            words=MATRIX_WORDS,
+            hook_text="",
+            contributions=None,
         )
         assert "subtitles=" in record.graph, mode
 
@@ -498,9 +523,12 @@ def test_o12_soft_mode_still_burns_the_hook_title(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_settings, "caption_mode", "soft", raising=False)
     record = _parity_render(
-        compositor, tmp_path / "hook",
+        compositor,
+        tmp_path / "hook",
         options=_matrix_options(captions=False, hook_title=True),
-        words=[], hook_text=MATRIX_HOOK, contributions=None,
+        words=[],
+        hook_text=MATRIX_HOOK,
+        contributions=None,
     )
     assert "subtitles=" in record.graph
     assert "hook_title" in record.effects_applied
@@ -511,19 +539,26 @@ def test_o12_the_soft_track_is_a_real_selectable_subtitle_stream(tmp_path, make_
     """The whole claim of soft captions: a player can find and switch off the track."""
     src = make_video("src.mp4", duration=3.0, w=640, h=360)
     srt = tmp_path / "caps.srt"
-    srt.write_text(
-        "1\n00:00:00,500 --> 00:00:02,000\nhello there\n\n", encoding="utf-8"
-    )
+    srt.write_text("1\n00:00:00,500 --> 00:00:02,000\nhello there\n\n", encoding="utf-8")
     out = tmp_path / "soft.mp4"
     mux_soft_subtitles(src, srt, out)
 
     streams = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-select_streams", "s",
-            "-show_entries", "stream=codec_name:stream_tags=language",
-            "-of", "csv=p=0", str(out),
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream=codec_name:stream_tags=language",
+            "-of",
+            "csv=p=0",
+            str(out),
         ],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert "mov_text" in streams
     assert "eng" in streams
@@ -541,10 +576,23 @@ def test_o12_muxing_does_not_re_encode_the_video(tmp_path, make_video):
     def video_md5(path):
         return subprocess.run(
             [
-                FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(path),
-                "-map", "0:v", "-c", "copy", "-f", "md5", "-",
+                FFMPEG,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:v",
+                "-c",
+                "copy",
+                "-f",
+                "md5",
+                "-",
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
 
     assert video_md5(out) == video_md5(src)
@@ -554,15 +602,26 @@ def test_o12_muxing_does_not_re_encode_the_video(tmp_path, make_video):
 def test_o12_the_soft_track_carries_the_caption_text(tmp_path, make_video):
     src = make_video("src.mp4", duration=3.0, w=640, h=360)
     srt = tmp_path / "caps.srt"
-    srt.write_text(
-        "1\n00:00:00,500 --> 00:00:02,000\nunmistakable phrase\n\n", encoding="utf-8"
-    )
+    srt.write_text("1\n00:00:00,500 --> 00:00:02,000\nunmistakable phrase\n\n", encoding="utf-8")
     out = tmp_path / "soft.mp4"
     mux_soft_subtitles(src, srt, out)
     extracted = subprocess.run(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(out),
-         "-map", "0:s:0", "-f", "srt", "-"],
-        check=True, capture_output=True, text=True,
+        [
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(out),
+            "-map",
+            "0:s:0",
+            "-f",
+            "srt",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     assert "unmistakable phrase" in extracted
 
@@ -571,9 +630,7 @@ def test_o12_sidecar_srt_generation_is_reused_rather_than_reimplemented(tmp_path
     """The soft track is built from the same cue generation as the O11 sidecars."""
     from tests.test_kinetic_compositor import MATRIX_WORDS
 
-    written = subtitle_export.write_sidecars(
-        MATRIX_WORDS, tmp_path / "clip", formats=("srt",)
-    )
+    written = subtitle_export.write_sidecars(MATRIX_WORDS, tmp_path / "clip", formats=("srt",))
     assert len(written) == 1
     assert written[0].suffix == ".srt"
     assert written[0].read_text(encoding="utf-8").strip()

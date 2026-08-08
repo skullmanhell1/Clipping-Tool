@@ -23,8 +23,9 @@ The mechanism lands here; the defaults wait for evidence.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Protocol, Sequence
+from typing import Protocol
 
 #: Minimum seconds a cue must remain on screen. ``0.0`` disables the floor (R4.12).
 #:
@@ -51,18 +52,76 @@ DEFAULT_MAX_READING_RATE = 0.0
 BINDING_WORDS: frozenset[str] = frozenset(
     {
         # articles
-        "a", "an", "the",
+        "a",
+        "an",
+        "the",
         # common prepositions
-        "at", "by", "for", "from", "in", "into", "of", "off", "on", "onto", "out",
-        "over", "to", "up", "upon", "with", "within", "without", "about", "after",
-        "against", "along", "among", "around", "before", "behind", "below", "beneath",
-        "beside", "between", "beyond", "during", "inside", "near", "outside", "past",
-        "through", "toward", "towards", "under", "until",
+        "at",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "of",
+        "off",
+        "on",
+        "onto",
+        "out",
+        "over",
+        "to",
+        "up",
+        "upon",
+        "with",
+        "within",
+        "without",
+        "about",
+        "after",
+        "against",
+        "along",
+        "among",
+        "around",
+        "before",
+        "behind",
+        "below",
+        "beneath",
+        "beside",
+        "between",
+        "beyond",
+        "during",
+        "inside",
+        "near",
+        "outside",
+        "past",
+        "through",
+        "toward",
+        "towards",
+        "under",
+        "until",
         # conjunctions and complementisers that bind rightwards
-        "and", "but", "or", "nor", "so", "yet", "if", "that", "than", "as", "because",
-        "while", "whether",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "so",
+        "yet",
+        "if",
+        "that",
+        "than",
+        "as",
+        "because",
+        "while",
+        "whether",
         # possessive/determiner-like
-        "my", "your", "his", "her", "its", "our", "their", "this", "these", "those",
+        "my",
+        "your",
+        "his",
+        "her",
+        "its",
+        "our",
+        "their",
+        "this",
+        "these",
+        "those",
     }
 )
 

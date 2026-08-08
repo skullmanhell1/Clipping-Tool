@@ -29,7 +29,6 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 from worker.models import Job, JobStatus
@@ -162,9 +161,7 @@ class Job_Persistence:
         """
         try:
             with self._connect() as db:
-                rows = db.execute(
-                    "SELECT data FROM jobs ORDER BY created_at DESC"
-                ).fetchall()
+                rows = db.execute("SELECT data FROM jobs ORDER BY created_at DESC").fetchall()
         except Exception:  # pragma: no cover - defensive
             logger.exception("failed to load persisted jobs from %s", self.path)
             return []
@@ -197,9 +194,7 @@ class Job_Persistence:
         for job in interrupted:
             self.save(job)
         if interrupted:
-            logger.warning(
-                "marked %d interrupted job(s) as failed after restart", len(interrupted)
-            )
+            logger.warning("marked %d interrupted job(s) as failed after restart", len(interrupted))
         return jobs
 
     def prune(self, *, keep: int) -> int:
@@ -233,7 +228,7 @@ class Job_Persistence:
             return 0
 
 
-_persistence: Optional[Job_Persistence] = None
+_persistence: Job_Persistence | None = None
 _lock = threading.Lock()
 
 

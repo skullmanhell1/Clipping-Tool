@@ -1,0 +1,60 @@
+{
+  "readings": [
+    {
+      "metric": "ssim",
+      "mean": 0.9964011111111112,
+      "minimum": 0.995523,
+      "frames": 90,
+      "available": true,
+      "reason": ""
+    },
+    {
+      "metric": "psnr",
+      "mean": 45.014999999999986,
+      "minimum": 43.96,
+      "frames": 90,
+      "available": true,
+      "reason": ""
+    },
+    {
+      "metric": "vmaf",
+      "mean": 94.98175912222224,
+      "minimum": 94.023471,
+      "frames": 90,
+      "available": true,
+      "reason": ""
+    }
+  ],
+  "provenance": {
+    "ffmpeg_version": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
+    "encoder": "libx264",
+    "x264_crf": 20,
+    "x264_preset": "veryfast",
+    "output_fps": 30,
+    "reference_crf": 12,
+    "reference_preset": "slow",
+    "revision": "6762d29",
+    "metrics_available": [
+      {
+        "metric": "ssim",
+        "available": true,
+        "reason": ""
+      },
+      {
+        "metric": "psnr",
+        "available": true,
+        "reason": ""
+      },
+      {
+        "metric": "vmaf",
+        "available": true,
+        "reason": ""
+      }
+    ]
+  },
+  "encode_seconds": 0.885,
+  "size_bytes": 2844958,
+  "caveat": "Readings are not comparable across ffmpeg builds: filter implementations and libvmaf model versions change between releases, and this project deliberately does not pin ffmpeg. Two reports from different builds are two different experiments.",
+  "reference_encode_seconds": 2.778,
+  "what_this_is": "The shipped ladder (veryfast/crf20) measured against the same filter graph at slow/crf12. Isolates the encode: both are the same picture. This is the number every O16/O17/O20 change is compared against."
+}

@@ -42,9 +42,7 @@ def _open_descriptors() -> int:
 
 def _job() -> Job:
     job = Job(input_type="file", source="/tmp/source.mp4", options=ProcessingOptions())
-    job.clips = [
-        ClipResult(id="c1", filename="c1.mp4", start=0.0, end=5.0, duration=5.0)
-    ]
+    job.clips = [ClipResult(id="c1", filename="c1.mp4", start=0.0, end=5.0, duration=5.0)]
     return job
 
 

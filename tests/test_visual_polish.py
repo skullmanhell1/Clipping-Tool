@@ -58,12 +58,22 @@ def _boxed_video(dest, inner_w=960, inner_h=540, out_w=1080, out_h=1080, duratio
     pad_y = (out_h - inner_h) // 2
     subprocess.run(
         [
-            FFMPEG, "-y", "-f", "lavfi",
-            "-i", f"testsrc=size={inner_w}x{inner_h}:rate=15:duration={duration}",
-            "-vf", f"pad={out_w}:{out_h}:{pad_x}:{pad_y}:black",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(dest),
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size={inner_w}x{inner_h}:rate=15:duration={duration}",
+            "-vf",
+            f"pad={out_w}:{out_h}:{pad_x}:{pad_y}:black",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(dest),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     return dest
 
@@ -78,19 +88,40 @@ def _still_gradient_video(dest, w=1920, h=1080, duration=6.0):
     still = dest.with_suffix(".png")
     subprocess.run(
         [
-            FFMPEG, "-y", "-f", "lavfi",
-            "-i", f"gradients=s={w}x{h}:c0=black:c1=white:x0=0:y0={h // 2}"
-                  f":x1={w - 1}:y1={h // 2}:d=1:nb_colors=2",
-            "-frames:v", "1", str(still),
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"gradients=s={w}x{h}:c0=black:c1=white:x0=0:y0={h // 2}"
+            f":x1={w - 1}:y1={h // 2}:d=1:nb_colors=2",
+            "-frames:v",
+            "1",
+            str(still),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         [
-            FFMPEG, "-y", "-loop", "1", "-i", str(still), "-t", str(duration),
-            "-r", "25", "-pix_fmt", "yuv420p", "-c:v", "libx264", str(dest),
+            FFMPEG,
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            str(still),
+            "-t",
+            str(duration),
+            "-r",
+            "25",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(dest),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     return dest
 
@@ -101,13 +132,25 @@ def _mean_luma(video, at, band):
     height = bottom - top
     out = subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-ss", str(at), "-i", str(video),
-            "-frames:v", "1",
-            "-vf", f"crop=iw:{height}:0:{top},format=gray",
-            "-f", "rawvideo", "-",
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            str(at),
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"crop=iw:{height}:0:{top},format=gray",
+            "-f",
+            "rawvideo",
+            "-",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     data = out.stdout
     assert data, "no pixels decoded"
@@ -123,7 +166,7 @@ def _zoom_at(filter_string, on):
     """
     expr = filter_string.split("z='", 1)[1].split("'", 1)[0]
     assert "if(" not in expr and "pow(" not in expr, f"not arithmetic: {expr}"
-    return eval(expr, {"__builtins__": {}}, {"on": on})  # noqa: S307 - fixed local input
+    return eval(expr, {"__builtins__": {}}, {"on": on})  # fixed local input
 
 
 def _bright_fraction(video, at, band, threshold=240):
@@ -131,13 +174,25 @@ def _bright_fraction(video, at, band, threshold=240):
     top, bottom = band
     out = subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-ss", str(at), "-i", str(video),
-            "-frames:v", "1",
-            "-vf", f"crop=iw:{bottom - top}:0:{top},format=gray",
-            "-f", "rawvideo", "-",
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            str(at),
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"crop=iw:{bottom - top}:0:{top},format=gray",
+            "-f",
+            "rawvideo",
+            "-",
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     data = out.stdout
     assert data, "no pixels decoded"
@@ -177,11 +232,20 @@ def test_v16_reports_nothing_on_a_clip_with_no_bars(tmp_path):
     video = tmp_path / "clean.mp4"
     subprocess.run(
         [
-            FFMPEG, "-y", "-f", "lavfi",
-            "-i", "testsrc=size=1280x720:rate=15:duration=3",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(video),
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=1280x720:rate=15:duration=3",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(video),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     assert detect_letterbox(video) is None
 
@@ -211,7 +275,13 @@ def test_v16_crop_is_confined_to_the_content_rectangle():
     """
     centers = [Center(t / 4, 540, 30) for t in range(8)]
     script = build_sendcmd(
-        centers, 540, 540, 960, 540, origin_x=60, origin_y=270,
+        centers,
+        540,
+        540,
+        960,
+        540,
+        origin_x=60,
+        origin_y=270,
     )
     ys = [int(line.split(" y ")[1].rstrip(";")) for line in script.strip().splitlines()]
     assert ys, "no commands emitted"
@@ -383,12 +453,22 @@ def test_v8_a_higher_rate_produces_more_crop_updates():
         boxes=[FaceBox(t / 10, 400 + t * 5, 400, 160, 160) for t in range(60)],
     )
     slow = build_region_centers(
-        track, src_w=1920, src_h=1080, dst_w=540, dst_h=960,
-        duration=6.0, command_fps=12.0,
+        track,
+        src_w=1920,
+        src_h=1080,
+        dst_w=540,
+        dst_h=960,
+        duration=6.0,
+        command_fps=12.0,
     )
     fast = build_region_centers(
-        track, src_w=1920, src_h=1080, dst_w=540, dst_h=960,
-        duration=6.0, command_fps=24.0,
+        track,
+        src_w=1920,
+        src_h=1080,
+        dst_w=540,
+        dst_h=960,
+        duration=6.0,
+        command_fps=24.0,
     )
     assert len(fast) > len(slow)
     # Same span either way - a finer grid, not a longer one.
@@ -517,8 +597,12 @@ def test_v8_the_command_rate_setting_reaches_the_follow_active_path(monkeypatch)
     assoc = Association(by_turn={0: "t0"}, unassociated=[], shown_order=["t0"])
     turns = [Speaker_Turn("S0", 0.0, 6.0)]
     common = dict(
-        src_w=1920, src_h=1080, crop_w=608, crop_h=1080,
-        intensity="standard", duration=6.0,
+        src_w=1920,
+        src_h=1080,
+        crop_w=608,
+        crop_h=1080,
+        intensity="standard",
+        duration=6.0,
     )
 
     monkeypatch.setattr(app_settings, "reframe_command_fps", 12.0, raising=False)
@@ -583,8 +667,13 @@ def test_v6_the_layout_builder_chooses_the_grid_for_a_portrait_target(n):
     turns = [Speaker_Turn(f"S{i}", float(i), float(i) + 1.0) for i in range(n)]
 
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080,
+        turns,
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
         max_regions=n,
     )
     assert len(regions) == n
@@ -602,13 +691,17 @@ def test_v6_a_two_up_portrait_layout_still_stacks():
     """V6 must not change the 2-up case, which is the default and the shipped behaviour."""
     shown = ["t0", "t1"]
     tracks = [_track(tid, 400 + 600 * i, 400) for i, tid in enumerate(shown)]
-    assoc = Association(
-        by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown)
-    )
+    assoc = Association(by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown))
     turns = [Speaker_Turn("S0", 0.0, 1.0), Speaker_Turn("S1", 1.0, 2.0)]
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080, max_regions=2,
+        turns,
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
+        max_regions=2,
     )
     assert len(regions) == 2
     for r in regions:
@@ -630,8 +723,14 @@ def test_v6_a_landscape_target_keeps_its_side_by_side_layout():
     )
     turns = [Speaker_Turn(f"S{i}", float(i), float(i) + 1.0) for i in range(3)]
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1920, target_h=1080, src_w=1920, src_h=1080, max_regions=3,
+        turns,
+        assoc,
+        tracks,
+        target_w=1920,
+        target_h=1080,
+        src_w=1920,
+        src_h=1080,
+        max_regions=3,
     )
     assert len(regions) == 3
     for r in regions:
@@ -654,14 +753,18 @@ def test_v5_the_layout_builder_attaches_a_centre_path_to_each_tile():
         )
         for i, tid in enumerate(shown)
     ]
-    assoc = Association(
-        by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown)
-    )
+    assoc = Association(by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown))
     turns = [Speaker_Turn("S0", 0.0, 3.0), Speaker_Turn("S1", 3.0, 6.0)]
 
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080, max_regions=2,
+        turns,
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
+        max_regions=2,
         duration=6.0,
     )
     assert len(regions) == 2
@@ -680,13 +783,17 @@ def test_v5_no_duration_means_the_previous_static_layout():
         )
         for i, tid in enumerate(shown)
     ]
-    assoc = Association(
-        by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown)
-    )
+    assoc = Association(by_turn={0: "t0", 1: "t1"}, unassociated=[], shown_order=list(shown))
     turns = [Speaker_Turn("S0", 0.0, 3.0), Speaker_Turn("S1", 3.0, 6.0)]
     regions = build_split_screen_layout(
-        turns, assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080, max_regions=2,
+        turns,
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
+        max_regions=2,
     )
     assert all(r.centers == () for r in regions)
 
@@ -700,17 +807,36 @@ def test_v6_the_grid_filtergraph_actually_renders(tmp_path, n):
     tracks = {tid: _track(tid, 300 + 400 * i, 400) for i, tid in enumerate(shown)}
     regions = _grid_regions(shown, tracks, 1080, 1920, 1920, 1080)
     _inputs, graph, _notes = build_reframe_filter(
-        "split_screen", regions=regions, crop_w=0, crop_h=0,
-        src_w=1920, src_h=1080, target_w=1080, target_h=1920,
+        "split_screen",
+        regions=regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1080,
+        target_h=1920,
     )
     out = tmp_path / f"grid{n}.mp4"
     subprocess.run(
         [
-            FFMPEG, "-y", "-i", str(src), "-filter_complex", graph,
-            "-map", "[vout]", "-frames:v", "10",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(out),
+            FFMPEG,
+            "-y",
+            "-i",
+            str(src),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-frames:v",
+            "10",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(out),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     assert probe_size(out) == (1080, 1920)
 
@@ -728,8 +854,13 @@ def test_v5_a_tile_gets_a_centre_path_that_follows_its_own_track():
         boxes=[FaceBox(t / 2, 200 + int(t * 60), 320, 160, 160) for t in range(12)],
     )
     centers = build_region_centers(
-        moving, src_w=1920, src_h=1080, dst_w=540, dst_h=960,
-        duration=6.0, command_fps=10.0,
+        moving,
+        src_w=1920,
+        src_h=1080,
+        dst_w=540,
+        dst_h=960,
+        duration=6.0,
+        command_fps=10.0,
     )
     assert centers, "no path produced for a track that clearly moves"
     assert centers[-1].cx > centers[0].cx, "the path did not follow the subject"
@@ -743,8 +874,13 @@ def test_v5_the_path_is_clamped_inside_the_source_frame():
         boxes=[FaceBox(t / 2, -400, -400, 160, 160) for t in range(6)],
     )
     centers = build_region_centers(
-        off, src_w=1920, src_h=1080, dst_w=540, dst_h=960,
-        duration=3.0, command_fps=10.0,
+        off,
+        src_w=1920,
+        src_h=1080,
+        dst_w=540,
+        dst_h=960,
+        duration=3.0,
+        command_fps=10.0,
     )
     assert centers
     for c in centers:
@@ -754,12 +890,15 @@ def test_v5_the_path_is_clamped_inside_the_source_frame():
 
 def test_v5_no_track_or_no_duration_means_a_static_tile():
     """Falls back to exactly the pre-V5 behaviour rather than inventing a path."""
-    assert build_region_centers(
-        None, src_w=1920, src_h=1080, dst_w=540, dst_h=960, duration=6.0
-    ) == ()
-    assert build_region_centers(
-        _track("t0", 400, 400), src_w=1920, src_h=1080, dst_w=540, dst_h=960, duration=0.0
-    ) == ()
+    assert (
+        build_region_centers(None, src_w=1920, src_h=1080, dst_w=540, dst_h=960, duration=6.0) == ()
+    )
+    assert (
+        build_region_centers(
+            _track("t0", 400, 400), src_w=1920, src_h=1080, dst_w=540, dst_h=960, duration=0.0
+        )
+        == ()
+    )
 
 
 def test_v5_each_tile_addresses_its_own_crop_instance(tmp_path):
@@ -770,12 +909,20 @@ def test_v5_each_tile_addresses_its_own_crop_instance(tmp_path):
     """
     regions = [
         Region(0, 0, 1080, 960, 480, 270, "t0", (Center(0.0, 300, 270), Center(1.0, 600, 270))),
-        Region(0, 960, 1080, 960, 1400, 270, "t1", (Center(0.0, 1500, 270), Center(1.0, 1200, 270))),
+        Region(
+            0, 960, 1080, 960, 1400, 270, "t1", (Center(0.0, 1500, 270), Center(1.0, 1200, 270))
+        ),
     ]
     tiles = [str(tmp_path / "tile0.cmd"), str(tmp_path / "tile1.cmd")]
     _inputs, graph, _notes = build_reframe_filter(
-        "split_screen", regions=regions, crop_w=0, crop_h=0,
-        src_w=1920, src_h=1080, target_w=1080, target_h=1920,
+        "split_screen",
+        regions=regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1080,
+        target_h=1920,
         tile_sendcmd_paths=tiles,
     )
     assert "crop@t0" in graph and "crop@t1" in graph
@@ -793,8 +940,14 @@ def test_v5_a_static_region_emits_no_sendcmd(tmp_path):
         Region(0, 960, 1080, 960, 1400, 270, "t1"),
     ]
     _inputs, graph, _notes = build_reframe_filter(
-        "split_screen", regions=regions, crop_w=0, crop_h=0,
-        src_w=1920, src_h=1080, target_w=1080, target_h=1920,
+        "split_screen",
+        regions=regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1080,
+        target_h=1920,
         tile_sendcmd_paths=[str(tmp_path / "a.cmd"), str(tmp_path / "b.cmd")],
     )
     assert "sendcmd" not in graph
@@ -815,25 +968,60 @@ def test_v5_tiles_move_independently_through_real_ffmpeg(tmp_path):
     # over 0..706 and the centres have to stay inside that band to move at all. Centres outside
     # it are clamped - which is correct behaviour, and would make this test silently vacuous.
     regions = [
-        Region(0, 0, 1080, 960, 700, 540, "t0",
-               tuple(Center(i / 4, 700 + 100 * (i / 4), 540) for i in range(0, 25))),
-        Region(0, 960, 1080, 960, 1300, 540, "t1",
-               tuple(Center(i / 4, 1300 - 100 * (i / 4), 540) for i in range(0, 25))),
+        Region(
+            0,
+            0,
+            1080,
+            960,
+            700,
+            540,
+            "t0",
+            tuple(Center(i / 4, 700 + 100 * (i / 4), 540) for i in range(0, 25)),
+        ),
+        Region(
+            0,
+            960,
+            1080,
+            960,
+            1300,
+            540,
+            "t1",
+            tuple(Center(i / 4, 1300 - 100 * (i / 4), 540) for i in range(0, 25)),
+        ),
     ]
     tiles = [str(tmp_path / "t0.cmd"), str(tmp_path / "t1.cmd")]
     _inputs, graph, _notes = build_reframe_filter(
-        "split_screen", regions=regions, crop_w=0, crop_h=0,
-        src_w=1920, src_h=1080, target_w=1080, target_h=1920,
+        "split_screen",
+        regions=regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1080,
+        target_h=1920,
         tile_sendcmd_paths=tiles,
     )
     out = tmp_path / "out.mp4"
     subprocess.run(
         [
-            FFMPEG, "-y", "-i", str(src), "-filter_complex", graph,
-            "-map", "[vout]", "-frames:v", "125",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(out),
+            FFMPEG,
+            "-y",
+            "-i",
+            str(src),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-frames:v",
+            "125",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(out),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     assert probe_size(out) == (1080, 1920)
 
@@ -898,9 +1086,7 @@ def test_v14_position_arguments_are_numeric():
 
 def test_v14_writes_a_standalone_ass_that_libass_can_parse(tmp_path):
     """Standalone so the card is independent of captions being on, or engine-owned."""
-    path = cap.write_end_card_ass(
-        tmp_path / "end.ass", 30.0, text="follow for more", seconds=2.0
-    )
+    path = cap.write_end_card_ass(tmp_path / "end.ass", 30.0, text="follow for more", seconds=2.0)
     assert path is not None
     body = path.read_text(encoding="utf-8")
     assert "[Script Info]" in body
@@ -929,24 +1115,42 @@ def test_v14_the_card_renders_through_libass(tmp_path):
     src = tmp_path / "grey.mp4"
     subprocess.run(
         [
-            FFMPEG, "-y", "-f", "lavfi",
-            "-i", "color=c=gray:s=1080x1920:r=25:d=4",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(src),
+            FFMPEG,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:s=1080x1920:r=25:d=4",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(src),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
-    path = cap.write_end_card_ass(
-        tmp_path / "end.ass", 4.0, text="follow for more", seconds=2.0
-    )
+    path = cap.write_end_card_ass(tmp_path / "end.ass", 4.0, text="follow for more", seconds=2.0)
     assert path is not None
     out = tmp_path / "carded.mp4"
     subprocess.run(
         [
-            FFMPEG, "-y", "-i", str(src),
-            "-vf", cap.subtitles_filter(path),
-            "-frames:v", "100", "-pix_fmt", "yuv420p", "-c:v", "libx264", str(out),
+            FFMPEG,
+            "-y",
+            "-i",
+            str(src),
+            "-vf",
+            cap.subtitles_filter(path),
+            "-frames:v",
+            "100",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(out),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     # Absent for the first half, present for the last: text appears only over the tail.
     assert _bright_fraction(out, 0.5, (1400, 1700)) < 0.001

@@ -31,7 +31,6 @@ truncated output that a later stage reads as valid - and it belongs with the con
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
 
 class Job_Cancelled(Exception):
@@ -66,7 +65,7 @@ class _Registry:
                 self._events[job_id] = event
         event.set()
 
-    def is_requested(self, job_id: Optional[str]) -> bool:
+    def is_requested(self, job_id: str | None) -> bool:
         if not job_id:
             return False
         with self._lock:
@@ -95,7 +94,7 @@ def request_cancel(job_id: str) -> None:
     _registry.request(job_id)
 
 
-def is_cancelled(job_id: Optional[str]) -> bool:
+def is_cancelled(job_id: str | None) -> bool:
     """Whether a stop has been requested for ``job_id``."""
     return _registry.is_requested(job_id)
 
@@ -110,7 +109,7 @@ def reset() -> None:
     _registry.reset()
 
 
-def checkpoint(job_id: Optional[str]) -> None:
+def checkpoint(job_id: str | None) -> None:
     """Raise :class:`Job_Cancelled` if ``job_id`` has been asked to stop.
 
     Safe to call anywhere, including with ``None`` - a pipeline run outside a job (the smoke

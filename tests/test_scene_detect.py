@@ -40,10 +40,26 @@ def _clip(tmp_path, colours, *, seconds=4.0, fps=25):
     for index, colour in enumerate(colours):
         part = tmp_path / f"part{index}.mp4"
         subprocess.run(
-            [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-f", "lavfi", "-i", f"color={colour}:s=320x240:d={seconds}:r={fps}",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", str(part)],
-            check=True, capture_output=True, timeout=120,
+            [
+                FFMPEG,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color={colour}:s=320x240:d={seconds}:r={fps}",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+                str(part),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
         )
         parts.append(part)
 
@@ -51,10 +67,30 @@ def _clip(tmp_path, colours, *, seconds=4.0, fps=25):
     listing.write_text("".join(f"file '{p.name}'\n" for p in parts), encoding="utf-8")
     out = tmp_path / f"{'_'.join(colours)}.mp4"
     subprocess.run(
-        [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-f", "concat", "-safe", "0", "-i", str(listing),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps), "-y", str(out)],
-        check=True, capture_output=True, timeout=180,
+        [
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(listing),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            str(fps),
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
     )
     return out
 
@@ -126,7 +162,7 @@ def test_cuts_are_found_at_the_right_absolute_times(tmp_path):
     from 3.0 s comes back as 1.0. Failing to add the offset would snap every boundary towards the
     start of the video, and the numbers would still look plausible.
     """
-    video = _clip(tmp_path, ["black", "gray", "white"])   # cuts at 4 s and 8 s
+    video = _clip(tmp_path, ["black", "gray", "white"])  # cuts at 4 s and 8 s
 
     assert scene_detect.detect_cuts(video, 4.5) == [4.0]
     assert scene_detect.detect_cuts(video, 7.5) == [8.0]
@@ -169,8 +205,8 @@ def test_detection_failures_return_no_cuts(tmp_path):
 @pytest.mark.real_binary
 def test_candidates_are_snapped_in_place(tmp_path):
     video = _clip(tmp_path, ["black", "gray", "white"])
-    mid_shot = Candidate(4.6, 11.0)     # 0.6 s into the second shot
-    clean = Candidate(2.0, 3.5)         # nowhere near a cut
+    mid_shot = Candidate(4.6, 11.0)  # 0.6 s into the second shot
+    clean = Candidate(2.0, 3.5)  # nowhere near a cut
 
     moved = scene_detect.snap_candidates(video, [mid_shot, clean])
 
@@ -224,6 +260,8 @@ def test_the_selector_snaps_what_it_returns(tmp_path):
     # Every start is either untouched or exactly on a detected cut - never somewhere new.
     for candidate in found:
         cuts = scene_detect.detect_cuts(video, candidate.start)
-        assert (not cuts) or candidate.start in cuts or all(
-            abs(candidate.start - cut) > settings.scene_snap_max_shift_s for cut in cuts
+        assert (
+            (not cuts)
+            or candidate.start in cuts
+            or all(abs(candidate.start - cut) > settings.scene_snap_max_shift_s for cut in cuts)
         ), (candidate.start, cuts)

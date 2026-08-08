@@ -14,6 +14,7 @@ Pipeline:
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,8 +24,21 @@ from worker.ffmpeg_utils import _run, aac_args, h264_args
 # Disfluencies removed by default. Kept deliberately conservative so real words
 # (e.g. "like" as a verb) are never cut.
 FILLER_WORDS = {
-    "um", "umm", "ummm", "uh", "uhh", "uhhh", "er", "err", "erm",
-    "ah", "ahh", "hmm", "mmm", "mm", "uhm",
+    "um",
+    "umm",
+    "ummm",
+    "uh",
+    "uhh",
+    "uhhh",
+    "er",
+    "err",
+    "erm",
+    "ah",
+    "ahh",
+    "hmm",
+    "mmm",
+    "mm",
+    "uhm",
 }
 
 _WORD_RE = re.compile(r"[a-z']+")
@@ -172,9 +186,14 @@ def rebase_words(words: list, keeps: list[Interval]):
             if ks <= mid < ke:
                 ns = new_off + (max(ws, ks) - ks)
                 ne = new_off + (min(we, ke) - ks)
-                out.append(Word(start=round(ns, 3), end=round(max(ns, ne), 3),
-                                text=getattr(w, "text", ""),
-                                probability=getattr(w, "probability", 1.0)))
+                out.append(
+                    Word(
+                        start=round(ns, 3),
+                        end=round(max(ns, ne), 3),
+                        text=getattr(w, "text", ""),
+                        probability=getattr(w, "probability", 1.0),
+                    )
+                )
                 break
     return out
 
@@ -211,7 +230,13 @@ def _seam_fades(duration: float, fade_s: float, *, lead: bool, tail: bool) -> st
 
 
 def apply_keep_intervals(
-    source: str | Path, keeps: list[Interval], dest: str | Path
+    source: str | Path,
+    keeps: list[Interval],
+    dest: str | Path,
+    *,
+    delivered_fps: int | None = None,
+    keyframe_seconds: float | None = None,
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Concatenate ``keeps`` from ``source`` into ``dest`` in one ffmpeg pass.
 
@@ -245,12 +270,26 @@ def apply_keep_intervals(
     graph = ";".join(parts + [concat])
 
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-filter_complex", graph,
-        "-map", "[v]", "-map", "[a]",
-        *h264_args(normalise_fps=True, vbv_cap=True),
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-filter_complex",
+        graph,
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        *h264_args(
+            normalise_fps=True,
+            vbv_cap=True,
+            delivered_fps=delivered_fps,
+            keyframe_seconds=keyframe_seconds,
+            colour_tags=colour_tags,
+        ),
         *aac_args(),
-        "-movflags", "+faststart",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     _run(cmd)

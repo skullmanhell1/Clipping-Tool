@@ -1,4 +1,5 @@
 """Tests for the publish manager: routing, scheduling, and throttling."""
+
 from __future__ import annotations
 
 import time
@@ -24,8 +25,14 @@ def test_submit_routes_via_campaign(tmp_path, fake_clip, video_file):
         "camp", {"youtube": {"account_id": "chan9", "target_type": "", "target_id": ""}}
     )
 
-    ids = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                         platforms=[], campaign_id=campaign.id, mode="auto")
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=video_file,
+        platforms=[],
+        campaign_id=campaign.id,
+        mode="auto",
+    )
     assert len(ids) == 1
     attempt = store.get_attempt(ids[0])
     assert attempt["platform"] == "youtube"
@@ -35,17 +42,27 @@ def test_submit_routes_via_campaign(tmp_path, fake_clip, video_file):
 
 def test_submit_skips_unknown_platform(tmp_path, fake_clip, video_file):
     manager, store = _manager(tmp_path, {"youtube": FakePublisher("youtube")})
-    ids = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                         platforms=["youtube", "myspace"], mode="auto")
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=video_file,
+        platforms=["youtube", "myspace"],
+        mode="auto",
+    )
     assert len(ids) == 1
 
 
 def test_scheduled_attempt_not_due_until_time(tmp_path, fake_clip, video_file):
     pub = FakePublisher("x")
     manager, store = _manager(tmp_path, {"x": pub})
-    ids = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                         platforms=["x"], mode="auto",
-                         schedule_at=time.time() + 3600)
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=video_file,
+        platforms=["x"],
+        mode="auto",
+        schedule_at=time.time() + 3600,
+    )
     assert store.get_attempt(ids[0])["state"] == "scheduled"
 
     processed = manager.run_due_once()
@@ -56,8 +73,9 @@ def test_scheduled_attempt_not_due_until_time(tmp_path, fake_clip, video_file):
 def test_run_due_executes_and_records_result(tmp_path, fake_clip, video_file):
     pub = FakePublisher("youtube")
     manager, store = _manager(tmp_path, {"youtube": pub})
-    ids = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                         platforms=["youtube"], mode="auto")
+    ids = manager.submit(
+        job_id="j", clip=fake_clip, video_path=video_file, platforms=["youtube"], mode="auto"
+    )
 
     processed = manager.run_due_once()
     assert ids[0] in processed
@@ -77,10 +95,12 @@ def test_throttling_defers_second_post(tmp_path, fake_clip, video_file, monkeypa
     pub = FakePublisher("youtube", min_interval_seconds=999)
     manager, store = _manager(tmp_path, {"youtube": pub})
 
-    first = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                          platforms=["youtube"], mode="auto")[0]
-    second = manager.submit(job_id="j2", clip=fake_clip, video_path=video_file,
-                           platforms=["youtube"], mode="auto")[0]
+    first = manager.submit(
+        job_id="j", clip=fake_clip, video_path=video_file, platforms=["youtube"], mode="auto"
+    )[0]
+    second = manager.submit(
+        job_id="j2", clip=fake_clip, video_path=video_file, platforms=["youtube"], mode="auto"
+    )[0]
 
     manager.run_due_once()
     # Only one should have gone out because of the throttle window.
@@ -93,9 +113,13 @@ def test_throttling_defers_second_post(tmp_path, fake_clip, video_file, monkeypa
 def test_missing_file_marks_failed(tmp_path, fake_clip):
     pub = FakePublisher("youtube")
     manager, store = _manager(tmp_path, {"youtube": pub})
-    ids = manager.submit(job_id="j", clip=fake_clip,
-                         video_path=tmp_path / "does_not_exist.mp4",
-                         platforms=["youtube"], mode="auto")
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=tmp_path / "does_not_exist.mp4",
+        platforms=["youtube"],
+        mode="auto",
+    )
     manager.run_due_once()
     attempt = store.get_attempt(ids[0])
     assert attempt["state"] == "failed"
@@ -109,13 +133,13 @@ def test_failed_publish_result_recorded(tmp_path, fake_clip, video_file):
         result=PublishResult(False, PublishState.FAILED, "tiktok", error="boom"),
     )
     manager, store = _manager(tmp_path, {"tiktok": failing})
-    ids = manager.submit(job_id="j", clip=fake_clip, video_path=video_file,
-                         platforms=["tiktok"], mode="auto")
+    ids = manager.submit(
+        job_id="j", clip=fake_clip, video_path=video_file, platforms=["tiktok"], mode="auto"
+    )
     manager.run_due_once()
     attempt = store.get_attempt(ids[0])
     assert attempt["state"] == "failed"
     assert attempt["error"] == "boom"
-
 
 
 def test_each_publisher_own_rate_limit_governs(tmp_path, fake_clip, video_file, monkeypatch):
@@ -141,8 +165,13 @@ def test_each_publisher_own_rate_limit_governs(tmp_path, fake_clip, video_file, 
     manager, _store = _manager(tmp_path, {"whop": fast, "youtube": slow})
 
     for job in ("j1", "j2"):
-        manager.submit(job_id=job, clip=fake_clip, video_path=video_file,
-                       platforms=["whop", "youtube"], mode="auto")
+        manager.submit(
+            job_id=job,
+            clip=fake_clip,
+            video_path=video_file,
+            platforms=["whop", "youtube"],
+            mode="auto",
+        )
 
     manager.run_due_once()
     manager.run_due_once()
@@ -151,8 +180,7 @@ def test_each_publisher_own_rate_limit_governs(tmp_path, fake_clip, video_file, 
     assert len(slow.published) == 1, "the slow publisher ignored its own rate limit"
 
 
-def test_the_floor_can_still_slow_a_fast_publisher(tmp_path, fake_clip, video_file,
-                                                   monkeypatch):
+def test_the_floor_can_still_slow_a_fast_publisher(tmp_path, fake_clip, video_file, monkeypatch):
     """The floor remains available for operators who want to be more conservative."""
     import publishers.manager as manager_mod
 
@@ -161,8 +189,9 @@ def test_the_floor_can_still_slow_a_fast_publisher(tmp_path, fake_clip, video_fi
     manager, _store = _manager(tmp_path, {"whop": fast})
 
     for job in ("j1", "j2"):
-        manager.submit(job_id=job, clip=fake_clip, video_path=video_file,
-                       platforms=["whop"], mode="auto")
+        manager.submit(
+            job_id=job, clip=fake_clip, video_path=video_file, platforms=["whop"], mode="auto"
+        )
 
     manager.run_due_once()
     manager.run_due_once()
@@ -192,6 +221,7 @@ def _accept_stub_clips(monkeypatch):
     manager-level test that a rejected clip never reaches the publisher.
     """
     monkeypatch.setattr(
-        preflight, "validate_clip",
+        preflight,
+        "validate_clip",
         lambda video_path, platform: preflight.PreflightReport(platform=platform),
     )

@@ -30,7 +30,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 #: Side of the greyscale grid each frame is reduced to before hashing.
 #:
@@ -79,17 +79,27 @@ class FrameHash:
         }
 
 
-def _luma_grid(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> Optional[list[int]]:
+def _luma_grid(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> list[int] | None:
     """The frame at ``at`` reduced to a ``HASH_GRID**2`` list of luma values, or ``None``."""
     result = subprocess.run(
         [
-            ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-ss", f"{max(0.0, float(at)):.3f}", "-i", str(video),
-            "-frames:v", "1",
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{max(0.0, float(at)):.3f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
             # Explicit scaler flags: the default changes between builds, and a different
             # downscale filter is a different hash for identical pixels.
-            "-vf", f"scale={HASH_GRID}:{HASH_GRID}:flags=bilinear,format=gray",
-            "-f", "rawvideo", "-",
+            "-vf",
+            f"scale={HASH_GRID}:{HASH_GRID}:flags=bilinear,format=gray",
+            "-f",
+            "rawvideo",
+            "-",
         ],
         capture_output=True,
     )
@@ -107,7 +117,7 @@ def _luma_grid(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> Optional
 DEFAULT_MEAN_TOLERANCE = 4.0
 
 
-def average_hash(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> Optional[str]:
+def average_hash(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> str | None:
     """The average hash of one frame as hex, or ``None`` when the frame cannot be read."""
     measured = _measure(video, at, ffmpeg=ffmpeg)
     return None if measured is None else measured[0]
@@ -115,7 +125,7 @@ def average_hash(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> Option
 
 def _measure(
     video: str | Path, at: float, ffmpeg: str = "ffmpeg"
-) -> Optional[tuple[str, float, float]]:
+) -> tuple[str, float, float] | None:
     """``(average_hash, mean_luma, luma_spread)`` for one frame, or ``None``."""
     grid = _luma_grid(video, at, ffmpeg=ffmpeg)
     if grid is None:
@@ -168,15 +178,17 @@ class Comparison:
 
     def summary(self) -> str:
         if self.ok:
-            return f"matches the golden (worst frame {self.worst}/{HASH_GRID ** 2} bits)"
+            return f"matches the golden (worst frame {self.worst}/{HASH_GRID**2} bits)"
         lines = [
             f"differs from the golden: worst frame {self.worst} bits "
             f"(tolerance {self.tolerance}) or luma beyond tolerance"
         ]
         for entry in self.detail:
-            if (entry["distance"] > self.tolerance
-                    or entry.get("mean_shift", 0) > 0
-                    or entry.get("spread_shift", 0) > 0):
+            if (
+                entry["distance"] > self.tolerance
+                or entry.get("mean_shift", 0) > 0
+                or entry.get("spread_shift", 0) > 0
+            ):
                 lines.append(
                     f"  at {entry['at']:.3f}s: {entry['distance']} bits, "
                     f"luma shift {entry.get('mean_shift', 0)}, "
@@ -202,14 +214,16 @@ def compare(
     if len(actual) != len(golden):
         return Comparison(
             ok=False,
-            worst=HASH_GRID ** 2,
+            worst=HASH_GRID**2,
             tolerance=tolerance,
-            detail=[{
-                "at": 0.0,
-                "distance": HASH_GRID ** 2,
-                "golden": f"{len(golden)} frames",
-                "actual": f"{len(actual)} frames",
-            }],
+            detail=[
+                {
+                    "at": 0.0,
+                    "distance": HASH_GRID**2,
+                    "golden": f"{len(golden)} frames",
+                    "actual": f"{len(actual)} frames",
+                }
+            ],
         )
 
     detail: list[dict[str, Any]] = []
@@ -222,24 +236,24 @@ def compare(
         # change, spread for a contrast change. Neither alone separates a grade from a re-encode.
         golden_mean = expected.get("mean")
         level_gap = (
-            abs(float(sampled.mean) - float(golden_mean))
-            if golden_mean is not None else 0.0
+            abs(float(sampled.mean) - float(golden_mean)) if golden_mean is not None else 0.0
         )
         golden_spread = expected.get("spread")
         spread_gap = (
-            abs(float(sampled.spread) - float(golden_spread))
-            if golden_spread is not None else 0.0
+            abs(float(sampled.spread) - float(golden_spread)) if golden_spread is not None else 0.0
         )
         if level_gap > mean_tolerance or spread_gap > mean_tolerance:
             level_ok = False
-        detail.append({
-            "at": sampled.at,
-            "distance": gap,
-            "golden": expected.get("hash"),
-            "actual": sampled.hash,
-            "mean_shift": round(level_gap, 2),
-            "spread_shift": round(spread_gap, 2),
-        })
+        detail.append(
+            {
+                "at": sampled.at,
+                "distance": gap,
+                "golden": expected.get("hash"),
+                "actual": sampled.hash,
+                "mean_shift": round(level_gap, 2),
+                "spread_shift": round(spread_gap, 2),
+            }
+        )
     return Comparison(
         ok=worst <= tolerance and level_ok,
         worst=worst,
@@ -248,7 +262,7 @@ def compare(
     )
 
 
-def load_golden(path: str | Path) -> Optional[list[dict[str, Any]]]:
+def load_golden(path: str | Path) -> list[dict[str, Any]] | None:
     """Read a golden file, or ``None`` when it does not exist yet."""
     path = Path(path)
     if not path.is_file():

@@ -1,4 +1,5 @@
 """Tests for the runtime-mutable config store."""
+
 from __future__ import annotations
 
 from runtime_config import RETENTION_CHOICES, RuntimeConfigStore
@@ -14,8 +15,7 @@ def test_defaults_seed_from_config(tmp_path):
 def test_update_persists(tmp_path):
     path = tmp_path / "rc.json"
     store = RuntimeConfigStore(path)
-    store.update(retention_days=14, auto_delete_temp=False,
-                 delete_local_after_publish=True)
+    store.update(retention_days=14, auto_delete_temp=False, delete_local_after_publish=True)
     assert path.exists()
     # A fresh store reads the persisted values.
     reloaded = RuntimeConfigStore(path)

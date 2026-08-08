@@ -186,7 +186,11 @@ def _build(raw):
 # Feature: clip-presentation-polish, Property 1: cue constraints never produce overlapping cues
 # and never alter word-span times.
 @settings(max_examples=100, deadline=None)
-@given(raw=_cue_lists, min_seconds=st.floats(min_value=0.0, max_value=3.0), rate=st.floats(min_value=0.0, max_value=30.0))
+@given(
+    raw=_cue_lists,
+    min_seconds=st.floats(min_value=0.0, max_value=3.0),
+    rate=st.floats(min_value=0.0, max_value=30.0),
+)
 def test_property_constraints_never_overlap_and_never_touch_word_spans(raw, min_seconds, rate):
     """R10.4. The two invariants that outrank every legibility goal.
 
@@ -253,9 +257,9 @@ def test_a_multi_word_proper_noun_is_not_split_when_an_alternative_exists():
     """R5.3, via a capitalised-run proxy — no model, no network (R5.7)."""
     words = ["meeting", "with", "Ada", "Lovelace", "tomorrow"]
     position = cc.choose_break(words, fit=_Budget(40), enabled=True)
-    assert not (
-        cc._is_capitalised(words[position - 1]) and cc._is_capitalised(words[position])
-    ), f"broke inside a proper noun at {position}"
+    assert not (cc._is_capitalised(words[position - 1]) and cc._is_capitalised(words[position])), (
+        f"broke inside a proper noun at {position}"
+    )
 
 
 def test_the_width_budget_outranks_the_linguistic_preference():

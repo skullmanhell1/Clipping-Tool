@@ -26,8 +26,9 @@ be indistinguishable from one that made it better.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any
 
 #: A window shorter than this is too small for a rate to mean anything: two words in 0.3 s is
 #: 6.7 words per second, which describes a measurement artefact rather than fast speech.
@@ -61,13 +62,13 @@ class SpeechRate:
         }
 
 
-def _bounds(word: Any) -> Optional[tuple[float, float]]:
+def _bounds(word: Any) -> tuple[float, float] | None:
     try:
-        start = float(getattr(word, "start"))
-        end = float(getattr(word, "end"))
+        start = float(word.start)
+        end = float(word.end)
     except (AttributeError, TypeError, ValueError):
         return None
-    if not (start == start and end == end):     # NaN
+    if not (start == start and end == end):  # NaN
         return None
     return start, end
 
@@ -95,7 +96,7 @@ def source_median_rate(
     duration: float,
     *,
     window: float = 30.0,
-) -> Optional[float]:
+) -> float | None:
     """The source's own median speech rate, in words per second.
 
     Measured over fixed ``window``-second slices and taken as a **median**, not a mean: a long
@@ -129,7 +130,7 @@ def speech_rate(
     start: float,
     end: float,
     *,
-    baseline: Optional[float] = None,
+    baseline: float | None = None,
 ) -> SpeechRate:
     """Speech-rate features for ``[start, end]`` (S4).
 

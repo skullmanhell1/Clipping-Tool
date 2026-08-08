@@ -98,7 +98,9 @@ def main() -> int:
     if args.check:
         missing = [g for g in glyphs if not (assets / emoji_filename(g)).exists()]
         if missing:
-            print(f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}")
+            print(
+                f"missing {len(missing)} of {len(glyphs)} {style.name} emoji: {' '.join(missing)}"
+            )
             print(f"run: python scripts/fetch_emoji.py --style {style.name}")
             return 1
         print(f"all {len(glyphs)} {style.name} emoji vendored")
@@ -114,7 +116,7 @@ def main() -> int:
         try:
             dest.write_bytes(_get(style.remote_url(glyph)))
             fetched += 1
-        except Exception as exc:  # noqa: BLE001 - report and continue over the whole set
+        except Exception as exc:  # report and continue over the whole set
             failures.append(f"{glyph} ({style.remote_filename(glyph)}): {exc}")
 
     licence_url, licence_name = LICENCE_URLS[style.name]
@@ -122,7 +124,7 @@ def main() -> int:
     if not licence.exists() or args.force:
         try:
             licence.write_bytes(_get(licence_url))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"LICENSE: {exc}")
 
     print(f"fetched {fetched}, already present {skipped}, failed {len(failures)}")

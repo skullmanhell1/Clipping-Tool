@@ -30,7 +30,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from config import settings
 
@@ -40,15 +41,57 @@ _TOKEN_RE = re.compile(r"[a-z0-9']+")
 #: stop list starts discarding the content words that make the comparison work.
 _COMMON = frozenset(
     {
-        "the", "a", "an", "and", "or", "but", "if", "of", "to", "in", "on", "at", "for",
-        "is", "was", "are", "were", "be", "been", "it", "its", "this", "that", "these",
-        "those", "i", "you", "he", "she", "we", "they", "not", "so", "do", "did", "does",
-        "have", "has", "had", "will", "would", "can", "could", "just", "like", "with",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "if",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "for",
+        "is",
+        "was",
+        "are",
+        "were",
+        "be",
+        "been",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "you",
+        "he",
+        "she",
+        "we",
+        "they",
+        "not",
+        "so",
+        "do",
+        "did",
+        "does",
+        "have",
+        "has",
+        "had",
+        "will",
+        "would",
+        "can",
+        "could",
+        "just",
+        "like",
+        "with",
     }
 )
 
 
-def _span(candidate: Any) -> Optional[tuple[float, float]]:
+def _span(candidate: Any) -> tuple[float, float] | None:
     try:
         start = float(candidate.start)
         end = float(candidate.end)
@@ -126,9 +169,9 @@ def text_similarity(left: str, right: str) -> float:
 def deduplicate(
     candidates: Sequence[Any],
     *,
-    max_overlap: Optional[float] = None,
-    max_similarity: Optional[float] = None,
-    limit: Optional[int] = None,
+    max_overlap: float | None = None,
+    max_similarity: float | None = None,
+    limit: int | None = None,
 ) -> list[Any]:
     """Drop candidates that duplicate a higher-ranked one, preserving input order (S15).
 
