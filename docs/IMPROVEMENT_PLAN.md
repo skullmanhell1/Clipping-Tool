@@ -8,8 +8,8 @@ Every claim about our own code below was verified by reading it, and the current
 quoted exactly. Nothing here is aspirational description — where something does not exist,
 it says so.
 
-**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 140 of the 154
-items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 14 that remain and why each was
+**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 142 of the 154
+items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 12 that remain and why each was
 left; `CHANGELOG.md` is the record of what landed.
 
 Do not recount by grepping for item IDs without reading the traps `SESSION_HANDOFF.md` §"Start

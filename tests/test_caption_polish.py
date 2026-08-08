@@ -30,8 +30,7 @@ class _W:
 
 def _words(text: str, step: float = 0.4) -> list[_W]:
     return [
-        _W(word, index * step, index * step + step * 0.9)
-        for index, word in enumerate(text.split())
+        _W(word, index * step, index * step + step * 0.9) for index, word in enumerate(text.split())
     ]
 
 
@@ -63,7 +62,8 @@ def test_c6_width_scales_with_font_size():
 def test_c6_every_vendored_preset_font_can_be_measured():
     """A preset whose font cannot be measured silently falls back to a character budget."""
     unmeasurable = [
-        preset.font for preset in BUILTIN_PRESETS.values()
+        preset.font
+        for preset in BUILTIN_PRESETS.values()
         if tm.metrics_for_font(preset.font) is None
     ]
     assert unmeasurable == []
@@ -74,7 +74,10 @@ def test_c6_an_unknown_font_falls_back_rather_than_failing():
     assert tm.metrics_for_font("No Such Face") is None
     lines = tm.wrap_text(
         "one two three four five six seven eight nine ten",
-        font="No Such Face", font_size=96, max_width_px=900, max_lines=3,
+        font="No Such Face",
+        font_size=96,
+        max_width_px=900,
+        max_lines=3,
     )
     assert len(lines) > 1
 
@@ -97,12 +100,8 @@ def test_c6_words_are_never_split():
 def test_c6_a_condensed_face_fits_more_per_line():
     """The property that makes measurement worth doing at all."""
     text = "This one small change transformed my entire podcast workflow forever"
-    condensed = tm.wrap_word_groups(
-        text.split(), font="Anton", font_size=96, max_width_px=900
-    )
-    wide = tm.wrap_word_groups(
-        text.split(), font="Archivo Black", font_size=96, max_width_px=900
-    )
+    condensed = tm.wrap_word_groups(text.split(), font="Anton", font_size=96, max_width_px=900)
+    wide = tm.wrap_word_groups(text.split(), font="Archivo Black", font_size=96, max_width_px=900)
     assert len(condensed[0]) > len(wide[0])
 
 
@@ -110,9 +109,7 @@ def test_c6_letter_spacing_and_scale_x_widen_the_measurement():
     """Both change the drawn width, so a wrap that ignored them would overflow."""
     words = "one two three four five six".split()
     plain = tm.wrap_word_groups(words, font="Anton", font_size=96, max_width_px=600)
-    spaced = tm.wrap_word_groups(
-        words, font="Anton", font_size=96, max_width_px=600, spacing=12
-    )
+    spaced = tm.wrap_word_groups(words, font="Anton", font_size=96, max_width_px=600, spacing=12)
     stretched = tm.wrap_word_groups(
         words, font="Anton", font_size=96, max_width_px=600, scale_x=160
     )
@@ -123,9 +120,7 @@ def test_c6_letter_spacing_and_scale_x_widen_the_measurement():
 def test_c6_word_groups_never_drop_a_word():
     """A silently truncated caption is worse than one line more than requested."""
     words = ("word " * 40).split()
-    groups = tm.wrap_word_groups(
-        words, font="Anton", font_size=96, max_width_px=500, max_lines=2
-    )
+    groups = tm.wrap_word_groups(words, font="Anton", font_size=96, max_width_px=500, max_lines=2)
     assert sum(len(group) for group in groups) == len(words)
 
 
@@ -148,11 +143,13 @@ def test_c6_the_ass_carries_real_line_breaks(tmp_path):
 def test_c6_a_short_cue_gets_no_line_break(tmp_path):
     """The wrap is a budget, not a target: one line stays one line."""
     preset, _ = resolve_preset("karaoke")
-    cues = cap.words_to_cues(_words("two words"), max_words=6,
-                             fit=cap.TextFit.for_preset(preset, video_width=1080))
+    cues = cap.words_to_cues(
+        _words("two words"), max_words=6, fit=cap.TextFit.for_preset(preset, video_width=1080)
+    )
     dest = cap.build_ass(cues, tmp_path / "c.ass", preset=preset, clip_duration=2.0)
     dialogue = [
-        line for line in dest.read_text(encoding="utf-8").splitlines()
+        line
+        for line in dest.read_text(encoding="utf-8").splitlines()
         if line.startswith("Dialogue")
     ]
     assert dialogue
@@ -168,25 +165,35 @@ def test_c6_break_positions_are_measured_from_plain_words_not_tagged_spans(tmp_p
     "no break at all", which was the first version of this test and merely encoded a wrong guess
     about the fixture's width.
     """
-    preset, _ = resolve_preset("karaoke")   # karaoke_fill emits a \kf tag per word
+    preset, _ = resolve_preset("karaoke")  # karaoke_fill emits a \kf tag per word
     text = "alpha beta gamma delta"
     words = _words(text)
     fit = cap.TextFit.for_preset(preset, video_width=1080)
     cues = cap.words_to_cues(words, max_words=12, fit=fit)
     dest = cap.build_ass(cues, tmp_path / "c.ass", preset=preset, clip_duration=3.0)
     dialogue = next(
-        line for line in dest.read_text(encoding="utf-8").splitlines()
+        line
+        for line in dest.read_text(encoding="utf-8").splitlines()
         if line.startswith("Dialogue")
     )
 
-    plain_lines = len(tm.wrap_word_groups(
-        text.split(), font=preset.font, font_size=preset.font_size,
-        max_width_px=fit.max_width_px,
-    ))
+    plain_lines = len(
+        tm.wrap_word_groups(
+            text.split(),
+            font=preset.font,
+            font_size=preset.font_size,
+            max_width_px=fit.max_width_px,
+        )
+    )
     tagged = [f"{{\\kf36}}{word}" for word in text.split()]
-    tagged_lines = len(tm.wrap_word_groups(
-        tagged, font=preset.font, font_size=preset.font_size, max_width_px=fit.max_width_px,
-    ))
+    tagged_lines = len(
+        tm.wrap_word_groups(
+            tagged,
+            font=preset.font,
+            font_size=preset.font_size,
+            max_width_px=fit.max_width_px,
+        )
+    )
     assert tagged_lines > plain_lines, "fixture does not distinguish the two measurements"
     assert dialogue.count("\\N") == plain_lines - 1
 
@@ -195,8 +202,8 @@ def test_c16_cue_length_follows_the_font(tmp_path):
     """A word count cannot decide this: the same three words are a comfortable line in one face
     and an overflowing one in another."""
     words = _words("This one small change transformed my entire podcast workflow forever")
-    condensed, _ = resolve_preset("hormozi")     # Anton
-    wide, _ = resolve_preset("boxed")            # Archivo Black
+    condensed, _ = resolve_preset("hormozi")  # Anton
+    wide, _ = resolve_preset("boxed")  # Archivo Black
     condensed_cues = cap.words_to_cues(
         words, max_words=12, fit=cap.TextFit.for_preset(condensed, video_width=1080)
     )
@@ -224,10 +231,16 @@ def test_c16_a_fitted_cue_never_exceeds_its_line_budget(name):
     )
     for cue in cap.words_to_cues(words, max_words=12, fit=fit):
         text = " ".join(word.text for word in cue.words)
-        needed = len(tm.wrap_word_groups(
-            text.split(), font=fit.font, font_size=fit.font_size,
-            max_width_px=fit.max_width_px, spacing=fit.spacing, scale_x=fit.scale_x,
-        ))
+        needed = len(
+            tm.wrap_word_groups(
+                text.split(),
+                font=fit.font,
+                font_size=fit.font_size,
+                max_width_px=fit.max_width_px,
+                spacing=fit.spacing,
+                scale_x=fit.scale_x,
+            )
+        )
         assert needed <= fit.max_lines, f"{name}: {text!r} needs {needed} lines"
 
 
@@ -245,10 +258,17 @@ def test_c16_without_a_fit_a_cue_can_overflow_its_budget():
     worst = 0
     for cue in cap.words_to_cues(words, max_words=12):
         text = " ".join(word.text for word in cue.words)
-        worst = max(worst, len(tm.wrap_word_groups(
-            text.split(), font=fit.font, font_size=fit.font_size,
-            max_width_px=fit.max_width_px,
-        )))
+        worst = max(
+            worst,
+            len(
+                tm.wrap_word_groups(
+                    text.split(),
+                    font=fit.font,
+                    font_size=fit.font_size,
+                    max_width_px=fit.max_width_px,
+                )
+            ),
+        )
     assert worst > fit.max_lines
 
 
@@ -345,8 +365,9 @@ def test_c17_is_off_by_default():
 
 
 def test_c17_repurposes_the_shadow_slot_as_an_outer_stroke():
-    preset = replace(BUILTIN_PRESETS["karaoke"], outline=4, outline2=12,
-                     outline2_color="&H00FF00FF")
+    preset = replace(
+        BUILTIN_PRESETS["karaoke"], outline=4, outline2=12, outline2_color="&H00FF00FF"
+    )
     fields = cap._preset_style_line(preset, "Anton", 96, 2, 220).split(",")
     assert fields[16] == "4", "the inner stroke should be unchanged"
     assert fields[17] == "12", "the outer stroke should occupy the shadow slot"
@@ -396,8 +417,13 @@ def test_c14_the_new_presets_are_genuinely_different_treatments():
     """A preset whose only difference is a hue is a colour picker pretending to be a style."""
     signatures = {
         (
-            preset.animation, preset.font, preset.uppercase, preset.border_style,
-            bool(preset.word_pill), bool(preset.outline2), preset.max_lines,
+            preset.animation,
+            preset.font,
+            preset.uppercase,
+            preset.border_style,
+            bool(preset.word_pill),
+            bool(preset.outline2),
+            preset.max_lines,
         )
         for preset in BUILTIN_PRESETS.values()
     }
@@ -410,7 +436,8 @@ def test_c14_every_preset_renders_valid_ass(tmp_path, name):
     preset = BUILTIN_PRESETS[name]
     cues = cap.words_to_cues(
         _words("This one change made everything click"),
-        max_words=6, fit=cap.TextFit.for_preset(preset, video_width=1080),
+        max_words=6,
+        fit=cap.TextFit.for_preset(preset, video_width=1080),
     )
     dest = cap.build_ass(
         cues, tmp_path / f"{name}.ass", preset=preset, keyword_indices={2}, clip_duration=3.0
@@ -449,10 +476,25 @@ def test_c18_a_preview_actually_draws_the_caption(tmp_path, name):
     preset = BUILTIN_PRESETS[name]
     band_y = 760 if preset.position == "center" else 1400
     raw = subprocess.run(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-ss", "1.2", "-i", str(out),
-         "-frames:v", "1", "-vf", f"crop=1080:400:0:{band_y},format=gray",
-         "-f", "rawvideo", "-"],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "1.2",
+            "-i",
+            str(out),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"crop=1080:400:0:{band_y},format=gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
     ).stdout
     # The background is mid-grey, so anything far from it is drawn text.
     ink = sum(1 for value in raw if value < 100 or value > 200) / max(1, len(raw))
@@ -484,16 +526,31 @@ def _text_rows(video: Path, at: float, band: tuple[int, int]) -> int:
     """
     top, height = band
     raw = subprocess.run(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-ss", f"{at}", "-i", str(video),
-         "-frames:v", "1", "-vf", f"crop=1080:{height}:0:{top},format=gray",
-         "-f", "rawvideo", "-"],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{at}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"crop=1080:{height}:0:{top},format=gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
     ).stdout
     width = 1080
     rows = 0
     inside = False
     for index in range(height):
-        row = raw[index * width:(index + 1) * width]
+        row = raw[index * width : (index + 1) * width]
         inked = sum(1 for value in row if value < 100 or value > 200) > width * 0.02
         if inked and not inside:
             rows += 1
@@ -617,10 +674,23 @@ def test_c20_samples_the_caption_band_not_the_frame_average(tmp_path):
     caption sits."""
     video = tmp_path / "gradient.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "gradients=s=1080x1920:c0=black:c1=white:x0=540:y0=0:x1=540:y1=1919:d=2",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", str(video)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "gradients=s=1080x1920:c0=black:c1=white:x0=540:y0=0:x1=540:y1=1919:d=2",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(video),
+        ],
+        check=True,
+        capture_output=True,
     )
     band = cc.caption_band("bottom", 1080, 1920)
     sample = cc.sample_background(video, 2.0, band)
@@ -645,10 +715,23 @@ def test_c20_reaches_the_render(tmp_path, monkeypatch, make_video):
     monkeypatch.setattr(settings, "caption_auto_contrast", True, raising=False)
     dark = tmp_path / "dark.mp4"
     subprocess.run(
-        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=black:s=1080x1920:r=25:d=2",
-         "-pix_fmt", "yuv420p", "-c:v", "libx264", str(dark)],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=1080x1920:r=25:d=2",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            str(dark),
+        ],
+        check=True,
+        capture_output=True,
     )
     preset, _ = resolve_preset("karaoke")
     adapted, markers = cc.choose_for_clip(

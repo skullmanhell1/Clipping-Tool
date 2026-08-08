@@ -105,6 +105,91 @@ filter order, and `V21` must hand its consumed margin to reframing or the crop d
 pixels — neither should ride along with a colour change. See
 `.kiro/specs/clip-signal-fidelity/CLOSE_OUT.md`.
 
+### Changed — one formatter, and two rule sets that found real defects (I9)
+
+- **`I9` — `UP` (pyupgrade) and `B` (flake8-bugbear) are enabled, and formatting is now enforced.**
+  761 findings; 831 fixes applied by `ruff --fix` (more fixes than findings, because several
+  rewrites cascade). `ruff format` then reformatted 181 of 235 files. The suite is **2160 passed,
+  0 failed, 0 skipped, 0 warnings** and `mypy` is clean across 101 source files — which is the
+  claim worth making, since `UP045`/`UP006` rewrote type annotations in nearly every module and a
+  formatter is only safe if it is provably behaviour-preserving.
+
+- **`black` was the item's literal instruction and is not what was adopted.** Measured before
+  deciding rather than after: on this tree `ruff format` and `black` disagree on **35 of 195
+  files**, under `black` 24.10 — the version `requirements-dev.txt` actually pinned — and not only
+  under 25.x. The entire disagreement is redundant parentheses around multi-line conditional
+  expressions, which `black` adds and `ruff` does not. Neither output is better, so the decision
+  was never about style.
+
+  It was about how many formatters this repository has. Two that disagree on 35 files, with one
+  enforced in CI and one not, is the same shape as the defects this project keeps finding: one fact
+  stated in two places, where changing one has no effect. Whoever ran the unenforced one would
+  produce a diff CI then rejected. `black` is therefore **removed** from `requirements-dev.txt`
+  rather than left listed and unused — which is exactly what it had been since the first commit.
+  `ruff format` wins the tiebreakers: ruff is already a hard dependency, already blocking, and
+  already carries `line-length = 100`, so the linter and formatter cannot drift on line length the
+  way a separate `[tool.black]` section could.
+
+- **Three rule sets are ignored with reasons, not silently dropped.** `B905` (`zip()` without
+  `strict=`) fires on 33 sites, most of them the pairwise `zip(x, x[1:])` idiom where `strict=True`
+  is actively wrong and `strict=False` is noise. `UP042` (`str, Enum` → `StrEnum`) touches 8 enums
+  that serialise into stored job records, where `StrEnum` differs in `_generate_next_value_` and in
+  how some serialisers treat it — a migration needing its own verification pass, not a lint
+  autofix. `UP031` fires on `struct.pack("<%dh" % n)`, where `%d` is building a binary descriptor
+  rather than formatting prose. `B008` is scoped to `api/main.py` alone, because FastAPI's
+  `File(...)`/`Form(...)` defaults *are* the dependency-injection mechanism.
+
+- **Two real defects, both found by the sweep rather than by review.**
+  - `publishers/preflight.py` caught `except (FFmpegError, Exception)`. `FFmpegError` subclasses
+    `RuntimeError`, so `Exception` already subsumed it and the tuple was one fact stated twice — it
+    read as "handle ffmpeg errors specially, and guard broadly as well" while being identical to
+    `except Exception`. `B014` does not catch this: it matches literal duplicates, not subclass
+    relationships. Removing the redundant arm then made the import dead and `F401` said so, which
+    is the lint chain working as intended.
+  - A lambda in `tests/test_kinetic_compositor.py` closed over the loop variable `available`
+    instead of binding it (`B023`), so both halves of a two-case parity loop patched
+    `font_available` with whatever the *last* iteration set. Bound via a default argument.
+
+- **`RUF100` is enabled, and it is the part of this change that will keep paying.** It reports a
+  `# noqa` that no longer suppresses anything, and it is here *because of* the formatter rather
+  than alongside it. `ruff format` wraps long calls, and a line-scoped suppression does not travel
+  with the code it was written for: four `# noqa: S106` directives in `publishers/` ended up after
+  a closing paren during this sweep, at which point they suppressed nothing and the S106 findings
+  reappeared. Those announced themselves as errors. **The inverse case is the dangerous one** — a
+  suppression left on a line with no violation is invisible, survives indefinitely, and silently
+  hides a real finding the day the code beneath it changes.
+
+  It found **76** such directives. 34 had a written rationale, which was preserved as a plain
+  comment rather than deleted with the directive — `ruff --fix` removes the whole trailing comment,
+  which would have discarded pointers like `# noqa: BLE001 - see below`. 41 had nothing worth
+  keeping. 23 of the total were `E402` inside `tests/`, already covered by `per-file-ignores`, so
+  the directive was pure redundancy. The rest named rules this project never enabled (`BLE001` 34,
+  `N803` 7, `PLC0415` 3) — aspirational suppressions for checks that were not running.
+
+- **Prose can create a blanket suppression, which nothing was checking for.** Two comments
+  discussing `noqa` were being *parsed* as directives. One began `# noqa on the message, not the
+  rule: S608 ...`, which ruff reads as a bare `# noqa` — a blanket suppression of every rule on
+  that line. Harmless here only because it sat on a comment-only line, where `RUF100` could see it
+  was unused; inline after code it would have silenced everything with no signal at all. The other
+  was the long-standing `Invalid # noqa directive` warning on `worker/engines/base.py:58`, which
+  had been emitted on every single lint run and read as cosmetic. Both reworded so the token no
+  longer appears in a parseable position.
+
+- **Markdown is excluded from the formatter, after it rewrote 679 lines of design documents.**
+  Recent ruff versions format fenced Python blocks inside `.md`, so `ruff format .` silently
+  reformatted nine `.kiro/specs/` documents with no Python source involved. Those are records of
+  decisions already taken, and their snippets are frequently not valid complete modules — elided
+  with `...`, cut to the two lines under discussion, or written in the compressed style of the
+  module they describe, which is the same style `publishers/*` is exempted from `E701`/`E702` to
+  preserve. Reflowing them buries the real change in a diff that says nothing and edits history to
+  match today's house style. `[tool.ruff.format] exclude = ["*.md"]`, which also keeps the CI gate
+  stable across ruff upgrades now that the set of file types the formatter claims has changed once.
+
+- **No mutation spec accompanies this batch, deliberately.** The convention is one spec per batch,
+  and it does not apply to a change with no behavioural surface: the only semantic edit is an
+  exception tuple whose two arms were already equivalent. Mutating reformatted code would measure
+  the suite against itself and report a number that means nothing. The evidence here is the 2160
+  green tests and a clean `mypy` over annotations that were rewritten wholesale.
 
 ### Added — transcript-based trimming (U4)
 

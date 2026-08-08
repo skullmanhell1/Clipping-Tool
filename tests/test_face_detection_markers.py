@@ -50,9 +50,7 @@ def test_the_single_speaker_path_records_the_resolved_backend(make_video, tmp_pa
     def detector(_frame):
         return [(600, 300, 120, 120)]
 
-    rf.apply_reframe(
-        src, tmp_path / "out1.mp4", aspect="9:16", detector=detector, notes=notes
-    )
+    rf.apply_reframe(src, tmp_path / "out1.mp4", aspect="9:16", detector=detector, notes=notes)
     assert "face_detector:injected" in notes, notes
     assert not any(n.startswith("face_detector_substituted") for n in notes), notes
 
@@ -87,9 +85,7 @@ def test_a_missing_model_records_the_substitution_naming_both_sides(
     # A real cascade would find nothing in synthetic footage, so the sampler is injected to
     # give the render a face path; the backend under test is the *resolution*, which the
     # sampler does not bypass because it is passed via `backend`.
-    report = rf.sample_face_report(
-        src, sample_fps=2.0, backend="mediapipe", model_dir=empty_models
-    )
+    report = rf.sample_face_report(src, sample_fps=2.0, backend="mediapipe", model_dir=empty_models)
     assert report.resolved_backend == "substituted:mediapipe:haar"
     notes.extend(rf.detector_notes(report))
     assert "face_detector_substituted:mediapipe:haar" in notes, notes
@@ -181,13 +177,11 @@ def test_the_sampling_marker_appears_only_when_the_cap_bound(make_video):
     src = make_video("cap.mp4", duration=4.0, w=320, h=240)
 
     uncapped = rf.sample_face_report(src, sample_fps=2.0, detector=lambda _f: [])
-    assert not any(
-        n.startswith("reframe_sample_rate") for n in rf.detector_notes(uncapped)
-    ), rf.detector_notes(uncapped)
-
-    capped = rf.sample_face_report(
-        src, sample_fps=10.0, max_samples=3, detector=lambda _f: []
+    assert not any(n.startswith("reframe_sample_rate") for n in rf.detector_notes(uncapped)), (
+        rf.detector_notes(uncapped)
     )
+
+    capped = rf.sample_face_report(src, sample_fps=10.0, max_samples=3, detector=lambda _f: [])
     rate = [n for n in rf.detector_notes(capped) if n.startswith("reframe_sample_rate")]
     assert len(rate) == 1, rf.detector_notes(capped)
     assert rate[0].count(".") == 1, rate[0]
@@ -255,12 +249,10 @@ def test_no_rung_raises_out_of_the_geometry_stage(make_video, tmp_path, monkeypa
     src = make_video("rungs.mp4", duration=1.0, w=320, h=240)
     for name in ("haar", "mediapipe", "nonsense"):
         try:
-            rf.apply_reframe(
-                src, tmp_path / f"{name}.mp4", aspect="9:16", backend=name
-            )
+            rf.apply_reframe(src, tmp_path / f"{name}.mp4", aspect="9:16", backend=name)
         except rf.ReframeUnavailable:
             pass  # the expected, handled signal
-        except Exception as exc:  # noqa: BLE001 - the point of the test
+        except Exception as exc:  # the point of the test
             pytest.fail(f"backend {name!r} raised {type(exc).__name__}: {exc}")
 
     # And the missing-model rung, which resolves through settings rather than an argument.
@@ -269,7 +261,7 @@ def test_no_rung_raises_out_of_the_geometry_stage(make_video, tmp_path, monkeypa
         rf.apply_reframe(src, tmp_path / "nomodel.mp4", aspect="9:16", backend="mediapipe")
     except rf.ReframeUnavailable:
         pass
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         pytest.fail(f"missing-model rung raised {type(exc).__name__}: {exc}")
 
 
@@ -297,7 +289,7 @@ def test_the_sendcmd_script_is_identical_with_and_without_the_new_plumbing(
         script = ""
         for part in vf.split(","):
             if part.startswith("sendcmd=f='"):
-                path = part[len("sendcmd=f='"):].rstrip("'").replace("\\", "")
+                path = part[len("sendcmd=f='") :].rstrip("'").replace("\\", "")
                 try:
                     # Read via Path so the handle closes: `warnings = error` turns a leaked
                     # file into a PytestUnraisableExceptionWarning, which fails the run in a
@@ -316,8 +308,12 @@ def test_the_sendcmd_script_is_identical_with_and_without_the_new_plumbing(
     rf.apply_reframe(src, tmp_path / "a.mp4", aspect="9:16", detector=detector)
     notes: list[str] = []
     rf.apply_reframe(
-        src, tmp_path / "b.mp4", aspect="9:16", detector=detector,
-        backend="haar", notes=notes,
+        src,
+        tmp_path / "b.mp4",
+        aspect="9:16",
+        detector=detector,
+        backend="haar",
+        notes=notes,
     )
 
     assert len(captured) == 2

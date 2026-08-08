@@ -43,10 +43,20 @@ COLOUR_ENTRIES = "stream=pix_fmt,profile,color_transfer,color_primaries,color_sp
 def _probe_colour(path) -> dict[str, str]:
     proc = subprocess.run(
         [
-            FFPROBE, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", COLOUR_ENTRIES, "-of", "default=nw=1", str(path),
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            COLOUR_ENTRIES,
+            "-of",
+            "default=nw=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     out: dict[str, str] = {}
@@ -61,13 +71,34 @@ def _hdr_source(path, *, transfer: str = "smpte2084"):
     """A real PQ- or HLG-signalled 10-bit BT.2020 source."""
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=1",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p10le", "-profile:v", "high10",
-            "-color_trc", transfer, "-color_primaries", "bt2020",
-            "-colorspace", "bt2020nc", "-color_range", "tv", str(path),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=25:duration=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-profile:v",
+            "high10",
+            "-color_trc",
+            transfer,
+            "-color_primaries",
+            "bt2020",
+            "-colorspace",
+            "bt2020nc",
+            "-color_range",
+            "tv",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
     return path
@@ -102,8 +133,10 @@ def test_an_hdr_source_is_delivered_as_rec709(tmp_path):
     src = _hdr_source(tmp_path / "pq.mp4")
     info = fu.probe(src)
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
         prober=_prober_all_present(),
     )
     assert plan.source_range is Dynamic_Range.HDR
@@ -130,8 +163,10 @@ def test_hlg_is_delivered_as_rec709_too(tmp_path):
     src = _hdr_source(tmp_path / "hlg.mp4", transfer="arib-std-b67")
     info = fu.probe(src)
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
         prober=_prober_all_present(),
     )
     dest = tmp_path / "delivered_hlg.mp4"
@@ -158,8 +193,10 @@ def test_tone_mapping_measurably_changes_the_picture(tmp_path):
     src = _hdr_source(tmp_path / "pq_pixels.mp4")
     info = fu.probe(src)
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
         prober=_prober_all_present(),
     )
 
@@ -171,10 +208,20 @@ def test_tone_mapping_measurably_changes_the_picture(tmp_path):
     def mean_luma(path) -> float:
         proc = subprocess.run(
             [
-                FFMPEG, "-hide_banner", "-nostats", "-i", str(path),
-                "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-",
+                FFMPEG,
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(path),
+                "-vf",
+                "signalstats,metadata=print:file=-",
+                "-f",
+                "null",
+                "-",
             ],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
         values = [
             float(line.partition("=")[2])
@@ -200,7 +247,10 @@ def test_a_missing_filter_degrades_with_a_named_marker_and_does_not_fail():
     """
     for missing in ("zscale", "tonemap"):
         plan = colour.plan_colour(
-            transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
+            transfer="smpte2084",
+            primaries="bt2020",
+            matrix="bt2020nc",
+            source_range="tv",
             prober=_prober_missing(missing),
         )
         assert plan.tone_mapped is False, missing
@@ -226,7 +276,10 @@ def test_a_prober_that_raises_yields_an_unavailable_capability_not_a_crash():
         raise RuntimeError("probe unavailable")
 
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
         prober=exploding_prober,
     )
     assert plan.tone_mapped is False
@@ -269,8 +322,12 @@ def test_tone_mapping_can_be_switched_off_and_says_so():
     suite ever took this branch.
     """
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
-        tone_map_enabled=False, prober=_prober_all_present(),
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
+        tone_map_enabled=False,
+        prober=_prober_all_present(),
     )
     assert plan.tone_mapped is False
     assert plan.filters == (), "switched off must mean no conversion, not a no-op chain"
@@ -307,7 +364,10 @@ def test_the_tone_map_is_spent_after_one_pass():
     must, since every pass that writes a file should describe it.
     """
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
         prober=_prober_all_present(),
     )
     assert plan.filters, "precondition: the plan should carry a chain"
@@ -330,7 +390,10 @@ def test_only_the_first_of_three_passes_receives_the_chain():
     above.
     """
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
         prober=_prober_all_present(),
     )
     passes: list[str] = []
@@ -356,7 +419,10 @@ def test_only_the_first_of_three_passes_receives_the_chain():
 def test_non_hdr_sources_are_never_tone_mapped(transfer):
     """R2.6, R2.7 together: the union of SDR and unknown gets no conversion."""
     plan = colour.plan_colour(
-        transfer=transfer, primaries="bt709", matrix="bt709", source_range="tv",
+        transfer=transfer,
+        primaries="bt709",
+        matrix="bt709",
+        source_range="tv",
         prober=_prober_all_present(),
     )
     assert plan.tone_mapped is False, transfer
@@ -372,7 +438,10 @@ def test_an_sdr_source_produces_no_filters_at_all():
     only defensible because of this: it cannot fire on a source that is not positively HDR.
     """
     plan = colour.plan_colour(
-        transfer="bt709", primaries="bt709", matrix="bt709", source_range="tv",
+        transfer="bt709",
+        primaries="bt709",
+        matrix="bt709",
+        source_range="tv",
         prober=_prober_all_present(),
     )
     assert plan.filters == ()
@@ -395,13 +464,32 @@ def test_a_full_range_source_is_delivered_limited(tmp_path):
     src = tmp_path / "full.mp4"
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=1",
-            "-c:v", "libx264", "-pix_fmt", "yuvj420p",
-            "-color_range", "pc", "-color_trc", "bt709",
-            "-color_primaries", "bt709", "-colorspace", "bt709", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=25:duration=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuvj420p",
+            "-color_range",
+            "pc",
+            "-color_trc",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            str(src),
         ],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -409,8 +497,10 @@ def test_a_full_range_source_is_delivered_limited(tmp_path):
     assert colour.normalise_range(info.color_range) == "pc", info.color_range
 
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
     )
     assert "colour_range_converted:pc:tv" in plan.markers, plan.markers
     assert plan.tone_mapped is False, "a range conversion is not a tone-map"
@@ -488,7 +578,10 @@ def test_tone_mapped_output_declares_rec709_and_drops_the_source_curve():
     wrong rather than falling back to a correct assumption.
     """
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
         prober=_prober_all_present(),
     )
     assert plan.tone_mapped is True
@@ -530,8 +623,12 @@ def test_the_marker_names_the_operator_that_ran_not_the_one_requested():
     marker is to tell them what actually happened when it differed.
     """
     plan = colour.plan_colour(
-        transfer="smpte2084", primaries="bt2020", matrix="bt2020nc", source_range="tv",
-        operator="nonsense", prober=_prober_all_present(),
+        transfer="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
+        source_range="tv",
+        operator="nonsense",
+        prober=_prober_all_present(),
     )
     assert f"tone_map:{colour.DEFAULT_TONEMAP_OPERATOR}:smpte2084" in plan.markers, plan.markers
 

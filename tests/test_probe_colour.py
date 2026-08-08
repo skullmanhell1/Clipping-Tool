@@ -55,9 +55,21 @@ def _make(
     guessed (R1.4).
     """
     cmd = [
-        FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=25:duration=1",
-        "-c:v", "libx264", "-pix_fmt", pix_fmt, "-profile:v", profile,
+        FFMPEG,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={size}:rate=25:duration=1",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        pix_fmt,
+        "-profile:v",
+        profile,
     ]
     if trc:
         cmd += ["-color_trc", trc]
@@ -78,12 +90,20 @@ def _make(
 def test_pq_and_hlg_sources_classify_as_hdr(tmp_path):
     """The two transfer functions that actually mean HDR (R1.6, R2.1)."""
     pq = _make(
-        tmp_path / "pq.mp4", pix_fmt="yuv420p10le", profile="high10",
-        trc="smpte2084", primaries="bt2020", matrix="bt2020nc",
+        tmp_path / "pq.mp4",
+        pix_fmt="yuv420p10le",
+        profile="high10",
+        trc="smpte2084",
+        primaries="bt2020",
+        matrix="bt2020nc",
     )
     hlg = _make(
-        tmp_path / "hlg.mp4", pix_fmt="yuv420p10le", profile="high10",
-        trc="arib-std-b67", primaries="bt2020", matrix="bt2020nc",
+        tmp_path / "hlg.mp4",
+        pix_fmt="yuv420p10le",
+        profile="high10",
+        trc="arib-std-b67",
+        primaries="bt2020",
+        matrix="bt2020nc",
     )
 
     pq_info = probe(pq)
@@ -107,16 +127,22 @@ def test_ten_bit_rec709_is_not_hdr(tmp_path):
     picture.
     """
     src = _make(
-        tmp_path / "ten_bit_709.mp4", pix_fmt="yuv420p10le", profile="high10",
-        trc="bt709", primaries="bt709", matrix="bt709",
+        tmp_path / "ten_bit_709.mp4",
+        pix_fmt="yuv420p10le",
+        profile="high10",
+        trc="bt709",
+        primaries="bt709",
+        matrix="bt709",
     )
     info = probe(src)
     assert info.color_transfer == "bt709"
     assert colour.classify_transfer(info.color_transfer) is Dynamic_Range.SDR
 
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
     )
     assert plan.tone_mapped is False
     assert plan.filters == (), "a 10-bit Rec.709 source must be left alone"
@@ -127,16 +153,21 @@ def test_ten_bit_rec709_is_not_hdr(tmp_path):
 def test_four_k_sdr_is_not_hdr(tmp_path):
     """R1.6: resolution is not evidence either. 4K SDR is the norm, not the exception."""
     src = _make(
-        tmp_path / "uhd_sdr.mp4", size="3840x2160",
-        trc="bt709", primaries="bt709", matrix="bt709",
+        tmp_path / "uhd_sdr.mp4",
+        size="3840x2160",
+        trc="bt709",
+        primaries="bt709",
+        matrix="bt709",
     )
     info = probe(src)
     assert (info.width, info.height) == (3840, 2160)
     assert colour.classify_transfer(info.color_transfer) is Dynamic_Range.SDR
 
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
     )
     assert plan.tone_mapped is False
 
@@ -157,8 +188,10 @@ def test_an_untagged_source_is_unknown_not_sdr(tmp_path):
     assert colour.classify_transfer(info.color_transfer) is Dynamic_Range.UNKNOWN
 
     plan = colour.plan_colour(
-        transfer=info.color_transfer, primaries=info.color_primaries,
-        matrix=info.color_space, source_range=info.color_range,
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
     )
     assert plan.tone_mapped is False, "an unknown transfer must never be tone-mapped (R2.7)"
 

@@ -49,7 +49,7 @@ class Speaker_Turn:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Speaker_Turn":
+    def from_dict(cls, data: dict) -> Speaker_Turn:
         """Parse a single record. May raise on a malformed element; callers
         that must tolerate bad input should use :func:`turns_from_dicts`."""
         return cls(
@@ -151,7 +151,7 @@ def _apply_cap(turns: list[Speaker_Turn], max_speakers: int) -> list[Speaker_Tur
                 new_label = prev.speaker_label
                 break
         if new_label is None:
-            for nxt in turns[i + 1:]:
+            for nxt in turns[i + 1 :]:
                 if nxt.speaker_label in retained:
                     new_label = nxt.speaker_label
                     break
@@ -168,11 +168,7 @@ def _merge_same_label(turns: list[Speaker_Turn], eps: float = 1e-6) -> list[Spea
     """
     out: list[Speaker_Turn] = []
     for t in turns:
-        if (
-            out
-            and out[-1].speaker_label == t.speaker_label
-            and t.start <= out[-1].end + eps
-        ):
+        if out and out[-1].speaker_label == t.speaker_label and t.start <= out[-1].end + eps:
             last = out[-1]
             out[-1] = Speaker_Turn(last.speaker_label, last.start, max(last.end, t.end))
         else:
@@ -188,9 +184,7 @@ def _relabel(turns: list[Speaker_Turn]) -> list[Speaker_Turn]:
     for t in turns:
         if t.speaker_label not in mapping:
             mapping[t.speaker_label] = f"S{len(mapping) + 1}"
-        out.append(
-            Speaker_Turn(mapping[t.speaker_label], round(t.start, 3), round(t.end, 3))
-        )
+        out.append(Speaker_Turn(mapping[t.speaker_label], round(t.start, 3), round(t.end, 3)))
     return out
 
 
@@ -412,9 +406,7 @@ def diarize_source(
 # --------------------------------------------------------------------------- #
 
 
-def slice_turns(
-    turns: list[Speaker_Turn], start: float, end: float
-) -> list[Speaker_Turn]:
+def slice_turns(turns: list[Speaker_Turn], start: float, end: float) -> list[Speaker_Turn]:
     """Return source-relative ``turns`` clipped to ``[start, end]`` and rebased
     to clip-relative (0-based) coordinates, bounded within ``[0, end-start]``.
 

@@ -14,6 +14,7 @@ The pipeline's transcribe + (where appropriate) selection steps are stubbed the
 same way ``tests/test_pipeline_effects.py`` does, so the tests stay fast and
 offline. Renders use tiny ``make_video`` clips gated on ``requires_ffmpeg``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -68,9 +69,7 @@ def _stub_selection(monkeypatch, text="hello there my friend today"):
     monkeypatch.setattr(
         pl.sel,
         "select_moments",
-        lambda *a, **k: [
-            ClipCandidate(start=0.0, end=4.0, score=50.0, text=text)
-        ],
+        lambda *a, **k: [ClipCandidate(start=0.0, end=4.0, score=50.0, text=text)],
     )
 
 
@@ -93,9 +92,7 @@ def test_p24_all_features_off_reproduces_legacy(make_video, tmp_path, monkeypatc
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
 
     assert len(clips) == 1
     clip = clips[0]
@@ -119,8 +116,12 @@ def test_p24_compositor_all_off_returns_none(make_video, tmp_path):
     base = make_video("b.mp4", duration=2.0, w=640, h=360)
     words = [FakeWord(0.2, 0.6, "hello"), FakeWord(0.7, 1.1, "world")]
     result = compositor.render_clip(
-        base, tmp_path / "out.mp4", options_all_off(captions=False),
-        words, tmp_path, broll_resolver=lambda: [],
+        base,
+        tmp_path / "out.mp4",
+        options_all_off(captions=False),
+        words,
+        tmp_path,
+        broll_resolver=lambda: [],
     )
     assert result is None
 
@@ -146,7 +147,10 @@ def test_p27_missing_llm_still_produces_clips(make_video, tmp_path, monkeypatch)
     src = make_video("s.mp4", duration=6.0, w=640, h=360)
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")
     clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp",
+        src,
+        opts,
+        clips_dir=tmp_path / "clips",
+        temp_dir=tmp_path / "tmp",
         llm_client=None,
     )
     assert len(clips) >= 1
@@ -155,9 +159,7 @@ def test_p27_missing_llm_still_produces_clips(make_video, tmp_path, monkeypatch)
 
 # Feature: tier1-creator-output-upgrade, Property 27: Missing dependencies still produce clips and record degradation
 @requires_ffmpeg
-def test_p27_broll_enabled_but_no_assets_still_produces_clips(
-    make_video, tmp_path, monkeypatch
-):
+def test_p27_broll_enabled_but_no_assets_still_produces_clips(make_video, tmp_path, monkeypatch):
     """Validates: Requirements 18.1, 18.2
 
     B-roll enabled but the (empty) local library resolves no assets: the
@@ -175,12 +177,14 @@ def test_p27_broll_enabled_but_no_assets_still_produces_clips(
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        broll=True, broll_intensity="standard", asset_sourcing_mode="local_only",
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        broll=True,
+        broll_intensity="standard",
+        asset_sourcing_mode="local_only",
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     clip = clips[0]
     assert not any(m.startswith("broll:") for m in clip.effects_applied)
@@ -190,9 +194,7 @@ def test_p27_broll_enabled_but_no_assets_still_produces_clips(
 
 # Feature: tier1-creator-output-upgrade, Property 27: Missing dependencies still produce clips and record degradation
 @requires_ffmpeg
-def test_p27_visual_selection_failing_sampler_degrades(
-    make_video, tmp_path, monkeypatch
-):
+def test_p27_visual_selection_failing_sampler_degrades(make_video, tmp_path, monkeypatch):
     """Validates: Requirements 18.1, 18.2, 18.4
 
     Visual selection enabled but keyframe sampling fails: selection degrades to
@@ -212,12 +214,8 @@ def test_p27_visual_selection_failing_sampler_degrades(
     monkeypatch.setattr(pl.visual_selection, "sample_keyframes", boom)
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
-    opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16", visual_selection=True
-    )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    opts = ProcessingOptions(captions=False, metadata=False, aspect="9:16", visual_selection=True)
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     clip = clips[0]
     assert "visual_selection" in clip.effects_applied
@@ -229,9 +227,7 @@ def test_p27_visual_selection_failing_sampler_degrades(
 # ===========================================================================
 # Feature: tier1-creator-output-upgrade, Property 28: No external network when external features are disabled
 @requires_ffmpeg
-def test_p28_no_external_provider_when_download_disabled(
-    make_video, tmp_path, monkeypatch
-):
+def test_p28_no_external_provider_when_download_disabled(make_video, tmp_path, monkeypatch):
     """Validates: Requirements 18.3
 
     With external downloading disabled (``broll_allow_download=False``) — even
@@ -260,22 +256,21 @@ def test_p28_no_external_provider_when_download_disabled(
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        broll=True, broll_intensity="standard",
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        broll=True,
+        broll_intensity="standard",
         asset_sourcing_mode="local_then_external",
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     assert constructed == []  # ExternalProvider never constructed -> no network
 
 
 # Feature: tier1-creator-output-upgrade, Property 28: No external network when external features are disabled
 @requires_ffmpeg
-def test_p28_permissibility_forces_local_only_no_external(
-    make_video, tmp_path, monkeypatch
-):
+def test_p28_permissibility_forces_local_only_no_external(make_video, tmp_path, monkeypatch):
     """Validates: Requirements 18.3
 
     Under ``permissibility_mode`` ``effective_options`` forces ``local_only``
@@ -303,16 +298,16 @@ def test_p28_permissibility_forces_local_only_no_external(
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        broll=True, asset_sourcing_mode="local_then_external",
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        broll=True,
+        asset_sourcing_mode="local_then_external",
         permissibility_mode=True,
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     assert constructed == []
-
 
 
 # ===========================================================================
@@ -431,12 +426,8 @@ def test_p22_diarization_once_per_source_sdr(make_video, tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler([[FaceBox(0.0, 100, 100, 80, 80)]]))
     monkeypatch.setattr(pl.reframe, "apply_speaker_reframe", _reframe_ok)
 
-    opts_on = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16", speaker_reframe=True
-    )
-    clips = pl.run_pipeline(
-        src, opts_on, clips_dir=tmp_path / "c_on", temp_dir=tmp_path / "t_on"
-    )
+    opts_on = ProcessingOptions(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
+    clips = pl.run_pipeline(src, opts_on, clips_dir=tmp_path / "c_on", temp_dir=tmp_path / "t_on")
     assert len(clips) == 3
     assert len(calls) == 1  # once per source, independent of clip count
 
@@ -450,7 +441,7 @@ def test_p22_diarization_once_per_source_sdr(make_video, tmp_path, monkeypatch):
         src, opts_off, clips_dir=tmp_path / "c_off", temp_dir=tmp_path / "t_off"
     )
     assert len(clips_off) == 2
-    assert calls_off == []          # diariser never invoked
+    assert calls_off == []  # diariser never invoked
     assert sampler_off.calls == []  # frame sampler never invoked
 
 
@@ -617,9 +608,7 @@ def test_p26_all_off_reproduces_v070_sdr(make_video, tmp_path, monkeypatch):
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = options_all_off(captions=False, metadata=False, aspect="9:16")  # both OFF
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t")
 
     assert len(clips) == 1
     clip = clips[0]
@@ -636,9 +625,7 @@ def test_p26_all_off_reproduces_v070_sdr(make_video, tmp_path, monkeypatch):
 # ===========================================================================
 # Feature: speaker-diarization-reframe, Property 27: Reframe auto-enables diarisation without flipping the persisted toggle
 @requires_ffmpeg
-def test_p27_reframe_auto_enables_diarisation_without_flip_sdr(
-    make_video, tmp_path, monkeypatch
-):
+def test_p27_reframe_auto_enables_diarisation_without_flip_sdr(make_video, tmp_path, monkeypatch):
     """Validates: Requirements 16.5
 
     With ``speaker_reframe`` enabled and ``diarization`` disabled, diarisation
@@ -655,16 +642,17 @@ def test_p27_reframe_auto_enables_diarisation_without_flip_sdr(
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        speaker_reframe=True, diarization=False,
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        speaker_reframe=True,
+        diarization=False,
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t")
 
     assert len(clips) == 1
-    assert len(calls) == 1                 # diarisation happened internally
-    assert opts.diarization is False       # persisted toggle NOT flipped/mutated
+    assert len(calls) == 1  # diarisation happened internally
+    assert opts.diarization is False  # persisted toggle NOT flipped/mutated
     assert "speaker_reframe:follow_active" in clips[0].effects_applied
 
 
@@ -704,19 +692,20 @@ def test_p28_permissibility_offline_network_free_sdr(make_video, tmp_path, monke
 
     src = make_video("s.mp4", duration=4.0, w=640, h=360)
     opts = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        speaker_reframe=True, permissibility_mode=True,
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        speaker_reframe=True,
+        permissibility_mode=True,
     )
-    clips = pl.run_pipeline(
-        src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t"
-    )
+    clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "c", temp_dir=tmp_path / "t")
 
     assert len(clips) == 1
     clip = clips[0]
-    assert backend.calls == []                                  # backend bypassed (offline only)
-    assert "diarization:transcript" in clip.effects_applied     # offline segmentation used
+    assert backend.calls == []  # backend bypassed (offline only)
+    assert "diarization:transcript" in clip.effects_applied  # offline segmentation used
     assert "speaker_reframe:follow_active" in clip.effects_applied
-    assert constructed == []                                    # no external provider / network
+    assert constructed == []  # no external provider / network
 
 
 # ===========================================================================
@@ -745,9 +734,7 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
     # (a) sampler -> no frames -> no tracks -> real reframe raises -> fallback clip.
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler([]))
     opts_a = options_all_off(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
-    clips_a = pl.run_pipeline(
-        src, opts_a, clips_dir=tmp_path / "ca", temp_dir=tmp_path / "ta"
-    )
+    clips_a = pl.run_pipeline(src, opts_a, clips_dir=tmp_path / "ca", temp_dir=tmp_path / "ta")
     assert len(clips_a) == 1
     assert "speaker_reframe_degraded" in clips_a[0].effects_applied
     assert (tmp_path / "ca" / clips_a[0].filename).exists()
@@ -756,9 +743,7 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
     monkeypatch.setattr(pl.reframe, "apply_speaker_reframe", _reframe_raise_ffmpeg)
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler([[FaceBox(0.0, 100, 100, 80, 80)]]))
     opts_b = options_all_off(captions=False, metadata=False, aspect="9:16", speaker_reframe=True)
-    clips_b = pl.run_pipeline(
-        src, opts_b, clips_dir=tmp_path / "cb", temp_dir=tmp_path / "tb"
-    )
+    clips_b = pl.run_pipeline(src, opts_b, clips_dir=tmp_path / "cb", temp_dir=tmp_path / "tb")
     assert len(clips_b) == 1
     assert "speaker_reframe_degraded" in clips_b[0].effects_applied
     assert (tmp_path / "cb" / clips_b[0].filename).exists()
@@ -771,17 +756,17 @@ def test_p24_ffmpeg_degradation_and_permissibility_sdr(make_video, tmp_path, mon
     canned = [[FaceBox(t, 100, 100, 80, 80)] for t in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5)]
     monkeypatch.setattr(pl, "FRAME_SAMPLER", CannedSampler(canned))
     opts_c = ProcessingOptions(
-        captions=False, metadata=False, aspect="9:16",
-        speaker_reframe=True, permissibility_mode=True,
+        captions=False,
+        metadata=False,
+        aspect="9:16",
+        speaker_reframe=True,
+        permissibility_mode=True,
     )
-    clips_c = pl.run_pipeline(
-        src, opts_c, clips_dir=tmp_path / "cc", temp_dir=tmp_path / "tc"
-    )
+    clips_c = pl.run_pipeline(src, opts_c, clips_dir=tmp_path / "cc", temp_dir=tmp_path / "tc")
     assert len(clips_c) == 1
     assert backend.calls == []  # permissibility -> backend bypassed, no network
     assert "speaker_reframe:follow_active" in clips_c[0].effects_applied
     assert (tmp_path / "cc" / clips_c[0].filename).exists()
-
 
 
 # ===========================================================================
@@ -928,12 +913,15 @@ def av_ffmpeg_free_pipeline(pl, render_calls, *, spans=AV_CLIP_SPANS):
         return None
 
     def fake_transcribe(source, language=None, translate=False, **_kw):
-        words = [Word(0.2, 0.6, "hello"), Word(0.8, 1.2, "there"),
-                 Word(2.2, 2.6, "my"), Word(2.8, 3.2, "friend")]
+        words = [
+            Word(0.2, 0.6, "hello"),
+            Word(0.8, 1.2, "there"),
+            Word(2.2, 2.6, "my"),
+            Word(2.8, 3.2, "friend"),
+        ]
         return Transcript(
             language="en",
-            segments=[TranscriptSegment(0.0, AV_SOURCE_DURATION, "hello there my friend",
-                                        words)],
+            segments=[TranscriptSegment(0.0, AV_SOURCE_DURATION, "hello there my friend", words)],
         )
 
     def fake_select(*args, **kwargs):
@@ -956,6 +944,7 @@ def av_ffmpeg_free_pipeline(pl, render_calls, *, spans=AV_CLIP_SPANS):
 @contextlib.contextmanager
 def av_injected_host(pl, registry, report, storage, clock):
     """Make ``run_pipeline`` build its host on an ISOLATED registry + collaborators."""
+
     def factory(options, **kwargs):
         return Engine_Host(
             options,
@@ -970,20 +959,32 @@ def av_injected_host(pl, registry, report, storage, clock):
         yield
 
 
-def av_engine_double(engine_id, stage, priority, outcome, *, exception, overrun,
-                     required, clock):
+def av_engine_double(engine_id, stage, priority, outcome, *, exception, overrun, required, clock):
     """The ``tests.fakes`` double matching one generated engine outcome."""
     if exception is not None:
-        return RaisingEngine(engine_id, stage, exc=exception, priority=priority,
-                             required_capabilities=required)
+        return RaisingEngine(
+            engine_id, stage, exc=exception, priority=priority, required_capabilities=required
+        )
     if overrun:
-        return SlowEngine(engine_id, stage, overrun=2.0, clock=clock, priority=priority,
-                          time_budget_s=1.0, required_capabilities=required)
+        return SlowEngine(
+            engine_id,
+            stage,
+            overrun=2.0,
+            clock=clock,
+            priority=priority,
+            time_budget_s=1.0,
+            required_capabilities=required,
+        )
     return FakeEngine(
-        engine_id, stage,
-        status=outcome["status"], markers=outcome["markers"],
-        artifacts=outcome["artifacts"], plan=outcome["plan"], detail=outcome["detail"],
-        priority=priority, required_capabilities=required,
+        engine_id,
+        stage,
+        status=outcome["status"],
+        markers=outcome["markers"],
+        artifacts=outcome["artifacts"],
+        plan=outcome["plan"],
+        detail=outcome["detail"],
+        priority=priority,
+        required_capabilities=required,
     )
 
 
@@ -1004,8 +1005,11 @@ def av_expected_stage_media(ctx, temp_dir, clips_dir):
 
 
 # Feature: av-engines-foundation, Property 13: Clip count is invariant under degradation and failure
-@settings(max_examples=25, deadline=None,
-          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+@settings(
+    max_examples=25,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+)
 @given(data=st.data())
 def test_p13_clip_count_invariant_under_degradation_and_failure(data):
     """Validates: Requirements 7.3, 7.5, 8.3, 8.7
@@ -1024,30 +1028,35 @@ def test_p13_clip_count_invariant_under_degradation_and_failure(data):
     reset_registry()
     reset_report()
 
-    registrations = data.draw(st_registrations(min_size=1, max_size=4),
-                              label="registrations")
+    registrations = data.draw(st_registrations(min_size=1, max_size=4), label="registrations")
     availability = data.draw(st_availability_map(max_size=4), label="availability")
     capability_ids = sorted(availability)
 
     clock = FakeClock()
     engines = []
     for index, (engine_id, stage, priority) in enumerate(registrations):
-        outcome = data.draw(st_engine_outcomes(engine_id=engine_id),
-                            label=f"outcome:{engine_id}")
+        outcome = data.draw(st_engine_outcomes(engine_id=engine_id), label=f"outcome:{engine_id}")
         exception = outcome["exception"]
         # Cover the FFmpegError case explicitly (Req 8.7), not just by luck.
         if exception is not None and data.draw(st.booleans(), label=f"ffmpeg:{engine_id}"):
             exception = fu.FFmpegError("engine ffmpeg failure")
         overrun = (
-            False if exception is not None
+            False
+            if exception is not None
             else data.draw(st.booleans(), label=f"overrun:{engine_id}")
         )
-        required = (
-            (capability_ids[index % len(capability_ids)],) if capability_ids else ()
-        )
+        required = (capability_ids[index % len(capability_ids)],) if capability_ids else ()
         engines.append(
-            av_engine_double(engine_id, stage, priority, outcome, exception=exception,
-                             overrun=overrun, required=required, clock=clock)
+            av_engine_double(
+                engine_id,
+                stage,
+                priority,
+                outcome,
+                exception=exception,
+                overrun=overrun,
+                required=required,
+                clock=clock,
+            )
         )
 
     registry = Engine_Registry()
@@ -1065,8 +1074,9 @@ def test_p13_clip_count_invariant_under_degradation_and_failure(data):
             clips_dir = root / tag / "clips"
             temp_dir = root / tag / "tmp"
             renders: list = []
-            with av_ffmpeg_free_pipeline(pl, renders), av_injected_host(
-                pl, registry, report, storage, clock
+            with (
+                av_ffmpeg_free_pipeline(pl, renders),
+                av_injected_host(pl, registry, report, storage, clock),
             ):
                 clips = pl.run_pipeline(
                     source, av_options(flags), clips_dir=clips_dir, temp_dir=temp_dir
@@ -1078,7 +1088,7 @@ def test_p13_clip_count_invariant_under_degradation_and_failure(data):
         baseline, baseline_renders, baseline_clips_dir, _ = run("off", off_flags)
 
         assert len(baseline) == len(AV_CLIP_SPANS)
-        assert all(engine.run_count == 0 for engine in engines)   # Req 7.3 / 19.5
+        assert all(engine.run_count == 0 for engine in engines)  # Req 7.3 / 19.5
         for clip in baseline:
             assert not any(m.startswith("engine:") for m in clip.effects_applied)
             assert (baseline_clips_dir / clip.filename).exists()
@@ -1121,7 +1131,6 @@ def test_p13_clip_count_invariant_under_degradation_and_failure(data):
 
     reset_registry()
     reset_report()
-
 
 
 # ===========================================================================
@@ -1214,11 +1223,7 @@ def _build_unhooked_pipeline():
         def visit_Assign(self, node):
             self.generic_visit(node)
             targets = node.targets
-            if (
-                len(targets) == 1
-                and isinstance(targets[0], _ast.Name)
-                and targets[0].id == "host"
-            ):
+            if len(targets) == 1 and isinstance(targets[0], _ast.Name) and targets[0].id == "host":
                 removed["host_assignments"] += 1
                 return None
             return node
@@ -1389,8 +1394,12 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         # reports ``changed`` and the filler stage genuinely runs when the option
         # is on — no need to stub the planner itself.
         words = [
-            Word(0.2, 0.6, "hello"), Word(0.7, 1.1, "um"), Word(1.2, 1.6, "there"),
-            Word(2.2, 2.6, "my"), Word(2.7, 3.1, "uh"), Word(3.2, 3.6, "friend"),
+            Word(0.2, 0.6, "hello"),
+            Word(0.7, 1.1, "um"),
+            Word(1.2, 1.6, "there"),
+            Word(2.2, 2.6, "my"),
+            Word(2.7, 3.1, "uh"),
+            Word(3.2, 3.6, "friend"),
         ]
         return Transcript(
             language="en",
@@ -1410,9 +1419,7 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         stack.enter_context(mock.patch.object(module.fu, "generate_thumbnail", fake_thumbnail))
         stack.enter_context(mock.patch.object(module.compositor, "probe", fake_probe))
         stack.enter_context(mock.patch.object(module.compositor, "_run", fake_run))
-        stack.enter_context(
-            mock.patch.object(module.filler, "apply_keep_intervals", fake_filler)
-        )
+        stack.enter_context(mock.patch.object(module.filler, "apply_keep_intervals", fake_filler))
         stack.enter_context(mock.patch.object(module, "transcribe", fake_transcribe))
         stack.enter_context(mock.patch.object(module.sel, "select_moments", fake_select))
         yield
@@ -1421,8 +1428,15 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
 #: Effect flags that are safe to vary in a fully offline run: none of them needs
 #: an asset library, a model, an LLM or the network.
 P34_SAFE_FLAGS = (
-    "captions", "zoom", "transitions", "fades", "progress_bar", "filler_removal",
-    "hook_title", "caption_keyword_highlight", "caption_emoji",
+    "captions",
+    "zoom",
+    "transitions",
+    "fades",
+    "progress_bar",
+    "filler_removal",
+    "hook_title",
+    "caption_keyword_highlight",
+    "caption_emoji",
 )
 
 P34_COLORS = ("", "vivid", "warm", "cinematic")
@@ -1435,11 +1449,22 @@ P34_ASPECTS = ("9:16", "1:1", "16:9")
 #: exercised elsewhere (the tier1 / sdr tests above, and the ffmpeg parity example
 #: below covers the real geometry ladder end to end).
 P34_PINNED = {
-    "metadata": False, "music": "", "emoji": "off", "broll": False,
-    "visual_selection": False, "reframe": False, "speaker_reframe": False,
-    "diarization": False, "caption_keyword_ai": False, "permissibility_mode": False,
-    "asset_sourcing_mode": "off", "range_start": None, "range_end": None,
-    "language": None, "translate": False, "caption_animation": "",
+    "metadata": False,
+    "music": "",
+    "emoji": "off",
+    "broll": False,
+    "visual_selection": False,
+    "reframe": False,
+    "speaker_reframe": False,
+    "diarization": False,
+    "caption_keyword_ai": False,
+    "permissibility_mode": False,
+    "asset_sourcing_mode": "off",
+    "range_start": None,
+    "range_end": None,
+    "language": None,
+    "translate": False,
+    "caption_animation": "",
 }
 
 
@@ -1479,14 +1504,10 @@ def p34_run(module, source, options, root, tag, *, registry=None, report=None):
 
     with p34_stubbed_media(module, rec):
         if registry is None:
-            clips = module.run_pipeline(
-                source, options, clips_dir=clips_dir, temp_dir=temp_dir
-            )
+            clips = module.run_pipeline(source, options, clips_dir=clips_dir, temp_dir=temp_dir)
         else:
             with mock.patch.object(module, "Engine_Host", factory):
-                clips = module.run_pipeline(
-                    source, options, clips_dir=clips_dir, temp_dir=temp_dir
-                )
+                clips = module.run_pipeline(source, options, clips_dir=clips_dir, temp_dir=temp_dir)
 
     return {
         "clip_count": len(clips),
@@ -1495,9 +1516,7 @@ def p34_run(module, source, options, root, tag, *, registry=None, report=None):
         "probes": rec.probes,
         "stages": rec.per_clip(),
         "graphs": [p34_canonical(graph, root, tag) for graph in rec.filter_graphs],
-        "commands": [
-            [p34_canonical(part, root, tag) for part in argv] for argv in rec.commands
-        ],
+        "commands": [[p34_canonical(part, root, tag) for part in argv] for argv in rec.commands],
         "_clips": clips,
         "_clips_dir": clips_dir,
         "_temp_dir": temp_dir,
@@ -1510,9 +1529,15 @@ def p34_run(module, source, options, root, tag, *, registry=None, report=None):
 # only restores the process-wide registrations the module import left behind, once,
 # after the whole test. Its not being reset between examples is exactly what is
 # wanted.
-@settings(max_examples=100, deadline=None,
-          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large,
-                                 HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=100,
+    deadline=None,
+    suppress_health_check=[
+        HealthCheck.too_slow,
+        HealthCheck.data_too_large,
+        HealthCheck.function_scoped_fixture,
+    ],
+)
 @given(data=st.data())
 def test_p34_all_engines_off_reproduces_v080_exactly(p34_default_registry_restored, data):
     """Validates: Requirements 4.3, 9.4, 23.1, 23.2, 23.3
@@ -1558,8 +1583,7 @@ def _run_p34_body(pl, data):
     reset_registry()
     reset_report()
 
-    registrations = data.draw(st_registrations(min_size=1, max_size=4),
-                              label="registrations")
+    registrations = data.draw(st_registrations(min_size=1, max_size=4), label="registrations")
     engines = [
         FakeEngine(engine_id, stage, priority=priority, markers=("ran",))
         for engine_id, stage, priority in registrations
@@ -1575,10 +1599,16 @@ def _run_p34_body(pl, data):
     # Every flag really is off, so the host the Pipeline builds is inactive.
     from worker.models import effective_options
 
-    assert Engine_Host(
-        effective_options(options), job_id="probe", temp_dir=_Path("/nonexistent"),
-        registry=loaded, capabilities=report,
-    ).active is False
+    assert (
+        Engine_Host(
+            effective_options(options),
+            job_id="probe",
+            temp_dir=_Path("/nonexistent"),
+            registry=loaded,
+            capabilities=report,
+        ).active
+        is False
+    )
 
     with tempfile.TemporaryDirectory() as root:
         root = _Path(root)
@@ -1587,15 +1617,20 @@ def _run_p34_body(pl, data):
         # (A) the genuine v0.8.0 code path: no Engine_Host exists at all.
         baseline = p34_run(UNHOOKED_PIPELINE, source, options, root, "baseline")
         # (B) the hooked code path with an EMPTY registry.
-        with_empty = p34_run(pl, source, options, root, "empty",
-                             registry=empty, report=report)
+        with_empty = p34_run(pl, source, options, root, "empty", registry=empty, report=report)
         # (C) the hooked code path with engines registered but every flag off.
-        with_engines = p34_run(pl, source, options, root, "loaded",
-                               registry=loaded, report=report)
+        with_engines = p34_run(pl, source, options, root, "loaded", registry=loaded, report=report)
 
         # --- the parity gate itself (Reqs 23.1, 23.3) ---------------------
-        for key in ("clip_count", "effects", "ffmpeg_calls", "probes", "stages",
-                    "graphs", "commands"):
+        for key in (
+            "clip_count",
+            "effects",
+            "ffmpeg_calls",
+            "probes",
+            "stages",
+            "graphs",
+            "commands",
+        ):
             assert with_empty[key] == baseline[key], f"empty-registry run differs: {key}"
             assert with_engines[key] == baseline[key], f"loaded-registry run differs: {key}"
 
@@ -1610,8 +1645,12 @@ def _run_p34_body(pl, data):
         # emitted a ``-filter_complex`` graph, so the equality above is comparing
         # real command lines rather than two empty lists.
         effect_on = bool(
-            options.captions or options.color or options.zoom
-            or options.transitions or options.fades or options.progress_bar
+            options.captions
+            or options.color
+            or options.zoom
+            or options.transitions
+            or options.fades
+            or options.progress_bar
         )
         if effect_on:
             assert all(graph for graph in baseline["graphs"])
@@ -1671,7 +1710,8 @@ def test_all_off_ffmpeg_parity_matches_unhooked_baseline(make_video, tmp_path, m
     # ffmpeg collaborator are shared module objects, so patching those once is enough.
     monkeypatch.setattr(UNHOOKED_PIPELINE, "transcribe", pl.transcribe)
     monkeypatch.setattr(
-        pl.sel, "select_moments",
+        pl.sel,
+        "select_moments",
         lambda *a, **k: [ClipCandidate(start=0.0, end=1.5, score=50.0, text="hello there")],
     )
 
@@ -1691,9 +1731,7 @@ def test_all_off_ffmpeg_parity_matches_unhooked_baseline(make_video, tmp_path, m
 
     def spying_render_clip(*args, **kwargs):
         result = real_render_clip(*args, **kwargs)
-        renders.append(
-            {"contributions": kwargs.get("engine_contributions"), "result": result}
-        )
+        renders.append({"contributions": kwargs.get("engine_contributions"), "result": result})
         return result
 
     monkeypatch.setattr(fu, "_run", counting_fu_run)

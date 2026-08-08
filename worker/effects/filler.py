@@ -24,8 +24,21 @@ from worker.ffmpeg_utils import _run, aac_args, h264_args
 # Disfluencies removed by default. Kept deliberately conservative so real words
 # (e.g. "like" as a verb) are never cut.
 FILLER_WORDS = {
-    "um", "umm", "ummm", "uh", "uhh", "uhhh", "er", "err", "erm",
-    "ah", "ahh", "hmm", "mmm", "mm", "uhm",
+    "um",
+    "umm",
+    "ummm",
+    "uh",
+    "uhh",
+    "uhhh",
+    "er",
+    "err",
+    "erm",
+    "ah",
+    "ahh",
+    "hmm",
+    "mmm",
+    "mm",
+    "uhm",
 }
 
 _WORD_RE = re.compile(r"[a-z']+")
@@ -173,9 +186,14 @@ def rebase_words(words: list, keeps: list[Interval]):
             if ks <= mid < ke:
                 ns = new_off + (max(ws, ks) - ks)
                 ne = new_off + (min(we, ke) - ks)
-                out.append(Word(start=round(ns, 3), end=round(max(ns, ne), 3),
-                                text=getattr(w, "text", ""),
-                                probability=getattr(w, "probability", 1.0)))
+                out.append(
+                    Word(
+                        start=round(ns, 3),
+                        end=round(max(ns, ne), 3),
+                        text=getattr(w, "text", ""),
+                        probability=getattr(w, "probability", 1.0),
+                    )
+                )
                 break
     return out
 
@@ -250,12 +268,20 @@ def apply_keep_intervals(
     graph = ";".join(parts + [concat])
 
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-filter_complex", graph,
-        "-map", "[v]", "-map", "[a]",
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-filter_complex",
+        graph,
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
         *h264_args(normalise_fps=True, vbv_cap=True, colour_tags=colour_tags),
         *aac_args(),
-        "-movflags", "+faststart",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     _run(cmd)

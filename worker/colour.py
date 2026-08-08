@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Type-checking only. The runtime import stays inside `tonemap_filters_missing`, because
@@ -336,7 +336,7 @@ def colour_tag_args(
     return tuple(args)
 
 
-def tonemap_filters_missing(prober: Optional["Prober"] = None) -> str:
+def tonemap_filters_missing(prober: Prober | None = None) -> str:
     """Return the first tone-map filter this ffmpeg lacks, or ``""`` if all are present.
 
     Routed through ``worker.engines.capabilities`` rather than probing here, because that
@@ -388,7 +388,7 @@ def plan_colour(
     operator: str = DEFAULT_TONEMAP_OPERATOR,
     target_nits: int = DEFAULT_TONEMAP_TARGET_NITS,
     delivery_range: str = DEFAULT_DELIVERY_RANGE,
-    prober: Optional["Prober"] = None,
+    prober: Prober | None = None,
 ) -> Colour_Plan:
     """Decide the whole colour treatment for one clip.
 

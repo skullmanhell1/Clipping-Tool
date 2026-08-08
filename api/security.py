@@ -28,7 +28,6 @@ import logging
 import re
 import threading
 import time
-from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -66,15 +65,13 @@ _CLIPS_MOUNT_PREFIX = "/clips/"
 #: Everything else is header-only, which is the part that matters: no token ever appears in the
 #: URL of a request that mutates state, so none reaches an access log, browser history or a
 #: `Referer` header for anything that writes.
-_QUERY_TOKEN_PATHS = re.compile(
-    r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download|video)$)"
-)
+_QUERY_TOKEN_PATHS = re.compile(r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download|video)$)")
 
 #: How a caller supplies the secret.
 _BEARER = "bearer "
 
 
-def token_matches(supplied: Optional[str]) -> bool:
+def token_matches(supplied: str | None) -> bool:
     """Whether ``supplied`` is the configured secret.
 
     ``hmac.compare_digest`` rather than ``==``: string comparison returns as soon as it finds a
@@ -89,7 +86,7 @@ def token_matches(supplied: Optional[str]) -> bool:
     return hmac.compare_digest(supplied.strip(), expected)
 
 
-def extract_token(request: Request) -> Optional[str]:
+def extract_token(request: Request) -> str | None:
     """Pull the secret from a request, preferring headers.
 
     ``Authorization: Bearer <t>`` and ``X-API-Token: <t>`` are the supported headers, and are the
@@ -98,7 +95,7 @@ def extract_token(request: Request) -> Optional[str]:
     """
     header = request.headers.get("authorization") or ""
     if header.lower().startswith(_BEARER):
-        return header[len(_BEARER):]
+        return header[len(_BEARER) :]
     direct = request.headers.get("x-api-token")
     if direct:
         return direct
@@ -201,7 +198,7 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._windows: dict[str, tuple[float, int]] = {}
 
-    def check(self, key: str, *, limit: int, window: float, now: Optional[float] = None) -> bool:
+    def check(self, key: str, *, limit: int, window: float, now: float | None = None) -> bool:
         """Record a request and return whether it is allowed."""
         if limit <= 0 or window <= 0:
             return True
@@ -217,9 +214,7 @@ class RateLimiter:
             # attacker chooses the size of.
             if len(self._windows) > 4096:
                 cutoff = moment - window
-                self._windows = {
-                    k: v for k, v in self._windows.items() if v[0] > cutoff
-                }
+                self._windows = {k: v for k, v in self._windows.items() if v[0] > cutoff}
             return count <= limit
 
     def reset(self) -> None:
