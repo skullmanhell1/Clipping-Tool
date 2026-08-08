@@ -242,6 +242,37 @@ def plan(
     )
 
 
+def geometry_refusal(*, reframe: bool, speaker_reframe: bool) -> str:
+    """``""`` when this geometry branch can hide the vacated band, else the reason it cannot.
+
+    The rule R10.5 implies but does not state: ``vidstabtransform`` fills what it vacates with black,
+    and those pixels are invisible only when the delivered frame is a **crop held inside the valid
+    rectangle**. `apply_reframe` arranges exactly that, through ``stabilise_margin`` and
+    :func:`_intersect_margin`. No other branch of the geometry ladder does:
+
+    * ``crop_blur`` scales the whole source frame into the blurred background, so the band is
+      blurred rather than hidden;
+    * ``pad`` fits the frame entire, so the band is delivered at full size;
+    * ``apply_speaker_reframe`` crops, but reads ``info.width``/``info.height`` directly and has no
+      content-rectangle seam to inset -- V16's letterbox rectangle already bypasses it for the same
+      reason.
+
+    Stabilising into any of those trades shake for moving black edges, which is worse: shake is the
+    footage, and a black edge is a defect the pipeline introduced. So it declines.
+
+    Here rather than inline in the pipeline because it is a rule about this feature, and a rule
+    expressed as an ``if`` inside a 300-line loop is a rule nothing can test. The refusal *reason* is
+    returned rather than a bool so the marker can name the branch: an operator who sets
+    ``STABILISE_STRENGTH`` and sees nothing happen needs to know which branch refused, not merely
+    that something did.
+    """
+    if speaker_reframe:
+        return "speaker_layout"
+    if not reframe:
+        return "no_reframe_crop"
+    return ""
+
+
 def run_analysis(
     source: str | Path,
     transforms_path: str | Path,

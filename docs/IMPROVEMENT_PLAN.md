@@ -512,11 +512,14 @@ Implemented, with where the code lives:
 | `C24`, `C25` | `worker/cue_constraints.py` |
 | `AU11` | `worker/effects/audio.py` |
 
+`V21` | `worker/stabilise.py`, wired into the geometry pass. Applies only on the `apply_reframe`
+branch, which is the one that can hold its crop inside the rectangle `vidstab` leaves valid; the other
+branches decline with `stabilise_skipped:<branch>`.
+
 **Implemented but unreachable — these are worse than unbuilt, because they read as done:**
 
 | ID | Module | State |
 | --- | --- | --- |
-| `V21` | `worker/stabilise.py` | Imported by nothing outside its test; `stabilise_strength` read by nothing. Inert. |
 | `AU12` | `worker/turn_gain.py` | Imported by nothing outside its test. Diarisation is still never used for gain. |
 
 `scripts/check_wired.py` is the check, and it also lists `worker/effects/sfx.py` (`A15`) and

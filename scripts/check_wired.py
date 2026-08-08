@@ -79,10 +79,6 @@ ALLOWED: dict[str, str] = {
 #:
 #: Each of these is a shipped, tested feature with no effect on output. That is the point of the file.
 KNOWN_UNWIRED: dict[str, str] = {
-    "worker.stabilise": (
-        "V21 optional stabilisation, merged in #124. Nothing imports it and `stabilise_strength` "
-        "is read by nothing, so the feature is entirely inert"
-    ),
     "worker.turn_gain": (
         "AU12 per-speaker level matching, merged in #126. Nothing imports it, so diarisation is "
         "still never used for gain -- which is the defect AU12 was written to fix"
@@ -105,7 +101,6 @@ KNOWN_UNWIRED: dict[str, str] = {
 #: `API_PORT` or `REDIS_URL` today gets silence, which is worse than an unsupported option because it
 #: looks supported.
 KNOWN_UNREAD: dict[str, str] = {
-    "stabilise_strength": "V21; inert until worker.stabilise is wired",
     "sfx_volume": "A15; inert until worker.effects.sfx is wired",
     "face_detector_backend": (
         "documented as the detector used 'when a job does not specify one', but "

@@ -1547,6 +1547,7 @@ def apply_reframe(
     notes: list[str] | None = None,
     colour_tags: Sequence[str] = (),
     stabilise_margin: tuple[int, int] = (0, 0),
+    prefilter: str = "",
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1642,7 +1643,15 @@ def apply_reframe(
     y0 = origin_y + int(round(_clamp(first_cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
 
     escaped = str(cmd_file.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    vf = f"sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
+    # V21/R10.8: `prefilter` carries `vidstabtransform` so the correction rides *this* pass instead
+    # of costing a third encode. It goes at the head of the chain and that is not cosmetic: the
+    # margin, the content rectangle and every crop coordinate below are in source pixels, so the
+    # frame has to be translated before anything crops or scales it. `vidstabtransform` does not
+    # change dimensions, so the crop arithmetic above stays valid.
+    #
+    # Empty by default, which leaves the filter string character-for-character what it was.
+    head = f"{prefilter}," if prefilter else ""
+    vf = f"{head}sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
     cmd = [
         settings.ffmpeg_binary,
         "-y",

@@ -74,18 +74,18 @@ morning**:
 
 | Module | Item | State |
 | --- | --- | --- |
-| `worker/stabilise.py` | V21 stabilisation | Nothing imports it; `stabilise_strength` read by nothing. Entirely inert. |
+| ~~`worker/stabilise.py`~~ | V21 stabilisation | **Now wired.** See §3a for what wiring it turned up. |
 | `worker/turn_gain.py` | AU12 per-speaker level | Nothing imports it, so diarisation is still never used for gain — the exact defect AU12 was written to fix. |
 | `worker/effects/sfx.py` | A15 sound effects | Nothing imports it; `sfx_volume` read by nothing. No path would honour `SFX_MODE` at all. |
 | `worker/caption_placement.py` | V15 captions off the mouth | Nothing imports it, so `caption_avoid_faces` cannot take effect. |
 
-Plus fourteen `Settings` fields read by nothing. Two are inert because their module is
-(`stabilise_strength`, `sfx_volume`); the rest are documented environment variables that were never
-plumbed — `API_PORT`, `REDIS_URL`, `RQ_QUEUE_NAME`, `PUBLIC_BASE_URL`, `USE_INPROCESS_FALLBACK`,
-`MUSIC_DEFAULT_VOLUME`, `BACKGROUND_COLOR`, `BACKGROUND_STYLE`, `X_API_KEY`, `X_API_SECRET`,
-`API_HOST`, and `FACE_DETECTOR_BACKEND`. The last is worth singling out: it is documented as the
-detector used "when a job does not specify one", but `resolve_detector` is only ever called with the
-per-job option, so that default is never consulted.
+Plus fourteen `Settings` fields read by nothing, now thirteen. One is inert because its module is
+(`sfx_volume`); the rest are documented environment variables that were never plumbed — `API_PORT`,
+`REDIS_URL`, `RQ_QUEUE_NAME`, `PUBLIC_BASE_URL`, `USE_INPROCESS_FALLBACK`, `MUSIC_DEFAULT_VOLUME`,
+`BACKGROUND_COLOR`, `BACKGROUND_STYLE`, `X_API_KEY`, `X_API_SECRET`, `API_HOST`, and
+`FACE_DETECTOR_BACKEND`. The last is worth singling out: it is documented as the detector used "when a
+job does not specify one", but `resolve_detector` is only ever called with the per-job option, so that
+default is never consulted.
 
 The check is a **ratchet against a recorded baseline**, not a clean-tree assertion — the debt above is
 listed in the script with a reason each, so new dead code fails immediately while the backlog is
@@ -189,10 +189,10 @@ than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2619 passed, 0 failed, 0 skipped, 0 warnings** |
+| `pytest` | **2631 passed, 0 failed, 0 skipped, 0 warnings** |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 230 files (I9; blocking in CI) |
+| `ruff format --check .` | clean — 231 files (I9; blocking in CI) |
 | `mypy .` | clean — 116 source files |
 | `python scripts/check_wired.py --check` | `0 new` unwired modules / unread settings |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
@@ -235,9 +235,43 @@ labels, weights or credentials.
 
 ### Wire up what already exists (nothing blocks this)
 
-`worker/stabilise.py` (V21) · `worker/turn_gain.py` (AU12) · `worker/effects/sfx.py` (A15) ·
-`worker/caption_placement.py` (V15). Each is written, tested and unreachable. See §0 for how to
-confirm, and take the settings with them — `stabilise_strength` and `sfx_volume` are read by nothing.
+`worker/turn_gain.py` (AU12) · `worker/effects/sfx.py` (A15) · `worker/caption_placement.py` (V15).
+Each is written, tested and unreachable. See §0 for how to confirm, and take the settings with them —
+`sfx_volume` is read by nothing.
+
+### 3a. What wiring V21 turned up, because the next one will be similar
+
+Stabilisation is now live, and the exercise was informative beyond the one feature.
+
+**The composition seam already existed and had never been reached.** `apply_reframe` has had a
+`stabilise_margin` parameter and an `_intersect_margin` helper, complete with V16 letterbox
+composition and R10.5 reasoning in the docstring, for as long as the module has existed. Nothing
+passed it. So "unwired" here did not mean "needs designing" — it meant one keyword argument at two
+call sites. Look for the seam before building one.
+
+**Only one geometry branch can host it, and that is not obvious.** `vidstabtransform` fills what it
+vacates with black (`crop=black`, chosen over `optzoom` so subject scale does not vary with how shaky
+the footage was). Those pixels are hidden only when the delivered frame is a crop held inside the
+valid rectangle. `crop_blur` scales the whole frame into the blurred background, `pad` fits it entire,
+and `apply_speaker_reframe` crops but reads `info.width`/`info.height` directly with no
+content-rectangle seam — V16's letterbox rect already bypasses it for the same reason. So V21 declines
+on those and records which branch refused; the rule is in `stabilise.geometry_refusal` rather than
+inline, because a rule expressed as an `if` inside a 300-line loop is a rule nothing can test.
+
+**Measured, on a synthesised shaky fixture:** mean inter-frame luma difference **24.34 → 6.65**. And
+the margin is provably load-bearing — the darkest top strip across all frames is **16.00** with the
+inset and **0.00** without it, i.e. a fully black band delivered. `tests/test_stabilisation_wiring.py`
+asserts both directions, so the second number is what stops the first test passing vacuously.
+
+**`cropdetect` cannot see this defect.** It reports the union of non-black area over time, and the
+vacated band appears only on the frames where the correction shifted furthest — so the union is the
+whole frame and it reports clean. Use a per-frame minimum of an edge strip instead.
+
+**Test the call site, not just the seam.** The first version of these tests drove `apply_reframe`
+directly; deleting `prefilter=` from `worker/pipeline.py` broke none of them. Five pipeline-level
+tests were added that run `run_pipeline` and capture what the geometry stage was handed. This is the
+same mistake as the caption ordering test in §0 — it recurs because seam-level tests are so much
+cheaper to write.
 
 ### Buildable, from Appendix B and the `clip-quality-uplift` spec
 

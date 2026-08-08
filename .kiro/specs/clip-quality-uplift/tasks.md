@@ -28,7 +28,7 @@ design's Testing Strategy. ffmpeg and audio integration tests reuse the existing
 (`make_video`, `requires_ffmpeg`, `probe_size`, `FakeWord`, `FakeFaceDetector`).
 
 **Before starting, run the baseline and record it:** `pytest` must report
-**2619 passed, 0 skipped, 0 warnings**; `cd frontend && npm run test:run` must report
+**2631 passed, 0 skipped, 0 warnings**; `cd frontend && npm run test:run` must report
 **141 passed**. A drop at any point means something stopped running, and a skip is not a
 pass.
 
