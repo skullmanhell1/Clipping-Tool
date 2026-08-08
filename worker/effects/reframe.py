@@ -32,7 +32,7 @@ from config import settings
 # association path; importing it here keeps the module self-describing without
 # creating a hard runtime dependency cycle (diarization imports nothing from
 # this module).
-from worker import scene_detect
+from worker import headroom, scene_detect
 from worker.diarization import Speaker_Turn
 from worker.ffmpeg_utils import (
     ASPECT_PRESETS,
@@ -457,6 +457,7 @@ def build_sendcmd(
     origin_x: int = 0,
     origin_y: int = 0,
     target: str = "crop",
+    headroom_bias: float = 0.0,
 ) -> str:
     """Return ``sendcmd`` script text setting the crop x/y over time.
 
@@ -480,8 +481,16 @@ def build_sendcmd(
     max_y = max(0, src_h - crop_h)
     lines: list[str] = []
     for c in centers:
+        # V22: headroom applied *here*, downstream of `smooth_centers`, which is R1.5 rather than a
+        # convenience. `smooth_centers` resets its EMA at every detected cut, so a bias folded into
+        # the samples upstream would ramp in again after each shot boundary -- a slow vertical drift
+        # per cut that reads as bad tracking rather than as a setting. Zero by default, so the
+        # arithmetic below is byte-identical to v0.11.0 unless someone opts in.
+        biased_cy = headroom.biased_center_y(
+            c.cy, crop_h, src_h, bias=headroom_bias, origin_y=origin_y
+        )
         x = origin_x + int(round(_clamp(c.cx - origin_x - crop_w / 2.0, 0, max_x)))
-        y = origin_y + int(round(_clamp(c.cy - origin_y - crop_h / 2.0, 0, max_y)))
+        y = origin_y + int(round(_clamp(biased_cy - origin_y - crop_h / 2.0, 0, max_y)))
         lines.append(f"{c.t:.3f} {target} x {x}, {target} y {y};")
     return "\n".join(lines) + "\n"
 
@@ -1443,9 +1452,24 @@ def apply_reframe(
 
     smoothed = smooth_centers(samples, alpha=smoothing, cuts=cuts)
     dense = resample_centers(smoothed, command_fps, info.duration)
+    # V22/R1.6: only ever biased when a face was actually detected. Reaching here means `samples`
+    # came from detections -- `apply_reframe` raises `ReframeUnavailable` otherwise -- so the bias is
+    # read from settings here rather than being threaded from a caller that cannot know.
+    headroom_bias_value = headroom.clamp_bias(getattr(settings, "reframe_headroom_bias", 0.0))
     script = build_sendcmd(
-        dense, crop_w, crop_h, src_w, src_h, origin_x=origin_x, origin_y=origin_y
+        dense,
+        crop_w,
+        crop_h,
+        src_w,
+        src_h,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        headroom_bias=headroom_bias_value,
     )
+    if notes is not None:
+        _marker = headroom.marker(headroom_bias_value)
+        if _marker and _marker not in notes:
+            notes.append(_marker)
 
     cmd_file = dest.with_suffix(".reframe.cmd")
     cmd_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1453,8 +1477,14 @@ def apply_reframe(
 
     # Initial crop position (first command); sendcmd updates x/y over time.
     first = dense[0]
+    # The same bias as the sendcmd script above. If these two disagreed, frame 0 would be framed
+    # differently from frame 1 and the clip would open with a visible jump -- so the biased centre is
+    # computed by the same function rather than by a second copy of the arithmetic.
+    first_cy = headroom.biased_center_y(
+        first.cy, crop_h, src_h, bias=headroom_bias_value, origin_y=origin_y
+    )
     x0 = origin_x + int(round(_clamp(first.cx - origin_x - crop_w / 2.0, 0, src_w - crop_w)))
-    y0 = origin_y + int(round(_clamp(first.cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
+    y0 = origin_y + int(round(_clamp(first_cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
 
     escaped = str(cmd_file.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     vf = f"sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
