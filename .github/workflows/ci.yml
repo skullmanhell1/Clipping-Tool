@@ -22,6 +22,11 @@ jobs:
   backend:
     name: Backend (lint + tests)
     runs-on: ubuntu-latest
+    env:
+      # Where the VMAF-capable ffmpeg fetched below lands. Set at job level so the test steps
+      # and the coverage pass agree on it; `config.vmaf_ffmpeg_binary` reads it from the
+      # environment. Everything other than VMAF still runs on the apt ffmpeg.
+      VMAF_FFMPEG_BINARY: ${{ github.workspace }}/.ffmpeg-vmaf/ffmpeg
     steps:
       # fetch-depth: 0 because two parity guards in tests/test_stems_parity.py diff the
       # branch against `origin/main` to prove the stem feature did not touch its sibling
@@ -66,6 +71,58 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-liberation libgl1 libglib2.0-0 libegl1 libgles2
+
+      # VMAF needs an ffmpeg that apt does not provide. No mainstream distribution compiles
+      # `libvmaf` in, so the binary installed above measures SSIM and PSNR but reports VMAF
+      # unavailable — which failed the eight fidelity tests that assert on it.
+      #
+      # Only this measurement moves onto the second binary. Pointing FFMPEG_BINARY at a build
+      # with `libvmaf` was tried first and is worse: the third-party builds that carry it signal
+      # colour differently, leaving `color_transfer` and `color_primaries` unset where the apt
+      # build writes them, so the colour-pipeline checks fail instead. Measured, both ways —
+      # there is no single binary that satisfies both, which is why there are two.
+      #
+      # Pinned to an immutable release tag *and* a version-stamped asset name, then checksummed.
+      # A floating `latest` would be actively wrong here rather than merely untidy: these are
+      # measurement readings, `evaluation/fidelity.py` records the VMAF build in provenance, and
+      # `compare()` refuses to difference readings taken across builds. A silently-updated
+      # libvmaf would invalidate every stored baseline with nothing to point at as the cause.
+      - name: Cache the VMAF-capable ffmpeg
+        id: cache-vmaf-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: .ffmpeg-vmaf
+          # The URL is in the key, so changing the pin below busts the cache by construction and
+          # cannot serve a stale binary under a new pin.
+          key: vmaf-ffmpeg-autobuild-2026-08-07-13-13-n7.1.5-12-g1fdbca85aa
+
+      - name: Fetch the VMAF-capable ffmpeg
+        if: steps.cache-vmaf-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-07-13-13/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
+          sha="4b773a5d930e44d0d187ed543f6c4cb16adc91d3abc1ac27af735486ecbfc7c9"
+          curl -sSL --retry 3 -o ffmpeg-vmaf.tar.xz "$url"
+          echo "${sha}  ffmpeg-vmaf.tar.xz" | sha256sum --check --strict
+          mkdir -p .ffmpeg-vmaf
+          # Only the binary; the archive also carries ffprobe, docs and shared libs we do not use.
+          tar -xJf ffmpeg-vmaf.tar.xz --strip-components=2 -C .ffmpeg-vmaf --wildcards '*/bin/ffmpeg'
+          chmod +x .ffmpeg-vmaf/ffmpeg
+          rm -f ffmpeg-vmaf.tar.xz
+
+      # Asserted rather than assumed. A silently absent or libvmaf-less binary here would make
+      # the fidelity tests fail with "libvmaf not built in", several steps away from the cause.
+      - name: The VMAF ffmpeg is present and has libvmaf
+        run: |
+          set -euo pipefail
+          "$VMAF_FFMPEG_BINARY" -hide_banner -version | head -1
+          "$VMAF_FFMPEG_BINARY" -hide_banner -filters | grep -qE '[[:space:]]libvmaf[[:space:]]' \
+            || { echo "::error::${VMAF_FFMPEG_BINARY} has no libvmaf filter"; exit 1; }
+          # The apt ffmpeg must remain the primary one; if it ever gains libvmaf this whole step
+          # becomes unnecessary, and that is worth noticing rather than carrying forever.
+          if ffmpeg -hide_banner -filters | grep -qE '[[:space:]]libvmaf[[:space:]]'; then
+            echo "::notice::apt ffmpeg now ships libvmaf; VMAF_FFMPEG_BINARY may no longer be needed"
+          fi
 
       - name: Install Python dependencies
         run: |
