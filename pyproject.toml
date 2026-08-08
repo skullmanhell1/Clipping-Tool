@@ -162,7 +162,6 @@ ignore = [
     "S106",  # same, passed as an argument
     "S107",  # same, as a default
     "S108",  # "insecure temp file" — pytest tmp_path fixtures
-    "S306",  # mktemp — in test helpers only
     "S307",  # eval — one documented site evaluating our own emitted expression
     "S311",  # non-crypto random — generating test data
     "S603",  # subprocess — running the real ffmpeg is the point
