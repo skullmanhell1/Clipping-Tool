@@ -192,6 +192,55 @@ def test_p27_broll_enabled_but_no_assets_still_produces_clips(make_video, tmp_pa
     assert (tmp_path / "clips" / clip.filename).exists()
 
 
+@requires_ffmpeg
+def test_a_failed_composite_pass_still_produces_a_clip_and_says_so(
+    make_video, tmp_path, monkeypatch
+):
+    """A compositor failure must cost the effects, never the clip - and must be recorded.
+
+    This was found by running the app rather than the suite. The compositor's ffmpeg failed, the
+    pipeline caught `FFmpegError` into a bare ``rendered = None``, and the fallback then shipped the
+    un-composited clip - which is right. Two things were wrong with it:
+
+    * the failure was recorded nowhere. ``render_clip`` *also* returns ``None`` legitimately when no
+      effect is enabled, so a clip that silently lost every requested effect was indistinguishable
+      from one that never asked for any. Hence ``compositor_degraded``.
+    * the fallback wrote into ``clips_dir``, whose existence it assumed. When that directory was
+      missing the fallback raised ``FileNotFoundError`` and failed the entire job - so the branch
+      whose whole purpose is surviving a compositor failure was itself fatal.
+
+    Both are asserted here, with the output directory deleted after the pipeline created it to
+    reproduce the original conditions exactly.
+    """
+    import shutil
+
+    import worker.pipeline as pl
+    from worker import ffmpeg_utils as fu
+
+    _stub_transcribe(monkeypatch)
+    _stub_selection(monkeypatch)
+
+    clips_dir = tmp_path / "clips"
+
+    def exploding_render(base_clip, dest, *a, **k):
+        # Reproduce the real failure: the destination's parent has gone while this clip rendered.
+        shutil.rmtree(clips_dir, ignore_errors=True)
+        raise fu.FFmpegError("simulated composite pass failure")
+
+    monkeypatch.setattr(pl.compositor, "render_clip", exploding_render)
+
+    src = make_video("s.mp4", duration=4.0, w=640, h=360)
+    opts = ProcessingOptions(captions=True, metadata=False, aspect="9:16")
+
+    clips = pl.run_pipeline(src, opts, clips_dir=clips_dir, temp_dir=tmp_path / "tmp")
+
+    assert len(clips) == 1, "a failed composite pass must not cost the clip"
+    clip = clips[0]
+    assert "compositor_degraded" in clip.effects_applied
+    assert "captions" not in clip.effects_applied, "captions cannot be claimed; the pass failed"
+    assert (clips_dir / clip.filename).exists(), "the un-composited clip was not written"
+
+
 # Feature: tier1-creator-output-upgrade, Property 27: Missing dependencies still produce clips and record degradation
 @requires_ffmpeg
 def test_p27_visual_selection_failing_sampler_degrades(make_video, tmp_path, monkeypatch):
