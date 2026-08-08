@@ -26,6 +26,7 @@ from worker import (
     discourse,
     hook_score,
     intermediate_cache,
+    pitch_features,
     scene_detect,
     selection_features,
 )
@@ -327,6 +328,7 @@ def select_moments(
     source_path: str | Path,
     total_duration: float,
     client: Optional[BaseLLMClient] = None,
+    audio_wav: Optional[str | Path] = None,
 ) -> list[ClipCandidate]:
     """Return scored clip candidates for a video.
 
@@ -367,6 +369,54 @@ def select_moments(
         )
     ]
 
+    # S3: one pitch track per source, from the 16 kHz mono WAV `extract_audio` already wrote for
+    # transcription. Cached by source content like the envelope above, for the same reason -- the
+    # answer for a given file never changes, and re-deriving it to try different effect settings
+    # was paying for a full analysis to learn nothing new.
+    #
+    # Absent `audio_wav` this is empty and no pitch feature is attached, which is the same
+    # "no information" contract the envelope already has. Nothing here can fail a selection.
+    def _pitch_wav() -> Path:
+        """The 16 kHz mono WAV pitch analysis needs, extracting it if the caller gave none.
+
+        R4.7 allows one additional pass over the source audio, and this is it. `extract_audio`
+        already produces exactly the format `read_mono_wav` requires -- and this is its first
+        production caller: nothing in `worker/` used it before, because faster-whisper decodes the
+        media itself. Inside the memoisation, so the pass is paid once per source rather than once
+        per run.
+        """
+        if audio_wav:
+            return Path(audio_wav)
+        import tempfile
+
+        from worker import ffmpeg_utils as _fu
+
+        target = Path(tempfile.mkdtemp(prefix="pitch-")) / "audio.wav"
+        return _fu.extract_audio(source_path, target, sample_rate=16000)
+
+    pitch_track: list[tuple[float, float]] = []
+    if bool(getattr(settings, "selection_pitch_feature", False)):
+        try:
+            pitch_track = [
+                (float(t), float(hz))
+                for t, hz in intermediate_cache.memoise(
+                    "pitch",
+                    source_path,
+                    lambda: [
+                        list(reading)
+                        for reading in pitch_features.f0_track(
+                            *pitch_features.read_mono_wav(_pitch_wav())
+                        )
+                    ],
+                    {"hop": pitch_features.HOP_S, "frame": pitch_features.FRAME_S},
+                )
+            ]
+        except Exception:
+            # A missing or unexpected WAV must never cost a selection. S3 is an extra signal, and
+            # the ranking blend treats an absent feature as neutral.
+            pitch_track = []
+    pitch_median = pitch_features.source_median_f0(pitch_track) if pitch_track else None
+
     def _measured(found: list[ClipCandidate]) -> list[ClipCandidate]:
         """Attach the measured features to a result on its way out (S2, S4, S6).
 
@@ -378,6 +428,10 @@ def select_moments(
         """
         selection_features.annotate_candidates(found, transcript.words, total_duration)
         audio_features.annotate_candidates(found, envelope)
+        if pitch_track:
+            pitch_features.annotate_candidates(
+                found, pitch_track, source_median=pitch_median
+            )
         hook_score.annotate_candidates(found, transcript.words, envelope=envelope)
         discourse.annotate_candidates(found)
         return found
