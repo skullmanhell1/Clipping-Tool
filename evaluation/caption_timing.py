@@ -135,9 +135,7 @@ def match_tokens(text: str) -> list[str]:
 # --- reading what was actually rendered ---------------------------------------------------
 
 #: ASS dialogue lines. Captured groups: start, end, the remainder of the fields plus text.
-_ASS_DIALOGUE = re.compile(
-    r"^Dialogue:\s*[^,]*,([^,]+),([^,]+),(.*)$", re.MULTILINE
-)
+_ASS_DIALOGUE = re.compile(r"^Dialogue:\s*[^,]*,([^,]+),([^,]+),(.*)$", re.MULTILINE)
 #: ASS override blocks (`{\kf30\c&H..}`) and drawing commands, stripped to leave spoken text.
 _ASS_OVERRIDE = re.compile(r"\{[^}]*\}")
 

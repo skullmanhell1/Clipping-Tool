@@ -129,9 +129,7 @@ def test_a_file_is_not_submitted_on_the_first_sighting(watcher, watch_dir, manag
     assert manager.calls == []
 
 
-def test_a_file_still_growing_is_not_submitted_until_its_size_settles(
-    watcher, watch_dir, manager
-):
+def test_a_file_still_growing_is_not_submitted_until_its_size_settles(watcher, watch_dir, manager):
     """The defect this prevents: ffprobe reading a container that is still being written.
 
     Three sightings at three different sizes must submit nothing, and the fourth — the first to
@@ -238,8 +236,16 @@ def test_several_files_are_ingested_in_a_deterministic_order(watcher, watch_dir,
         "README",
         ".hidden.swp",
     ],
-    ids=["ytdlp-partial", "chrome-partial", "text", "subtitles", "image", "archive",
-         "no-extension", "editor-swap"],
+    ids=[
+        "ytdlp-partial",
+        "chrome-partial",
+        "text",
+        "subtitles",
+        "image",
+        "archive",
+        "no-extension",
+        "editor-swap",
+    ],
 )
 def test_files_that_are_not_videos_are_ignored(watcher, watch_dir, manager, name):
     """The two partial-download suffixes are the reason this filter matters, not tidiness.
@@ -439,9 +445,7 @@ def test_start_creates_the_watch_folder(tmp_path, manager):
         watcher.stop()
 
 
-def test_files_already_present_when_watching_starts_are_not_ingested(
-    watcher, watch_dir, manager
-):
+def test_files_already_present_when_watching_starts_are_not_ingested(watcher, watch_dir, manager):
     """Enabling the toggle must not queue the folder's entire backlog.
 
     A user who has been using ``storage/watch`` as an ordinary directory, or who re-enables the

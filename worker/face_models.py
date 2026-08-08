@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 
@@ -54,7 +53,7 @@ MODEL_MANIFEST: tuple[Model_Entry, ...] = (
 )
 
 
-def entry_for_backend(backend: str) -> Optional[Model_Entry]:
+def entry_for_backend(backend: str) -> Model_Entry | None:
     """The manifest entry serving ``backend``, or ``None``."""
     for entry in MODEL_MANIFEST:
         if entry.backend == backend:
@@ -76,7 +75,7 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def verify(directory: Optional[Path] = None) -> list[str]:
+def verify(directory: Path | None = None) -> list[str]:
     """Return human-readable problems; empty means every model verified.
 
     Performs no network access. Each problem names the file, because "a model is wrong" is not
@@ -105,13 +104,12 @@ def verify(directory: Optional[Path] = None) -> list[str]:
         licence = directory / entry.licence_file
         if not licence.is_file():
             problems.append(
-                f"{entry.licence_file}: licence text missing for {entry.filename} "
-                f"({entry.licence})"
+                f"{entry.licence_file}: licence text missing for {entry.filename} ({entry.licence})"
             )
     return problems
 
 
-def resolve_model(backend: str, directory: Optional[Path] = None) -> Optional[Path]:
+def resolve_model(backend: str, directory: Path | None = None) -> Path | None:
     """The path to ``backend``'s model when it is present and intact, else ``None``.
 
     **Size is checked, the full digest is not.** A ``stat`` is free and catches the realistic

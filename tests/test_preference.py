@@ -58,8 +58,7 @@ def test_the_same_seed_reproduces_the_same_set():
 def test_different_seeds_generally_produce_different_orders():
     """Otherwise the seed is decorative and every set carries the same arrangement."""
     orders = {
-        tuple(t.config_a for t in pref.build_set("x", _pairs(12), seed=s).trials)
-        for s in range(8)
+        tuple(t.config_a for t in pref.build_set("x", _pairs(12), seed=s).trials) for s in range(8)
     }
     assert len(orders) > 1
 
@@ -114,7 +113,7 @@ def test_the_session_is_entirely_local(tmp_path):
     """
     built = pref.build_set("grade", _pairs(2), seed=1)
     page = pref.write_session(built, tmp_path)["page"].read_text(encoding="utf-8")
-    for forbidden in ("http://", "https://", "cdn", "src=\"//"):
+    for forbidden in ("http://", "https://", "cdn", 'src="//'):
         assert forbidden not in page, forbidden
 
 
@@ -246,7 +245,7 @@ def test_a_small_run_is_explicitly_labelled_small():
 
 
 def test_zero_judgements_is_not_reported_as_equivalence():
-    """"Nobody judged it" and "nobody could tell" are different findings."""
+    """ "Nobody judged it" and "nobody could tell" are different findings."""
     built = pref.build_set("grade", _pairs(3), seed=1)
     result = pref.tally(built, [])
     assert result["trials_judged"] == 0

@@ -1,4 +1,5 @@
 """Integration tests for the single-pass effect compositor."""
+
 from __future__ import annotations
 
 from tests.conftest import (
@@ -13,8 +14,12 @@ from worker.models import ProcessingOptions
 
 
 def _words():
-    return [FakeWord(0.2, 0.6, "This"), FakeWord(0.7, 1.1, "is"),
-            FakeWord(1.2, 1.6, "fire"), FakeWord(1.7, 2.2, "money")]
+    return [
+        FakeWord(0.2, 0.6, "This"),
+        FakeWord(0.7, 1.1, "is"),
+        FakeWord(1.2, 1.6, "fire"),
+        FakeWord(1.7, 2.2, "money"),
+    ]
 
 
 @requires_ffmpeg
@@ -30,18 +35,40 @@ def test_all_effects_single_pass(make_video, png_asset, tmp_path):
     base = make_video("base.mp4", duration=3.0, w=1080, h=1920)
     asset = png_asset("e.png")
     opts = ProcessingOptions(
-        captions=True, hook_title=True, color="vivid", zoom=True, transitions=True,
-        fades=True, progress_bar=True, emoji="heavy", music="chill",
-        caption_template="boxed", caption_position="bottom",
+        captions=True,
+        hook_title=True,
+        color="vivid",
+        zoom=True,
+        transitions=True,
+        fades=True,
+        progress_bar=True,
+        emoji="heavy",
+        music="chill",
+        caption_template="boxed",
+        caption_position="bottom",
     )
     result = compositor.render_clip(
-        base, tmp_path / "all.mp4", opts, _words(), tmp_path,
-        hook_text="WAIT FOR IT", emoji_resolver=lambda c: asset,
+        base,
+        tmp_path / "all.mp4",
+        opts,
+        _words(),
+        tmp_path,
+        hook_text="WAIT FOR IT",
+        emoji_resolver=lambda c: asset,
     )
     assert result is not None
     applied = result.effects_applied
-    for fx in ("captions", "hook_title", "color:vivid", "zoom", "transitions",
-               "fades", "progress_bar", "emoji:heavy", "music:chill"):
+    for fx in (
+        "captions",
+        "hook_title",
+        "color:vivid",
+        "zoom",
+        "transitions",
+        "fades",
+        "progress_bar",
+        "emoji:heavy",
+        "music:chill",
+    ):
         assert fx in applied
     assert result.path.exists()
     assert probe_size(result.path) == (1080, 1920)
@@ -68,7 +95,6 @@ def test_captions_only(make_video, tmp_path):
     assert "captions" in result.effects_applied
 
 
-
 # --------------------------------------------------------------------------- #
 # Task 6 — B-roll single-pass compositor integration (6.5, 6.6, 6.7)
 # --------------------------------------------------------------------------- #
@@ -92,8 +118,7 @@ def _spy_run(monkeypatch):
 
 def _image_resolver(png_path, keyword="fire", start=0.4, end=1.4):
     """A b-roll resolver returning a single resolved (image) cue."""
-    asset = AssetRef(path=str(png_path), kind="image", provider="local",
-                     license="local")
+    asset = AssetRef(path=str(png_path), kind="image", provider="local", license="local")
     return lambda: [BrollCue(start, end, keyword, asset=asset)]
 
 
@@ -111,8 +136,7 @@ def _maps_and_codecs(cmd):
 
 
 @requires_ffmpeg
-def test_broll_single_pass_with_captions_and_emoji(make_video, png_asset,
-                                                   monkeypatch, tmp_path):
+def test_broll_single_pass_with_captions_and_emoji(make_video, png_asset, monkeypatch, tmp_path):
     """Validates: Requirements 10.1, 10.3, 17.1 — one ffmpeg pass, distinct indices."""
     base = make_video("base.mp4", duration=3.0, w=1080, h=1920)
     emoji_png = png_asset("emoji.png", color="red")
@@ -121,7 +145,11 @@ def test_broll_single_pass_with_captions_and_emoji(make_video, png_asset,
     calls = _spy_run(monkeypatch)
     opts = ProcessingOptions(captions=True, emoji="heavy")
     result = compositor.render_clip(
-        base, tmp_path / "single.mp4", opts, _words(), tmp_path,
+        base,
+        tmp_path / "single.mp4",
+        opts,
+        _words(),
+        tmp_path,
         emoji_resolver=lambda c: emoji_png,
         broll_resolver=_image_resolver(broll_png, keyword="fire"),
     )
@@ -146,8 +174,7 @@ def test_broll_single_pass_with_captions_and_emoji(make_video, png_asset,
 
 
 @requires_ffmpeg
-def test_zero_resolvable_cues_equals_broll_disabled(make_video, monkeypatch,
-                                                    tmp_path):
+def test_zero_resolvable_cues_equals_broll_disabled(make_video, monkeypatch, tmp_path):
     """Validates: Requirements 9.3 — no resolvable assets == b-roll disabled.
 
     Property 18 (as an integration example): enabling b-roll with an empty
@@ -159,11 +186,19 @@ def test_zero_resolvable_cues_equals_broll_disabled(make_video, monkeypatch,
     calls = _spy_run(monkeypatch)
     # b-roll "enabled" but the resolver yields nothing resolvable.
     with_broll = compositor.render_clip(
-        base, tmp_path / "with.mp4", opts, _words(), tmp_path,
+        base,
+        tmp_path / "with.mp4",
+        opts,
+        _words(),
+        tmp_path,
         broll_resolver=lambda: [],
     )
     disabled = compositor.render_clip(
-        base, tmp_path / "without.mp4", opts, _words(), tmp_path,
+        base,
+        tmp_path / "without.mp4",
+        opts,
+        _words(),
+        tmp_path,
     )
 
     assert with_broll is not None and disabled is not None
@@ -184,8 +219,11 @@ def test_stream_copy_and_noop_contract(make_video, monkeypatch, tmp_path):
     # here would make this a test about two changed streams, not one.
     calls = _spy_run(monkeypatch)
     result = compositor.render_clip(
-        base, tmp_path / "vidonly.mp4", options_all_off(captions=True),
-        _words(), tmp_path,
+        base,
+        tmp_path / "vidonly.mp4",
+        options_all_off(captions=True),
+        _words(),
+        tmp_path,
     )
     assert result is not None
     cmd = calls[-1]
@@ -193,8 +231,12 @@ def test_stream_copy_and_noop_contract(make_video, monkeypatch, tmp_path):
 
     # Everything off (even with a b-roll resolver that yields nothing) -> None.
     noop = compositor.render_clip(
-        base, tmp_path / "noop.mp4", options_all_off(captions=False),
-        _words(), tmp_path, broll_resolver=lambda: [],
+        base,
+        tmp_path / "noop.mp4",
+        options_all_off(captions=False),
+        _words(),
+        tmp_path,
+        broll_resolver=lambda: [],
     )
     assert noop is None
 
@@ -242,7 +284,7 @@ class Input_Claiming_Engine(AV_Engine):
         self.engine_id = str(engine_id)
         self.stage = Engine_Stage.COMPOSE
         self.priority = priority
-        self.max_inputs = len(paths)          # this engine's reserved block size
+        self.max_inputs = len(paths)  # this engine's reserved block size
         self.z_order = z_order
         self._paths = tuple(_Path(p) for p in paths)
         self.contexts: list = []
@@ -266,8 +308,7 @@ class Input_Claiming_Engine(AV_Engine):
             contribution=Compose_Contribution(
                 engine_id=self.engine_id,
                 inputs=tuple(
-                    Compose_Input(path=path, loop=True, duration=1.0)
-                    for path in self._paths
+                    Compose_Input(path=path, loop=True, duration=1.0) for path in self._paths
                 ),
                 # Index-free filter text carrying the claimed label so the test can
                 # see WHICH engine's filter landed where in the graph.
@@ -281,8 +322,7 @@ def _stub_ffmpeg(monkeypatch, *, has_audio=True, duration=3.0, w=1080, h=1920):
     """Stub ``probe``/``_run`` so the compositor's argv is inspectable offline."""
     from worker.ffmpeg_utils import MediaInfo
 
-    info = MediaInfo(duration=duration, width=w, height=h, fps=30.0,
-                     has_audio=has_audio)
+    info = MediaInfo(duration=duration, width=w, height=h, fps=30.0, has_audio=has_audio)
     calls: list[list[str]] = []
 
     def fake_run(cmd):
@@ -325,42 +365,55 @@ def test_engine_inputs_land_at_the_host_reserved_indices(tmp_path, monkeypatch):
     registry.register(alpha)
     registry.register(beta)
 
-    options = _Namespace(alpha_engine_enabled=True, beta_engine_enabled=True,
-                         permissibility_mode=False)
+    options = _Namespace(
+        alpha_engine_enabled=True, beta_engine_enabled=True, permissibility_mode=False
+    )
     host = Engine_Host(
-        options, job_id="job1", temp_dir=tmp_path / "tmp", registry=registry,
-        capabilities=Capability_Report(StaticProber({})), clock=FakeClock(),
+        options,
+        job_id="job1",
+        temp_dir=tmp_path / "tmp",
+        registry=registry,
+        capabilities=Capability_Report(StaticProber({})),
+        clock=FakeClock(),
     )
     outcome = host.run_stage(
-        Engine_Stage.COMPOSE, clip_id="01_abc123", source=tmp_path / "src.mp4",
-        clip_path=base, clip_start=0.0, clip_end=3.0, duration=3.0,
+        Engine_Stage.COMPOSE,
+        clip_id="01_abc123",
+        source=tmp_path / "src.mp4",
+        clip_path=base,
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
     )
 
     # The reserved block starts, known BEFORE run() and published to the engine.
     assert alpha.contexts[0].first_input_index == 1
     assert beta.contexts[0].first_input_index == 2
     # Contributions arrive in registry order — what the reservation is built from.
-    assert [c.engine_id for c in outcome.contributions] == ["alpha_engine",
-                                                            "beta_engine"]
+    assert [c.engine_id for c in outcome.contributions] == ["alpha_engine", "beta_engine"]
 
     calls = _stub_ffmpeg(monkeypatch)
     result = compositor.render_clip(
-        base, tmp_path / "out.mp4", options_all_off(captions=False), [],
-        tmp_path / "work", engine_contributions=outcome.contributions,
+        base,
+        tmp_path / "out.mp4",
+        options_all_off(captions=False),
+        [],
+        tmp_path / "work",
+        engine_contributions=outcome.contributions,
     )
     assert result is not None
-    assert len(calls) == 1                     # still exactly one ffmpeg pass
+    assert len(calls) == 1  # still exactly one ffmpeg pass
     cmd = calls[0]
 
     inputs = _input_paths(cmd)
-    assert inputs == [str(base), str(alpha_input), str(beta_inputs[0]),
-                      str(beta_inputs[1])]
+    assert inputs == [str(base), str(alpha_input), str(beta_inputs[0]), str(beta_inputs[1])]
     # Each engine's first input sits on exactly the index it was promised.
     assert inputs.index(str(alpha_input)) == alpha.contexts[0].first_input_index
     assert inputs.index(str(beta_inputs[0])) == beta.contexts[0].first_input_index
     # ... and the second engine's block really accounts for the first's size.
-    assert (beta.contexts[0].first_input_index
-            == alpha.contexts[0].first_input_index + alpha.max_inputs)
+    assert (
+        beta.contexts[0].first_input_index == alpha.contexts[0].first_input_index + alpha.max_inputs
+    )
 
     # Filters layer by (z_order, engine_id): beta (z=1) below alpha (z=9), which is
     # the OPPOSITE of the input order. The two orderings decouple by design.
@@ -370,8 +423,7 @@ def test_engine_inputs_land_at_the_host_reserved_indices(tmp_path, monkeypatch):
     host.finish_clip("01_abc123")
 
 
-def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
-                                                                     monkeypatch):
+def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path, monkeypatch):
     """Validates: Requirements 23.1, 23.3 — the reserved block is inert when empty.
 
     The parity guarantee of the seam: with no engine contribution the block is
@@ -390,33 +442,41 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     # about the synthesised fallback. The compositor resolves through ``resolve_music_bed``
     # now, because a bare path cannot say whether it is a real track (A15).
     monkeypatch.setattr(
-        compositor.audio, "resolve_music_bed",
+        compositor.audio,
+        "resolve_music_bed",
         lambda mood, duration, temp_dir, **_kw: compositor.audio.MusicBed(
             path=music, mood=mood, source=compositor.audio.SOURCE_USER_TRACK
         ),
     )
     calls = _stub_ffmpeg(monkeypatch)
 
-    opts = ProcessingOptions(captions=True, music="chill", emoji="heavy",
-                             caption_template="boxed")
+    opts = ProcessingOptions(captions=True, music="chill", emoji="heavy", caption_template="boxed")
 
     def render(dest, contributions):
         return compositor.render_clip(
-            base, tmp_path / dest, opts, _words(), tmp_path / "work",
+            base,
+            tmp_path / dest,
+            opts,
+            _words(),
+            tmp_path / "work",
             emoji_resolver=lambda char: emoji_png,
             engine_contributions=contributions,
         )
 
-    legacy = render("legacy.mp4", None)          # every v0.8.0 caller
-    empty = render("empty.mp4", [])              # host with no contribution
-    none_left = render("nones.mp4", [None])      # hostile/empty sequence
+    legacy = render("legacy.mp4", None)  # every v0.8.0 caller
+    empty = render("empty.mp4", [])  # host with no contribution
+    none_left = render("nones.mp4", [None])  # hostile/empty sequence
 
     assert legacy is not None and empty is not None and none_left is not None
     assert len(calls) == 3
 
     def canonical(cmd):
-        return [part.replace("legacy.mp4", "<out>").replace("empty.mp4", "<out>")
-                .replace("nones.mp4", "<out>") for part in cmd]
+        return [
+            part.replace("legacy.mp4", "<out>")
+            .replace("empty.mp4", "<out>")
+            .replace("nones.mp4", "<out>")
+            for part in cmd
+        ]
 
     assert canonical(calls[1]) == canonical(calls[0])
     assert canonical(calls[2]) == canonical(calls[0])
@@ -431,6 +491,6 @@ def test_zero_contribution_engine_block_preserves_v080_input_indices(tmp_path,
     # instead of `volume` directly. The property this line guards is that music is still input
     # **1** — which is what the `inputs[1] == str(music)` assertion above states directly, and
     # this restates through whichever filter happens to consume it first.
-    assert "[1:a]aloop=" in graph                       # music label unchanged
-    assert "volume=" in graph                           # and it is still levelled
-    assert "[2:v]" in graph                            # first emoji input at 2
+    assert "[1:a]aloop=" in graph  # music label unchanged
+    assert "volume=" in graph  # and it is still levelled
+    assert "[2:v]" in graph  # first emoji input at 2

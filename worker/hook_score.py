@@ -34,7 +34,8 @@ without a code change.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from config import settings
 from worker import audio_features, selection_features
@@ -52,16 +53,43 @@ SPEECH_DEADLINE_S = 1.0
 #: word boundaries so "you" does not fire inside "your" twice or inside "young" at all.
 _HOOK_TOKENS = frozenset(
     {
-        "how", "why", "what", "when", "who", "which", "whose",
-        "you", "your", "youre", "yours",
-        "never", "nobody", "nothing", "everyone", "everybody", "always",
-        "worst", "best", "biggest", "hardest", "only", "stop", "wrong",
-        "secret", "mistake", "truth", "actually", "listen", "imagine",
+        "how",
+        "why",
+        "what",
+        "when",
+        "who",
+        "which",
+        "whose",
+        "you",
+        "your",
+        "youre",
+        "yours",
+        "never",
+        "nobody",
+        "nothing",
+        "everyone",
+        "everybody",
+        "always",
+        "worst",
+        "best",
+        "biggest",
+        "hardest",
+        "only",
+        "stop",
+        "wrong",
+        "secret",
+        "mistake",
+        "truth",
+        "actually",
+        "listen",
+        "imagine",
     }
 )
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
-_NUMBER_RE = re.compile(r"\b\d+(?:[.,]\d+)?\b|\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b")
+_NUMBER_RE = re.compile(
+    r"\b\d+(?:[.,]\d+)?\b|\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b"
+)
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -100,10 +128,10 @@ def speech_promptness(words: Sequence[Any], start: float) -> float:
     Linear rather than a step, because the difference between speech starting at 0.1 s and at
     0.9 s is real and a threshold would call them identical.
     """
-    first: Optional[float] = None
+    first: float | None = None
     for word in words:
         try:
-            word_start = float(getattr(word, "start"))
+            word_start = float(word.start)
         except (AttributeError, TypeError, ValueError):
             continue
         if word_start != word_start:  # NaN

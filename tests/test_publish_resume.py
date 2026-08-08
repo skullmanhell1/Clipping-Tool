@@ -46,13 +46,12 @@ def resume_env(monkeypatch, history, clip_on_disk):
         "whop": FakePublisher("whop"),
         # Configured but not approved for direct publishing — the Instagram/X shape.
         "instagram": FakePublisher(
-            "instagram", direct_publish=False,
+            "instagram",
+            direct_publish=False,
             message="Professional account/app approval required; review mode only",
         ),
         # Not configured at all.
-        "tiktok": FakePublisher(
-            "tiktok", configured=False, message="Set TIKTOK_ACCESS_TOKEN"
-        ),
+        "tiktok": FakePublisher("tiktok", configured=False, message="Set TIKTOK_ACCESS_TOKEN"),
     }
     manager = PublishManager(publishers=publishers, history=history, autostart=False)
     monkeypatch.setattr(api_main, "get_history", lambda: history)
@@ -65,12 +64,17 @@ def client():
     return TestClient(api_main.app)
 
 
-def _attempt(history, clip_path: Path, *, platform="whop", state="review_required",
-             mode="review") -> str:
+def _attempt(
+    history, clip_path: Path, *, platform="whop", state="review_required", mode="review"
+) -> str:
     return history.create_attempt(
-        job_id="job1", clip_id="c1", platform=platform,
+        job_id="job1",
+        clip_id="c1",
+        platform=platform,
         request={"video_path": str(clip_path), "mode": mode, "account_id": ""},
-        scheduled_at=time.time() - 10, state=state, mode=mode,
+        scheduled_at=time.time() - 10,
+        state=state,
+        mode=mode,
     )
 
 
@@ -79,9 +83,7 @@ def _attempt(history, clip_path: Path, *, platform="whop", state="review_require
 # ---------------------------------------------------------------------------
 
 
-def test_approving_a_review_required_attempt_queues_it_for_direct_publish(
-    client, resume_env
-):
+def test_approving_a_review_required_attempt_queues_it_for_direct_publish(client, resume_env):
     """The dead end now has an exit: the attempt returns to ``queued`` as ``mode=auto``.
 
     Rewriting the mode is the substance of an approval. Leaving it as ``review`` would
@@ -121,9 +123,7 @@ def test_an_approved_attempt_is_actually_picked_up_by_the_scheduler(client, resu
     assert manager.publishers["whop"].published[0].mode == "auto"
 
 
-def test_approval_is_refused_when_the_platform_cannot_publish_directly(
-    client, resume_env
-):
+def test_approval_is_refused_when_the_platform_cannot_publish_directly(client, resume_env):
     """Approving an unapproved platform fails loudly instead of bouncing forever.
 
     This is the case that matters most: Instagram and X return ``review_required``
@@ -203,9 +203,7 @@ def test_non_resumable_states_are_refused(client, resume_env, state):
     assert history.get_attempt(attempt_id)["state"] == state
 
 
-def test_retry_does_not_escalate_a_review_submission_into_a_live_post(
-    client, resume_env
-):
+def test_retry_does_not_escalate_a_review_submission_into_a_live_post(client, resume_env):
     """``/retry`` preserves ``mode``; only ``/approve`` may change it.
 
     Otherwise "retry this stuck item" would silently publish something the operator had
@@ -255,6 +253,7 @@ def _accept_stub_clips(monkeypatch):
     manager-level test that a rejected clip never reaches the publisher.
     """
     monkeypatch.setattr(
-        preflight, "validate_clip",
+        preflight,
+        "validate_clip",
         lambda video_path, platform: preflight.PreflightReport(platform=platform),
     )

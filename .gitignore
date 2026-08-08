@@ -80,3 +80,17 @@ eval/*.json
 # Cached static ffmpeg build fetched by scripts/setup_dev_env.sh, so a re-run after a
 # recycled environment is a copy rather than a 42 MB download.
 .devtools/
+
+
+
+# SARIF written by the CodeQL workflow. It lands in the workspace (rather than the action's default
+# location outside it) so the run can archive it and gate on it; that also puts it in reach of
+# `git add`, which is the only reason this line is needed.
+sarif-results/
+
+
+
+# The VMAF-capable ffmpeg CI fetches for the fidelity gate (see .github/workflows/ci.yml).
+# Cached between runs by actions/cache, and downloadable locally the same way, so it is never
+# something to commit — it is a 114 MB third-party binary.
+.ffmpeg-vmaf/

@@ -119,21 +119,42 @@ def make_sync_fixture(
     audio_at = max(0.0, event_at + audio_offset)
 
     video_src = f"color=c=black:s={size}:r={fps}:d={duration}"
-    audio_expr = (
-        f"if(between(t,{audio_at},{audio_at + 0.05}), 0.8*sin(2*PI*1000*t), 0)"
-    )
+    audio_expr = f"if(between(t,{audio_at},{audio_at + 0.05}), 0.8*sin(2*PI*1000*t), 0)"
     flash = (
         f"drawbox=x=0:y=0:w=iw:h=ih:color=white@1.0:t=fill:"
         f"enable='between(t,{event_at},{event_at + 1.0 / fps})'"
     )
 
     cmd = [
-        _ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", video_src,
-        "-f", "lavfi", "-i", f"aevalsrc='{audio_expr}':d={duration}:s=48000",
-        "-vf", flash,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-ar", "48000", "-ac", "2",
+        _ffmpeg(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        video_src,
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc='{audio_expr}':d={duration}:s=48000",
+        "-vf",
+        flash,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
     ]
     if vfr:
         # A variable frame rate source, which `config.py`'s own comment calls "every screen
@@ -161,10 +182,20 @@ def video_onset(path: str | Path) -> float:
     """
     proc = subprocess.run(
         [
-            _ffmpeg(), "-hide_banner", "-nostats", "-i", str(path),
-            "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-",
+            _ffmpeg(),
+            "-hide_banner",
+            "-nostats",
+            "-i",
+            str(path),
+            "-vf",
+            "signalstats,metadata=print:file=-",
+            "-f",
+            "null",
+            "-",
         ],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True,
+        text=True,
+        timeout=900,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
     frames = _FRAME_INDEX.findall(combined)
@@ -193,10 +224,20 @@ def video_onset(path: str | Path) -> float:
 def _stream_fps(path: str | Path) -> float:
     proc = subprocess.run(
         [
-            _ffprobe(), "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=avg_frame_rate", "-of", "default=nw=1:nk=1", str(path),
+            _ffprobe(),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     text = (proc.stdout or "").strip()
     try:
@@ -219,10 +260,24 @@ def audio_onset(path: str | Path, *, sample_rate: int = 48000) -> float:
     """
     proc = subprocess.run(
         [
-            _ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path),
-            "-map", "0:a", "-f", "s16le", "-ac", "1", "-ar", str(sample_rate), "-",
+            _ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:a",
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            "-",
         ],
-        capture_output=True, timeout=900,
+        capture_output=True,
+        timeout=900,
     )
     raw = proc.stdout or b""
     count = len(raw) // 2

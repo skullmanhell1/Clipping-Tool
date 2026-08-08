@@ -36,7 +36,6 @@ What a profile controls, and what it does not:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from config import settings
 from worker.ffmpeg_utils import OUTPUT_SHORT_SIDES
@@ -67,7 +66,7 @@ class OutputProfile:
     #: VBV ceiling in kbps.
     max_bitrate_kbps: int
     #: Longest clip this destination should be given, in seconds, or ``None`` for no opinion.
-    max_duration_s: Optional[float]
+    max_duration_s: float | None
 
     @property
     def size(self) -> tuple[int, int]:
@@ -100,7 +99,7 @@ _DURATION_OVERRIDES: dict[str, float] = {
 }
 
 
-def _duration_ceiling(platform: str) -> Optional[float]:
+def _duration_ceiling(platform: str) -> float | None:
     """The platform's own maximum duration.
 
     An override wins where the product is stricter than the upload limit; otherwise this is read
@@ -136,7 +135,7 @@ _PLATFORM_SHAPES: dict[str, tuple[str, int]] = {
 }
 
 
-def profile_for(platform: str) -> Optional[OutputProfile]:
+def profile_for(platform: str) -> OutputProfile | None:
     """The output profile for ``platform``, or ``None`` when there is no entry.
 
     ``None`` means "no platform-specific opinion", and every caller treats that as "use the
@@ -158,7 +157,7 @@ def profile_for(platform: str) -> Optional[OutputProfile]:
     )
 
 
-def active_profile() -> Optional[OutputProfile]:
+def active_profile() -> OutputProfile | None:
     """The profile named by ``settings.output_platform``, or ``None`` when unset."""
     return profile_for(str(getattr(settings, "output_platform", "") or ""))
 
@@ -221,7 +220,7 @@ def resolve_audio_bitrate_kbps() -> int:
     return configured
 
 
-def duration_ceiling_s() -> Optional[float]:
+def duration_ceiling_s() -> float | None:
     """The active profile's duration ceiling, or ``None``."""
     profile = active_profile()
     return None if profile is None else profile.max_duration_s

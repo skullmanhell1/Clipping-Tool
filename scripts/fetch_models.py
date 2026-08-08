@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             dest.write_bytes(payload)
             fetched += 1
-        except Exception as exc:  # noqa: BLE001 - report every model, then exit non-zero
+        except Exception as exc:  # report every model, then exit non-zero
             failures.append(f"{entry.filename}: {exc}")
 
     print(f"fetched {fetched}, already present {skipped}, failed {len(failures)}")

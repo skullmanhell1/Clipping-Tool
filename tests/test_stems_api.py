@@ -28,9 +28,9 @@ from worker.models import ProcessingOptions
 
 _ROOT = Path(__file__).resolve().parents[1]
 _APP_JSX = (_ROOT / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
-_PANEL_JSX = (
-    _ROOT / "frontend" / "src" / "components" / "SettingsPanel.jsx"
-).read_text(encoding="utf-8")
+_PANEL_JSX = (_ROOT / "frontend" / "src" / "components" / "SettingsPanel.jsx").read_text(
+    encoding="utf-8"
+)
 
 #: The eleven Processing_Options fields this spec adds: the Feature_Flag plus one per
 #: ``Stem_Options`` field. Spelled out rather than derived, because the point is to pin the
@@ -154,7 +154,7 @@ def test_unknown_values_never_fail_the_job() -> None:
     assert resolved.repair_mode == "crossfade"
     assert resolved.backend == "auto"
     assert resolved.gain_music == stems.GAIN_DEFAULT
-    assert resolved.repair_window_ms == stems.WINDOW_MAX_MS      # clamped, not rejected
+    assert resolved.repair_window_ms == stems.WINDOW_MAX_MS  # clamped, not rejected
 
 
 # --------------------------------------------------------------------------- #
@@ -185,7 +185,7 @@ def test_p21_every_option_field_survives_the_api_surface(option_map: dict) -> No
     assert engine.resolve_options(through_api) == direct
 
     # And the flat fields really are carried on ProcessingOptions, not just coerced away.
-    for key, value in option_map.items():
+    for key, _value in option_map.items():
         assert hasattr(through_api, f"stem_{key}")
 
 
@@ -269,8 +269,15 @@ def test_info_advertises_the_engine_row(client) -> None:
     assert row["requires_network"] is False
     # The row schema is fixed and generic, so adding an engine never changes it.
     assert set(row) == {
-        "id", "stage", "priority", "flag", "enabled_by_default",
-        "available", "missing", "requires_network", "time_budget_s",
+        "id",
+        "stage",
+        "priority",
+        "flag",
+        "enabled_by_default",
+        "available",
+        "missing",
+        "requires_network",
+        "time_budget_s",
     }
 
 
@@ -290,7 +297,9 @@ def test_info_advertises_the_stem_option_domains(client) -> None:
     assert domains["backends"] == list(stems.BACKEND_IDS)
     assert domains["stem_set"] == list(stems.STEM_NAMES)
     assert domains["gain"] == {
-        "min": stems.GAIN_MIN, "max": stems.GAIN_MAX, "default": stems.GAIN_DEFAULT
+        "min": stems.GAIN_MIN,
+        "max": stems.GAIN_MAX,
+        "default": stems.GAIN_DEFAULT,
     }
     assert domains["repair_window_ms"] == {
         "min": stems.WINDOW_MIN_MS,
@@ -319,17 +328,34 @@ def test_info_leaves_the_pre_existing_payload_untouched(client) -> None:
     payload = client.get("/api/info").json()
 
     for key in (
-        "app_name", "version", "aspect_ratios", "clip_lengths", "clip_counts",
-        "platforms", "strategies", "regeneratable_fields", "llm_available",
-        "effects", "broll_available", "storage_backend", "retention_choices",
+        "app_name",
+        "version",
+        "aspect_ratios",
+        "clip_lengths",
+        "clip_counts",
+        "platforms",
+        "strategies",
+        "regeneratable_fields",
+        "llm_available",
+        "effects",
+        "broll_available",
+        "storage_backend",
+        "retention_choices",
     ):
         assert key in payload, key
 
     effects = payload["effects"]
     for key in (
-        "music_moods", "color_presets", "emoji_intensities", "caption_templates",
-        "caption_positions", "caption_presets", "caption_animations",
-        "broll_intensities", "reframe_layouts", "reframe_intensities",
+        "music_moods",
+        "color_presets",
+        "emoji_intensities",
+        "caption_templates",
+        "caption_positions",
+        "caption_presets",
+        "caption_animations",
+        "broll_intensities",
+        "reframe_layouts",
+        "reframe_intensities",
     ):
         assert key in effects, key
 
@@ -347,9 +373,7 @@ def test_the_frontend_defaults_list_every_field_with_the_api_spelling() -> None:
     FormData field names, so the JS spelling has to equal the Python one exactly. That makes
     this a real integration assertion rather than a style check.
     """
-    block = re.search(
-        r"DEFAULT_ENGINE_SETTINGS\s*=\s*\{(.*?)\n\};", _APP_JSX, re.DOTALL
-    )
+    block = re.search(r"DEFAULT_ENGINE_SETTINGS\s*=\s*\{(.*?)\n\};", _APP_JSX, re.DOTALL)
     assert block is not None, "DEFAULT_ENGINE_SETTINGS not found in App.jsx"
     body = block.group(1)
 
@@ -388,7 +412,7 @@ def test_the_field_the_panel_omits_is_still_reachable() -> None:
     it unsettable by any means, which is a different and worse thing.
     """
     assert "stem_model" not in _PANEL_JSX
-    assert re.search(r"^\s*stem_model:", _APP_JSX, re.MULTILINE)   # forwarded generically
+    assert re.search(r"^\s*stem_model:", _APP_JSX, re.MULTILINE)  # forwarded generically
     assert "stem_model" in {f.name for f in __import__("dataclasses").fields(ProcessingOptions)}
 
 
@@ -413,9 +437,9 @@ def test_the_panel_disables_spectral_without_a_local_model() -> None:
     assert 'capabilities?.["model:htdemucs"]' in _PANEL_JSX
     assert "needs local model" in _PANEL_JSX
     # Shown-but-unselectable requires Dropdown to honour a per-option `disabled`.
-    dropdown = (
-        _ROOT / "frontend" / "src" / "components" / "Dropdown.jsx"
-    ).read_text(encoding="utf-8")
+    dropdown = (_ROOT / "frontend" / "src" / "components" / "Dropdown.jsx").read_text(
+        encoding="utf-8"
+    )
     assert "disabled={!!o.disabled}" in dropdown
 
 
@@ -423,4 +447,4 @@ def test_the_panel_disables_the_whole_group_when_the_engine_is_unavailable() -> 
     """A creator must not be able to enable something that would silently degrade."""
     assert "stemAvailable" in _PANEL_JSX
     assert "disabled={!stemAvailable}" in _PANEL_JSX
-    assert 'engineHint(stemEngine)' in _PANEL_JSX
+    assert "engineHint(stemEngine)" in _PANEL_JSX

@@ -127,9 +127,7 @@ def test_absent_libvmaf_is_reported_with_a_reason_and_is_not_a_pass():
 @pytest.mark.real_binary
 def test_a_run_without_libvmaf_still_reports_ssim_and_psnr(faithful, tmp_path):
     """R1.4: VMAF's absence degrades the run, it does not fail it."""
-    report = fidelity.measure(
-        faithful, faithful, prober=_prober_without_vmaf(), log_dir=tmp_path
-    )
+    report = fidelity.measure(faithful, faithful, prober=_prober_without_vmaf(), log_dir=tmp_path)
     ssim = report.reading(Metric.SSIM.value)
     vmaf = report.reading(Metric.VMAF.value)
     assert ssim is not None and ssim.available is True
@@ -164,9 +162,7 @@ def test_a_file_compared_against_itself_is_perfect(faithful, tmp_path):
     a field breaks at least one of these — with the documented exception that produced the
     frame-count assertion below.
     """
-    report = fidelity.measure(
-        faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path)
 
     ssim = report.reading(Metric.SSIM.value)
     assert ssim.mean == 1.0, ssim
@@ -190,9 +186,7 @@ def test_every_metric_parses_the_same_number_of_frames(faithful, tmp_path):
     The frame count is also checked against the fixture's known length, so all three parsers
     agreeing on a wrong number cannot pass either.
     """
-    report = fidelity.measure(
-        faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path)
     counts = {r.frames for r in report.readings if r.available}
     assert counts == {FIXTURE_FRAMES}, (
         f"parsers disagree or miscount: {[(r.metric, r.frames) for r in report.readings]}"
@@ -212,9 +206,7 @@ def test_vmaf_on_an_identical_pair_is_near_but_not_at_one_hundred(faithful, tmp_
     Bounded loosely on purpose: tightening it would turn this into a drift test for somebody
     else's model version, and the report already carries the cross-build caveat.
     """
-    report = fidelity.measure(
-        faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path)
     vmaf = report.reading(Metric.VMAF.value)
     assert vmaf.available is True
     assert 99.0 < vmaf.mean <= 100.0, vmaf
@@ -237,9 +229,7 @@ def test_a_worse_encode_scores_worse_on_every_available_metric(faithful, degrade
     good = fidelity.measure(
         faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path / "a"
     )
-    bad = fidelity.measure(
-        degraded, faithful, prober=_prober_all_present(), log_dir=tmp_path / "b"
-    )
+    bad = fidelity.measure(degraded, faithful, prober=_prober_all_present(), log_dir=tmp_path / "b")
 
     assert bad.reading(Metric.SSIM.value).mean < good.reading(Metric.SSIM.value).mean
     assert bad.reading(Metric.SSIM.value).mean < 1.0
@@ -257,9 +247,7 @@ def test_the_minimum_is_never_above_the_mean(faithful, degraded, tmp_path):
     the same type, and both plausible — and it would make every reading look slightly better
     than it is, which is the direction nobody questions.
     """
-    report = fidelity.measure(
-        degraded, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(degraded, faithful, prober=_prober_all_present(), log_dir=tmp_path)
     for reading in report.readings:
         if reading.available:
             assert reading.minimum <= reading.mean, reading
@@ -283,18 +271,32 @@ def test_one_damaged_frame_moves_the_minimum_and_barely_the_mean(tmp_path, faith
     damaged = tmp_path / "one_bad_frame.mp4"
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(faithful),
-            "-vf", "drawbox=x=0:y=0:w=iw:h=ih:color=black@1.0:t=fill:enable='eq(n,10)'",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(faithful),
+            "-vf",
+            "drawbox=x=0:y=0:w=iw:h=ih:color=black@1.0:t=fill:enable='eq(n,10)'",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
             str(damaged),
         ],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
 
-    report = fidelity.measure(
-        damaged, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(damaged, faithful, prober=_prober_all_present(), log_dir=tmp_path)
     ssim = report.reading(Metric.SSIM.value)
     assert ssim.frames == FIXTURE_FRAMES
     # The mean stays high because 49 frames are near-perfect; the minimum collapses.
@@ -342,9 +344,7 @@ def test_alignment_is_checked_before_any_measurement_is_taken(tmp_path, faithful
     exists to suppress.
     """
     called: list[str] = []
-    monkeypatch.setattr(
-        fidelity, "measure_ssim", lambda *a, **k: called.append("ssim") or None
-    )
+    monkeypatch.setattr(fidelity, "measure_ssim", lambda *a, **k: called.append("ssim") or None)
     shorter = _render(tmp_path / "shorter2.mp4", duration=1)
     with pytest.raises(MisalignedComparison):
         fidelity.measure(shorter, faithful, prober=_prober_all_present(), log_dir=tmp_path)
@@ -358,9 +358,7 @@ def test_alignment_is_checked_before_any_measurement_is_taken(tmp_path, faithful
 @pytest.mark.real_binary
 def test_the_report_carries_provenance_and_the_cross_build_caveat(faithful, tmp_path):
     """R2.1, R2.2, R2.6. A report outlives its context, so the caveat travels with the numbers."""
-    report = fidelity.measure(
-        faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path
-    )
+    report = fidelity.measure(faithful, faithful, prober=_prober_all_present(), log_dir=tmp_path)
     prov = report.provenance
     for key in ("ffmpeg_version", "encoder", "x264_crf", "x264_preset", "revision"):
         assert key in prov, key
@@ -478,3 +476,151 @@ def test_a_fidelity_metric_is_documented_as_measuring_reproduction_not_quality()
     scores 1.0.
     """
     assert "reproduction, not quality" in (fidelity.__doc__ or "")
+
+
+# --- the VMAF binary is separately configurable ---------------------------------------------
+#
+# VMAF is the one metric that cannot be measured with the ffmpeg this project renders with,
+# because no mainstream distribution compiles `libvmaf` into it. Pointing the primary binary at
+# a build that has it is not a fix either: the third-party builds that carry `libvmaf` signal
+# colour differently, leaving `color_transfer` and `color_primaries` unset where the
+# distribution build writes them, which the colour-pipeline checks read. So VMAF gets its own
+# binary and nothing else moves. These tests hold that separation in place.
+
+
+def test_the_vmaf_binary_defaults_to_the_primary_ffmpeg(monkeypatch):
+    """An unset `vmaf_ffmpeg_binary` must not change single-binary behaviour at all.
+
+    This is the configuration almost every reader runs, so it is asserted rather than assumed:
+    the default has to leave the module measuring VMAF exactly where it measured it before the
+    setting existed.
+    """
+    monkeypatch.setattr(app_settings, "vmaf_ffmpeg_binary", "", raising=False)
+    assert fidelity._vmaf_ffmpeg() == fidelity._ffmpeg()
+    assert fidelity._vmaf_binary_is_separate() is False
+
+
+def test_a_configured_vmaf_binary_is_used_only_for_vmaf(monkeypatch, tmp_path):
+    """SSIM and PSNR keep the primary binary; only the VMAF pass switches.
+
+    Moving all three onto a second build would change SSIM and PSNR for a reason unrelated to
+    the encode, and a stored baseline would read that as a regression in the renderer.
+    """
+    fake = tmp_path / "ffmpeg-with-vmaf"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(app_settings, "vmaf_ffmpeg_binary", str(fake), raising=False)
+
+    assert fidelity._vmaf_ffmpeg() == str(fake)
+    assert fidelity._vmaf_binary_is_separate() is True
+
+    seen: list[str] = []
+
+    def record(candidate, reference, lavfi, *, binary=""):
+        seen.append(binary or fidelity._ffmpeg())
+        raise fidelity.FidelityError("stopped after recording the binary")
+
+    monkeypatch.setattr(fidelity, "_run_filter", record)
+
+    for call in (
+        lambda: fidelity.measure_ssim("a.mp4", "b.mp4"),
+        lambda: fidelity.measure_psnr("a.mp4", "b.mp4"),
+        lambda: fidelity.measure_vmaf("a.mp4", "b.mp4", log_dir=tmp_path),
+    ):
+        with pytest.raises(fidelity.FidelityError):
+            call()
+
+    ssim_binary, psnr_binary, vmaf_binary = seen
+    assert ssim_binary == fidelity._ffmpeg(), "SSIM must stay on the primary binary"
+    assert psnr_binary == fidelity._ffmpeg(), "PSNR must stay on the primary binary"
+    assert vmaf_binary == str(fake), "VMAF must use the configured binary"
+
+
+def test_a_configured_vmaf_binary_answers_its_own_availability(monkeypatch):
+    """Availability must come from the build that will run the filter (R1.2, R1.3).
+
+    The capability report describes `settings.ffmpeg_binary` — which in this configuration is
+    precisely the build known *not* to have `libvmaf`. Asking it would report VMAF unavailable
+    while the measurement would in fact succeed, which is the same "answer cached where nobody
+    is looking" defect the capability module was written to remove.
+    """
+    monkeypatch.setattr(app_settings, "vmaf_ffmpeg_binary", "/opt/ffmpeg-vmaf", raising=False)
+
+    asked: list[str] = []
+
+    def fake_available(name, *, binary=""):
+        asked.append(binary)
+        return name == fidelity.VMAF_FILTER
+
+    monkeypatch.setattr("worker.engines.capabilities.ffmpeg_filter_available", fake_available)
+
+    vmaf = next(
+        entry for entry in fidelity.available_metrics() if entry.metric == Metric.VMAF.value
+    )
+    assert vmaf.available is True
+    assert asked == ["/opt/ffmpeg-vmaf"], "the VMAF binary must be the one probed"
+
+
+def test_a_missing_vmaf_binary_is_a_named_unavailability_not_a_silent_fallback(monkeypatch):
+    """R1.4, R1.5. Configuring a binary that is not there must not measure with another one.
+
+    The reason for configuring it is that the reading has to come from that build, so quietly
+    substituting the primary ffmpeg would produce a number nobody asked for — reported as
+    though it were the one they did.
+    """
+    monkeypatch.setattr(
+        app_settings, "vmaf_ffmpeg_binary", "/nonexistent/ffmpeg-vmaf", raising=False
+    )
+    assert fidelity._vmaf_ffmpeg() == "/nonexistent/ffmpeg-vmaf"
+    assert fidelity._vmaf_binary_is_separate() is True
+
+    vmaf = next(
+        entry for entry in fidelity.available_metrics() if entry.metric == Metric.VMAF.value
+    )
+    assert vmaf.available is False
+    assert vmaf.reason, "an unavailable metric must say why (R1.2)"
+
+
+def test_compare_refuses_readings_from_different_vmaf_builds():
+    """The build guard has to cover the second binary too.
+
+    Swap only the VMAF ffmpeg and `ffmpeg_version` still matches, so the existing check passes
+    and the VMAF column gets differenced across two `libvmaf` versions — the arithmetic works
+    and the result looks like a finding, which is exactly what that guard exists to stop.
+    """
+    before = {
+        "provenance": {
+            "ffmpeg_version": "ffmpeg version 7.1",
+            "vmaf_ffmpeg_version": "ffmpeg version 7.1 (libvmaf 2.3.1)",
+        },
+        "readings": [],
+    }
+    after = {
+        "provenance": {
+            "ffmpeg_version": "ffmpeg version 7.1",
+            "vmaf_ffmpeg_version": "ffmpeg version 8.0 (libvmaf 3.0.0)",
+        },
+        "readings": [],
+    }
+    with pytest.raises(FidelityError) as excinfo:
+        fidelity.compare(before, after)
+    assert "VMAF" in str(excinfo.value)
+
+
+def test_compare_still_works_against_a_baseline_written_before_the_field_existed():
+    """An unrecorded VMAF version is not a mismatch.
+
+    Stored baselines predate this field. Refusing them would make a schema addition look like a
+    build mismatch, and a guard that cries wolf gets deleted — costing more than the case it
+    would have caught.
+    """
+    prov_old = {"ffmpeg_version": "ffmpeg version 7.1"}
+    prov_new = {
+        "ffmpeg_version": "ffmpeg version 7.1",
+        "vmaf_ffmpeg_version": "ffmpeg version 7.1 (libvmaf 2.3.1)",
+    }
+    result = fidelity.compare(
+        {"provenance": prov_old, "readings": []},
+        {"provenance": prov_new, "readings": []},
+    )
+    assert isinstance(result, dict)

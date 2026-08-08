@@ -62,7 +62,7 @@ def cmd_template(args) -> int:
         from worker.ffmpeg_utils import probe
 
         duration = probe(source).duration
-    except Exception:  # noqa: BLE001 - a template is useful without a probe
+    except Exception:  # a template is useful without a probe
         pass
 
     if duration:
@@ -70,9 +70,11 @@ def cmd_template(args) -> int:
         # written and the first edit is replacing a moment rather than inventing the schema.
         centre = duration / 2.0
         payload["moments"] = [
-            {"start": round(max(0.0, centre - 15.0), 2),
-             "end": round(min(duration, centre + 15.0), 2),
-             "note": "REPLACE ME - the moments you would actually post"}
+            {
+                "start": round(max(0.0, centre - 15.0), 2),
+                "end": round(min(duration, centre + 15.0), 2),
+                "note": "REPLACE ME - the moments you would actually post",
+            }
         ]
         payload["notes"] = f"duration {duration:.1f}s"
 
@@ -99,8 +101,9 @@ def cmd_validate(args) -> int:
     for source in dataset.sources:
         total = sum(moment.duration for moment in source.moments)
         marker = " " if source.exists else "!"
-        print(f" {marker} {source.name:<40} {len(source.moments):>3} moments "
-              f"{total:>7.1f}s labelled")
+        print(
+            f" {marker} {source.name:<40} {len(source.moments):>3} moments {total:>7.1f}s labelled"
+        )
 
     missing = dataset.missing_media()
     if missing:
@@ -112,8 +115,10 @@ def cmd_validate(args) -> int:
     if len(dataset) < 20:
         # S1 asks for 20 sources. Fewer still works, and the harness will happily score 3 -
         # but the result is noisy enough that a small change cannot be distinguished from it.
-        print(f"\nNote: {len(dataset)} sources. S1 asks for 20; with fewer, a difference of a "
-              "few points between runs is noise rather than signal.")
+        print(
+            f"\nNote: {len(dataset)} sources. S1 asks for 20; with fewer, a difference of a "
+            "few points between runs is noise rather than signal."
+        )
     return 0
 
 
@@ -182,7 +187,10 @@ def cmd_run(args) -> int:
 
     def segments_of(source: Path, duration: float):
         return segmentation.segment_video(
-            source, duration, clip_length=args.clip_length, strategy="silence",
+            source,
+            duration,
+            clip_length=args.clip_length,
+            strategy="silence",
             max_clips=None,
         )
 
@@ -199,7 +207,10 @@ def cmd_run(args) -> int:
     baseline_scores = []
     if not args.no_baselines:
         baseline_scores = harness.run_baselines(
-            dataset, k=args.k, duration_of=duration_of, segments_of=segments_of,
+            dataset,
+            k=args.k,
+            duration_of=duration_of,
+            segments_of=segments_of,
         )
 
     report = harness.build_report(dataset, selector_score, baseline_scores, runs)
@@ -278,10 +289,12 @@ def main() -> int:
     run.add_argument("--strategy", default="ai", choices=["ai", "silence", "fixed"])
     run.add_argument("--clip-length", default="auto")
     run.add_argument("--json", type=Path, help="also write the result as JSON")
-    run.add_argument("--no-baselines", action="store_true",
-                     help="skip the baselines (the results become uninterpretable)")
-    run.add_argument("--strict", action="store_true",
-                     help="exit non-zero if any source errored")
+    run.add_argument(
+        "--no-baselines",
+        action="store_true",
+        help="skip the baselines (the results become uninterpretable)",
+    )
+    run.add_argument("--strict", action="store_true", help="exit non-zero if any source errored")
     run.set_defaults(func=cmd_run)
 
     compare = sub.add_parser("compare", help="diff two JSON results")

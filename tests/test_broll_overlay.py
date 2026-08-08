@@ -6,6 +6,7 @@ tagged with the design property text and a ``Validates: Requirements ...``
 docstring. The builder under test (``build_broll_overlay``) is pure string
 building — no ffmpeg is invoked here.
 """
+
 from __future__ import annotations
 
 import re
@@ -39,13 +40,19 @@ def _resolved_cues(draw):
         provider = draw(st.sampled_from(["local", "external"]))
         if provider == "local":
             asset = AssetRef(
-                path=f"/lib/asset{i}.png", kind=kind, provider="local",
+                path=f"/lib/asset{i}.png",
+                kind=kind,
+                provider="local",
                 license="local",
             )
         else:
             asset = AssetRef(
-                path=f"/ext/asset{i}.mp4", kind=kind, provider="external",
-                source_id=f"sid-{i}", license="CC0", attribution=f"Photo by {i}",
+                path=f"/ext/asset{i}.mp4",
+                kind=kind,
+                provider="external",
+                source_id=f"sid-{i}",
+                license="CC0",
+                attribution=f"Photo by {i}",
             )
         cues.append(BrollCue(round(start, 3), round(end, 3), f"kw{i}", asset=asset))
     return cues, duration
@@ -68,8 +75,13 @@ def test_p20_overlays_bounded_indexed_below_captions(data, offset):
     cues, _duration = data
     n = len(cues)
     input_args, graph, notes = build_broll_overlay(
-        cues, base_label="vlook", out_label="vbroll",
-        width=1080, height=1920, fps=30.0, input_offset=offset,
+        cues,
+        base_label="vlook",
+        out_label="vbroll",
+        width=1080,
+        height=1920,
+        fps=30.0,
+        input_offset=offset,
     )
 
     # Every overlay is bounded to its cue window (Req 10.4).
@@ -83,11 +95,13 @@ def test_p20_overlays_bounded_indexed_below_captions(data, offset):
 
     # Layering: in a full graph the b-roll overlays precede the subtitles filter
     # (captions layered on top, Req 10.2).
-    full = ";".join([
-        "[0:v]eq=contrast=1.1[vlook]",
-        graph,
-        "[vbroll]subtitles=sub.ass[vbase]",
-    ])
+    full = ";".join(
+        [
+            "[0:v]eq=contrast=1.1[vlook]",
+            graph,
+            "[vbroll]subtitles=sub.ass[vbase]",
+        ]
+    )
     assert full.index("overlay") < full.index("subtitles")
 
 
@@ -106,8 +120,13 @@ def test_p19_only_composited_cues_recorded_with_provenance(data):
     """
     cues, _duration = data
     _input_args, _graph, notes = build_broll_overlay(
-        cues, base_label="vlook", out_label="vbroll",
-        width=1080, height=1920, fps=30.0, input_offset=1,
+        cues,
+        base_label="vlook",
+        out_label="vbroll",
+        width=1080,
+        height=1920,
+        fps=30.0,
+        input_offset=1,
     )
 
     # One note per composited cue, in order (Req 9.4).
@@ -136,6 +155,11 @@ def test_p19_only_composited_cues_recorded_with_provenance(data):
 def test_no_cues_returns_empty():
     """Validates: Requirements 9.3, 10.6 — empty resolved cues => no-op builder."""
     assert build_broll_overlay(
-        [], base_label="vlook", out_label="vbroll",
-        width=1080, height=1920, fps=30.0, input_offset=1,
+        [],
+        base_label="vlook",
+        out_label="vbroll",
+        width=1080,
+        height=1920,
+        fps=30.0,
+        input_offset=1,
     ) == ([], "", [])

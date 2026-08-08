@@ -45,12 +45,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from worker.engines.capabilities import Capability_Status
 
 Prober = Callable[[str], "Capability_Status"]
+
 
 #: Metric ids. `str, Enum` matching the project's existing style.
 class Metric(str, Enum):
@@ -66,6 +67,9 @@ ALWAYS_AVAILABLE: tuple[str, ...] = (Metric.SSIM.value, Metric.PSNR.value)
 #: The capability id `libvmaf` is resolved through. Deliberately the same id vocabulary
 #: `worker/engines/capabilities.py` uses, so one probe answers for the whole process.
 VMAF_CAPABILITY = "ffmpeg_filter:libvmaf"
+
+#: The filter name inside that id, derived rather than repeated so the two cannot drift.
+VMAF_FILTER = VMAF_CAPABILITY.split(":", 1)[1]
 
 #: Reference-render settings: the *same filter graph* at much higher fidelity (R1.1, task 2.3).
 #:
@@ -168,7 +172,7 @@ class Fidelity_Report:
         "ffmpeg. Two reports from different builds are two different experiments."
     )
 
-    def reading(self, metric: str) -> Optional[Metric_Reading]:
+    def reading(self, metric: str) -> Metric_Reading | None:
         for item in self.readings:
             if item.metric == metric:
                 return item
@@ -196,7 +200,35 @@ def _ffprobe() -> str:
     return shutil.which(str(settings.ffprobe_binary)) or "ffprobe"
 
 
-def available_metrics(prober: Optional[Prober] = None) -> tuple[Metric_Availability, ...]:
+def _vmaf_ffmpeg() -> str:
+    """The binary VMAF is measured with — ``settings.vmaf_ffmpeg_binary`` if set.
+
+    Separate from :func:`_ffmpeg` because no single build serves both jobs: ``libvmaf`` is
+    absent from the ffmpeg mainstream distributions ship, while the third-party builds that
+    have it signal colour differently and break the colour-pipeline readings. So the primary
+    binary stays the distribution one and only this measurement moves.
+
+    Empty setting means "the primary binary", which keeps the single-binary case exactly as it
+    was: VMAF works if that build has ``libvmaf`` and is reported unavailable by name if not.
+    """
+    from config import settings
+
+    configured = str(getattr(settings, "vmaf_ffmpeg_binary", "") or "").strip()
+    if not configured:
+        return _ffmpeg()
+    # `which` so a bare name on PATH resolves, matching `_ffmpeg`; the configured value is
+    # returned unresolved rather than silently falling back to the primary binary, because a
+    # VMAF binary that was asked for and is missing must surface as a named failure, not as a
+    # measurement quietly taken with the wrong build.
+    return shutil.which(configured) or configured
+
+
+def _vmaf_binary_is_separate() -> bool:
+    """Whether VMAF will run on a different binary than everything else."""
+    return _vmaf_ffmpeg() != _ffmpeg()
+
+
+def available_metrics(prober: Prober | None = None) -> tuple[Metric_Availability, ...]:
     """Which metrics this ffmpeg can measure (R1.3, R6.6).
 
     Resolved through ``worker.engines.capabilities`` and **not** by a second probe of our own.
@@ -213,16 +245,38 @@ def available_metrics(prober: Optional[Prober] = None) -> tuple[Metric_Availabil
 
     detail = ""
     ok = False
-    try:
-        from worker.engines.capabilities import Capability_Report, get_report
+    if prober is None and _vmaf_binary_is_separate():
+        # VMAF is measured with its own build, so the capability report cannot answer this:
+        # that report describes `settings.ffmpeg_binary`, which is precisely the build known
+        # not to have `libvmaf`. Asking it would report VMAF unavailable while the measurement
+        # would in fact succeed — availability has to be answered by whichever binary is going
+        # to run the filter. Still resolved through the shared listing parser rather than a
+        # `-filters` grep of our own, for the reason in this function's docstring.
+        binary = _vmaf_ffmpeg()
+        try:
+            from worker.engines.capabilities import ffmpeg_filter_available
 
-        report = Capability_Report(prober) if prober is not None else get_report()
-        status = report.status(VMAF_CAPABILITY)
-        ok = bool(status.available)
-        detail = status.detail or ""
-    except Exception as exc:  # pragma: no cover - defensive; capabilities never raises
-        ok = False
-        detail = f"{type(exc).__name__}: {exc}"
+            ok = ffmpeg_filter_available(VMAF_FILTER, binary=binary)
+            detail = (
+                "" if ok else f"{VMAF_FILTER} not built into the configured VMAF ffmpeg: {binary}"
+            )
+        except Exception as exc:
+            # A configured-but-unusable VMAF binary is a named unavailability, not a crash and
+            # not a silent fall back to the primary build: the whole point of configuring one is
+            # that a reading taken with a different binary is not the reading that was asked for.
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+    else:
+        try:
+            from worker.engines.capabilities import Capability_Report, get_report
+
+            report = Capability_Report(prober) if prober is not None else get_report()
+            status = report.status(VMAF_CAPABILITY)
+            ok = bool(status.available)
+            detail = status.detail or ""
+        except Exception as exc:  # pragma: no cover - defensive; capabilities never raises
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
 
     entries.append(
         Metric_Availability(
@@ -246,11 +300,21 @@ def _probe_geometry(path: str | Path) -> tuple[int, int, int]:
     """
     proc = subprocess.run(
         [
-            _ffprobe(), "-v", "error", "-select_streams", "v:0", "-count_frames",
-            "-show_entries", "stream=width,height,nb_read_frames",
-            "-of", "default=nw=1", str(path),
+            _ffprobe(),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=width,height,nb_read_frames",
+            "-of",
+            "default=nw=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     if proc.returncode != 0:
         raise FidelityError(f"could not probe {path}: {proc.stderr.strip()}")
@@ -309,21 +373,39 @@ _SSIM_FRAME = re.compile(r"^n:\d+.*?\bAll:\s*([0-9.]+)", re.MULTILINE)
 _PSNR_FRAME = re.compile(r"^n:\d+.*?\bpsnr_avg:\s*([0-9.]+|inf)", re.MULTILINE)
 
 
-def _run_filter(candidate: str | Path, reference: str | Path, lavfi: str) -> str:
+def _run_filter(
+    candidate: str | Path, reference: str | Path, lavfi: str, *, binary: str = ""
+) -> str:
     """Run a two-input comparison filter, returning combined output.
 
     Input 0 is the candidate and input 1 the reference, matching every ffmpeg example and the
     argument order of `ssim`/`psnr`/`libvmaf` themselves. Getting this backwards is not
     detectable from the numbers for SSIM and PSNR, which are symmetric — but it is for VMAF,
     which is not, so the order is fixed here once rather than at each call.
+
+    ``binary`` defaults to the primary ffmpeg. Only the VMAF path overrides it, so SSIM and
+    PSNR are always measured with the build this project actually renders with — moving them
+    onto a second binary would change the numbers a stored baseline is compared against for a
+    reason unrelated to the encode.
     """
     proc = subprocess.run(
         [
-            _ffmpeg(), "-hide_banner", "-nostats",
-            "-i", str(candidate), "-i", str(reference),
-            "-lavfi", lavfi, "-f", "null", "-",
+            binary or _ffmpeg(),
+            "-hide_banner",
+            "-nostats",
+            "-i",
+            str(candidate),
+            "-i",
+            str(reference),
+            "-lavfi",
+            lavfi,
+            "-f",
+            "null",
+            "-",
         ],
-        capture_output=True, text=True, timeout=1800,
+        capture_output=True,
+        text=True,
+        timeout=1800,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
@@ -338,8 +420,10 @@ def _reduce(values: Sequence[float], metric: str) -> Metric_Reading:
     finite = [v for v in values if not math.isinf(v)]
     # Mean over infinities is infinity, which is correct for an identical pair and is what a
     # reader should see rather than a large finite number implying a measurement.
-    mean = (sum(finite) / len(finite)) if finite and len(finite) == len(values) else (
-        math.inf if not finite else sum(finite) / len(finite)
+    mean = (
+        (sum(finite) / len(finite))
+        if finite and len(finite) == len(values)
+        else (math.inf if not finite else sum(finite) / len(finite))
     )
     return Metric_Reading(
         metric=metric,
@@ -359,9 +443,7 @@ def measure_ssim(candidate: str | Path, reference: str | Path) -> Metric_Reading
 def measure_psnr(candidate: str | Path, reference: str | Path) -> Metric_Reading:
     """Per-frame PSNR in dB. Infinite for an identical pair."""
     out = _run_filter(candidate, reference, "[0:v][1:v]psnr=stats_file=-")
-    values = [
-        (PSNR_IDENTICAL if m == "inf" else float(m)) for m in _PSNR_FRAME.findall(out)
-    ]
+    values = [(PSNR_IDENTICAL if m == "inf" else float(m)) for m in _PSNR_FRAME.findall(out)]
     return _reduce(values, Metric.PSNR.value)
 
 
@@ -375,10 +457,8 @@ def measure_vmaf(
     directory = Path(log_dir)
     directory.mkdir(parents=True, exist_ok=True)
     log_path = directory / "vmaf.json"
-    lavfi = (
-        f"[0:v][1:v]libvmaf=log_path={log_path.as_posix()}:log_fmt=json"
-    )
-    _run_filter(candidate, reference, lavfi)
+    lavfi = f"[0:v][1:v]libvmaf=log_path={log_path.as_posix()}:log_fmt=json"
+    _run_filter(candidate, reference, lavfi, binary=_vmaf_ffmpeg())
     try:
         data = json.loads(log_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -391,7 +471,7 @@ def measure_vmaf(
     return _reduce(values, Metric.VMAF.value)
 
 
-def provenance(prober: Optional[Prober] = None) -> dict:
+def provenance(prober: Prober | None = None) -> dict:
     """What a reading depends on, so two reports can be known to be comparable (R2.2).
 
     Recorded rather than assumed because every field here has changed the numbers at least
@@ -400,14 +480,19 @@ def provenance(prober: Optional[Prober] = None) -> dict:
     """
     from config import settings
 
-    version = ""
-    try:
-        proc = subprocess.run(
-            [_ffmpeg(), "-version"], capture_output=True, text=True, timeout=60
-        )
-        version = (proc.stdout or "").splitlines()[0] if proc.stdout else ""
-    except Exception:
-        version = "unknown"
+    def _version_line(binary: str) -> str:
+        try:
+            proc = subprocess.run([binary, "-version"], capture_output=True, text=True, timeout=60)
+            return (proc.stdout or "").splitlines()[0] if proc.stdout else ""
+        except Exception:
+            return "unknown"
+
+    version = _version_line(_ffmpeg())
+    # VMAF may be measured with a different build than SSIM and PSNR, and this report's own
+    # caveat says readings are not comparable across builds. Recording only the primary version
+    # would let two reports look comparable while their VMAF columns came from different
+    # `libvmaf` versions — which is the exact mistake `compare` refuses to make for ffmpeg.
+    vmaf_version = _version_line(_vmaf_ffmpeg()) if _vmaf_binary_is_separate() else version
 
     encoder = ""
     try:
@@ -422,7 +507,7 @@ def provenance(prober: Optional[Prober] = None) -> dict:
         # S607: `git` is resolved from PATH, exactly as ffmpeg and ffprobe are throughout this
         # project. Hard-coding an absolute path would break on every platform that installs it
         # somewhere else, and the value is used only as a provenance label.
-        git_argv = ["git", "rev-parse", "--short", "HEAD"]  # noqa: S607
+        git_argv = ["git", "rev-parse", "--short", "HEAD"]
         proc = subprocess.run(git_argv, capture_output=True, text=True, timeout=30)
         revision = (proc.stdout or "").strip() or "unknown"
     except Exception:
@@ -430,6 +515,7 @@ def provenance(prober: Optional[Prober] = None) -> dict:
 
     return {
         "ffmpeg_version": version,
+        "vmaf_ffmpeg_version": vmaf_version,
         "encoder": encoder,
         "x264_crf": int(settings.x264_crf),
         "x264_preset": str(settings.x264_preset),
@@ -445,9 +531,9 @@ def measure(
     candidate: str | Path,
     reference: str | Path,
     *,
-    metrics: Optional[Sequence[str]] = None,
-    prober: Optional[Prober] = None,
-    log_dir: Optional[str | Path] = None,
+    metrics: Sequence[str] | None = None,
+    prober: Prober | None = None,
+    log_dir: str | Path | None = None,
     encode_seconds: float = 0.0,
 ) -> Fidelity_Report:
     """Compare ``candidate`` against ``reference`` on every requested, available metric.
@@ -465,17 +551,13 @@ def measure(
     for name in wanted:
         entry = availability.get(name)
         if entry is None:
-            readings.append(
-                Metric_Reading(metric=name, available=False, reason="unknown metric")
-            )
+            readings.append(Metric_Reading(metric=name, available=False, reason="unknown metric"))
             continue
         if not entry.available:
             # R1.5: an explicit unavailable state carrying the reason. Not an omitted key, and
             # emphatically not a pass — "we could not measure this" and "this measured fine"
             # are the two answers a reader must never see conflated.
-            readings.append(
-                Metric_Reading(metric=name, available=False, reason=entry.reason)
-            )
+            readings.append(Metric_Reading(metric=name, available=False, reason=entry.reason))
             continue
         if name == Metric.SSIM.value:
             readings.append(measure_ssim(candidate, reference))
@@ -531,6 +613,25 @@ def compare(before: dict, after: dict) -> dict:
             f"  before: {b_ff or '(unrecorded)'}\n"
             f"  after:  {a_ff or '(unrecorded)'}\n"
             "These are two different experiments, not two measurements."
+        )
+
+    # The same refusal for the VMAF binary, which since VMAF moved onto its own build is a
+    # second thing the readings depend on. Without this the guard has a hole exactly where it
+    # is least visible: swap only the VMAF ffmpeg and `ffmpeg_version` still matches, so the
+    # check above passes and the VMAF column gets differenced across two `libvmaf` versions.
+    #
+    # Only enforced when *both* reports recorded it. Baselines written before this field existed
+    # have no value to compare, and refusing those would make an unrelated schema addition look
+    # like a build mismatch — the guard would then be discarded for crying wolf, which costs more
+    # than the case it would have caught.
+    b_vmaf = b_prov.get("vmaf_ffmpeg_version", "")
+    a_vmaf = a_prov.get("vmaf_ffmpeg_version", "")
+    if b_vmaf and a_vmaf and b_vmaf != a_vmaf:
+        raise FidelityError(
+            "refusing to compare readings from different VMAF ffmpeg builds:\n"
+            f"  before: {b_vmaf}\n"
+            f"  after:  {a_vmaf}\n"
+            "SSIM and PSNR came from the same build, but VMAF did not."
         )
 
     def index(report: dict) -> dict[str, dict]:

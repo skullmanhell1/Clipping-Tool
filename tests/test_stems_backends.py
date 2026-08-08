@@ -125,8 +125,12 @@ def test_p9_stem_set_is_always_three_stems_assembled_in_sorted_order(
 
     runner = Recording_Command_Runner()
     stem_set, details = stems.assemble_stem_set(
-        case["raw"], dest_dir=dest, fmt=audio, duration=duration,
-        runner=runner, timeout_s=10.0,
+        case["raw"],
+        dest_dir=dest,
+        fmt=audio,
+        duration=duration,
+        runner=runner,
+        timeout_s=10.0,
     )
 
     assert list(stem_set) == list(stems.STEM_NAMES) == sorted(stems.STEM_NAMES)
@@ -145,7 +149,8 @@ def test_p9_stem_set_is_always_three_stems_assembled_in_sorted_order(
         if len(contributors) < 2:
             continue
         summed = [
-            call for call in runner.calls
+            call
+            for call in runner.calls
             if any(part.endswith(f"{name}.wav") for part in call.argv)
             and "amix" in " ".join(call.argv)
         ]
@@ -160,8 +165,12 @@ def test_p9_stem_set_is_always_three_stems_assembled_in_sorted_order(
     permuted = dict(reversed(list(case["raw"].items())))
     other_runner = Recording_Command_Runner()
     other_set, other_details = stems.assemble_stem_set(
-        permuted, dest_dir=dest, fmt=audio, duration=duration,
-        runner=other_runner, timeout_s=10.0,
+        permuted,
+        dest_dir=dest,
+        fmt=audio,
+        duration=duration,
+        runner=other_runner,
+        timeout_s=10.0,
     )
     assert other_details == details
     assert other_set == stem_set
@@ -218,12 +227,14 @@ def test_p10_stems_decompose_additively_and_preserve_the_audio_format(
     duration = len(frames) / float(sample_rate)
 
     backend = Fake_Separator_Backend(sum_to_input=True, stems=shape)
-    raw = backend.separate(
-        source, root / "stems", fmt=audio, seed=11, timeout_s=10.0
-    )
+    raw = backend.separate(source, root / "stems", fmt=audio, seed=11, timeout_s=10.0)
     stem_set, _details = stems.assemble_stem_set(
-        raw, dest_dir=root / "assembled", fmt=audio, duration=duration,
-        runner=_real_runner, timeout_s=30.0,
+        raw,
+        dest_dir=root / "assembled",
+        fmt=audio,
+        duration=duration,
+        runner=_real_runner,
+        timeout_s=30.0,
     )
 
     # Format preservation (Req 4.6).
@@ -256,13 +267,18 @@ def test_a_wrong_length_stem_is_an_integrity_error(tmp_path: Path) -> None:
     """
     audio = stems.Audio_Format(48000, 2, "pcm_s16le", 0.0)
     backend = Truncating_Separator_Backend(scale=0.5, duration_s=0.25)
-    raw = backend.separate(tmp_path / "missing.wav", tmp_path / "stems",
-                           fmt=audio, seed=3, timeout_s=5.0)
+    raw = backend.separate(
+        tmp_path / "missing.wav", tmp_path / "stems", fmt=audio, seed=3, timeout_s=5.0
+    )
 
     try:
         stems.assemble_stem_set(
-            raw, dest_dir=tmp_path / "out", fmt=audio, duration=0.25,
-            runner=_real_runner, timeout_s=20.0,
+            raw,
+            dest_dir=tmp_path / "out",
+            fmt=audio,
+            duration=0.25,
+            runner=_real_runner,
+            timeout_s=20.0,
         )
     except stems.Integrity_Error as exc:
         assert "frames" in str(exc)
@@ -270,10 +286,10 @@ def test_a_wrong_length_stem_is_an_integrity_error(tmp_path: Path) -> None:
         raise AssertionError("a truncated stem must raise Integrity_Error")
 
 
-
 # =========================================================================== #
 # Epic 9 — the two backend adapters (tasks 9.1-9.5)                           #
 # =========================================================================== #
+
 
 def _fmt(**overrides) -> stems.Audio_Format:
     """A valid probed ``Audio_Format``."""
@@ -372,7 +388,11 @@ def test_the_locator_is_registered_at_import_time(tmp_path) -> None:
 
     absent = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(root), env=env, timeout=60,
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        env=env,
+        timeout=60,
     )
     assert absent.returncode == 0, absent.stderr
     assert absent.stdout.strip() == "None"
@@ -380,7 +400,11 @@ def test_the_locator_is_registered_at_import_time(tmp_path) -> None:
     (tmp_path / "htdemucs.th").write_bytes(b"checkpoint")
     present = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(root), env=env, timeout=60,
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        env=env,
+        timeout=60,
     )
     assert present.returncode == 0, present.stderr
     assert present.stdout.strip() == str(tmp_path / "htdemucs.th")
@@ -392,7 +416,7 @@ def test_the_locator_never_imports_or_downloads(tmp_path, monkeypatch) -> None:
     for module in ("torch", "demucs"):
         monkeypatch.setitem(sys.modules, module, None)
 
-    assert stems._locate_model("htdemucs", tmp_path) is None      # no raise
+    assert stems._locate_model("htdemucs", tmp_path) is None  # no raise
 
 
 def _no_socket(*_args, **_kwargs):
@@ -438,8 +462,11 @@ def test_a_missing_checkpoint_is_refused_before_any_import(tmp_path, monkeypatch
 
     with pytest.raises(stems.Model_Unavailable):
         backend.separate(
-            tmp_path / "in.wav", tmp_path / "stems",
-            fmt=_fmt(), seed=7, timeout_s=30.0,
+            tmp_path / "in.wav",
+            tmp_path / "stems",
+            fmt=_fmt(),
+            seed=7,
+            timeout_s=30.0,
         )
 
 
@@ -475,14 +502,14 @@ def test_inference_is_pinned_to_one_seeded_cpu_thread() -> None:
 
     assert shim.threads == [stems.ML_THREAD_COUNT] == [1]
     assert shim.grad == [False]
-    assert shim.seeds == [9]                       # masked into 32 bits
+    assert shim.seeds == [9]  # masked into 32 bits
     assert shim.deterministic == [True]
 
 
 def test_a_build_without_deterministic_algorithms_still_runs() -> None:
     """Best-effort: refusing to run on an older build is the worse trade."""
     shim = _TorchShim(deterministic_raises=True)
-    stems._pin_torch(shim, 3)                      # must not raise
+    stems._pin_torch(shim, 3)  # must not raise
 
     assert shim.threads == [1] and shim.seeds == [3]
     assert shim.deterministic == []
@@ -495,18 +522,14 @@ def test_the_ml_adapter_writes_one_wav_per_backend_stem(tmp_path) -> None:
     write_pcm_wav(source, _pack([(0.5,), (-0.5,), (0.25,)]), sample_rate=8000, channels=1)
     (tmp_path / "htdemucs.th").write_bytes(b"checkpoint")
 
-    backend = stems.ML_Separator_Backend(
-        model_dir=tmp_path, loader=_identity_loader
-    )
-    written = backend.separate(
-        source, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=30.0
-    )
+    backend = stems.ML_Separator_Backend(model_dir=tmp_path, loader=_identity_loader)
+    written = backend.separate(source, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=30.0)
 
     assert sorted(written) == ["bass", "drums", "other", "vocals"]
     for path in written.values():
         probed = stems._wav_format(path)
         assert probed is not None
-        assert probed[0] == 8000 and probed[1] == 1          # fmt preserved (Req 4.6)
+        assert probed[0] == 8000 and probed[1] == 1  # fmt preserved (Req 4.6)
 
 
 def test_the_ml_adapter_rejects_a_source_that_is_not_at_the_probed_format(tmp_path) -> None:
@@ -518,8 +541,11 @@ def test_the_ml_adapter_rejects_a_source_that_is_not_at_the_probed_format(tmp_pa
     backend = stems.ML_Separator_Backend(model_dir=tmp_path, loader=_identity_loader)
     with pytest.raises(stems.Invalid_Audio_Format):
         backend.separate(
-            source, tmp_path / "stems",
-            fmt=_fmt(sample_rate=48000, channels=2), seed=1, timeout_s=30.0,
+            source,
+            tmp_path / "stems",
+            fmt=_fmt(sample_rate=48000, channels=2),
+            seed=1,
+            timeout_s=30.0,
         )
 
 
@@ -537,13 +563,16 @@ def test_the_ffmpeg_adapter_needs_nothing_but_ffmpeg(tmp_path, monkeypatch) -> N
     assert (backend.backend_id, backend.requires_network) == ("ffmpeg", False)
 
     written = backend.separate(
-        tmp_path / "in.wav", tmp_path / "stems",
-        fmt=_fmt(), seed=5, timeout_s=12.0,
+        tmp_path / "in.wav",
+        tmp_path / "stems",
+        fmt=_fmt(),
+        seed=5,
+        timeout_s=12.0,
     )
 
     # `other` is deliberately omitted so assemble_stem_set substitutes silence (Req 4.3).
     assert sorted(written) == ["music", "vocals"]
-    assert len(runner.calls) == 1                        # ONE invocation (Req 2.6)
+    assert len(runner.calls) == 1  # ONE invocation (Req 2.6)
     assert runner.calls[0].timeout_s == 12.0
 
 
@@ -551,10 +580,10 @@ def test_the_ffmpeg_graph_subtracts_vocals_to_get_music() -> None:
     """``music := clip - vocals`` is what makes additive decomposition exact (Req 4.7)."""
     graph = stems.Ffmpeg_Separator_Backend.build_graph(2)
 
-    assert "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1" in graph     # mid channel
-    assert "highpass=f=180" in graph and "lowpass=f=6000" in graph     # speech band
-    assert "volume=-1:precision=float" in graph                       # phase invert
-    assert "amix=inputs=2:normalize=0:dropout_transition=0" in graph   # sum, not average
+    assert "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1" in graph  # mid channel
+    assert "highpass=f=180" in graph and "lowpass=f=6000" in graph  # speech band
+    assert "volume=-1:precision=float" in graph  # phase invert
+    assert "amix=inputs=2:normalize=0:dropout_transition=0" in graph  # sum, not average
     # Every declared output pad is consumed: ffmpeg rejects an unconnected one outright.
     produced = set(re.findall(r"\[(\w+)\]", graph))
     assert "x3" not in produced
@@ -573,11 +602,13 @@ def test_the_ffmpeg_adapter_pins_both_outputs_to_the_probed_format(tmp_path) -> 
     """Both stems must pass ``_verify_stem_file`` unchanged (Req 4.6)."""
     backend = stems.Ffmpeg_Separator_Backend()
     argv = backend.build_command(
-        tmp_path / "in.wav", tmp_path / "vocals.wav", tmp_path / "music.wav",
+        tmp_path / "in.wav",
+        tmp_path / "vocals.wav",
+        tmp_path / "music.wav",
         fmt=_fmt(sample_rate=44100, channels=1),
     )
 
-    assert argv.count("-map") == 2                       # two outputs, one process
+    assert argv.count("-map") == 2  # two outputs, one process
     assert argv.count("-c:a") == 2
     assert [argv[i + 1] for i, part in enumerate(argv) if part == "-ar"] == ["44100", "44100"]
     assert [argv[i + 1] for i, part in enumerate(argv) if part == "-ac"] == ["1", "1"]
@@ -614,9 +645,7 @@ def test_p19_nothing_leaves_the_machine_and_nothing_enters_the_audio(
         channels=int(fmt_map["channels"]),
         codec=str(fmt_map.get("codec") or ""),
     )
-    runner = Recording_Command_Runner(
-        sample_rate=fmt.sample_rate, channels=fmt.channels
-    )
+    runner = Recording_Command_Runner(sample_rate=fmt.sample_rate, channels=fmt.channels)
 
     with _sockets_blocked():
         probed = stems.probe_audio_format(clip, runner, 5.0)
@@ -629,21 +658,31 @@ def test_p19_nothing_leaves_the_machine_and_nothing_enters_the_audio(
             clip, workspace / "in.wav", fmt=probed, runner=runner, timeout_s=5.0
         )
         stems.Ffmpeg_Separator_Backend(runner=runner).separate(
-            workspace / "in.wav", workspace / "stems",
-            fmt=probed, seed=plan.repair_window_ms, timeout_s=5.0,
+            workspace / "in.wav",
+            workspace / "stems",
+            fmt=probed,
+            seed=plan.repair_window_ms,
+            timeout_s=5.0,
         )
         stem_set, _details = stems.assemble_stem_set(
-            {"music": workspace / "stems" / "music.wav",
-             "vocals": workspace / "stems" / "vocals.wav"},
-            dest_dir=workspace / "stems", fmt=probed, duration=4.0,
-            runner=runner, timeout_s=5.0,
+            {
+                "music": workspace / "stems" / "music.wav",
+                "vocals": workspace / "stems" / "vocals.wav",
+            },
+            dest_dir=workspace / "stems",
+            fmt=probed,
+            duration=4.0,
+            runner=runner,
+            timeout_s=5.0,
         )
-        stems.render_mix(
-            plan, stem_set, workspace / "mixed.wav", runner=runner, timeout_s=5.0
-        )
+        stems.render_mix(plan, stem_set, workspace / "mixed.wav", runner=runner, timeout_s=5.0)
         stems.remux_replacement(
-            clip, workspace / "mixed.wav", workspace / "out.mp4",
-            fmt=probed, runner=runner, timeout_s=5.0,
+            clip,
+            workspace / "mixed.wav",
+            workspace / "out.mp4",
+            fmt=probed,
+            runner=runner,
+            timeout_s=5.0,
         )
 
     root = str(workspace.resolve())
@@ -674,14 +713,28 @@ def test_p19_silent_audio_in_yields_silent_audio_out(tmp_path) -> None:
         source, tmp_path / "stems", fmt=fmt, seed=1, timeout_s=60.0
     )
     stem_set, _ = stems.assemble_stem_set(
-        written, dest_dir=tmp_path / "stems", fmt=fmt, duration=1.0,
-        runner=_real_runner, timeout_s=60.0,
+        written,
+        dest_dir=tmp_path / "stems",
+        fmt=fmt,
+        duration=1.0,
+        runner=_real_runner,
+        timeout_s=60.0,
     )
     plan = stems.Stem_Plan(
-        backend="ffmpeg", model="", gains={n: 1.0 for n in stems.STEM_NAMES},
-        active_stems=stems.STEM_NAMES, repair_mode="off", repair_window_ms=12,
-        seams=(), windows=(), sample_rate=8000, channels=1, duration=1.0,
-        declick=False, needs_separation=True, missing_capabilities=(),
+        backend="ffmpeg",
+        model="",
+        gains={n: 1.0 for n in stems.STEM_NAMES},
+        active_stems=stems.STEM_NAMES,
+        repair_mode="off",
+        repair_window_ms=12,
+        seams=(),
+        windows=(),
+        sample_rate=8000,
+        channels=1,
+        duration=1.0,
+        declick=False,
+        needs_separation=True,
+        missing_capabilities=(),
     )
     mixed, _ = stems.render_mix(
         plan, stem_set, tmp_path / "mixed.wav", runner=_real_runner, timeout_s=60.0
@@ -730,9 +783,7 @@ def test_p20_reproducibility_holds_where_it_is_claimed_and_only_there(
 
     def _run_once(label: str, loader):
         backend = stems.ML_Separator_Backend(model_dir=root, loader=loader)
-        written = backend.separate(
-            source, root / label, fmt=fmt, seed=seed, timeout_s=30.0
-        )
+        written = backend.separate(source, root / label, fmt=fmt, seed=seed, timeout_s=30.0)
         plan = stems.plan_stems(opts=options, duration=duration, fmt=fmt)
         command = stems.mix_command(plan, written, root / f"{label}.wav")
         return written, plan, command
@@ -751,12 +802,12 @@ def test_p20_reproducibility_holds_where_it_is_claimed_and_only_there(
 
     # Across two environments differing by sub-tolerance noise.
     third, plan_c, _ = _run_once("c", _offset_loader(1))
-    assert plan_c.to_dict() == plan_a.to_dict()          # same plan
-    assert sorted(third) == sorted(first)               # same Stem_Set
+    assert plan_c.to_dict() == plan_a.to_dict()  # same plan
+    assert sorted(third) == sorted(first)  # same Stem_Set
     for name in first:
         left = _read_samples(first[name])
         right = _read_samples(third[name])
-        assert len(left) == len(right)                  # same duration
+        assert len(left) == len(right)  # same duration
         for a, b in zip(left, right):
             assert abs(a - b) / 32768.0 <= stems.AMPLITUDE_TOLERANCE + 1e-12
 
@@ -764,10 +815,20 @@ def test_p20_reproducibility_holds_where_it_is_claimed_and_only_there(
 def test_p20_the_emitted_graph_is_independent_of_mapping_order(tmp_path) -> None:
     """Two permutations of the same Stem_Set emit the identical command (Req 4.9, 10.6)."""
     plan = stems.Stem_Plan(
-        backend="ml", model="htdemucs", gains={n: 0.5 for n in stems.STEM_NAMES},
-        active_stems=stems.STEM_NAMES, repair_mode="off", repair_window_ms=12,
-        seams=(), windows=(), sample_rate=48000, channels=2, duration=3.0,
-        declick=False, needs_separation=True, missing_capabilities=(),
+        backend="ml",
+        model="htdemucs",
+        gains={n: 0.5 for n in stems.STEM_NAMES},
+        active_stems=stems.STEM_NAMES,
+        repair_mode="off",
+        repair_window_ms=12,
+        seams=(),
+        windows=(),
+        sample_rate=48000,
+        channels=2,
+        duration=3.0,
+        declick=False,
+        needs_separation=True,
+        missing_capabilities=(),
     )
     forward = {name: tmp_path / f"{name}.wav" for name in stems.STEM_NAMES}
     reversed_map = {name: forward[name] for name in reversed(stems.STEM_NAMES)}
@@ -796,7 +857,7 @@ def test_an_injected_locator_overrides_checkpoint_resolution(tmp_path) -> None:
     assert backend.locate() == marker
 
     broken = stems.ML_Separator_Backend(locator=lambda _n, _d: 1 / 0)
-    assert broken.locate() is None                     # never raises
+    assert broken.locate() is None  # never raises
 
 
 def test_injected_reads_one_collaborator_out_of_context_deps() -> None:
@@ -827,7 +888,7 @@ def test_the_repair_only_path_completes_with_demucs_absent(tmp_path, monkeypatch
         fmt=_fmt(),
     )
 
-    assert plan.needs_separation is False              # all gains neutral
+    assert plan.needs_separation is False  # all gains neutral
     assert plan.repair_mode == "crossfade"
     assert len(plan.windows) == 1
 
@@ -839,8 +900,7 @@ def test_the_repair_only_path_completes_with_demucs_absent(tmp_path, monkeypatch
 
     assert details == ()
     graph = runner.calls[0].argv[runner.calls[0].argv.index("-filter_complex") + 1]
-    assert "aeval" in graph      # the per-sample V-notch (see notch_filters)
-
+    assert "aeval" in graph  # the per-sample V-notch (see notch_filters)
 
 
 # =========================================================================== #
@@ -861,7 +921,7 @@ def test_the_module_imports_and_plans_with_no_heavy_dependency_present(tmp_path)
     from earlier tests and could not observe an import-time dependency.
     """
     root = Path(__file__).resolve().parents[1]
-    script = r'''
+    script = r"""
 import builtins, socket, sys
 
 # Nothing heavy may be importable...
@@ -899,16 +959,20 @@ assert stems.plan_is_noop(plan) is False
 # And the locator reports "absent" rather than trying to fetch anything.
 assert stems._locate_model("htdemucs", "/nonexistent") is None
 print("OK")
-'''
+"""
     env = {
-        "PATH": "",                                  # no ffmpeg, no ffprobe
+        "PATH": "",  # no ffmpeg, no ffprobe
         "PYTHONPATH": str(root),
         "HOME": str(tmp_path),
         stems.MODEL_DIR_ENV: str(tmp_path / "no-models"),
     }
     out = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(root), env=env, timeout=120,
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        env=env,
+        timeout=120,
     )
     assert out.returncode == 0, f"stdout={out.stdout}\nstderr={out.stderr}"
     assert out.stdout.strip().endswith("OK")
@@ -922,7 +986,7 @@ def test_the_engine_class_is_constructible_without_the_ml_stack(tmp_path) -> Non
     fail with it.
     """
     root = Path(__file__).resolve().parents[1]
-    script = r'''
+    script = r"""
 import builtins, sys
 BLOCKED = {"torch", "demucs", "numpy"}
 _real = builtins.__import__
@@ -942,15 +1006,17 @@ assert engine.is_enabled(None) is False
 resolved = engine.resolve_options({"stem_mix_preset": "clean_speech"})
 assert resolved.mix_preset == "custom"        # a mapping is not an attribute source
 print("OK")
-'''
+"""
     out = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(root), timeout=120,
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        timeout=120,
         env={**os.environ, "PYTHONPATH": str(root)},
     )
     assert out.returncode == 0, f"stdout={out.stdout}\nstderr={out.stderr}"
     assert out.stdout.strip().endswith("OK")
-
 
 
 # =========================================================================== #
@@ -968,8 +1034,7 @@ print("OK")
     gains=st.fixed_dictionaries(
         {
             name: st.one_of(
-                st.floats(min_value=0.0, max_value=4.0,
-                          allow_nan=False, allow_infinity=False),
+                st.floats(min_value=0.0, max_value=4.0, allow_nan=False, allow_infinity=False),
                 st.just(0.0),
                 st.just(1.0),
                 st.sampled_from([-1.0, 5.0, float("nan"), "loud", None]),
@@ -995,13 +1060,17 @@ def test_p11_gain_resolution_follows_the_preset_rules_and_zero_means_excluded(
     """
     root = tmp_path_factory.mktemp("p11")
     options = stems.resolve_stem_options(
-        type("O", (), {
-            "stem_mix_preset": preset,
-            "stem_gain_vocals": gains["vocals"],
-            "stem_gain_music": gains["music"],
-            "stem_gain_other": gains["other"],
-            "stem_repair_mode": "crossfade",
-        })()
+        type(
+            "O",
+            (),
+            {
+                "stem_mix_preset": preset,
+                "stem_gain_vocals": gains["vocals"],
+                "stem_gain_music": gains["music"],
+                "stem_gain_other": gains["other"],
+                "stem_repair_mode": "crossfade",
+            },
+        )()
     )
     resolved = stems.resolve_gains(options)
 
@@ -1014,7 +1083,8 @@ def test_p11_gain_resolution_follows_the_preset_rules_and_zero_means_excluded(
             assert resolved[name] == stems._coerce_gain(gains[name])
 
     plan = stems.plan_stems(
-        opts=options, duration=3.0,
+        opts=options,
+        duration=3.0,
         fmt=stems.Audio_Format(sample_rate=48000, channels=2),
     )
 
@@ -1035,21 +1105,27 @@ def test_p11_gain_resolution_follows_the_preset_rules_and_zero_means_excluded(
 
     # 4 — the applied rung emits mix:<preset> exactly once.
     runner = Recording_Command_Runner(probe_json=_P11_MEDIA_JSON)
-    engine = stems.Stem_Inpainting_Engine(
-        backend=_P11_Backend(), runner=runner
-    )
+    engine = stems.Stem_Inpainting_Engine(backend=_P11_Backend(), runner=runner)
     result = engine.run(_p11_ctx(root, options, runner))
     details = [m.split(":", 2)[2] for m in result.markers]
     assert details.count(f"mix:{options.mix_preset}") == (
-        1 if result.status in (stems.Engine_Status.APPLIED, stems.Engine_Status.DEGRADED)
-        and result.media is not None else 0
+        1
+        if result.status in (stems.Engine_Status.APPLIED, stems.Engine_Status.DEGRADED)
+        and result.media is not None
+        else 0
     )
 
 
 _P11_MEDIA_JSON = {
     "streams": [
-        {"codec_type": "audio", "sample_rate": "48000", "channels": 2,
-         "codec_name": "aac", "start_time": "0.0", "duration": "3.0"},
+        {
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "codec_name": "aac",
+            "start_time": "0.0",
+            "duration": "3.0",
+        },
         {"codec_type": "video", "duration": "3.0", "nb_frames": "90"},
     ],
     "format": {"duration": "3.0"},
@@ -1082,13 +1158,24 @@ def _p11_ctx(root: Path, options, runner):
     if not clip.exists():
         clip.write_bytes(b"\x00" * 64)
     return Engine_Context(
-        job_id="job", clip_id="clip_a", engine_id=stems.ENGINE_ID,
-        stage=Engine_Stage.AUDIO, source_path=clip, clip_path=clip,
+        job_id="job",
+        clip_id="clip_a",
+        engine_id=stems.ENGINE_ID,
+        stage=Engine_Stage.AUDIO,
+        source_path=clip,
+        clip_path=clip,
         time_base=Time_Base(sample_rate=48000),
-        clip_start=0.0, clip_end=3.0, duration=3.0,
-        options=options, options_digest="p11", seed=3,
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
+        options=options,
+        options_digest="p11",
+        seed=3,
         workspace=allocate_workspace(root / "ws", "job", "clip_a", stems.ENGINE_ID, "p11"),
         capabilities=Capability_Report(prober=StaticProber({}, default=True)),
-        permissibility=False, deadline=time.monotonic() + 120.0, time_budget_s=120.0,
-        notes=("filler_seam:1.500",), deps={"runner": runner},
+        permissibility=False,
+        deadline=time.monotonic() + 120.0,
+        time_budget_s=120.0,
+        notes=("filler_seam:1.500",),
+        deps={"runner": runner},
     )

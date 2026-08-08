@@ -27,9 +27,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
-from worker.ffmpeg_utils import FFmpegError, MediaInfo, probe
+from worker.ffmpeg_utils import MediaInfo, probe
 
 #: Codecs every target platform accepts. Anything else is an error rather than a warning:
 #: no platform in this list transcodes an unexpected codec on ingest.
@@ -131,7 +130,7 @@ class PreflightReport:
     platform: str
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    info: Optional[MediaInfo] = None
+    info: MediaInfo | None = None
 
     @property
     def ok(self) -> bool:
@@ -178,7 +177,12 @@ def validate_clip(video_path: str | Path, platform: str) -> PreflightReport:
 
     try:
         info = probe(path)
-    except (FFmpegError, Exception) as exc:  # noqa: BLE001 - a report, not a raise
+    # Deliberately broad, and deliberately *not* a tuple: this returns a report rather than
+    # raising, so every probe failure must land in `report.errors`. It previously read
+    # `except (FFmpegError, Exception)`, which looks like it handles ffmpeg errors specially and
+    # guards broadly as well — but `FFmpegError` subclasses `RuntimeError`, so `Exception` already
+    # subsumed it and the tuple was one fact stated twice.
+    except Exception as exc:
         report.errors.append(f"clip could not be probed: {exc}")
         return report
     report.info = info

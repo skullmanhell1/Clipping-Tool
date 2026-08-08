@@ -12,7 +12,7 @@ this module never requires boto3 or network access.
 from __future__ import annotations
 
 import io
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 from config import settings
 from storage_backends.base import BaseStorage, Data, normalize_key
@@ -23,8 +23,9 @@ class S3Storage(BaseStorage):
 
     name = "s3"
 
-    def __init__(self, client=None, bucket: Optional[str] = None,
-                 prefix: str = "", url_expiry: int = 3600) -> None:
+    def __init__(
+        self, client=None, bucket: str | None = None, prefix: str = "", url_expiry: int = 3600
+    ) -> None:
         self.bucket = bucket or settings.s3_bucket
         self.prefix = prefix.strip("/")
         self.url_expiry = url_expiry
@@ -88,7 +89,7 @@ class S3Storage(BaseStorage):
         for page in paginator.paginate(Bucket=self.bucket, Prefix=full_prefix):
             for obj in page.get("Contents", []):
                 k = obj["Key"]
-                out.append(k[len(strip):] if strip and k.startswith(strip) else k)
+                out.append(k[len(strip) :] if strip and k.startswith(strip) else k)
         return sorted(out)
 
     def size(self, key: str) -> int:

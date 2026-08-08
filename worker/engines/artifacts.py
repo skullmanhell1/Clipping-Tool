@@ -36,9 +36,10 @@ import hashlib
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from worker.engines.base import Engine_Artifact
 
@@ -223,9 +224,7 @@ class Engine_Workspace:
         ]
         candidate = self.root.joinpath(*segments) if segments else self.root
         if not _contains(self.root, candidate):
-            raise ValueError(
-                f"engine workspace path escapes its root {self.root}: {candidate}"
-            )
+            raise ValueError(f"engine workspace path escapes its root {self.root}: {candidate}")
         return candidate
 
     def artifact(
@@ -321,7 +320,7 @@ def _default_remover(path: Path) -> None:
 def cleanup_workspace(
     ws: Engine_Workspace,
     *,
-    remover: Optional[Callable[[Path], None]] = None,
+    remover: Callable[[Path], None] | None = None,
     logger: Any | None = None,
 ) -> bool:
     """Delete ``ws.root``; log and swallow ``OSError`` (Reqs 17.1, 17.4, 17.5).
@@ -350,9 +349,7 @@ def cleanup_workspace(
     return True
 
 
-def cleanup_job_workspaces(
-    temp_dir: str | Path, job_id: Any, *, logger: Any | None = None
-) -> int:
+def cleanup_job_workspaces(temp_dir: str | Path, job_id: Any, *, logger: Any | None = None) -> int:
     """Delete ``<temp_dir>/engines/<job>`` (Reqs 17.1, 17.6).
 
     Returns the number of top-level entries (clip directories) removed beneath
@@ -360,9 +357,7 @@ def cleanup_job_workspaces(
     The job directory itself is removed too. ``OSError`` is logged and swallowed
     (17.4).
     """
-    target = _as_path(temp_dir) / ENGINE_TEMP_ROOT / sanitize_component(
-        job_id, fallback="job"
-    )
+    target = _as_path(temp_dir) / ENGINE_TEMP_ROOT / sanitize_component(job_id, fallback="job")
     if not target.exists():
         return 0
 
@@ -420,7 +415,7 @@ def cleanup_job_artifacts(
 
     try:
         auto_delete = bool(runtime_config.get_runtime_config().auto_delete_temp)
-    except Exception as exc:  # noqa: BLE001 - a config read must never fail cleanup
+    except Exception as exc:  # a config read must never fail cleanup
         _log(logger, "runtime config unavailable, keeping engine workspaces: %s", exc)
         return 0
     if not auto_delete:
@@ -484,7 +479,7 @@ def persist_artifact(
     job_id: Any,
     clip_id: Any,
     engine_id: Any = None,
-    storage: "BaseStorage | None" = None,
+    storage: BaseStorage | None = None,
 ) -> Engine_Artifact:
     """Persist one artifact through the active Storage_Backend (Reqs 18.1, 18.5).
 
@@ -510,17 +505,13 @@ def persist_artifact(
         A copy of ``artifact`` with ``storage_key`` set.
     """
     record = (
-        artifact
-        if isinstance(artifact, Engine_Artifact)
-        else Engine_Artifact.from_dict(artifact)
+        artifact if isinstance(artifact, Engine_Artifact) else Engine_Artifact.from_dict(artifact)
     )
     # A supplied id is passed through verbatim (not even stripped):
     # :func:`artifact_key` owns every normalisation, so an explicit id always
     # produces exactly the key ``artifact_key(job_id, clip_id, engine_id, name)``
     # predicts. Only ``None`` triggers recovery from the workspace path.
-    identifier = (
-        _engine_id_from_path(record.path) if engine_id is None else _as_text(engine_id)
-    )
+    identifier = _engine_id_from_path(record.path) if engine_id is None else _as_text(engine_id)
     key = artifact_key(job_id, clip_id, identifier, record.name or record.path.name)
 
     backend = storage
