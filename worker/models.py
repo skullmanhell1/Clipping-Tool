@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+from worker.effects.caption_presets import BUILTIN_PRESETS as _BUILTIN_CAPTION_PRESETS
+
 
 def _as_bool(value: Any) -> bool:
     """Coerce form/JSON values (``"true"``, ``"1"``, ``True`` ...) to ``bool``."""
@@ -129,7 +131,7 @@ class ProcessingOptions:
     # reproduces v0.6.0 behaviour. Existing fields/defaults above are unchanged.
     #
     # Feature A — animated caption presets
-    caption_preset: str = "karaoke"  # karaoke|boxed|minimal|pop|typewriter|hormozi
+    caption_preset: str = "karaoke"  # any key of caption_presets.BUILTIN_PRESETS
     caption_animation: str = ""  # "" = use preset default; else override
     # U1. Keyword highlighting is only worth defaulting on since C11 made it selective:
     # the old rule emphasised any word clearing Whisper probability 0.9, which on clean
@@ -240,7 +242,21 @@ class ProcessingOptions:
     profile: str = ""
 
     # Known value sets for enum-like string fields (used by ``from_dict``).
-    _CAPTION_PRESETS = ("karaoke", "boxed", "minimal", "pop", "typewriter", "hormozi")
+    #: Accepted ``caption_preset`` values, derived from the presets that actually exist.
+    #:
+    #: Was a hand-written six: ``karaoke, boxed, minimal, pop, typewriter, hormozi``. C14 added
+    #: eight more to ``BUILTIN_PRESETS`` - pill, pill_green, sticker, comic, headline, subtitle,
+    #: karaoke_bold, spotlight - and ``/api/info`` advertises the whole dictionary, so the UI
+    #: offered fourteen swatches while this tuple silently rejected eight of them and
+    #: substituted ``karaoke``. Picking "sticker" produced karaoke captions and a
+    #: ``caption_preset_substituted`` marker, i.e. the feature was built, shipped, exposed, and
+    #: unreachable.
+    #:
+    #: Derived rather than restated so the two cannot drift again: a preset added to
+    #: ``BUILTIN_PRESETS`` is selectable the moment it exists. ``worker.effects.caption_presets``
+    #: imports nothing but the standard library and ``worker.effects.__init__`` is docstring
+    #: only, so this costs no import chain and creates no cycle.
+    _CAPTION_PRESETS = tuple(_BUILTIN_CAPTION_PRESETS)
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
     _BROLL_INTENSITIES = ("off", "subtle", "standard", "heavy")
     _ASSET_SOURCING_MODES = ("off", "local_only", "local_then_external")

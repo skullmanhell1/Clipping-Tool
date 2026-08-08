@@ -252,16 +252,16 @@ class OptionsModel(BaseModel):
     publish_mode: str = "review"
     schedule_at: float | None = None
     # Phase 4 — visual effects (all individually toggleable)
-    reframe: bool = False
-    zoom: bool = False
-    transitions: bool = False
-    hook_title: bool = False
+    reframe: bool = True
+    zoom: bool = True
+    transitions: bool = True
+    hook_title: bool = True
     music: str = ""
     music_volume: float = 0.12
-    fades: bool = False
+    fades: bool = True
     color: str = ""
-    progress_bar: bool = False
-    emoji: str = "off"
+    progress_bar: bool = True
+    emoji: str = "standard"
     emoji_mode: str = "keyword"
     emoji_animate: bool = True
     filler_removal: bool = False
@@ -270,9 +270,9 @@ class OptionsModel(BaseModel):
     # Tier 1 — Feature A: animated caption presets
     caption_preset: str = "karaoke"
     caption_animation: str = ""
-    caption_keyword_highlight: bool = False
+    caption_keyword_highlight: bool = True
     caption_keyword_ai: bool = False
-    caption_emoji: bool = False
+    caption_emoji: bool = True
     # Tier 1 — Feature B: b-roll overlays
     broll: bool = False
     broll_intensity: str = "standard"
@@ -280,7 +280,7 @@ class OptionsModel(BaseModel):
     broll_provider: str = ""
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = ""
-    visual_selection: bool = False
+    visual_selection: bool = True
     # Tier 1 — cross-cutting
     permissibility_mode: bool = False
     # v0.8.0 — Speaker diarisation & multi-speaker reframe (default OFF)
@@ -316,9 +316,51 @@ class OptionsModel(BaseModel):
     stem_backend: str = "auto"
     stem_model: str = "htdemucs"
     stem_retain_stems: bool = False
+    # U6 brand kit. These were absent, and their absence was silent: FastAPI matches a
+    # request body against this model and drops unrecognised keys without a 422, so the UI's
+    # font, CTA, colour pickers and logo sliders all sent values that were discarded on
+    # arrival. `ProcessingOptions` has always carried them and the renderer has always
+    # honoured them, so nothing was broken except the wiring between the two.
+    brand_font: str = ""
+    brand_primary_color: str = ""
+    brand_highlight_color: str = ""
+    brand_cta: str = ""
+    brand_logo: str = ""
+    brand_logo_position: str = "top_right"
+    brand_logo_scale: float = 0.16
+    brand_logo_opacity: float = 0.85
+    # AU1/AU2/AU7. These three default ON, which is why their absence was easy to miss: a
+    # caller could not observe them failing to switch on, only failing to switch OFF. An
+    # operator disabling loudness normalisation on a clip that is already mastered, or
+    # silence trimming on one where the boundaries are deliberate, was ignored.
+    loudness_normalise: bool = True
+    music_duck: bool = True
+    trim_silence: bool = True
+    # Written next to the clip as .srt/.vtt. Present on the upload form but not here, so it
+    # worked for an uploaded file and was dropped for the same job submitted as a URL.
+    subtitle_sidecar: bool = False
+    # A named built-in bundle (podcast / gaming / talking_head / educational), expanded by
+    # `ProcessingOptions.from_dict`, which has always supported it. `/api/profiles/builtin`
+    # advertises the four, so they were offered by the API and accepted by nothing.
+    profile: str = ""
 
     def to_options(self) -> ProcessingOptions:
-        return ProcessingOptions.from_dict(self.model_dump())
+        """The options this request actually asked for.
+
+        ``exclude_unset`` is load-bearing, for two reasons.
+
+        It is what lets ``profile`` work at all. ``from_dict`` expands a named bundle and then
+        lets explicit keys win, which is the right precedence - but ``model_dump()`` emits
+        *every* field, so every one of them counted as explicit and the bundle was overridden
+        in full, every time. ``/api/profiles/builtin`` advertises four profiles that were
+        therefore accepted and silently ignored.
+
+        And it makes :class:`ProcessingOptions` the single source of truth for a default. A
+        field the caller did not mention now never reaches ``from_dict``, so the dataclass
+        default applies rather than this model's restatement of it - which had drifted on ten
+        fields, all of them the U1 default-on effects.
+        """
+        return ProcessingOptions.from_dict(self.model_dump(exclude_unset=True))
 
 
 class ClipEditModel(BaseModel):
@@ -866,16 +908,16 @@ async def upload(
     publish_mode: str = Form("review"),
     schedule_at: float | None = Form(None),
     # Phase 4 — visual effects
-    reframe: bool = Form(False),
-    zoom: bool = Form(False),
-    transitions: bool = Form(False),
-    hook_title: bool = Form(False),
+    reframe: bool = Form(True),
+    zoom: bool = Form(True),
+    transitions: bool = Form(True),
+    hook_title: bool = Form(True),
     music: str = Form(""),
     music_volume: float = Form(0.12),
-    fades: bool = Form(False),
+    fades: bool = Form(True),
     color: str = Form(""),
-    progress_bar: bool = Form(False),
-    emoji: str = Form("off"),
+    progress_bar: bool = Form(True),
+    emoji: str = Form("standard"),
     emoji_mode: str = Form("keyword"),
     emoji_animate: bool = Form(True),
     filler_removal: bool = Form(False),
@@ -884,9 +926,9 @@ async def upload(
     # Tier 1 — Feature A: animated caption presets
     caption_preset: str = Form("karaoke"),
     caption_animation: str = Form(""),
-    caption_keyword_highlight: bool = Form(False),
+    caption_keyword_highlight: bool = Form(True),
     caption_keyword_ai: bool = Form(False),
-    caption_emoji: bool = Form(False),
+    caption_emoji: bool = Form(True),
     # Tier 1 — Feature B: b-roll overlays
     broll: bool = Form(False),
     broll_intensity: str = Form("standard"),
@@ -894,7 +936,7 @@ async def upload(
     broll_provider: str = Form(""),
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = Form(""),
-    visual_selection: bool = Form(False),
+    visual_selection: bool = Form(True),
     # Tier 1 — cross-cutting
     permissibility_mode: bool = Form(False),
     # v0.8.0 — Speaker diarisation & multi-speaker reframe
@@ -940,6 +982,23 @@ async def upload(
     stem_backend: str | None = Form(None),
     stem_model: str | None = Form(None),
     stem_retain_stems: str | None = Form(None),
+    # U6 brand kit, and the three default-on audio switches. Declared as loose `str | None`
+    # for the same reason the engine fields above are: an unparseable value should fall back
+    # to the documented default rather than 422 a whole upload, and `ProcessingOptions
+    # .from_dict` already does that coercion. `None` means "not sent", and is filtered out
+    # below so the dataclass default applies rather than a null overwriting it.
+    brand_font: str | None = Form(None),
+    brand_primary_color: str | None = Form(None),
+    brand_highlight_color: str | None = Form(None),
+    brand_cta: str | None = Form(None),
+    brand_logo: str | None = Form(None),
+    brand_logo_position: str | None = Form(None),
+    brand_logo_scale: str | None = Form(None),
+    brand_logo_opacity: str | None = Form(None),
+    loudness_normalise: str | None = Form(None),
+    music_duck: str | None = Form(None),
+    trim_silence: str | None = Form(None),
+    profile: str | None = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -949,9 +1008,13 @@ async def upload(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    # Kinetic typography fields, forwarded only when actually supplied so an
-    # omitted field keeps its documented ProcessingOptions default (Req 17.4).
-    kinetic_form: dict[str, str | None] = {
+    # Loosely-typed form fields, forwarded only when actually supplied so an omitted field
+    # keeps its documented ProcessingOptions default (Req 17.4) rather than being overwritten
+    # with a null. Renamed from `kinetic_form`: it started as the kinetic engine's fields,
+    # then took the stem engine's, and now the brand kit and the three default-on audio
+    # switches - a name describing a third of its contents is how the next person adds a
+    # field to the signature and forgets this dict.
+    optional_form: dict[str, str | None] = {
         "kinetic_typography_enabled": kinetic_typography_enabled,
         "kinetic_style": kinetic_style,
         "kinetic_reveal": kinetic_reveal,
@@ -973,6 +1036,18 @@ async def upload(
         "stem_backend": stem_backend,
         "stem_model": stem_model,
         "stem_retain_stems": stem_retain_stems,
+        "brand_font": brand_font,
+        "brand_primary_color": brand_primary_color,
+        "brand_highlight_color": brand_highlight_color,
+        "brand_cta": brand_cta,
+        "brand_logo": brand_logo,
+        "brand_logo_position": brand_logo_position,
+        "brand_logo_scale": brand_logo_scale,
+        "brand_logo_opacity": brand_logo_opacity,
+        "loudness_normalise": loudness_normalise,
+        "music_duck": music_duck,
+        "trim_silence": trim_silence,
+        "profile": profile,
     }
 
     options = ProcessingOptions.from_dict(
@@ -1029,7 +1104,7 @@ async def upload(
             "reframe_layout": reframe_layout,
             "reframe_intensity": reframe_intensity,
             "face_detector": face_detector,
-            **{key: value for key, value in kinetic_form.items() if value is not None},
+            **{key: value for key, value in optional_form.items() if value is not None},
         }
     )
 
