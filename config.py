@@ -456,6 +456,33 @@ class Settings(BaseSettings):
         "crushing its blacks.",
     )
 
+    # C24: cue legibility floors. `words_to_cues` has only ceilings, so fast speech produces cues
+    # of about 0.3s -- nine frames, a flicker rather than a caption.
+    #
+    # BOTH DEFAULT TO OFF, which reproduces v0.11.0 exactly (R4.12). Neither has been measured
+    # against anything, and M10 (caption alignment error) plus M12 (preference trials) are the
+    # instruments that would justify a value. A floor turned on unmeasured would move every golden
+    # and re-freeze the parity fixtures around a number nobody checked.
+    min_cue_seconds: float = Field(
+        default=0.0,
+        description="Minimum seconds a caption stays on screen; 0 disables (C24). PROVISIONAL "
+        "and off: a useful value is probably near 0.8-1.0s, but 'probably' is why it ships off. "
+        "Cues are extended into free time, then merged, and never made to overlap.",
+    )
+    max_reading_rate: float = Field(
+        default=0.0,
+        description="Maximum characters per second a caption may demand; 0 disables (C24). "
+        "PROVISIONAL and off. Broadcast subtitling clusters around 15-20 CPS, but short-form "
+        "captions are larger and shorter so the right figure here is not known.",
+    )
+    # C25: linguistic line breaking. Width-only breaking splits proper nouns and article-noun pairs.
+    caption_linguistic_breaks: bool = Field(
+        default=False,
+        description="Prefer line breaks at linguistic boundaries over pure measured width (C25). "
+        "PROVISIONAL and off (R5.9). English only -- the rules are a hand-audited function-word "
+        "list, so other languages fall back to width-based breaking. The width budget always wins.",
+    )
+
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
     # hard cuts and misses equiluminant ones - which is why every snap is capped and optional.
