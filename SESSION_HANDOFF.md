@@ -1,25 +1,100 @@
 # Session Handoff
 
-Rewritten after the Phase 1–4 improvement pass. The previous version described the five completed
-specs and said "no PRs are open", which is no longer true of either half — it has been replaced
-rather than amended, because a handoff document that is wrong is worse than none.
+Amended after the caption-timing wiring pass. The numbers in §2 and the "what is left" list in §3
+were both wrong — they described `8670063`, and six PRs had landed since. Corrected by measurement
+rather than by reading the previous revision forward, because a handoff document that is wrong is
+worse than none.
 
 ## Start here
 
-**1. Check that `main` has the work before building on it.** See
-[§1](#1-where-the-work-is). One PR carries the whole Phase 1–4 pass onto `main`; until it
-lands, branching off `main` means rebuilding things that already exist.
+**1. Read [§0](#0-the-failure-mode-this-project-keeps-producing) first.** Three caption features
+shipped implemented, tested and never called. It is the most expensive recurring mistake here and it
+is invisible to a green suite.
+
+**2. Check that `main` has the work before building on it.** See [§1](#1-where-the-work-is).
 
 ```bash
 git fetch origin
-git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
+git cat-file -e origin/main:worker/word_spans.py && echo "main has the caption timing modules" \
   || echo "main is BEHIND - see section 1"
 ```
 
-**2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
-a priority and effort estimate each, every current value quoted from the code. **142 are now
-implemented.** The 12 that remain are listed in [§3](#3-what-is-actually-left), and all but one are
+**3. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items in
+the body plus Appendix B's newer IDs, every current value quoted from the code. The body is
+substantially complete; what remains is listed in [§3](#3-what-is-actually-left), and most of it is
 blocked on something other than effort.
+
+> Recount traps, all of which have produced wrong figures at least once. `P0`–`P3` are *phase* rows,
+> not items, and must be excluded — but excluding everything starting with `P` also drops `PB1`–`PB9`.
+> An item can be implemented without carrying its own ID: `PB3` is satisfied by
+> `publishers/preflight.py`, labelled `O10`. And an ID present in the tree is not necessarily
+> *reachable* — see §0. Grep both over- and under-counts; check before believing it.
+
+## 0. The failure mode this project keeps producing
+
+**A module can be complete, correct, fully tested, and never called. The suite will not tell you.**
+
+Found in the caption timing code: `worker/word_spans.py` (C23), `cue_constraints.apply_constraints`
+(C24) and `cue_constraints.choose_break` (C25) had **no importer outside their own test modules**,
+and `min_cue_seconds` / `max_reading_rate` / `caption_linguistic_breaks` were read by nothing. Three
+features, ~600 lines, full property-test coverage, and no effect on a single rendered frame. Every
+test passed the whole time, because a unit test of a pure function cannot tell whether anything calls
+it.
+
+Two real defects were hiding in that dead code and surfaced within minutes of wiring it up: an
+unguarded `dataclasses.replace` that raised `TypeError` from inside the renderer on the duck-typed
+word objects the caption paths actually use, and an R8.5 clamp that was unreachable because the
+compliance fast path never checked the cue boundary. Both would have shipped as "tested".
+
+The check is one command, and it is worth running on anything you add:
+
+```bash
+# Any worker module whose only importer is its own test is not wired in.
+for f in worker/*.py worker/**/*.py; do
+  m=$(basename "$f" .py)
+  [ "$m" = "__init__" ] && continue
+  hits=$(grep -rl "import $m\b\|from worker.$m\b\|from .$m\b" --include=*.py . \
+         | grep -v "^./tests/\|^./.venv\|^$f" | wc -l)
+  [ "$hits" -eq 0 ] && echo "UNWIRED: $f"
+done
+```
+
+A related trap in the same family: `tests/test_config_documentation.py` proves a setting is
+*documented*, not that it is *read*. A `Settings` field with no `getattr`/attribute access outside
+`config.py` is a knob connected to nothing, and it will pass every gate in the project.
+
+There is now a check for both, run in CI and as a test:
+
+```bash
+python scripts/check_wired.py --all
+```
+
+It found four more dead modules after the caption three, and **two of them had been merged that
+morning**:
+
+| Module | Item | State |
+| --- | --- | --- |
+| `worker/stabilise.py` | V21 stabilisation | Nothing imports it; `stabilise_strength` read by nothing. Entirely inert. |
+| `worker/turn_gain.py` | AU12 per-speaker level | Nothing imports it, so diarisation is still never used for gain — the exact defect AU12 was written to fix. |
+| `worker/effects/sfx.py` | A15 sound effects | Nothing imports it; `sfx_volume` read by nothing. No path would honour `SFX_MODE` at all. |
+| `worker/caption_placement.py` | V15 captions off the mouth | Nothing imports it, so `caption_avoid_faces` cannot take effect. |
+
+Plus fourteen `Settings` fields read by nothing. Two are inert because their module is
+(`stabilise_strength`, `sfx_volume`); the rest are documented environment variables that were never
+plumbed — `API_PORT`, `REDIS_URL`, `RQ_QUEUE_NAME`, `PUBLIC_BASE_URL`, `USE_INPROCESS_FALLBACK`,
+`MUSIC_DEFAULT_VOLUME`, `BACKGROUND_COLOR`, `BACKGROUND_STYLE`, `X_API_KEY`, `X_API_SECRET`,
+`API_HOST`, and `FACE_DETECTOR_BACKEND`. The last is worth singling out: it is documented as the
+detector used "when a job does not specify one", but `resolve_detector` is only ever called with the
+per-job option, so that default is never consulted.
+
+The check is a **ratchet against a recorded baseline**, not a clean-tree assertion — the debt above is
+listed in the script with a reason each, so new dead code fails immediately while the backlog is
+cleared. `tests/test_check_wired.py` asserts every baseline entry is *still* dead, so wiring one up
+forces its entry to be deleted and the list can only shrink. A baseline allowed to keep fixed entries
+becomes a list of historical problems that reads as current, which is worse than no baseline.
+
+**Wiring these four up is the highest-value work available in this repository right now.** Each is a
+finished, tested feature that currently does nothing.
 
 > If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
 > figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
@@ -34,17 +109,42 @@ when a constant changes, and one module reports "I cannot do this" rather than d
 
 ## 1. Where the work is
 
-**Resolved: all of this is on `main`.** `main` is at `5ed1b24` (PR #111) and the probe in "Start here"
-passes. Landed since this table was written: #83 face detection, #86, #92, #94, #106 (the API and UI
-silently dropped or contradicted 24 options), #107/#108 (the five new specs, documentation only), #109
-(**I9** — ruff `UP`/`B`, `ruff format` enforced, `black` removed), #110 (**O13**–**O15** HDR
-tone-mapping), #111 (**M9**–**M12** render-fidelity measurement, which is what introduced the VMAF
-ffmpeg requirement in §2), #114 CodeQL, #115, and #10. So two Appendix B claims are **no longer true**:
-`vmaf`/`ssim`/`psnr` and `tonemap`/`zscale` now exist in the tree.
+**All of it is on `main`.** `main` is at `d309f36` and the probe in "Start here" passes.
+
+Six PRs landed after `8670063`, which is the revision the previous version of this table described:
+
+| PR | Item |
+| --- | --- |
+| #121 | **AU11** speech presence chain, and a loudness defect it exposed |
+| #123 | the retention sweeper deleting running jobs' output directories |
+| #125 | **C23** word-span hygiene, and the measurement that rules **T11** out |
+| #126 | **AU12** per-speaker level matching |
+| #122 | **V24** screen-recording and graphics detection |
+| #124 | **V21** optional stabilisation |
+
+Three of those inserted a settings block at the same anchor in `config.py` and `.env.example`, so they
+conflicted with each other pairwise. CI never saw it: **each PR is tested against its base, never
+against the others.** They were merged through one integration branch with the full suite run on the
+combination first. Expect this whenever several PRs are open at once here — the conflict is in the
+settings block, every time.
+
+**Two of the six shipped inert** (V21, AU12) and neither the suite nor CI could tell. See §0.
 
 Version `0.11.0`, and note `CHANGELOG.md` still carries a large `[Unreleased]` section above it — an
 entire release of work with `VERSION` unbumped. Naming that release is a human decision and has not
 been made.
+
+**CI has been red on every branch since before #121, for a reason that has nothing to do with the
+code.** The annotation on every failed job is:
+
+> The job was not started because recent account payments have failed or your spending limit needs to
+> be increased. Please check the 'Billing & plans' section in your settings
+
+Jobs complete in about three seconds having run zero steps, including `Frontend (node 20.19)` and
+`Analyze (javascript-typescript)` on branches touching no JavaScript. That pattern — every job, every
+branch, including ones with nothing to do — is how to recognise it, and it is not fixable from a pull
+request. Until it is resolved, **every gate must be run locally** and the figures in §2 are the only
+evidence available.
 
 The original problem is kept below because its *shape* recurs whenever PRs are stacked, and this is
 the reference for untangling it. The Phase 1–4 pass was built as a stack of PRs which were all merged
@@ -82,22 +182,29 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on `8670063`. Figures in older revisions of this table, and the `1994`/`98` pair in
-`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md`, are historical snapshots — take a fresh
-measurement rather than trusting any of them, including this one.
+Measured on the caption-timing wiring branch, which is `d309f36` plus that change. The `2457` figure
+in the previous revision of this table was four PRs stale, and the `1994`/`98` pair in
+`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` is older still — take a fresh measurement rather
+than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2457 passed, 0 failed, 0 skipped, 0 warnings** |
+| `pytest` | **2619 passed, 0 failed, 0 skipped, 0 warnings** |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 218 files (I9; blocking in CI) |
-| `mypy .` | clean — 111 source files |
+| `ruff format --check .` | clean — 230 files (I9; blocking in CI) |
+| `mypy .` | clean — 116 source files |
+| `python scripts/check_wired.py --check` | `0 new` unwired modules / unread settings |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
-| `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified` |
+| `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified: blaze_face_short_range.tflite` |
 | `scripts/smoke_reel.py` | renders; 15 effects incl. `music_degraded:synthesised` |
 | `scripts/docker_smoke.sh` | builds and serves; prints `I12 OK` |
 | `npm audit --audit-level=critical` | exits 0 |
+
+**Node 20 or 22 is required for the frontend gates**, not whichever node is first on `PATH`. The
+sandbox ships 18, 20, 22 and 24; vitest and vite require `^20.19.0 || >=22.12.0` and crash on 18 with
+an error that does not name the version as the cause. Use
+`export PATH=/root/.nvm/versions/node/v20.20.2/bin:$PATH`.
 
 **Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
 README's Testing section. The full backend suite takes about **five minutes** (290 s measured).
@@ -121,7 +228,46 @@ tolerable.
 
 ## 3. What is actually left
 
-12 items. Only one is a matter of effort.
+The previous version of this section said "12 items, only one is a matter of effort". That was wrong
+in both directions: several listed items had since been built, and it missed everything in §0 — four
+finished features that do nothing, which is the largest block of available work here and needs no
+labels, weights or credentials.
+
+### Wire up what already exists (nothing blocks this)
+
+`worker/stabilise.py` (V21) · `worker/turn_gain.py` (AU12) · `worker/effects/sfx.py` (A15) ·
+`worker/caption_placement.py` (V15). Each is written, tested and unreachable. See §0 for how to
+confirm, and take the settings with them — `stabilise_strength` and `sfx_volume` are read by nothing.
+
+### Buildable, from Appendix B and the `clip-quality-uplift` spec
+
+| Item | What | Note |
+| --- | --- | --- |
+| **AU10** | Interior dead air | `plan_keep_intervals` already resolves filler ∪ U4 cut lists into one re-encode; interior silence is a third contributor. Reuse the memoised `detect_silences`, add no pass. |
+| **O6** | Intermediate render fidelity | `intermediate=` on `h264_args` plus `x264_crf_intermediate`. Now measurable — `evaluation/fidelity.py` (M9) exists, so "prove it helps or revert it" is answerable. |
+| **S19** | Narrow the hook disqualification | `hook_score` zeroes on `promptness <= 0.0`, which also zeroes a clip opening on a laugh. Mechanism ships, default stays strict. |
+| **S20** | End-boundary scene snapping | `snap_start` exists; `snap_end` does not. Gate on `mean_best_iou`, not F1 — end snapping cannot change *which* moments are found. |
+| **V23** | Subject-scale normalisation across shots | Subject size jumps between cuts. |
+| **S21** | Cold-open / multi-segment assembly | `filler.apply_keep_intervals` already renders non-contiguous keeps in one pass, so the hard part exists. |
+| **A14/A21** | Music tracks and `scripts/fetch_music.py --check` | `assets/music/` and `assets/broll/` exist; the manifest script does not. Licensing is the real work. |
+| **U12** | Multi-user auth, per-user storage | Product decision as much as technical. |
+
+### Already built, contrary to older notes
+
+`M9`–`M12` (`evaluation/fidelity.py`, `caption_timing.py`, `sync.py`, `preference.py`) ·
+`O13`–`O15` colour · `O16`–`O20` (`frame_rate.py`, `output_profiles.py`, `sws_flags`) · `V20`
+(`deinterlace.py`) · `V22` (`headroom.py`) · `V24` (`content_class.py`) · `C24`/`C25`
+(`cue_constraints.py`) · `C23` (`word_spans.py`) · `S3` pitch (`pitch_features.py`, wired through
+`selection.py` behind `selection_pitch_feature`) · `U4` transcript trimming.
+
+**`T11` is refused by measurement, not unbuilt.** Snapping word starts to audio onsets requires a
+word-scale envelope; the cached one is built at `ENVELOPE_WINDOW_S = 1.0`, and on an 8-second source
+with 20 bursts at 2.5/s it yielded 8 readings and `detect_onsets` found **zero**. R7.8 forbids the
+second audio pass that would fix that, so the requirement's constraint and its purpose are
+incompatible as written. Reasoning is in `worker/word_spans.py`'s docstring; measure the envelope
+before building against it.
+
+### Where the U4 seams ended up
 
 **`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
 knowing where the seams ended up, because the next person to touch trimming will meet them:
@@ -131,12 +277,6 @@ knowing where the seams ended up, because the next person to touch trimming will
 `filler.apply_keep_intervals`, so there is exactly one multi-range concat in the worker. Filler
 removal and a cut list compose by union into **one** keep list and **one** re-encode — do not add a
 second pass.
-
-### Buildable now
-
-| Item | What | Why it was left |
-| --- | --- | --- |
-| **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
 
 **`I9` is done** — `UP` and `B` are enabled, `ruff format` is enforced in CI, and `black` has been
 removed rather than left listed and unrun. Two consequences outlive the sweep. First, **`RUF100` is
@@ -198,8 +338,24 @@ reported green.
   must survive somewhere under the workspace.
 - The sandbox has **open internet** and **docker**. That is what made `I12` and `I13` verifiable at
   all; earlier sessions could not run either.
-- `git fetch origin` fails with `Missing header field, please provide AuthToken`. Only the GitHub
-  tooling authenticates — use it for push and PR operations, never bare `git push`.
+- **`git fetch` / `git push` work.** The previous note here said `git fetch origin` fails with
+  `Missing header field, please provide AuthToken` and that only the GitHub tooling authenticates.
+  That is no longer true — `git` and `gh` are both pre-configured. What still fails is `gh pr create`,
+  `gh pr merge` and the other GraphQL-backed `gh pr` / `gh issue` subcommands; use the REST endpoints
+  instead:
+
+  ```bash
+  gh api repos/{owner}/{repo}/pulls -f title=... -f head=... -f base=main -f body=...
+  gh api -X PUT repos/{owner}/{repo}/pulls/{n}/merge -f merge_method=squash
+  gh api -X PATCH repos/{owner}/{repo}/pulls/{n} -f base=main   # retarget
+  ```
+
+  `gh run view --log-failed` also fails (`none of the git remotes correspond to the GH_HOST`); read
+  job annotations through `gh api repos/{owner}/{repo}/check-runs/{id}/annotations`, which is where
+  the billing message in §1 was found.
+- **Commit before mutation testing.** `git checkout <file>` restores from the *index*, so running it
+  to undo a mutation destroys any uncommitted work in that file. It cost two rounds of re-doing the
+  same edits here.
 
 ## 5. Conventions that are not obvious from the code
 

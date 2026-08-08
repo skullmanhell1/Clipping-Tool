@@ -492,6 +492,44 @@ is owned by `clip-quality-uplift` task 13; do not treat the sections above as cu
 These items came from reading the render path directly rather than from competitor comparison,
 which is why none of them appear in §§1–12. Each is specified in full under `.kiro/specs/`.
 
+### Status of this appendix — read this before the tables
+
+**The tables below describe the tree as it was at the audit. Most of them have since been built, and
+the `Note` column still reads as though they have not.** Rows are kept rather than deleted, per the
+"mark superseded diagnoses" rule, but the notes are now history and not diagnoses.
+
+Implemented, with where the code lives:
+
+| ID | Where |
+| --- | --- |
+| `M9`–`M12` | `evaluation/fidelity.py`, `evaluation/caption_timing.py`, `evaluation/sync.py`, `evaluation/preference.py` |
+| `O13`–`O15` | `worker/colour.py` |
+| `O16`–`O20` | `worker/video_encoders.py`, `worker/ffmpeg_utils.py`, `worker/frame_rate.py`, `worker/output_profiles.py` |
+| `V20` | `worker/deinterlace.py` |
+| `V22` | `worker/headroom.py` |
+| `V24` | `worker/content_class.py` |
+| `C23` | `worker/word_spans.py` |
+| `C24`, `C25` | `worker/cue_constraints.py` |
+| `AU11` | `worker/effects/audio.py` |
+
+**Implemented but unreachable — these are worse than unbuilt, because they read as done:**
+
+| ID | Module | State |
+| --- | --- | --- |
+| `V21` | `worker/stabilise.py` | Imported by nothing outside its test; `stabilise_strength` read by nothing. Inert. |
+| `AU12` | `worker/turn_gain.py` | Imported by nothing outside its test. Diarisation is still never used for gain. |
+
+`scripts/check_wired.py` is the check, and it also lists `worker/effects/sfx.py` (`A15`) and
+`worker/caption_placement.py` (`V15`) from the body of this document, plus fourteen `Settings` fields
+that nothing reads. Wiring these up needs no labels, no weights and no credentials, which makes it the
+most available work in the backlog.
+
+`T11` is **refused by measurement** rather than outstanding — the cached energy envelope has no
+word-rate information and R7.8 forbids the second audio pass that would provide it. See
+`worker/word_spans.py`.
+
+Still genuinely open below: `V23`, `S21`, `S22`, `S23`, `S24`.
+
 ### Measurement — `render-quality-measurement`
 
 | ID | Item | Note |
@@ -553,4 +591,7 @@ Unchanged from the body above, restated because these are the items most often r
 detection) remains the largest single visual gap: on two-person footage we follow the largest,
 most-diarisation-active face rather than the person speaking.
 
-*Verified against v0.11.0. Appendix B only — the sections above it are not.*
+*Appendix B's tables were verified against v0.11.0; its "Status" section above was verified against
+`d309f36` plus the caption-timing wiring change, by reading the tree rather than the previous
+revision. The sections above Appendix B are still quoted against v0.10.0 and are not verified — that
+is `clip-quality-uplift` task 13 and it remains open.*
