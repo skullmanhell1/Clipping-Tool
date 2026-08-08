@@ -440,6 +440,21 @@ class Settings(BaseSettings):
         "policy and O19's keyframe interval, both of which read the delivered rate.",
     )
 
+    # V22: headroom. reframe centres the crop on the face centre, which is the most recognisable
+    # auto-crop tell -- a human editor puts the eyes near the upper third -- and it pushes the mouth
+    # towards the middle of a 9:16 frame, which is exactly where captions sit.
+    #
+    # DEFAULT ZERO, reproducing v0.11.0 framing exactly. This is a *look* change, and R1.8 requires
+    # a preference trial (M12) to justify a non-zero default rather than an assertion. The mechanism
+    # ships; the value waits for somebody to judge it.
+    reframe_headroom_bias: float = Field(
+        default=0.0,
+        description="Move the reframe crop down by this fraction of crop height, lifting the "
+        "subject and placing the eye line above the frame midpoint (V22). 0 reproduces v0.11.0 "
+        "framing; 0.05-0.10 is the plausible range. PROVISIONAL and zero: a non-zero default needs "
+        "a preference trial, not an opinion. Applied after smoothing and clamped to valid pixels.",
+    )
+
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #
     # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
