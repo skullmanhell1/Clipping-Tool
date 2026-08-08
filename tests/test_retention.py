@@ -78,6 +78,63 @@ def test_cleanup_expired_removes_old_clips_not_sources(tmp_path, monkeypatch):
     assert source.exists()
 
 
+def test_cleanup_expired_leaves_a_running_jobs_empty_output_directory_alone(tmp_path, monkeypatch):
+    """A live job's output directory is empty for a while, and must survive the sweep.
+
+    `run_pipeline` creates `storage/clips/<job_id>/` before it encodes anything, so between that
+    mkdir and the first finished clip the directory is legitimately empty for as long as the first
+    render takes. The empty-directory branch had no age check - unlike the file branch beside it -
+    so any sweep landing in that window removed the directory from under ffmpeg. The clip then
+    failed with "Error opening output ...: No such file or directory", and because the pipeline's
+    own degradation fallback writes into that same directory it failed too, taking the whole job
+    down: five clips became zero, on a 30-day retention window.
+
+    Nothing here is old enough to expire, so the sweep must not remove anything at all.
+    """
+    from config import settings
+
+    root = tmp_path / "storage"
+    live_job = root / "clips" / "job_rendering_right_now"
+    live_job.mkdir(parents=True)
+    (root / "temp").mkdir(parents=True)
+
+    monkeypatch.setattr(settings, "storage_root", root)
+    monkeypatch.setattr(settings, "clips_dir", root / "clips")
+    monkeypatch.setattr(settings, "temp_dir", root / "temp")
+
+    result = retention.cleanup_expired(retention_days=30)
+
+    assert live_job.is_dir(), "the sweep deleted a running job's output directory"
+    assert result["removed"] == 0
+
+
+def test_cleanup_expired_still_tidies_a_long_abandoned_empty_directory(tmp_path, monkeypatch):
+    """The grace period must not turn the empty-directory sweep into a no-op.
+
+    The branch exists so that a job directory left behind after its clips expired does not
+    accumulate forever. Guarding it with the retention window instead of a short grace period would
+    never fire: unlinking a file updates its parent's mtime, so a directory looks freshly modified
+    on the very sweep that emptied it, and would then be another full window from eligible.
+    """
+    from config import settings
+
+    root = tmp_path / "storage"
+    abandoned = root / "clips" / "job_whose_clips_expired"
+    abandoned.mkdir(parents=True)
+    (root / "temp").mkdir(parents=True)
+
+    stale = time.time() - (retention._EMPTY_DIR_GRACE_SECONDS + 600)
+    os.utime(abandoned, (stale, stale))
+
+    monkeypatch.setattr(settings, "storage_root", root)
+    monkeypatch.setattr(settings, "clips_dir", root / "clips")
+    monkeypatch.setattr(settings, "temp_dir", root / "temp")
+
+    retention.cleanup_expired(retention_days=30)
+
+    assert not abandoned.exists(), "an abandoned empty directory was never tidied away"
+
+
 def test_cleanup_expired_keep_forever_is_noop(tmp_path, monkeypatch):
     from config import settings
 
