@@ -673,6 +673,24 @@ def render_clip(
         if audio.deesser_filter():
             applied.append("deesser")
 
+    # AU11: presence and dynamic control on the SPEECH branch, before anything is mixed into it.
+    #
+    # The position is the requirement. R6.5 restricts this to speech: shaping a music bed for
+    # consonant definition is meaningless and compressing it would fight AU2's ducking. R6.2 puts it
+    # before loudness normalisation, so the measured loudness describes what is actually delivered.
+    #
+    # Chained onto whatever AU4/AU5 produced rather than reading `[0:a]` again, so the cleanup and
+    # the shaping compose instead of one silently discarding the other -- and so no additional
+    # encoding pass is introduced (R6.11): this is one more filter in a graph that already exists.
+    presence = audio.presence_chain(getattr(settings, "speech_presence", 0.0))
+    if presence and info.has_audio:
+        graph_parts.append(f"[{audio_out}]{','.join(presence)}[apresence]")
+        audio_out = "apresence"
+        audio_changed = True
+        _presence_marker = audio.presence_marker(getattr(settings, "speech_presence", 0.0))
+        if _presence_marker and _presence_marker not in applied:
+            applied.append(_presence_marker)
+
     speech_label = audio_out
     if music_path is not None:
         # Music follows the engine block and precedes the b-roll/emoji inputs, so
@@ -741,7 +759,12 @@ def render_clip(
     # loudness by a fraction of a LU, well inside loudnorm's own tolerance, and paying for a
     # second full encode to measure the finished mix would cost more than it corrects (O6).
     if options.loudness_normalise and info.has_audio and audio_changed:
-        stats = audio.measure_loudness(base_clip)
+        # AU11/R6.10: the presence chain removes energy, and `loudnorm`'s second pass applies a
+        # single gain computed from this measurement -- so the measurement has to see the shaped
+        # signal or the delivered clip lands below target. Measured without this: -17.5 LUFS against
+        # a -14 target, which every platform then turns *up*, lifting the noise floor. Empty when
+        # presence is off, which is the pre-AU11 behaviour verbatim.
+        stats = audio.measure_loudness(base_clip, prefilters=presence)
         if stats is None:
             # No audio to measure, an ffmpeg without loudnorm, or an unparsable report.
             # Render at the source's own level rather than failing the clip.
