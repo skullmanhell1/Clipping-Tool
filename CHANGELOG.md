@@ -285,7 +285,8 @@ one.
 
 ### Added — modern face detection and measured detection confidence
 
-- **A second face-detector backend, opt-in.** `face_detector` accepts `haar` (the shipped
+- **A second face-detector backend, opt-in.** `face_detector_backend` (`FACE_DETECTOR_BACKEND`)
+  accepts `haar` (the shipped
   OpenCV cascade) or `mediapipe` (BlazeFace, via the vendored model). **`haar` stays the
   default**, so an unchanged configuration reproduces v0.11.0 output exactly — which matters
   more than it sounds: the golden and parity renders only detect an *accidental* change while
