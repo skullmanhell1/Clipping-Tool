@@ -1,0 +1,44 @@
+{
+  "tolerance_ms": 20.0,
+  "measurements": [
+    {
+      "offset_ms": 0.0625,
+      "audio_onset_s": 1.0001,
+      "video_onset_s": 1.0,
+      "within_tolerance": true,
+      "tolerance_ms": 20.0,
+      "label": "unmodified render",
+      "note": "Positive offset means the audio event arrives later than the visual event. The measured value is reported whether or not it is within tolerance: a run reading 8 ms differs meaningfully from one reading 0 ms, and only one of those is a trend."
+    },
+    {
+      "offset_ms": 0.0625,
+      "audio_onset_s": 1.0001,
+      "video_onset_s": 1.0,
+      "within_tolerance": true,
+      "tolerance_ms": 20.0,
+      "label": "cut from non-zero start (-ss before -i)",
+      "note": "Positive offset means the audio event arrives later than the visual event. The measured value is reported whether or not it is within tolerance: a run reading 8 ms differs meaningfully from one reading 0 ms, and only one of those is a trend."
+    },
+    {
+      "offset_ms": 0.0625,
+      "audio_onset_s": 1.0001,
+      "video_onset_s": 1.0,
+      "within_tolerance": true,
+      "tolerance_ms": 20.0,
+      "label": "VFR normalised to 30fps",
+      "note": "Positive offset means the audio event arrives later than the visual event. The measured value is reported whether or not it is within tolerance: a run reading 8 ms differs meaningfully from one reading 0 ms, and only one of those is a trend."
+    },
+    {
+      "offset_ms": -13.2708,
+      "audio_onset_s": 2.0201,
+      "video_onset_s": 2.0333,
+      "within_tolerance": true,
+      "tolerance_ms": 20.0,
+      "label": "keep-interval concat (afade seam)",
+      "note": "Positive offset means the audio event arrives later than the visual event. The measured value is reported whether or not it is within tolerance: a run reading 8 ms differs meaningfully from one reading 0 ms, and only one of those is a trend."
+    }
+  ],
+  "worst_ms": 13.270833333333343,
+  "all_within_tolerance": true,
+  "note": "This records what was measured. No defect is alleged by the existence of these numbers: cut_segment's -ss placement is frame-accurate under re-encoding in modern ffmpeg. The finding these measurements exist to prevent is drift going unnoticed, since a desynchronised clip is a valid file of the correct duration and every burned-in caption drifts with it."
+}

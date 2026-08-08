@@ -260,16 +260,23 @@ def _probe_binary(capability_id: str, name: str) -> Capability_Status:
     return _available(capability_id, f"binary found: {resolved}")
 
 
-def _ffmpeg_filter_names() -> set[str]:
-    """Filter names reported by ``<settings.ffmpeg_binary> -filters`` (Req 5.4).
+def _ffmpeg_filter_names(binary: str = "") -> set[str]:
+    """Filter names reported by ``<binary> -filters`` (Req 5.4).
 
     ``config`` is imported here, not at module scope, so this module stays
     import-safe without ``pydantic-settings`` (Req 1.4). The configured binary is
     always used — never a hard-coded ``"ffmpeg"``.
+
+    ``binary`` overrides ``settings.ffmpeg_binary`` for callers that must ask a
+    *different* build what it can do. The fidelity gate needs that: it measures VMAF
+    with its own binary, because the distribution ffmpeg this project otherwise runs on
+    is not built with ``libvmaf``. It is a parameter rather than a second copy of the
+    loop below for the reason that loop documents — a hand-rolled listing parser once
+    hid 124 of 486 filters, and two parsers are two chances to do it again.
     """
     from config import settings  # lazy (Req 1.4)
 
-    binary = _as_text(getattr(settings, "ffmpeg_binary", "")).strip()
+    binary = _as_text(binary or getattr(settings, "ffmpeg_binary", "")).strip()
     if not binary:
         raise ValueError("settings.ffmpeg_binary is not configured")
     proc = subprocess.run(
@@ -309,6 +316,24 @@ def _ffmpeg_filter_names() -> set[str]:
         ):
             names.add(parts[1])
     return names
+
+
+def ffmpeg_filter_available(name: str, *, binary: str = "") -> bool:
+    """Whether ``binary`` (default: the configured ffmpeg) lists the filter ``name``.
+
+    The listing parser behind the ``ffmpeg_filter:`` capability id, exposed for the one
+    caller that has to ask a build other than ``settings.ffmpeg_binary``: the fidelity
+    gate's VMAF binary.
+
+    Returns a bool rather than a :class:`Capability_Status` deliberately. The capability
+    report describes *the configured build* — what this project will actually render with —
+    and a second binary's filters do not belong in it. Recording "libvmaf available" there
+    would be read by every other caller as "the primary ffmpeg can do this", which is the
+    kind of one-fact-in-two-places drift the report exists to prevent.
+    """
+    if not name:
+        return False
+    return name in _ffmpeg_filter_names(binary)
 
 
 def _probe_ffmpeg_filter(capability_id: str, name: str) -> Capability_Status:

@@ -342,6 +342,21 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------- ffmpeg --
     ffmpeg_binary: str = Field(default="ffmpeg", description="Path to ffmpeg binary.")
     ffprobe_binary: str = Field(default="ffprobe", description="Path to ffprobe binary.")
+    # VMAF is measured with its own binary because no single build serves both jobs.
+    # `libvmaf` is not compiled into the ffmpeg any mainstream distribution ships, so the
+    # fidelity gate cannot measure VMAF with the primary binary; but the builds that do carry
+    # `libvmaf` are third-party, and the one tested here signals colour differently — it leaves
+    # `color_transfer` and `color_primaries` unset where the distribution build writes them,
+    # which the colour-pipeline tests read. Swapping the primary binary to gain VMAF therefore
+    # trades one set of failures for another.
+    #
+    # Empty means "use `ffmpeg_binary`", which keeps the single-binary default: VMAF is then
+    # available only if the primary build happens to have `libvmaf`, and reported unavailable by
+    # name if not. Set this only to point the VMAF measurement at a build that has it.
+    vmaf_ffmpeg_binary: str = Field(
+        default="",
+        description="Path to an ffmpeg built with libvmaf, for VMAF only. Empty = use ffmpeg_binary.",
+    )
     # Wall-clock ceilings for media subprocesses. Jobs run in a thread pool with a
     # single worker, so an ffmpeg that hangs (an unreachable network input, a
     # malformed file that stalls a demuxer, a filter waiting on a pad that never
