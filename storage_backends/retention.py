@@ -31,6 +31,23 @@ from config import settings
 # deliberately excluded — sources are only ever removed on explicit request.
 _CLEANABLE = ("clips", "temp")
 
+#: How long an empty directory must have been untouched before the sweep removes it.
+#:
+#: The empty-directory branch of :func:`cleanup_expired` used to have no age check at all - unlike
+#: the file branch next to it - so it deleted *any* empty directory under ``clips``/``temp`` the
+#: moment it saw one, retention window irrelevant. That races every running job.
+#: ``run_pipeline`` creates ``storage/clips/<job_id>/`` before it encodes anything, so the directory
+#: is legitimately empty for as long as the first clip takes to render; a sweep landing in that
+#: window removed a live job's output directory from under ffmpeg, which then failed with
+#: "Error opening output ...: No such file or directory" and took the whole job down.
+#:
+#: A grace period rather than ``cutoff``: a directory's mtime updates when its contents are
+#: unlinked, so age-checking against the retention window would never remove the directories this
+#: branch exists to tidy - they look freshly modified on the very sweep that emptied them, and
+#: would then be 30 days from eligible again. An hour is far longer than any single clip encode and
+#: far shorter than the default six-hour sweep interval, so tidying still happens on the next sweep.
+_EMPTY_DIR_GRACE_SECONDS = 3600.0
+
 
 # --------------------------------------------------------------------------- #
 # Disk usage
@@ -223,7 +240,11 @@ def cleanup_expired(retention_days: int | None = None, now: float | None = None)
                     path.unlink()
                     removed += 1
                     freed += size
-                elif path.is_dir() and not any(path.iterdir()):
+                elif (
+                    path.is_dir()
+                    and now - path.stat().st_mtime >= _EMPTY_DIR_GRACE_SECONDS
+                    and not any(path.iterdir())
+                ):
                     path.rmdir()
             except OSError:
                 continue

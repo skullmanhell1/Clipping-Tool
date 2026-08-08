@@ -82,17 +82,17 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on `5ed1b24`. Figures in older revisions of this table, and the `1994`/`98` pair in
+Measured on `8670063`. Figures in older revisions of this table, and the `1994`/`98` pair in
 `.kiro/specs/face-detection-upgrade/CLOSE_OUT.md`, are historical snapshots — take a fresh
 measurement rather than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2292 passed, 0 failed, 0 skipped, 0 warnings** |
+| `pytest` | **2457 passed, 0 failed, 0 skipped, 0 warnings** |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 207 files (I9; blocking in CI) |
-| `mypy .` | clean — 106 source files |
+| `ruff format --check .` | clean — 218 files (I9; blocking in CI) |
+| `mypy .` | clean — 111 source files |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified` |
 | `scripts/smoke_reel.py` | renders; 15 effects incl. `music_degraded:synthesised` |
@@ -265,6 +265,15 @@ caller sees.
 
 ### Small things that will bite
 
+- **Background threads run against live jobs, and nothing in the suite exercises that.** The
+  retention sweeper deleted running jobs' output directories. `cleanup_expired`'s empty-directory
+  branch had no age check at all - unlike the file branch beside it - and `run_pipeline` creates
+  `storage/clips/<job_id>/` before it encodes anything, so the directory is legitimately empty for as
+  long as the first clip takes. A sweep landing in that window removed it from under ffmpeg. Found by
+  booting the app and uploading one video, not by the suite: 2457 tests pass either way, because the
+  sweeper and the pipeline are only ever tested apart. The API process also runs the render
+  (`ThreadPoolExecutor(max_workers=1)`, no RQ worker), so *every* background thread here shares a
+  filesystem with an active job. If you add one that deletes anything, assume a job is mid-write.
 - **Mocking `subprocess.run` does not reach a `shutil.which` gate sitting in front of it.**
   `WhopPublisher.status` probes for the Node interpreter (I7) before `publish` shells out, so the whop
   upload tests faked the bridge's whole response and were then refused before it ran — they were

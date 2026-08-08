@@ -32,6 +32,24 @@ filterwarnings = [
     "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
     # SWIG-generated bindings in mediapipe declare __module__ in a way Python 3.11 flags.
     "ignore:builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute:DeprecationWarning",
+    # yt-dlp does not close one of its HTTP sockets through the socket object, so CPython emits a
+    # ResourceWarning when the garbage collector finally reclaims it. The warning names a socket
+    # that is already `[closed]` and is raised from inside `yt_dlp/YoutubeDL.py` and
+    # `yt_dlp/utils/traversal.py`, so there is nothing on our side to close - the local HTTP
+    # fixture in tests/test_url_ingest.py does shut down and join, and making its handler threads
+    # non-daemon (so `server_close()` joins them too) made this *worse* rather than better.
+    #
+    # Ignored because of *when* it fires rather than what it says. A GC-time warning is attributed
+    # to whichever test happens to be running at collection, which is not the test that caused it:
+    # this surfaced as two failures in tests/test_url_ingest.py after tests were added to
+    # tests/test_pipeline_degradation.py, a module that never opens a socket. Left unignored it is a
+    # landmine that reassigns itself to an innocent test whenever anything earlier in the suite
+    # allocates differently, and the reported location actively misleads whoever has to debug it.
+    #
+    # Scoped to this one message rather than to ResourceWarning as a whole, and no code in this
+    # repository owns a socket directly - HTTP is httpx, boto3 and yt-dlp - so this cannot hide a
+    # descriptor leak of ours. Drop it if yt-dlp starts closing the socket.
+    'ignore:unclosed <socket\.socket:ResourceWarning',
 ]
 
 markers = [
