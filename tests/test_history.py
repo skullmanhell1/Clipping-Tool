@@ -1,4 +1,5 @@
 """Tests for the SQLite history/campaign store."""
+
 from __future__ import annotations
 
 import time
@@ -29,12 +30,22 @@ def test_record_and_sync_clip(history, fake_clip, tmp_path):
 
 def test_attempt_lifecycle_and_due(history):
     now = time.time()
-    past = history.create_attempt(job_id="j", clip_id="c", platform="youtube",
-                                  request={"video_path": "x"}, scheduled_at=now - 5,
-                                  state="queued")
-    future = history.create_attempt(job_id="j", clip_id="c", platform="tiktok",
-                                    request={"video_path": "x"}, scheduled_at=now + 3600,
-                                    state="scheduled")
+    past = history.create_attempt(
+        job_id="j",
+        clip_id="c",
+        platform="youtube",
+        request={"video_path": "x"},
+        scheduled_at=now - 5,
+        state="queued",
+    )
+    future = history.create_attempt(
+        job_id="j",
+        clip_id="c",
+        platform="tiktok",
+        request={"video_path": "x"},
+        scheduled_at=now + 3600,
+        state="scheduled",
+    )
 
     due = history.due_attempts(now)
     due_ids = {d["id"] for d in due}
@@ -48,10 +59,12 @@ def test_attempt_lifecycle_and_due(history):
 
 
 def test_history_platform_filter(history):
-    history.create_attempt(job_id="j", clip_id="c", platform="youtube",
-                           request={}, scheduled_at=0, state="queued")
-    history.create_attempt(job_id="j", clip_id="c", platform="x",
-                           request={}, scheduled_at=0, state="queued")
+    history.create_attempt(
+        job_id="j", clip_id="c", platform="youtube", request={}, scheduled_at=0, state="queued"
+    )
+    history.create_attempt(
+        job_id="j", clip_id="c", platform="x", request={}, scheduled_at=0, state="queued"
+    )
     only_x = history.history(platform="x")["publish_attempts"]
     assert len(only_x) == 1
     assert only_x[0]["platform"] == "x"

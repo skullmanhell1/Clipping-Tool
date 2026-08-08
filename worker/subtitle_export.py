@@ -19,8 +19,9 @@ line containing "5 < 10" truncates at the ``<``.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 
 def _clamp(value: float, low: float = 0.0, high: float | None = None) -> float:
@@ -95,11 +96,11 @@ def cues_from_words(
     previous_end: float | None = None
     for word in words:
         try:
-            start = float(getattr(word, "start"))
-            end = float(getattr(word, "end"))
+            start = float(word.start)
+            end = float(word.end)
         except (AttributeError, TypeError, ValueError):
             continue
-        if start != start or end != end:      # NaN
+        if start != start or end != end:  # NaN
             continue
         if current:
             gap = start - (previous_end if previous_end is not None else start)
@@ -116,11 +117,7 @@ def render_srt(cues: Iterable[tuple[float, float, str]]) -> str:
     """Render cues as SubRip. Returns ``""`` when there is nothing to write."""
     blocks = []
     for index, (start, end, text) in enumerate(cues, start=1):
-        blocks.append(
-            f"{index}\n"
-            f"{format_timestamp(start)} --> {format_timestamp(end)}\n"
-            f"{text}\n"
-        )
+        blocks.append(f"{index}\n{format_timestamp(start)} --> {format_timestamp(end)}\n{text}\n")
     return "\n".join(blocks)
 
 
@@ -146,12 +143,38 @@ def render_vtt(cues: Iterable[tuple[float, float, str]]) -> str:
 # track whose language field is not a valid ISO 639-2 code, which players handle by either
 # ignoring it or displaying the raw string in the track menu; `und` at least means what it says.
 ISO_639_2: dict[str, str] = {
-    "ar": "ara", "bn": "ben", "cs": "ces", "da": "dan", "de": "deu", "el": "ell",
-    "en": "eng", "es": "spa", "fa": "fas", "fi": "fin", "fr": "fra", "he": "heb",
-    "hi": "hin", "hu": "hun", "id": "ind", "it": "ita", "ja": "jpn", "ko": "kor",
-    "ms": "msa", "nl": "nld", "no": "nor", "pl": "pol", "pt": "por", "ro": "ron",
-    "ru": "rus", "sv": "swe", "th": "tha", "tr": "tur", "uk": "ukr", "ur": "urd",
-    "vi": "vie", "zh": "zho",
+    "ar": "ara",
+    "bn": "ben",
+    "cs": "ces",
+    "da": "dan",
+    "de": "deu",
+    "el": "ell",
+    "en": "eng",
+    "es": "spa",
+    "fa": "fas",
+    "fi": "fin",
+    "fr": "fra",
+    "he": "heb",
+    "hi": "hin",
+    "hu": "hun",
+    "id": "ind",
+    "it": "ita",
+    "ja": "jpn",
+    "ko": "kor",
+    "ms": "msa",
+    "nl": "nld",
+    "no": "nor",
+    "pl": "pol",
+    "pt": "por",
+    "ro": "ron",
+    "ru": "rus",
+    "sv": "swe",
+    "th": "tha",
+    "tr": "tur",
+    "uk": "ukr",
+    "ur": "urd",
+    "vi": "vie",
+    "zh": "zho",
 }
 
 

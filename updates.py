@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 from config import BASE_DIR, settings
 
@@ -58,10 +58,10 @@ class UpdateChecker:
     def __init__(self, http_get=None) -> None:
         self._http_get = http_get  # injectable for tests
         self._lock = threading.Lock()
-        self._cache: Optional[dict[str, Any]] = None
+        self._cache: dict[str, Any] | None = None
         self._fetched_at = 0.0
 
-    def _fetch_latest(self) -> Optional[dict[str, Any]]:
+    def _fetch_latest(self) -> dict[str, Any] | None:
         """Fetch the latest release from GitHub. Returns ``None`` on any failure."""
         url = f"https://api.github.com/repos/{settings.github_repo}/releases/latest"
         try:
@@ -69,8 +69,12 @@ class UpdateChecker:
                 return self._http_get(url)
             import httpx
 
-            resp = httpx.get(url, timeout=8, follow_redirects=True,
-                             headers={"Accept": "application/vnd.github+json"})
+            resp = httpx.get(
+                url,
+                timeout=8,
+                follow_redirects=True,
+                headers={"Accept": "application/vnd.github+json"},
+            )
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -80,7 +84,10 @@ class UpdateChecker:
     def check(self, force: bool = False) -> dict[str, Any]:
         """Return ``{current, latest, update_available, html_url, checked_at, ...}``."""
         current = get_current_version()
-        result = {
+        # Annotated because the literal's inferred value type is `bool | str | None`, which the
+        # float `checked_at` assigned further down does not fit - and the declared return type is
+        # already `dict[str, Any]`.
+        result: dict[str, Any] = {
             "current": current,
             "latest": None,
             "update_available": False,
@@ -92,8 +99,7 @@ class UpdateChecker:
             return result
 
         with self._lock:
-            fresh = (self._cache is not None
-                     and (time.time() - self._fetched_at) < _CACHE_TTL)
+            fresh = self._cache is not None and (time.time() - self._fetched_at) < _CACHE_TTL
             if force or not fresh:
                 data = self._fetch_latest()
                 self._cache = data
@@ -110,7 +116,7 @@ class UpdateChecker:
         return result
 
 
-_checker: Optional[UpdateChecker] = None
+_checker: UpdateChecker | None = None
 _lock = threading.Lock()
 
 

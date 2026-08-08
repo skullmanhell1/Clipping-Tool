@@ -35,15 +35,23 @@ def _probe_video(path: Path) -> dict[str, str]:
     """Return ``pix_fmt``/``profile``/``level`` for the first video stream."""
     out = subprocess.run(
         [
-            app_settings.ffprobe_binary, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=pix_fmt,profile,level",
-            "-of", "default=nw=1", str(path),
+            app_settings.ffprobe_binary,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt,profile,level",
+            "-of",
+            "default=nw=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=60, check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
     ).stdout
-    return dict(
-        line.split("=", 1) for line in out.strip().splitlines() if "=" in line
-    )
+    return dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
 
 
 @pytest.fixture
@@ -52,13 +60,32 @@ def ten_bit_source(tmp_path: Path) -> Path:
     dest = tmp_path / "src10.mp4"
     subprocess.run(
         [
-            app_settings.ffmpeg_binary, "-y", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
-            "-f", "lavfi", "-i", "sine=frequency=220:duration=2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p10le", "-profile:v", "high10",
-            "-c:a", "aac", "-shortest", str(dest),
+            app_settings.ffmpeg_binary,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x360:rate=30:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=220:duration=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-profile:v",
+            "high10",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(dest),
         ],
-        capture_output=True, timeout=120, check=True,
+        capture_output=True,
+        timeout=120,
+        check=True,
     )
     # Guard the fixture itself: if this is not 10-bit, the tests below prove nothing.
     assert _probe_video(dest)["pix_fmt"] == "yuv420p10le"
@@ -102,11 +129,23 @@ def test_an_8bit_source_is_unaffected(tmp_path):
     src = tmp_path / "src8.mp4"
     subprocess.run(
         [
-            app_settings.ffmpeg_binary, "-y", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src),
+            app_settings.ffmpeg_binary,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x360:rate=30:duration=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
         ],
-        capture_output=True, timeout=120, check=True,
+        capture_output=True,
+        timeout=120,
+        check=True,
     )
     dest = tmp_path / "cut.mp4"
     fu.cut_segment(src, 0.0, 1.0, dest)
@@ -151,6 +190,5 @@ def test_no_module_hardcodes_its_own_encoder_flags():
             offenders.append(str(path.relative_to(root)))
 
     assert not offenders, (
-        f"these modules set encoder flags directly instead of calling "
-        f"h264_args(): {offenders}"
+        f"these modules set encoder flags directly instead of calling h264_args(): {offenders}"
     )

@@ -7,6 +7,7 @@ property text and a ``Validates: Requirements ...`` docstring.
 Reuses the ``FakeWord`` helper from ``tests/conftest.py`` and ``MockLLMClient``
 from ``worker.llm_client`` for the AI-assisted path.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,12 +32,29 @@ from worker.llm_client import MockLLMClient
 # A mix of tokens that exercise every deterministic rule: stopwords, long
 # content words, ALL-CAPS acronyms, numerals/currency, and short fillers.
 _TOKEN_POOL = [
-    "the", "a", "and", "of", "to", "is",          # stopwords
-    "revolutionary", "strategy", "algorithm",       # long content words
-    "growth", "leverage", "compound",               # long content words
-    "NASA", "CEO", "AI",                            # ALL-CAPS acronyms
-    "$5", "42", "100%", "3.14",                     # numerals / currency
-    "go", "win", "big", "now",                      # short words
+    "the",
+    "a",
+    "and",
+    "of",
+    "to",
+    "is",  # stopwords
+    "revolutionary",
+    "strategy",
+    "algorithm",  # long content words
+    "growth",
+    "leverage",
+    "compound",  # long content words
+    "NASA",
+    "CEO",
+    "AI",  # ALL-CAPS acronyms
+    "$5",
+    "42",
+    "100%",
+    "3.14",  # numerals / currency
+    "go",
+    "win",
+    "big",
+    "now",  # short words
 ]
 
 
@@ -64,19 +82,21 @@ def _word_lists(draw):
 def _preset_strategy():
     """CaptionPresets drawn from the registry plus varied field overrides."""
     return st.builds(
-        lambda base, animation, font, font_size, position, hi, scale, emoji, border,
-        primary, highlight, outline, box: CaptionPreset(
-            name=base.name,
-            animation=animation,
-            font=font,
-            font_size=font_size,
-            colors=CaptionColors(primary=primary, highlight=highlight,
-                                 outline=outline, box=box),
-            position=position,
-            highlight_keywords=hi,
-            highlight_scale=scale,
-            emoji_inline=emoji,
-            border_style=border,
+        lambda base, animation, font, font_size, position, hi, scale, emoji, border, primary, highlight, outline, box: (
+            CaptionPreset(
+                name=base.name,
+                animation=animation,
+                font=font,
+                font_size=font_size,
+                colors=CaptionColors(
+                    primary=primary, highlight=highlight, outline=outline, box=box
+                ),
+                position=position,
+                highlight_keywords=hi,
+                highlight_scale=scale,
+                emoji_inline=emoji,
+                border_style=border,
+            )
         ),
         base=st.sampled_from(list(BUILTIN_PRESETS.values())),
         animation=st.sampled_from(sorted(VALID_ANIMATIONS)),
@@ -210,25 +230,41 @@ def test_p8_ai_assisted_highlighting_extends_deterministic_set(words):
     assert deterministic <= merged  # superset invariant
 
 
-
 # ===========================================================================
 # Task 3.3-3.7 — ASS generation extension property tests (worker/captions.py)
 # ===========================================================================
-import os  # noqa: E402
-import re  # noqa: E402
-import tempfile  # noqa: E402
-from dataclasses import replace  # noqa: E402
-from pathlib import Path  # noqa: E402
+import os
+import re
+import tempfile
+from dataclasses import replace
+from pathlib import Path
 
-import worker.captions as cap  # noqa: E402
-from worker.captions import (  # noqa: E402
+import worker.captions as cap
+from worker.captions import (
     _POSITION_ALIGN,
     Cue,
     build_ass,
     build_word_span,
     words_to_cues,
 )
-from worker.transcribe import Word  # noqa: E402
+from worker.transcribe import Word
+
+
+def _tmp_ass_path() -> str:
+    """Allocate a private path for an ASS file the caller will overwrite.
+
+    ``tempfile.mktemp`` only *predicts* an unused name, so anything else on the machine can
+    take that path before ``build_ass`` opens it — the CWE-377 race that makes the function
+    deprecated, and what CodeQL reports as ``py/insecure-temporary-file`` (severity 7.0).
+    ``mkstemp`` closes the window by creating the file atomically with ``O_EXCL`` and mode
+    0600. ``build_ass`` writes through ``Path.write_text``, which truncates, so handing it an
+    existing empty file is equivalent to the absent one it used to get. Callers keep their own
+    ``os.remove``, so cleanup still happens per Hypothesis example instead of leaving one
+    temporary directory behind per generated case.
+    """
+    fd, path = tempfile.mkstemp(suffix=".ass")
+    os.close(fd)
+    return path
 
 
 def _parse_ass_ts(ts: str) -> float:
@@ -276,7 +312,7 @@ def test_p4_per_word_animation_timed_and_bounded(data, anim):
 
     # Bounded: build the ASS and confirm all dialogue timestamps ∈ [0, D].
     cues = words_to_cues(words)
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(cues, dest, preset=preset, clip_duration=duration)
     text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
@@ -301,9 +337,12 @@ def test_p5_captions_use_ass_tags_only(data, name):
     """
     words, duration = data
     cues = words_to_cues(words)
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(
-        cues, dest, preset=BUILTIN_PRESETS[name], keyword_indices=set(),
+        cues,
+        dest,
+        preset=BUILTIN_PRESETS[name],
+        keyword_indices=set(),
         clip_duration=duration,
     )
     from worker.captions import subtitles_filter
@@ -383,13 +422,16 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
     cap.font_available = lambda _n: True  # avoid host-dependent substitution
     try:
         # No override -> preset default position + preset font/colours.
-        dest = tempfile.mktemp(suffix=".ass")
+        dest = _tmp_ass_path()
         cap.build_ass(
             [Cue(0.0, 1.0, [Word(0.0, 0.5, "hi"), Word(0.5, 1.0, "yo")])],
-            dest, preset=preset, clip_duration=1.0,
+            dest,
+            preset=preset,
+            clip_duration=1.0,
         )
         style = next(
-            ln for ln in Path(dest).read_text(encoding="utf-8").splitlines()
+            ln
+            for ln in Path(dest).read_text(encoding="utf-8").splitlines()
             if ln.startswith("Style: Default")
         )
         os.remove(dest)
@@ -399,13 +441,17 @@ def test_p9_preset_styling_applied_position_override_wins(name, override):
         assert int(vals[18]) == _POSITION_ALIGN[preset.position][0]
 
         # Override -> alignment reflects the override, not the preset default.
-        dest2 = tempfile.mktemp(suffix=".ass")
+        dest2 = _tmp_ass_path()
         cap.build_ass(
             [Cue(0.0, 1.0, [Word(0.0, 0.5, "hi")])],
-            dest2, preset=preset, position=override, clip_duration=1.0,
+            dest2,
+            preset=preset,
+            position=override,
+            clip_duration=1.0,
         )
         style2 = next(
-            ln for ln in Path(dest2).read_text(encoding="utf-8").splitlines()
+            ln
+            for ln in Path(dest2).read_text(encoding="utf-8").splitlines()
             if ln.startswith("Style: Default")
         )
         os.remove(dest2)
@@ -443,11 +489,15 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
         return glyph in allowed_glyphs
 
     words = [Word(float(i), float(i) + 0.4, kw) for i, kw in enumerate(_EMOJI_WORDS)]
-    dest = tempfile.mktemp(suffix=".ass")
+    dest = _tmp_ass_path()
     build_ass(
-        [Cue(0.0, float(len(words)), words)], dest, preset=preset,
-        clip_duration=float(len(words)), permissibility=True,
-        emoji_glyph_available=glyph_available, emoji_downloader=downloader,
+        [Cue(0.0, float(len(words)), words)],
+        dest,
+        preset=preset,
+        clip_duration=float(len(words)),
+        permissibility=True,
+        emoji_glyph_available=glyph_available,
+        emoji_downloader=downloader,
     )
     text = Path(dest).read_text(encoding="utf-8")
     os.remove(dest)
@@ -463,7 +513,6 @@ def test_p11_in_caption_emoji_respect_permissibility(allowed):
         # under test sets ``uppercase`` (C7) - the clause is about the word surviving the
         # emoji decision, not about its casing.
         assert kw.upper() in text.upper()
-
 
 
 # ===========================================================================
@@ -522,10 +571,10 @@ def test_emphasis_prefers_the_strongest_signal_available():
     from worker.effects.caption_presets import plan_keywords
 
     words = [
-        FakeWord(0.0, 0.4, "the"),          # stopword: never eligible
+        FakeWord(0.0, 0.4, "the"),  # stopword: never eligible
         FakeWord(0.4, 0.8, "interesting"),  # long content word
-        FakeWord(0.8, 1.2, "$5000"),        # currency: strongest
-        FakeWord(1.2, 1.6, "and"),          # stopword
+        FakeWord(0.8, 1.2, "$5000"),  # currency: strongest
+        FakeWord(1.2, 1.6, "and"),  # stopword
     ]
     for word in words:
         word.probability = 1.0
@@ -580,7 +629,6 @@ def test_the_legacy_karaoke_sweep_and_the_preset_highlight_agree():
     assert captions.HIGHLIGHT_COLOUR != "&H0000FF00", "green is the value C4 removed"
 
 
-
 # ===========================================================================
 # C11 follow-up — the budget is per cue, not per clip
 # ===========================================================================
@@ -605,11 +653,19 @@ def test_emphasis_is_spread_across_cues_not_clustered_in_one():
     from worker.effects.caption_presets import plan_keywords
 
     # Nine content words -> three cues at the three-word limit.
-    words = _timed([
-        "revolutionary", "changed", "everything",
-        "profits", "doubled", "overnight",
-        "nobody", "expected", "results",
-    ])
+    words = _timed(
+        [
+            "revolutionary",
+            "changed",
+            "everything",
+            "profits",
+            "doubled",
+            "overnight",
+            "nobody",
+            "expected",
+            "results",
+        ]
+    )
     cues = captions.words_to_cues(words)
     assert len(cues) == 3, [len(c.words) for c in cues]
 
@@ -674,11 +730,11 @@ def test_grouping_survives_words_that_cannot_be_grouped():
     from worker.effects.caption_presets import _cue_index_groups, plan_keywords
 
     class Hostile:
-        text = "revolutionary"          # eligible, but no timings at all
+        text = "revolutionary"  # eligible, but no timings at all
 
     hostile = [Hostile(), Hostile()]
     assert _cue_index_groups(hostile) == [[0, 1]]
-    plan_keywords(hostile, use_ai=False)   # must not raise
+    plan_keywords(hostile, use_ai=False)  # must not raise
 
     assert _cue_index_groups([]) == [[]]
     assert plan_keywords([], use_ai=False) == set()
@@ -693,7 +749,7 @@ def test_empty_text_words_do_not_lose_their_cue():
     from worker.effects.caption_presets import plan_keywords
 
     words = [
-        FakeWord(0.00, 0.40, ""),          # dropped by words_to_cues
+        FakeWord(0.00, 0.40, ""),  # dropped by words_to_cues
         FakeWord(0.45, 0.85, "revolutionary"),
         FakeWord(0.90, 1.30, "and"),
     ]
@@ -704,9 +760,18 @@ def test_emphasis_remains_a_pure_function_of_its_input():
     """Grouping adds a second ordering step; determinism still has to hold."""
     from worker.effects.caption_presets import plan_keywords
 
-    words = _timed([
-        "revolutionary", "changed", "everything", "$42", "profits", "doubled", "AI", "won",
-    ])
+    words = _timed(
+        [
+            "revolutionary",
+            "changed",
+            "everything",
+            "$42",
+            "profits",
+            "doubled",
+            "AI",
+            "won",
+        ]
+    )
     first = plan_keywords(words, use_ai=False)
     assert first
     assert all(plan_keywords(words, use_ai=False) == first for _ in range(5))

@@ -48,6 +48,7 @@ Provenance is carried on ``Kinetic_Options.notes`` at this stage of the spec; th
 in task 9, which copies these notes into ``Kinetic_Plan.markers`` /
 ``Engine_Result.markers``.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -104,9 +105,9 @@ _NON_MEMBER_STYLES = (
     "",
     " ",
     "\t",
-    "karaoke",              # the preset name, not the style name
-    "KARAOKE_FILL",         # wrong case
-    "karaoke_fill ",        # trailing space
+    "karaoke",  # the preset name, not the style name
+    "KARAOKE_FILL",  # wrong case
+    "karaoke_fill ",  # trailing space
     " pop",
     "Pop",
     "fade",
@@ -126,7 +127,7 @@ def _st_non_member_style():
         st.sampled_from(list(_NON_MEMBER_STYLES)),
         st.text(max_size=12).filter(lambda s: s not in KINETIC_STYLES),
         st.booleans(),
-        st.integers(min_value=-10 ** 6, max_value=10 ** 6),
+        st.integers(min_value=-(10**6), max_value=10**6),
         st.floats(allow_nan=True, allow_infinity=True),
         st.lists(st.sampled_from(list(KINETIC_STYLES)), max_size=2),
         st.dictionaries(st.just("style"), st.just("pop"), max_size=1),
@@ -148,11 +149,7 @@ def _attachable_noise_key(key):
     whitespace, ``"🎬"``, an 80-character key — stays attached, which is what the
     noise is for.
     """
-    return (
-        isinstance(key, str)
-        and key != "kinetic_style"
-        and not key.startswith("_")
-    )
+    return isinstance(key, str) and key != "kinetic_style" and not key.startswith("_")
 
 
 def _carrier(hostile, style):
@@ -210,18 +207,14 @@ def test_p10_unrecognised_style_falls_back_once_and_names_it(hostile, data):
 
     # Substitution is the *only* difference the style makes: every other resolved
     # field is identical, so the fallback never smuggles in another change.
-    fallback_twin = Kinetic_Options.from_processing_options(
-        _carrier(hostile, DEFAULT_STYLE)
-    )
+    fallback_twin = Kinetic_Options.from_processing_options(_carrier(hostile, DEFAULT_STYLE))
     assert resolved.to_dict() == {
         **fallback_twin.to_dict(),
         "notes": sorted(set(list(fallback_twin.notes) + [STYLE_NOTE])),
     }
 
     # Re-resolving does not accumulate a second note (Req 10.8 idempotence).
-    assert list(
-        Kinetic_Options.from_processing_options(resolved).notes
-    ).count(STYLE_NOTE) == 1
+    assert list(Kinetic_Options.from_processing_options(resolved).notes).count(STYLE_NOTE) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -450,7 +443,7 @@ def _fresh_registration_snapshot() -> dict[str, Any]:
         engine_registry.reset_registry()
         registry_was_empty = len(engine_registry.get_registry()) == 0
 
-        module = _exec_fresh_module("_kinetic_fresh_p1")   # re-runs registration
+        module = _exec_fresh_module("_kinetic_fresh_p1")  # re-runs registration
 
         fresh = engine_registry.get_registry()
         _FRESH.update(
@@ -576,9 +569,7 @@ def test_p1_the_engines_declared_contract_is_exactly_the_pinned_one(
 # `subtitle_path` that exists, and `Engine_Result.media is None`.
 @settings(max_examples=100, deadline=None)
 @given(timeline=st_word_timeline(), option_fields=st_kinetic_options())
-def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
-    timeline, option_fields
-):
+def test_p2_applying_contributes_a_subtitle_only_compose_fragment(timeline, option_fields):
     """Validates: Requirements 2.1, 2.3, 2.4, 12.4, 16.3
 
     The ``applied`` precondition is *forced*, not hoped for: captions are enabled,
@@ -589,9 +580,7 @@ def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
     quietly degraded would fail here rather than skip the assertions.
     """
     words, duration = timeline
-    opts = dataclasses.replace(
-        Kinetic_Options.parse(option_fields), captions_enabled=True
-    )
+    opts = dataclasses.replace(Kinetic_Options.parse(option_fields), captions_enabled=True)
     engine = Kinetic_Typography_Engine(font_probe=Recording_Font_Probe())
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -612,7 +601,7 @@ def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
 
         # --- a subtitle-only compose fragment (Reqs 2.1, 2.3, 2.4) ----------
         contribution = result.contribution
-        assert contribution is not None            # applied <=> owns the slot (Req 3.9)
+        assert contribution is not None  # applied <=> owns the slot (Req 3.9)
         assert contribution.engine_id == "kinetic_typography"
         assert contribution.inputs == ()
         assert contribution.video_filters == ()
@@ -675,9 +664,7 @@ def test_p2_applying_contributes_a_subtitle_only_compose_fragment(
         assert ref.contribution.z_order == KINETIC_Z_ORDER
         assert ref.media is None
         ref_document = Path(ref.contribution.subtitle_path).read_text(encoding="utf-8")
-        assert [
-            line for line in ref_document.splitlines() if line.startswith("Dialogue: ")
-        ]
+        assert [line for line in ref_document.splitlines() if line.startswith("Dialogue: ")]
 
 
 # --------------------------------------------------------------------------- #
@@ -819,9 +806,7 @@ def _expected_ladder(opts: Kinetic_Options) -> tuple[str, ...]:
     return tuple(ladder) or (FALLBACK_FONT,)
 
 
-def _expected_font(
-    ladder: tuple[str, ...], availability: dict, default: bool
-) -> tuple[str, bool]:
+def _expected_font(ladder: tuple[str, ...], availability: dict, default: bool) -> tuple[str, bool]:
     """``(family, marked)`` the ladder must resolve to, computed independently.
 
     ``marked`` follows the ladder contract task 9.2 spells out: a marker is owed
@@ -886,9 +871,7 @@ def _assert_font_clauses(
     expected, marked = _expected_font(ladder, availability, default)
 
     # --- exactly one Fontname in the Style: Default line (Reqs 9.3, 9.7) ---
-    default_lines = [
-        line for line in _style_lines(document) if line.startswith("Style: Default,")
-    ]
+    default_lines = [line for line in _style_lines(document) if line.startswith("Style: Default,")]
     assert len(default_lines) == 1, label
     family = _fontname(default_lines[0])
     assert family == expected, f"{label}: {family!r} != {expected!r}"
@@ -915,11 +898,11 @@ def _assert_font_clauses(
     # --- the injected probe is the only font oracle consulted (Reqs 9.1, 9.6) ---
     probed_fonts = [cap for cap in prober.calls if str(cap).startswith("font:")]
     assert probed_fonts == [f"font:{fam}" for fam in ladder[: len(probed_fonts)]], label
-    assert probed_fonts, label                       # the ladder really was probed
+    assert probed_fonts, label  # the ladder really was probed
     for cap in set(probed_fonts):
-        assert prober.count_for(cap) == 1, label     # cached: one probe per family
+        assert prober.count_for(cap) == 1, label  # cached: one probe per family
     assert f"font:{family}" in probed_fonts, label
-    assert probe.calls == [], label                  # no second oracle was consulted
+    assert probe.calls == [], label  # no second oracle was consulted
     # No download, no network: the ladder is capability answers only.
     assert Kinetic_Typography_Engine.requires_network is False
     assert Kinetic_Typography_Engine.requires_model_download is False
@@ -1015,9 +998,7 @@ def test_p17_exactly_one_font_name_always_from_the_ladder_marked_once(
         )
         assert marked is True
         assert family == FALLBACK_FONT
-        assert _font_markers(result.markers) == [
-            f"engine:{ENGINE_ID}:degraded:font:{missing}"
-        ]
+        assert _font_markers(result.markers) == [f"engine:{ENGINE_ID}:degraded:font:{missing}"]
 
         # --- 3: forced non-substitution (everything available) -------------
         result, _ctx, prober, probe, document = _run_font_case(
@@ -1126,9 +1107,7 @@ def test_an_os_error_from_the_ass_writer_yields_failed_with_no_contribution():
     not leave a file behind.
     """
     writer = Refusing_Writer(OSError("disk on fire"))
-    engine = Kinetic_Typography_Engine(
-        font_probe=Recording_Font_Probe(), ass_writer=writer
-    )
+    engine = Kinetic_Typography_Engine(font_probe=Recording_Font_Probe(), ass_writer=writer)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         report, _prober = _report({SUBTITLES_CAPABILITY: True}, default=True)

@@ -128,8 +128,15 @@ def test_the_u1_effects_are_on_for_a_caller_who_asks_for_nothing():
     """
     bare = OptionsModel().to_options()
     for name in (
-        "reframe", "zoom", "transitions", "hook_title", "fades", "progress_bar",
-        "caption_keyword_highlight", "caption_emoji", "visual_selection",
+        "reframe",
+        "zoom",
+        "transitions",
+        "hook_title",
+        "fades",
+        "progress_bar",
+        "caption_keyword_highlight",
+        "caption_emoji",
+        "visual_selection",
     ):
         assert getattr(bare, name) is True, f"{name} should default on for a bare request"
     assert bare.emoji == "standard"
@@ -156,8 +163,7 @@ def test_a_built_in_profile_actually_expands(name):
         if key not in real_fields:
             continue
         assert getattr(resolved, key) == value, (
-            f"profile {name!r} did not apply {key}={value!r} "
-            f"(got {getattr(resolved, key)!r})"
+            f"profile {name!r} did not apply {key}={value!r} (got {getattr(resolved, key)!r})"
         )
 
 
@@ -192,7 +198,6 @@ def test_an_unknown_caption_preset_still_falls_back():
     assert OptionsModel(caption_preset="nonsense").to_options().caption_preset == "karaoke"
 
 
-
 # --------------------------------------------------------------------------- #
 # 5. The fourth surface: the UI's own defaults
 # --------------------------------------------------------------------------- #
@@ -220,9 +225,9 @@ def _ui_default_settings() -> dict[str, object]:
     import pathlib
     import re
 
-    src = (
-        pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.jsx"
-    ).read_text(encoding="utf-8")
+    src = (pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.jsx").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"const DEFAULT_SETTINGS = \{(.*?)\n\};", src, re.S)
     assert match, "DEFAULT_SETTINGS not found in App.jsx"
 

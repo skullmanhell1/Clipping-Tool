@@ -36,7 +36,7 @@ echo "==> booting $IMAGE and probing it"
 docker run --rm --entrypoint sh "$IMAGE" -c '
 uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/uv.log 2>&1 &
 SERVER=$!
-python - <<PY
+python - <<\PY
 import json, time, urllib.request
 
 def get(path, tries=60):
@@ -80,6 +80,31 @@ import os
 count = len([n for n in os.listdir("/app/assets/emoji") if n.endswith(".png")])
 assert count >= 300, f"only {count} emoji vendored in the image"
 print("emoji vendored:", count)
+
+# The face-detector model, asserted THROUGH THE API rather than by listing the filesystem -
+# the same reason the font check above goes through /api/info. A file present under /app proves
+# the COPY landed; `available` proves the running application resolved it at the path its
+# settings actually point at, which is the thing that decides whether a render uses BlazeFace
+# or silently substitutes Haar on every clip.
+#
+# NOTE: this heredoc is inside a single-quoted `sh -c` string, so the Python below must use
+# double quotes only. A single quote here terminates the shell string and the failure surfaces
+# as a SyntaxError about an unterminated literal, several lines away from the cause.
+#
+# The delimiter is written <<\PY, not <<'PY', for the same reason: the backslash disables
+# expansion inside the heredoc without spending a single quote, which would close the sh -c
+# string. Unquoted, backticks in these comments were command substitutions - the prose above
+# ran fc-match Anton in the container, and the line below printed "available: not found".
+detectors = {}
+for entry in (effects.get("face_detectors") or []):
+    detectors[entry["name"]] = entry
+assert "mediapipe" in detectors, "face detectors not advertised through /api/info"
+mp_detail = detectors["mediapipe"].get("detail", "no detail given")
+assert detectors["mediapipe"]["available"], (
+    "the vendored BlazeFace model did not resolve inside the image: " + str(mp_detail)
+)
+assert detectors["haar"]["available"], "the Haar cascade is unavailable in the image"
+print("face detectors:", sorted(detectors))
 
 print("I12 OK")
 PY

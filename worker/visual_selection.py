@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable, Optional
 
 from config import settings
 from worker import candidate_ranking, intermediate_cache
@@ -37,17 +37,17 @@ from worker.selection import ClipCandidate
 from worker.transcribe import Transcript
 
 # A sampler resolves a single keyframe: ``(source, timestamp) -> path | None``.
-Sampler = Callable[[object, float], Optional[str]]
+Sampler = Callable[[object, float], str | None]
 
 
 @dataclass(frozen=True)
 class Keyframe:
     """A sampled keyframe with cheap, CPU-only visual cue proxies."""
 
-    t: float                     # timestamp in seconds
-    path: str                    # sampled JPEG path
-    brightness: float = 0.0      # mean luma normalised to [0, 1]
-    motion: float = 0.0          # |brightness - previous brightness| proxy
+    t: float  # timestamp in seconds
+    path: str  # sampled JPEG path
+    brightness: float = 0.0  # mean luma normalised to [0, 1]
+    motion: float = 0.0  # |brightness - previous brightness| proxy
 
 
 # --------------------------------------------------------------------------- #
@@ -58,8 +58,8 @@ def sample_keyframes(
     total_duration: float,
     *,
     limit: int,
-    sampler: Optional[Sampler] = None,
-    frames_dir: Optional[str] = None,
+    sampler: Sampler | None = None,
+    frames_dir: str | None = None,
 ) -> list[Keyframe]:
     """Sample at most ``limit`` evenly-spaced keyframes across the source.
 
@@ -153,14 +153,14 @@ def derive_visual_cues(frames: list[Keyframe]) -> list[Keyframe]:
         return []
 
     try:  # lazy, optional
-        from PIL import Image  # type: ignore
+        from PIL import Image
     except Exception:
-        Image = None  # type: ignore
+        Image = None  # type: ignore[assignment]
 
     try:  # lazy, optional
-        import numpy as np  # type: ignore
+        import numpy as np
     except Exception:
-        np = None  # type: ignore
+        np = None  # type: ignore[assignment]
 
     def _brightness(path: str) -> float:
         if Image is None:
@@ -177,13 +177,12 @@ def derive_visual_cues(frames: list[Keyframe]) -> list[Keyframe]:
             return 0.0
 
     enriched: list[Keyframe] = []
-    prev: Optional[float] = None
+    prev: float | None = None
     for f in frames:
         brightness = _brightness(f.path)
         motion = 0.0 if prev is None else abs(brightness - prev)
         prev = brightness
-        enriched.append(replace(f, brightness=round(brightness, 6),
-                                motion=round(motion, 6)))
+        enriched.append(replace(f, brightness=round(brightness, 6), motion=round(motion, 6)))
     return enriched
 
 
@@ -253,7 +252,7 @@ def merge_scores(
     return merged
 
 
-def _bias_options(options, client: Optional[BaseLLMClient]):
+def _bias_options(options, client: BaseLLMClient | None):
     """Fold ``selection_prompt`` into the topic when an LLM is available.
 
     This is the simplest robust way to make the prompt text reach the transcript
@@ -318,7 +317,7 @@ def _snap_candidates(
                 reason=c.reason,
                 title=c.title,
                 text=c.text,
-                features=dict(c.features),   # same silent-drop bug as merge_scores
+                features=dict(c.features),  # same silent-drop bug as merge_scores
             )
         )
     return out
@@ -330,8 +329,8 @@ def select_moments_visual(
     source_path,
     total_duration: float,
     *,
-    client: Optional[BaseLLMClient] = None,
-    sampler: Optional[Sampler] = None,
+    client: BaseLLMClient | None = None,
+    sampler: Sampler | None = None,
 ) -> list[ClipCandidate]:
     """Feature C entry point — visual/prompt-aware clip selection.
 
@@ -350,9 +349,7 @@ def select_moments_visual(
     """
     # Pass-through when disabled (Req 15.4).
     if not getattr(options, "visual_selection", False):
-        return sel.select_moments(
-            transcript, options, source_path, total_duration, client=client
-        )
+        return sel.select_moments(transcript, options, source_path, total_duration, client=client)
 
     # Transcript-based candidates (already fallback-safe inside select_moments).
     try:
@@ -391,7 +388,10 @@ def select_moments_visual(
         if cached_dir is not None:
             frames = derive_visual_cues(
                 sample_keyframes(
-                    source_path, total_duration, limit=limit, sampler=sampler,
+                    source_path,
+                    total_duration,
+                    limit=limit,
+                    sampler=sampler,
                     frames_dir=str(cached_dir),
                 )
             )
@@ -399,7 +399,10 @@ def select_moments_visual(
             with tempfile.TemporaryDirectory(prefix="kf-") as frames_dir:
                 frames = derive_visual_cues(
                     sample_keyframes(
-                        source_path, total_duration, limit=limit, sampler=sampler,
+                        source_path,
+                        total_duration,
+                        limit=limit,
+                        sampler=sampler,
                         frames_dir=frames_dir,
                     )
                 )

@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — one formatter, and two rule sets that found real defects (I9)
+
+- **`I9` — `UP` (pyupgrade) and `B` (flake8-bugbear) are enabled, and formatting is now enforced.**
+  761 findings; 831 fixes applied by `ruff --fix` (more fixes than findings, because several
+  rewrites cascade). `ruff format` then reformatted 181 of 235 files. The suite is **2160 passed,
+  0 failed, 0 skipped, 0 warnings** and `mypy` is clean across 101 source files — which is the
+  claim worth making, since `UP045`/`UP006` rewrote type annotations in nearly every module and a
+  formatter is only safe if it is provably behaviour-preserving.
+
+- **`black` was the item's literal instruction and is not what was adopted.** Measured before
+  deciding rather than after: on this tree `ruff format` and `black` disagree on **35 of 195
+  files**, under `black` 24.10 — the version `requirements-dev.txt` actually pinned — and not only
+  under 25.x. The entire disagreement is redundant parentheses around multi-line conditional
+  expressions, which `black` adds and `ruff` does not. Neither output is better, so the decision
+  was never about style.
+
+  It was about how many formatters this repository has. Two that disagree on 35 files, with one
+  enforced in CI and one not, is the same shape as the defects this project keeps finding: one fact
+  stated in two places, where changing one has no effect. Whoever ran the unenforced one would
+  produce a diff CI then rejected. `black` is therefore **removed** from `requirements-dev.txt`
+  rather than left listed and unused — which is exactly what it had been since the first commit.
+  `ruff format` wins the tiebreakers: ruff is already a hard dependency, already blocking, and
+  already carries `line-length = 100`, so the linter and formatter cannot drift on line length the
+  way a separate `[tool.black]` section could.
+
+- **Three rule sets are ignored with reasons, not silently dropped.** `B905` (`zip()` without
+  `strict=`) fires on 33 sites, most of them the pairwise `zip(x, x[1:])` idiom where `strict=True`
+  is actively wrong and `strict=False` is noise. `UP042` (`str, Enum` → `StrEnum`) touches 8 enums
+  that serialise into stored job records, where `StrEnum` differs in `_generate_next_value_` and in
+  how some serialisers treat it — a migration needing its own verification pass, not a lint
+  autofix. `UP031` fires on `struct.pack("<%dh" % n)`, where `%d` is building a binary descriptor
+  rather than formatting prose. `B008` is scoped to `api/main.py` alone, because FastAPI's
+  `File(...)`/`Form(...)` defaults *are* the dependency-injection mechanism.
+
+- **Two real defects, both found by the sweep rather than by review.**
+  - `publishers/preflight.py` caught `except (FFmpegError, Exception)`. `FFmpegError` subclasses
+    `RuntimeError`, so `Exception` already subsumed it and the tuple was one fact stated twice — it
+    read as "handle ffmpeg errors specially, and guard broadly as well" while being identical to
+    `except Exception`. `B014` does not catch this: it matches literal duplicates, not subclass
+    relationships. Removing the redundant arm then made the import dead and `F401` said so, which
+    is the lint chain working as intended.
+  - A lambda in `tests/test_kinetic_compositor.py` closed over the loop variable `available`
+    instead of binding it (`B023`), so both halves of a two-case parity loop patched
+    `font_available` with whatever the *last* iteration set. Bound via a default argument.
+
+- **`RUF100` is enabled, and it is the part of this change that will keep paying.** It reports a
+  `# noqa` that no longer suppresses anything, and it is here *because of* the formatter rather
+  than alongside it. `ruff format` wraps long calls, and a line-scoped suppression does not travel
+  with the code it was written for: four `# noqa: S106` directives in `publishers/` ended up after
+  a closing paren during this sweep, at which point they suppressed nothing and the S106 findings
+  reappeared. Those announced themselves as errors. **The inverse case is the dangerous one** — a
+  suppression left on a line with no violation is invisible, survives indefinitely, and silently
+  hides a real finding the day the code beneath it changes.
+
+  It found **76** such directives. 34 had a written rationale, which was preserved as a plain
+  comment rather than deleted with the directive — `ruff --fix` removes the whole trailing comment,
+  which would have discarded pointers like `# noqa: BLE001 - see below`. 41 had nothing worth
+  keeping. 23 of the total were `E402` inside `tests/`, already covered by `per-file-ignores`, so
+  the directive was pure redundancy. The rest named rules this project never enabled (`BLE001` 34,
+  `N803` 7, `PLC0415` 3) — aspirational suppressions for checks that were not running.
+
+- **Prose can create a blanket suppression, which nothing was checking for.** Two comments
+  discussing `noqa` were being *parsed* as directives. One began `# noqa on the message, not the
+  rule: S608 ...`, which ruff reads as a bare `# noqa` — a blanket suppression of every rule on
+  that line. Harmless here only because it sat on a comment-only line, where `RUF100` could see it
+  was unused; inline after code it would have silenced everything with no signal at all. The other
+  was the long-standing `Invalid # noqa directive` warning on `worker/engines/base.py:58`, which
+  had been emitted on every single lint run and read as cosmetic. Both reworded so the token no
+  longer appears in a parseable position.
+
+- **Markdown is excluded from the formatter, after it rewrote 679 lines of design documents.**
+  Recent ruff versions format fenced Python blocks inside `.md`, so `ruff format .` silently
+  reformatted nine `.kiro/specs/` documents with no Python source involved. Those are records of
+  decisions already taken, and their snippets are frequently not valid complete modules — elided
+  with `...`, cut to the two lines under discussion, or written in the compressed style of the
+  module they describe, which is the same style `publishers/*` is exempted from `E701`/`E702` to
+  preserve. Reflowing them buries the real change in a diff that says nothing and edits history to
+  match today's house style. `[tool.ruff.format] exclude = ["*.md"]`, which also keeps the CI gate
+  stable across ruff upgrades now that the set of file types the formatter claims has changed once.
+
+- **No mutation spec accompanies this batch, deliberately.** The convention is one spec per batch,
+  and it does not apply to a change with no behavioural surface: the only semantic edit is an
+  exception tuple whose two arms were already equivalent. Mutating reformatted code would measure
+  the suite against itself and report a number that means nothing. The evidence here is the 2160
+  green tests and a clean `mypy` over annotations that were rewritten wholesale.
+
 ### Added — transcript-based trimming (U4)
 
 - **`U4` — click words out of a clip.** The Descript-class feature: a clip's transcript is shown
@@ -97,6 +183,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Baseline: 1880 → 1900 passed, 0 failed, 0 skipped**, measured with the vendored faces *absent*
 from fontconfig and no `.venv` present — the environment CI actually has, rather than a prepared
 one.
+
+
+### Added — modern face detection and measured detection confidence
+
+- **A second face-detector backend, opt-in.** `face_detector` accepts `haar` (the shipped
+  OpenCV cascade) or `mediapipe` (BlazeFace, via the vendored model). **`haar` stays the
+  default**, so an unchanged configuration reproduces v0.11.0 output exactly — which matters
+  more than it sounds: the golden and parity renders only detect an *accidental* change while
+  they are not re-frozen each release, and switching the default detector would move the crop
+  path, and therefore the pixels, in every one of them.
+
+  Measured on a synthetic source containing a frontal drift, a profile turn and a two-shot:
+  Haar reaches **0.886** detection coverage overall and **0.60** across the profile turn;
+  BlazeFace reaches **0.971** and **0.90**. The profile turn is the case the upgrade exists
+  for — a frontal cascade loses the face as the head rotates, which on screen is the crop
+  freezing while the subject keeps moving. Both figures come from drawn faces rather than
+  photographs, so they are a controlled comparison and a demonstration that the measurement
+  works, not a claim about real-world accuracy.
+
+- **Detection coverage is now measured and reported**, which is the first quantitative
+  statement this subsystem has made about itself. `reframe_low_confidence:<coverage>` lands on
+  a clip whose framing was built from sparse detections, so a batch review can concentrate on
+  those and trust the rest. Below-floor *and* at least one detection: zero coverage is already
+  reported by the existing no-faces degradation, and emitting both would be two names for one
+  condition — the duplicated-fact pattern mutation testing has caught twice here.
+  `reframe_sample_rate:<fps>` appears only when the sampling cap actually reduced the rate,
+  because a marker emitted on every clip is noise, and noise is what stops a marker being read.
+
+- **The marker names the backend that ran, never the one that was asked for.**
+  `face_detector:haar|mediapipe|injected`, and `face_detector_substituted:mediapipe:haar` when
+  MediaPipe was requested and Haar ran. The resolver returns the label from the branch that
+  succeeded rather than letting the caller infer it, because inference is exactly how
+  `font_substituted:Arial` got frozen into a golden file as correct. An injected detector
+  reports `injected` rather than borrowing a backend name: a test double is not evidence that a
+  backend works.
+
+- **The BlazeFace model is vendored, licensed and verified offline**, following the
+  `assets/emoji/` precedent exactly — `assets/models/blaze_face_short_range.tflite` (229,746
+  bytes, Apache-2.0) with its licence and provenance alongside, and
+  `scripts/fetch_models.py --check` verifying it by SHA-256 against a manifest with no network
+  access, wired into CI. This is what moves the item out of the weights-blocked bucket: a
+  quarter-megabyte graph under a permissive licence can live in a git repository, where an
+  active-speaker or body-detection checkpoint cannot. Neither MediaPipe nor OpenCV ships a
+  model in its wheel — verified, not assumed — so without vendoring the backend has nothing to
+  load. A digest rather than an existence check, because a half-downloaded `.tflite` is a file
+  that exists, has a plausible size, and fails deep inside the native graph at the first frame
+  of a render.
+
+- **A coordinate-conversion function with its own tests, verified against the real library.**
+  This is the part of the feature that would have failed silently. Measured on mediapipe
+  0.10.35, the tasks API returns **absolute pixels** and has no `relative_bounding_box` at all
+  — the normalised box belonged to the `mediapipe.solutions` namespace, which was **removed**.
+  Had a normalised box leaked through as pixels, the result is a one-pixel face at the frame
+  origin and *nothing objects*: `pick_main_face` returns a centre, `FaceBox` validates,
+  `build_face_tracks` builds tracks, `build_sendcmd` clamps to a valid window, ffmpeg encodes,
+  and the clip record says `reframe`. Every clip would be cropped to the frame's left edge and
+  the only evidence would be the pixels. A suite of fake detectors returning pixel tuples
+  cannot catch that, because the fakes would be right and the real backend wrong — so
+  `tests/test_face_detection_real_binary.py` runs the real library against a real image with no
+  mocking, and cross-checks the conversion through arithmetic written out in the test that
+  shares no code with the function under test.
+
+- **Confidence-aware main-face selection.** Where a backend supplies scores, the main face is
+  ranked on `score × sqrt(area)` so a large low-confidence box loses to a smaller confident
+  face — the crop should follow a face rather than a bookshelf, and a bookshelf is usually
+  bigger. Linear extent rather than area because weighting by area makes confidence nearly
+  irrelevant: a 400×400 false positive at 0.10 beats an 80×80 face at 0.95 by more than two to
+  one on `score × area`. Where no scores are available — Haar supplies none, and inventing one
+  from reject levels would be false precision — selection is largest-area *verbatim*, which is
+  what makes the byte-identical default achievable rather than merely likely.
+
+- **Fixed: the speaker-aware path reported coverage 0.0 for every clip.** `FaceBox` carries a
+  leading `t`, so it is not a 4-tuple, and the detection coercion silently rejected it — which
+  meant footage the same run had just tracked successfully was reported as having no faces.
+  Found by a test written for the marker, not by review.
 
 ### Added — scripts, placement, stings and hardware encoding (C21, V15, AU9, O8)
 

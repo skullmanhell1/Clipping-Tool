@@ -8,8 +8,8 @@ Every claim about our own code below was verified by reading it, and the current
 quoted exactly. Nothing here is aspirational description — where something does not exist,
 it says so.
 
-**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 140 of the 154
-items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 14 that remain and why each was
+**Status: written 2026-07-29 against `VERSION` 0.10.0, when none of it was done. 142 of the 154
+items are now implemented.** `SESSION_HANDOFF.md` §3 lists the 12 that remain and why each was
 left; `CHANGELOG.md` is the record of what landed.
 
 Do not recount by grepping for item IDs without reading the traps `SESSION_HANDOFF.md` §"Start
@@ -477,3 +477,80 @@ I1, I2, I3, I4 · S5, S16 · PB8 · U12
 
 *External sources were rephrased for compliance with licensing restrictions; links are
 inline throughout.*
+
+
+---
+
+## Appendix B: backlog items added after the v0.11.0 render-path audit
+
+Registered here so the plan stays the single index of work. **This appendix is additive only.**
+The body of this document above is still quoted against **v0.10.0** and is materially stale —
+the Arial fallback, the green karaoke secondary, absent `loudnorm`, missing `pix_fmt`, `base`
+Whisper, and the longest-segment production fallback are all already fixed. Correcting the body
+is owned by `clip-quality-uplift` task 13; do not treat the sections above as current.
+
+These items came from reading the render path directly rather than from competitor comparison,
+which is why none of them appear in §§1–12. Each is specified in full under `.kiro/specs/`.
+
+### Measurement — `render-quality-measurement`
+
+| ID | Item | Note |
+| --- | --- | --- |
+| M9 | Full-reference render fidelity (SSIM/PSNR, VMAF where built) | **No `vmaf`, `psnr`, or `ssim` exists anywhere in the repo today.** `golden_render.py` answers "did it change?", not "is it better?" |
+| M10 | Caption alignment error | `wer.py` measures words; nothing measures timing, which is the defect viewers see |
+| M11 | A/V sync verification | Nothing measures sync. No defect alleged — but if it drifts, every burned caption drifts and no test would notice |
+| M12 | Pairwise human preference harness | The only instrument for framing, grade, and pacing changes, which have no metric |
+
+### Signal chain — `clip-signal-fidelity`
+
+| ID | Item | Note |
+| --- | --- | --- |
+| O13 | HDR → SDR tone-mapping | **Currently wrong output, not a missing feature.** Zero hits for `tonemap`/`zscale`/`colorspace`. `probe()` already fetches `color_transfer` and never reads it |
+| O14 | Colour metadata on delivered files | Nothing sets `-colorspace`/`-color_primaries`/`-color_trc`; players guess |
+| O15 | Colour range resolution | Full-range phone footage crushes or lifts |
+| O16 | Encoder preset quality | `x264_preset="veryfast"` (`config.py:354`), paid three times per clip |
+| O17 | Scaling algorithm | No `-sws_flags` anywhere; every `scale=` is default bicubic |
+| O18 | Conditional frame-rate normalisation | `-r 30` applied unconditionally; correct for VFR, adds 3:2 judder to CFR 24 fps |
+| O19 | Keyframe interval | No `-g` set; x264's default 250 (~8 s) applies |
+| O20 | Delivered audio bitrate | `-b:a 128k` fixed; thin under a music bed |
+| V20 | Deinterlacing | No `yadif`/`bwdif`; combing gets cropped and scaled into a smear |
+| V21 | Stabilisation | No `vidstab`; shaky source under a moving crop compounds |
+
+### Presentation — `clip-presentation-polish`
+
+| ID | Item | Note |
+| --- | --- | --- |
+| V22 | Headroom / eye-line composition | `reframe.py:487` centres the face vertically — the most recognisable auto-crop tell, and it parks the mouth where captions go |
+| V23 | Subject-scale normalisation across shots | Subject size jumps between cuts |
+| V24 | Screen-recording and graphics detection | No content-type notion; a 16:9 slide is cropped to an unreadable middle third |
+| C24 | Minimum cue duration and reading-rate cap | `words_to_cues` has only ceilings, no floor; fast speech yields ~0.3 s cues |
+| C25 | Linguistically-aware line breaking | Width-only breaking splits proper nouns and article-noun pairs |
+| AU11 | Speech presence / clarity chain | Only spectral shaping in `audio.py` is a `lowpass`; `loudnorm` is level, this is spectrum |
+| AU12 | Per-speaker level matching | Diarisation exists and is never used for gain; `loudnorm` normalises the clip so cannot fix balance within it |
+
+### Editorial structure — `clip-editorial-structure`
+
+| ID | Item | Note |
+| --- | --- | --- |
+| S21 | Cold-open / multi-segment assembly | Every clip is one contiguous range. `filler.apply_keep_intervals` already renders non-contiguous keeps in one pass |
+| S22 | Topic-shift boundaries | Boundaries use silence, sentence, and luma cuts only — nothing knows what the clip is about |
+| S23 | Semantic diversity in the delivered set | Dedup is lexical; weighted Jaccard is blind to paraphrase |
+| S24 | Dangling-opener repair | `discourse.py` already **detects** it and only ever scores it; nothing extends the start to include the antecedent |
+
+### Ordering
+
+`M9`–`M12` first: they gate `O16`, `O17`, `O20`, `V21`–`V24`, `C24`, `C25`, `AU11`, `AU12`, and
+`S21`, none of which can be judged without them. `O13`–`O15` are the exception and should jump
+the queue — they fix output that is currently incorrect and need no preference judgement.
+`S22`–`S24` additionally depend on **S1**, the labelled selection benchmark, for the same reason
+everything in §3 does.
+
+### Deferred, with the blocker named
+
+Unchanged from the body above, restated because these are the items most often rediscovered:
+**weights CI cannot have** — `S5`, `S13`, `T2`, `T6`, `V3`, `V7`, `AU6`; **credentials** —
+`PB1`, `PB9`; **data** — `S16`; **infrastructure** — `I1`, `I2`. `V3` (active-speaker
+detection) remains the largest single visual gap: on two-person footage we follow the largest,
+most-diarisation-active face rather than the person speaking.
+
+*Verified against v0.11.0. Appendix B only — the sections above it are not.*

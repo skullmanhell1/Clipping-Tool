@@ -22,14 +22,22 @@ Two deliberate choices:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 from worker import captions as cap
 from worker.effects.caption_presets import load_preset
 from worker.ffmpeg_utils import _run, aspect_size, h264_args
+
+# The real `Word`, not a local look-alike. This module previously declared a private
+# `_SampleWord` dataclass with exactly `Word`'s four fields, on the reasonable-sounding grounds
+# that a preview needs only "the attributes the caption renderer reads" - but `worker.captions`
+# already imports `Word` from here and annotates `words_to_cues(words: Iterable[Word])`, so the
+# import cost was already paid and the duplicate bought nothing except a type the renderer's
+# signature did not accept. Using the real class is what makes the preview provably feed
+# `words_to_cues` the same shape a real render does, which is the entire claim C18 rests on.
+from worker.transcribe import Word
 
 #: The sample text. Short, mixed-length words, and one obvious candidate for keyword emphasis.
 SAMPLE_TEXT = "This one change made everything click"
@@ -44,19 +52,7 @@ PREVIEW_SECONDS = 2.0
 PREVIEW_BACKGROUND = "gray"
 
 
-@dataclass
-class _SampleWord:
-    """A synthetic word with the attributes the caption renderer reads."""
-
-    text: str
-    start: float
-    end: float
-    probability: float = 1.0
-
-
-def sample_words(
-    text: str = SAMPLE_TEXT, duration: float = PREVIEW_SECONDS
-) -> list[_SampleWord]:
+def sample_words(text: str = SAMPLE_TEXT, duration: float = PREVIEW_SECONDS) -> list[Word]:
     """Evenly-spaced synthetic word timings across ``duration``.
 
     Evenly spaced on purpose: a preview is a comparison between presets, and irregular timings would
@@ -68,7 +64,7 @@ def sample_words(
     span = max(0.2, float(duration))
     step = span / len(words)
     return [
-        _SampleWord(text=word, start=index * step, end=(index + 1) * step - step * 0.08)
+        Word(text=word, start=index * step, end=(index + 1) * step - step * 0.08)
         for index, word in enumerate(words)
     ]
 
@@ -79,10 +75,10 @@ def render_preview(
     *,
     text: str = SAMPLE_TEXT,
     aspect: str = "9:16",
-    position: Optional[str] = None,
+    position: str | None = None,
     duration: float = PREVIEW_SECONDS,
-    highlight_index: Optional[int] = 2,
-    brand: Optional[Any] = None,
+    highlight_index: int | None = 2,
+    brand: Any | None = None,
 ) -> Path:
     """Render a caption sample to ``dest`` and return the path.
 
@@ -127,15 +123,22 @@ def render_preview(
     )
 
     try:
-        _run([
-            settings.ffmpeg_binary, "-y",
-            "-f", "lavfi",
-            "-i", f"color=c={PREVIEW_BACKGROUND}:s={width}x{height}:r=25:d={duration:.2f}",
-            "-vf", cap.subtitles_filter(ass_path),
-            *h264_args(),
-            "-movflags", "+faststart",
-            str(dest),
-        ])
+        _run(
+            [
+                settings.ffmpeg_binary,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={PREVIEW_BACKGROUND}:s={width}x{height}:r=25:d={duration:.2f}",
+                "-vf",
+                cap.subtitles_filter(ass_path),
+                *h264_args(),
+                "-movflags",
+                "+faststart",
+                str(dest),
+            ]
+        )
     finally:
         # The ASS is an intermediate; leaving it beside the preview would accumulate one per
         # preview per preset in whatever directory the caller chose.

@@ -13,11 +13,19 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING
 
 from config import settings
+
+if TYPE_CHECKING:
+    # Type-checking only. `h264_args` imports `worker.video_encoders` lazily *inside* the
+    # function, and that stays as it is — this module is imported by almost everything, and the
+    # encoder probe runs a real one-frame encode. Naming the type here costs nothing at runtime
+    # and is what lets `_compat_args` be checked against the object it is actually handed.
+    from worker.video_encoders import VideoEncoder
 
 
 class FFmpegError(RuntimeError):
@@ -63,13 +71,16 @@ OUTPUT_LEVEL = "4.0"
 #: Deliberately *not* configurable, unlike CRF and preset: there is no good reason to ship
 #: a clip a player will refuse to open.
 H264_COMPAT_ARGS: tuple[str, ...] = (
-    "-pix_fmt", OUTPUT_PIX_FMT,
-    "-profile:v", OUTPUT_PROFILE,
-    "-level", OUTPUT_LEVEL,
+    "-pix_fmt",
+    OUTPUT_PIX_FMT,
+    "-profile:v",
+    OUTPUT_PROFILE,
+    "-level",
+    OUTPUT_LEVEL,
 )
 
 
-def _compat_args(encoder) -> list[str]:
+def _compat_args(encoder: VideoEncoder) -> list[str]:
     """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
 
     Built *from* the tuple rather than respelling it, and that is the whole point of this function
@@ -86,10 +97,15 @@ def _compat_args(encoder) -> list[str]:
     """
     pairs = zip(H264_COMPAT_ARGS[::2], H264_COMPAT_ARGS[1::2])
     args: list[str] = []
+    # Read directly rather than through `getattr(..., default)`. Both fields are declared on
+    # `VideoEncoder` with defaults, and every encoder reaching here comes from
+    # `resolve_encoder()`, so there is no object without them - the defaults were guarding against
+    # a type that is now named in the signature, and they would have silently supplied a
+    # project-default pix_fmt if either field were ever renamed.
     for flag, value in pairs:
-        if flag == "-pix_fmt" and getattr(encoder, "pix_fmt", ""):
+        if flag == "-pix_fmt" and encoder.pix_fmt:
             value = encoder.pix_fmt
-        elif flag == "-level" and not getattr(encoder, "accepts_level", True):
+        elif flag == "-level" and not encoder.accepts_level:
             continue
         args += [flag, value]
     return args
@@ -246,10 +262,14 @@ def aac_args() -> list[str]:
     gets it first, if at all.
     """
     return [
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", str(int(settings.output_sample_rate)),
-        "-ac", str(int(settings.output_channels)),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        str(int(settings.output_sample_rate)),
+        "-ac",
+        str(int(settings.output_channels)),
     ]
 
 
@@ -340,9 +360,7 @@ def _default_timeout(cmd: list[str]) -> float:
     return float(settings.ffmpeg_timeout_seconds)
 
 
-def _run(
-    cmd: list[str], *, timeout: Optional[float] = None
-) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess:
     """Run a command, returning the completed process or raising ``FFmpegError``.
 
     Every invocation is bounded. Jobs are processed by a thread pool with a single
@@ -385,9 +403,7 @@ def _run(
         ) from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "").strip().splitlines()[-15:]
-        raise FFmpegError(
-            f"Command failed ({' '.join(cmd[:2])} ...): " + "\n".join(tail)
-        ) from exc
+        raise FFmpegError(f"Command failed ({' '.join(cmd[:2])} ...): " + "\n".join(tail)) from exc
     return proc
 
 
@@ -478,8 +494,16 @@ def cut_segment(
     dest.parent.mkdir(parents=True, exist_ok=True)
     duration = end - start
 
-    cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
-           "-t", f"{duration:.3f}"]
+    cmd = [
+        settings.ffmpeg_binary,
+        "-y",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(source),
+        "-t",
+        f"{duration:.3f}",
+    ]
     if reencode:
         cmd += [*h264_args(), *aac_args()]
     else:
@@ -561,10 +585,7 @@ def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -
         # The source is discarded rather than blurred: nothing derived from it is wanted.
         return f"[bg]scale={tw}:{th},drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[bgb];"
     if style == "color":
-        return (
-            f"[bg]scale={tw}:{th},"
-            f"drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill[bgb];"
-        )
+        return f"[bg]scale={tw}:{th},drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill[bgb];"
     if style == "gradient":
         return (
             f"[bg]{cover},boxblur=luma_radius=20:luma_power=1,"
@@ -573,10 +594,7 @@ def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -
         )
     # blur, and the fallback for an unknown style - the previous behaviour, so an unrecognised
     # value degrades to what shipped before rather than to no background at all.
-    return (
-        f"[bg]{cover},boxblur=luma_radius=40:luma_power=1,"
-        f"eq=brightness=-0.1[bgb];"
-    )
+    return f"[bg]{cover},boxblur=luma_radius=40:luma_power=1,eq=brightness=-0.1[bgb];"
 
 
 def reformat_aspect(
@@ -632,11 +650,17 @@ def reformat_aspect(
         raise ValueError(f"Unknown mode '{mode}'. Valid: 'crop_blur', 'pad'.")
 
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-vf", vf,
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-vf",
+        vf,
         *h264_args(),
-        "-c:a", "copy",
-        "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     _run(cmd)
@@ -655,7 +679,7 @@ def detect_letterbox(
     *,
     probe_seconds: float = 8.0,
     skip_seconds: float = 1.0,
-) -> Optional[tuple[int, int, int, int]]:
+) -> tuple[int, int, int, int] | None:
     """The content rectangle of ``source`` as ``(w, h, x, y)``, or ``None`` (V16).
 
     Source footage is very often already letterboxed - a 16:9 video exported inside a 1:1
@@ -680,13 +704,22 @@ def detect_letterbox(
         return None
 
     command = [
-        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
-        "-ss", f"{max(0.0, float(skip_seconds)):.3f}",
-        "-t", f"{max(0.5, float(probe_seconds)):.3f}",
-        "-i", str(source),
+        settings.ffmpeg_binary,
+        "-nostdin",
+        "-hide_banner",
+        "-ss",
+        f"{max(0.0, float(skip_seconds)):.3f}",
+        "-t",
+        f"{max(0.5, float(probe_seconds)):.3f}",
+        "-i",
+        str(source),
         # round=2 keeps the result even, which libx264's 4:2:0 subsampling requires anyway.
-        "-vf", "cropdetect=limit=24:round=2:reset=0",
-        "-an", "-f", "null", "-",
+        "-vf",
+        "cropdetect=limit=24:round=2:reset=0",
+        "-an",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
@@ -732,9 +765,18 @@ def extract_audio(source: str | Path, dest: str | Path, sample_rate: int = 16000
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-vn", "-ac", "1", "-ar", str(sample_rate),
-        "-c:a", "pcm_s16le", str(dest),
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-c:a",
+        "pcm_s16le",
+        str(dest),
     ]
     _run(cmd)
     return dest
@@ -747,8 +789,17 @@ def generate_thumbnail(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_binary, "-y", "-ss", f"{max(at, 0):.3f}", "-i", str(source),
-        "-frames:v", "1", "-vf", f"scale={width}:-2", str(dest),
+        settings.ffmpeg_binary,
+        "-y",
+        "-ss",
+        f"{max(at, 0):.3f}",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={width}:-2",
+        str(dest),
     ]
     _run(cmd)
     return dest

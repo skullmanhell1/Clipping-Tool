@@ -14,8 +14,10 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any
 
 from config import settings
 from worker import (
@@ -39,10 +41,10 @@ class ClipCandidate:
 
     start: float
     end: float
-    score: float = 0.0            # virality score, 0..100
+    score: float = 0.0  # virality score, 0..100
     reason: str = ""
     title: str = ""
-    text: str = ""                # transcript text within the range
+    text: str = ""  # transcript text within the range
     # Measured signals about this window: speech rate (S4), audio energy (S2) and a hook
     # score for the opening seconds (S6).
     #
@@ -76,11 +78,11 @@ _SYSTEM = (
 
 def _segment_annotation(
     segment: TranscriptSegment,
-    words,
-    envelope,
+    words: Sequence[Any],
+    envelope: Sequence[tuple[float, float]],
     *,
-    pace_baseline: Optional[float],
-    energy_baseline: Optional[float],
+    pace_baseline: float | None,
+    energy_baseline: float | None,
 ) -> str:
     """A short human-readable tag describing how a segment was *delivered* (S10).
 
@@ -93,9 +95,7 @@ def _segment_annotation(
     """
     tags: list[str] = []
 
-    rate = selection_features.speech_rate(
-        words, segment.start, segment.end, baseline=pace_baseline
-    )
+    rate = selection_features.speech_rate(words, segment.start, segment.end, baseline=pace_baseline)
     if rate.reliable and pace_baseline:
         if rate.relative_speech_rate >= 1.25:
             tags.append("fast")
@@ -127,8 +127,8 @@ def _segment_annotation(
 def _format_transcript(
     segments: list[TranscriptSegment],
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
 ) -> str:
     """Render segments as ``[index] start-end{delivery}: text`` lines for the prompt.
 
@@ -153,8 +153,11 @@ def _format_transcript(
         tag = ""
         if annotate:
             tag = _segment_annotation(
-                s, words, envelope,
-                pace_baseline=pace_baseline, energy_baseline=energy_baseline,
+                s,
+                words,
+                envelope,
+                pace_baseline=pace_baseline,
+                energy_baseline=energy_baseline,
             )
         lines.append(f"[{i}] {s.start:.1f}-{s.end:.1f}{tag}: {s.text.strip()}")
     return "\n".join(lines)
@@ -165,10 +168,10 @@ def _build_prompt(
     options: ProcessingOptions,
     min_len: float,
     max_len: float,
-    max_clips: Optional[int],
+    max_clips: int | None,
     *,
-    words=(),
-    envelope=(),
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
 ) -> str:
     """Construct the selection prompt from the transcript + user options.
 
@@ -182,13 +185,9 @@ def _build_prompt(
         else "Select as many strong moments as you find (up to 10)."
     )
     topic_instr = (
-        f"Strongly prefer moments about: {options.topic}."
-        if options.topic.strip()
-        else ""
+        f"Strongly prefer moments about: {options.topic}." if options.topic.strip() else ""
     )
-    vibe_instr = (
-        f"Favor a {options.vibe} tone/vibe." if options.vibe.strip() else ""
-    )
+    vibe_instr = f"Favor a {options.vibe} tone/vibe." if options.vibe.strip() else ""
 
     delivery_instr = ""
     if words and getattr(settings, "selection_features_in_prompt", True):
@@ -256,14 +255,14 @@ def _text_between(segments: list[TranscriptSegment], start: float, end: float) -
 
 
 def _fallback(
-    path,
+    path: str | Path,
     total_duration: float,
     options: ProcessingOptions,
-    max_clips: Optional[int],
+    max_clips: int | None,
     *,
-    words=(),
-    envelope=(),
-    segments: Optional[list[TranscriptSegment]] = None,
+    words: Sequence[Any] = (),
+    envelope: Sequence[tuple[float, float]] = (),
+    segments: list[TranscriptSegment] | None = None,
 ) -> list[ClipCandidate]:
     """Deterministic fallback, now with real scoring rather than "keep the longest" (S11).
 
@@ -322,9 +321,9 @@ def _fallback(
 def select_moments(
     transcript: Transcript,
     options: ProcessingOptions,
-    source_path,
+    source_path: str | Path,
     total_duration: float,
-    client: Optional[BaseLLMClient] = None,
+    client: BaseLLMClient | None = None,
 ) -> list[ClipCandidate]:
     """Return scored clip candidates for a video.
 
@@ -357,9 +356,7 @@ def select_moments(
             source_path,
             lambda: [
                 list(reading)
-                for reading in audio_features.energy_envelope(
-                    source_path, window=envelope_window
-                )
+                for reading in audio_features.energy_envelope(source_path, window=envelope_window)
             ],
             {"window": envelope_window},
         )
@@ -383,8 +380,13 @@ def select_moments(
     def _fallback_result() -> list[ClipCandidate]:
         return _measured(
             _fallback(
-                source_path, total_duration, options, max_clips,
-                words=transcript.words, envelope=envelope, segments=transcript.segments,
+                source_path,
+                total_duration,
+                options,
+                max_clips,
+                words=transcript.words,
+                envelope=envelope,
+                segments=transcript.segments,
             )
         )
 
@@ -394,8 +396,13 @@ def select_moments(
 
     client = client or get_llm_client()
     prompt = _build_prompt(
-        transcript.segments, options, min_len, max_len, max_clips,
-        words=transcript.words, envelope=envelope,
+        transcript.segments,
+        options,
+        min_len,
+        max_len,
+        max_clips,
+        words=transcript.words,
+        envelope=envelope,
     )
 
     try:
@@ -410,9 +417,17 @@ def select_moments(
     for item in data:
         if not isinstance(item, dict):
             continue
+        # Absent keys are rejected before the conversion rather than through the `except
+        # TypeError` that `float(None)` used to raise. Same outcome for the same inputs - a
+        # hallucinated item without a range is skipped - but the intent is stated rather than
+        # inferred from which exception a builtin happens to throw.
+        raw_start = item.get("start")
+        raw_end = item.get("end")
+        if raw_start is None or raw_end is None:
+            continue
         try:
-            start = float(item.get("start"))
-            end = float(item.get("end"))
+            start = float(raw_start)
+            end = float(raw_end)
         except (TypeError, ValueError):
             continue
         if end <= start:

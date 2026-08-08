@@ -34,9 +34,29 @@ import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, TypeVar
 
 from config import settings
+
+if TYPE_CHECKING:
+    # `_typeshed` exists only for type checkers and must never be imported at runtime. It is
+    # where the "is a dataclass instance" bound lives, which is what `dataclasses.replace`
+    # requires of its argument.
+    from _typeshed import DataclassInstance
+
+#: The preset type flows through unchanged, whatever it is.
+#:
+#: This module reads a preset exclusively through ``getattr`` and rebuilds it with
+#: ``dataclasses.replace``, so it never needs to import ``CaptionPreset`` — a deliberate
+#: independence that keeps the contrast logic testable against a stub. The previous return type
+#: ``tuple[object, list[str]]`` expressed that independence but threw the caller's type away, so
+#: the compositor's ``preset`` became ``object`` the moment it passed through here. A type
+#: variable keeps both properties: nothing is imported, and what comes out is known to be what
+#: went in.
+#: Bounded to "a dataclass instance" because :func:`dataclasses.replace` is how the adapted
+#: preset is built, and that is the only structural requirement this module places on a preset
+#: beyond the attributes it reads with ``getattr``.
+_Preset = TypeVar("_Preset", bound="DataclassInstance")
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +143,7 @@ def sample_background(
     band: tuple[int, int, int, int],
     *,
     count: int = SAMPLE_COUNT,
-) -> Optional[BackgroundSample]:
+) -> BackgroundSample | None:
     """Mean luma of ``band`` across ``count`` frames, or ``None`` when unmeasurable.
 
     ``None`` means "no information", and every caller treats that as "keep the preset's colours" -
@@ -140,14 +160,26 @@ def sample_background(
         try:
             result = subprocess.run(
                 [
-                    settings.ffmpeg_binary, "-hide_banner", "-loglevel", "error",
-                    "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
+                    settings.ffmpeg_binary,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{at:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
                     # Reduced to a single pixel: the mean of the band is the whole measurement, and
                     # letting the scaler compute it avoids moving a megabyte of pixels per sample.
-                    "-vf", f"crop={width}:{height}:{x}:{y},scale=1:1,format=gray",
-                    "-f", "rawvideo", "-",
+                    "-vf",
+                    f"crop={width}:{height}:{x}:{y},scale=1:1,format=gray",
+                    "-f",
+                    "rawvideo",
+                    "-",
                 ],
-                capture_output=True, timeout=60,
+                capture_output=True,
+                timeout=60,
             )
         except Exception:
             continue
@@ -159,7 +191,9 @@ def sample_background(
     return BackgroundSample(mean_luma=sum(readings) / len(readings), samples=len(readings))
 
 
-def apply_auto_contrast(preset, sample: Optional[BackgroundSample]) -> tuple[object, list[str]]:
+def apply_auto_contrast(
+    preset: _Preset, sample: BackgroundSample | None
+) -> tuple[_Preset, list[str]]:
     """Return ``(preset, markers)`` with legibility colours chosen for the background (C20).
 
     Only ``outline`` and ``box`` are touched. The fill is a brand decision (U6) and silently
@@ -194,13 +228,13 @@ def apply_auto_contrast(preset, sample: Optional[BackgroundSample]) -> tuple[obj
 
 def choose_for_clip(
     video: str | Path,
-    preset,
+    preset: _Preset,
     *,
     duration: float,
     video_width: int,
     video_height: int,
-    position: Optional[str] = None,
-) -> tuple[object, list[str]]:
+    position: str | None = None,
+) -> tuple[_Preset, list[str]]:
     """Measure the caption region of ``video`` and adapt ``preset``'s legibility colours (C20).
 
     Off unless ``settings.caption_auto_contrast`` is set, because it costs three seeks per clip and

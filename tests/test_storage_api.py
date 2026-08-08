@@ -1,4 +1,5 @@
 """API tests for Phase 5 storage, profiles, and update endpoints."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,15 +28,15 @@ def test_storage_status(client):
 
 
 def test_update_storage_settings(client):
-    resp = client.post("/api/storage/settings",
-                       json={"retention_days": 14, "auto_delete_temp": False})
+    resp = client.post(
+        "/api/storage/settings", json={"retention_days": 14, "auto_delete_temp": False}
+    )
     assert resp.status_code == 200
     settings_out = resp.json()["settings"]
     assert settings_out["retention_days"] == 14
     assert settings_out["auto_delete_temp"] is False
     # Restore a sane default for other tests.
-    client.post("/api/storage/settings", json={"retention_days": 30,
-                                                "auto_delete_temp": True})
+    client.post("/api/storage/settings", json={"retention_days": 30, "auto_delete_temp": True})
 
 
 def test_storage_cleanup(client):
@@ -53,6 +54,7 @@ def test_info_exposes_version_and_backend(client):
 
 def test_updates_endpoint(client, monkeypatch):
     from updates import get_update_checker
+
     checker = get_update_checker()
     monkeypatch.setattr(checker, "_http_get", lambda url: {"tag_name": "v0.0.1"})
     resp = client.get("/api/updates?force=true")
@@ -62,12 +64,15 @@ def test_updates_endpoint(client, monkeypatch):
 
 # --- Profiles --------------------------------------------------------------
 def test_profile_crud(client):
-    created = client.post("/api/profiles", json={
-        "name": "Test Profile",
-        "settings": {"aspect": "1:1"},
-        "publishing": {"mode": "review"},
-        "make_default": True,
-    })
+    created = client.post(
+        "/api/profiles",
+        json={
+            "name": "Test Profile",
+            "settings": {"aspect": "1:1"},
+            "publishing": {"mode": "review"},
+            "make_default": True,
+        },
+    )
     assert created.status_code == 200
     pid = created.json()["id"]
 
@@ -76,10 +81,15 @@ def test_profile_crud(client):
     assert listing["default_id"] == pid
 
     # Update in place.
-    updated = client.post("/api/profiles", json={
-        "name": "Test Profile", "settings": {"aspect": "9:16"},
-        "publishing": {}, "id": pid,
-    })
+    updated = client.post(
+        "/api/profiles",
+        json={
+            "name": "Test Profile",
+            "settings": {"aspect": "9:16"},
+            "publishing": {},
+            "id": pid,
+        },
+    )
     assert updated.json()["settings"]["aspect"] == "9:16"
 
     # Delete.

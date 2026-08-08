@@ -27,7 +27,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 #: Suggested local posting times per platform, as ``(hour, minute)`` pairs.
 #:
@@ -96,8 +96,8 @@ def suggest(
     *,
     days: int = 7,
     per_day: int = 2,
-    now: Optional[float] = None,
-    taken: Optional[list[float]] = None,
+    now: float | None = None,
+    taken: list[float] | None = None,
     spacing_seconds: float = 3600.0,
 ) -> list[Suggestion]:
     """Suggested posting slots for the next ``days`` days (PB7).
@@ -124,9 +124,7 @@ def suggest(
         for index, (hour, minute) in enumerate(windows):
             if chosen_today >= wanted_per_day:
                 break
-            slot = datetime.combine(day, datetime.min.time()).replace(
-                hour=hour, minute=minute
-            )
+            slot = datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute)
             at = slot.timestamp()
             if at <= reference:
                 continue

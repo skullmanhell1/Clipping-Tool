@@ -2,3 +2,5 @@ node_modules
 dist
 .vite
 *.local
+# vitest coverage output (`npm run test:coverage`). Reported in CI as an artifact.
+coverage

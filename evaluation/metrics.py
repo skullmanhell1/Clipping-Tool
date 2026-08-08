@@ -21,8 +21,9 @@ improved coarse targeting while worsening precise boundaries. ``IOU_THRESHOLDS``
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol, Sequence
+from typing import Protocol
 
 #: The IoU thresholds every result is reported at.
 #:
@@ -36,10 +37,20 @@ PRIMARY_IOU = 0.5
 
 
 class TimeRange(Protocol):
-    """Anything with ``start`` and ``end`` - a ``ClipCandidate`` or a ``LabelledMoment``."""
+    """Anything with ``start`` and ``end`` - a ``ClipCandidate`` or a ``LabelledMoment``.
 
-    start: float
-    end: float
+    Declared as read-only properties rather than as bare mutable attributes. A Protocol that
+    states ``start: float`` requires an implementation whose ``start`` is *settable*, which
+    silently excluded ``LabelledMoment`` — it is a ``@dataclass(frozen=True)``, so its attributes
+    are read-only and it did not satisfy the very Protocol whose docstring names it. Nothing here
+    ever writes to a range, so asking only to read one is both accurate and wider.
+    """
+
+    @property
+    def start(self) -> float: ...
+
+    @property
+    def end(self) -> float: ...
 
 
 def iou(a: TimeRange, b: TimeRange) -> float:
@@ -212,8 +223,7 @@ def score_source(
         )
 
     score.best_iou_per_label = [
-        max((iou(prediction, label) for prediction in top), default=0.0)
-        for label in labels
+        max((iou(prediction, label) for prediction in top), default=0.0) for label in labels
     ]
     return score
 
@@ -260,8 +270,6 @@ class AggregateScore:
             "sources": [source.to_dict() for source in self.sources],
             "aggregate": {
                 "mean_best_iou": round(self.mean_best_iou, 4),
-                "thresholds": [
-                    self.at(threshold).to_dict() for threshold in IOU_THRESHOLDS
-                ],
+                "thresholds": [self.at(threshold).to_dict() for threshold in IOU_THRESHOLDS],
             },
         }

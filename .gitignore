@@ -7,6 +7,22 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+# Coverage and test-report output. Measured in CI and uploaded as an artifact; a local run leaves
+# these behind and none of them belong in a commit.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+pytest-report.xml
+# The visual smoke reel (M2) - a rendered video, produced on demand and by CI.
+#
+# `smoke_source.*` and `synth_bed_*` are intermediates `scripts/smoke_reel.py` writes into the
+# working directory when it synthesises a source rather than being given `--source`. Listed here
+# because the script is now run by CI, so they appear in a clean checkout.
+smoke_reel.mp4
+smoke_source.*
+synth_bed_*
+mutation-report.txt
 # Hypothesis example database / cache written by the test runner
 .hypothesis/
 
@@ -64,3 +80,10 @@ eval/*.json
 # Cached static ffmpeg build fetched by scripts/setup_dev_env.sh, so a re-run after a
 # recycled environment is a copy rather than a 42 MB download.
 .devtools/
+
+
+
+# SARIF written by the CodeQL workflow. It lands in the workspace (rather than the action's default
+# location outside it) so the run can archive it and gate on it; that also puts it in reach of
+# `git add`, which is the only reason this line is needed.
+sarif-results/

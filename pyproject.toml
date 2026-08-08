@@ -50,12 +50,29 @@ target-version = "py311"
 line-length = 100
 exclude = ["frontend", ".venv", "storage"]
 
+[tool.ruff.format]
+# Markdown is excluded from the *formatter*, and this is a finding rather than a preference.
+#
+# Recent ruff versions format fenced Python blocks inside `.md` files. Adopting `ruff format` for
+# I9 therefore rewrote **679 lines across nine `.kiro/specs/` design documents** as a side effect,
+# with no Python source involved. Those documents are records of decisions already taken; a
+# formatter reflowing their illustrative snippets produces an enormous diff that says nothing,
+# buries the change that was actually made, and edits history to match today's house style.
+#
+# Documentation snippets are also frequently *not* valid complete modules — elided with `...`,
+# abbreviated to the two lines under discussion, or written in the compressed style of the module
+# they describe (`publishers/*` is exempted from E701/E702 for exactly that reason). Formatting
+# them is at best noise and at worst a silent edit to an example chosen deliberately.
+#
+# Pinning this off also makes the CI gate stable across ruff upgrades, since which file types the
+# formatter claims has now changed once already.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
-# Deliberately a focused set: rules that catch mistakes rather than rules that impose a
-# house style on 300 existing files. `UP` (pyupgrade, ~450 findings — mostly
-# `Optional[X]` -> `X | None`) and `B` (bugbear, ~30) are both worth adopting, but each
-# is a mechanical sweep of its own and does not belong in the same change as a set of
-# behavioural fixes.
+# Focused set plus the two mechanical-sweep rule sets that I9 adds: `UP` (pyupgrade) modernises
+# syntax to Python 3.11 idiom (`Optional[X]` → `X | None`, `dict()` → `{}`, old-style string
+# formatting, etc.) and `B` (flake8-bugbear) catches common correctness/performance pitfalls
+# (mutable default arguments, bare `except:`, unreliable `hasattr` patterns, etc.).
 select = [
     "F",   # pyflakes: undefined names, unused imports/variables — real bugs
     "E4",  # import placement/shadowing
@@ -63,6 +80,17 @@ select = [
     "E9",  # syntax and IO errors
     "I",   # import sorting, so import blocks stop churning between contributors
     "S",   # bandit: security findings. Three rules are ignored below, with reasons.
+    "UP",  # pyupgrade: modernise syntax to target-version (I9)
+    "B",   # flake8-bugbear: correctness and performance pitfalls (I9)
+    # RUF100 reports a `# noqa` that no longer suppresses anything. Enabled *because* of the
+    # formatter, not alongside it. `ruff format` wraps long calls, and a line-scoped suppression
+    # on a line it splits does not travel with the code it was written for — four `# noqa: S106`
+    # comments in `publishers/` ended up after the closing paren during this sweep, at which point
+    # they suppressed nothing and the S106 findings reappeared. Those surfaced as errors. The
+    # inverse case is the dangerous one: a suppression left sitting on a line with no violation is
+    # invisible, survives indefinitely, and will silently hide a *real* finding the day the code
+    # under it changes. This rule is what makes the formatter safe to keep running.
+    "RUF100",
 ]
 
 # Three `S` rules are switched off wholesale rather than annotated ~50 times. Each is a rule that
@@ -88,6 +116,22 @@ ignore = [
     # ~30 degradation paths at once. Deliberately deferred, not overlooked.
     "S110",
     "S112",
+    # B905 flags every `zip()` call lacking an explicit `strict=` parameter. In this codebase most
+    # calls intentionally zip unequal-length sequences (pairwise `zip(x, x[1:])`) or use sequences
+    # whose lengths are guaranteed equal by construction (struct unpacking, parallel iteration over
+    # a single source). Adding `strict=False` everywhere is noise; adding `strict=True` is wrong
+    # for the pairwise pattern. The rule is disabled globally rather than annotating ~33 sites.
+    "B905",
+    # UP042 suggests migrating `class Foo(str, Enum)` to `enum.StrEnum`. While available since
+    # Python 3.11, `StrEnum` has subtly different behaviour (auto-generated `_generate_next_value_`
+    # lowercases, `.value` type narrowing differs, and some serialisation libraries treat them
+    # differently). The 8 enums here serialise to JSON and are stored in job records, so migrating
+    # needs its own verification pass — not a lint auto-fix.
+    "UP042",
+    # UP031 flags `"<%dh" % count` style struct format strings. These are not general-purpose
+    # formatting — they build binary struct descriptors where `%d` is idiomatic and f-string
+    # alternatives (`f"<{count}h"`) are less readable in context.
+    "UP031",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -96,6 +140,9 @@ ignore = [
 # refactor; scoping the exemption here keeps the checks live everywhere else rather than
 # disabling them globally, which is what a top-level ignore would have done.
 "publishers/*" = ["E701", "E702", "E401"]
+# FastAPI uses function calls (`File(...)`, `Form(...)`, `Depends(...)`) as argument defaults
+# by design — it is how the dependency injection system works. B008 does not apply here.
+"api/main.py" = ["B008"]
 # tests/* imports after module-level setup on purpose: conftest rewrites environment
 # variables before `config` is imported, and several test modules import their subject
 # only after installing a guard. That ordering is the point, so E402 cannot apply.
@@ -115,9 +162,95 @@ ignore = [
     "S106",  # same, passed as an argument
     "S107",  # same, as a default
     "S108",  # "insecure temp file" — pytest tmp_path fixtures
-    "S306",  # mktemp — in test helpers only
     "S307",  # eval — one documented site evaluating our own emitted expression
     "S311",  # non-crypto random — generating test data
     "S603",  # subprocess — running the real ffmpeg is the point
     "S607",  # partial executable path — ffmpeg/ffprobe resolved via PATH
 ]
+
+
+
+[tool.mypy]
+# mypy was in `requirements-dev.txt` from the beginning and had **never been run**, so this
+# section is written against a real first run: 69 errors in 17 files across 100 source files.
+# That number is small enough to fix rather than suppress, and every one of them was fixed or
+# given a narrowly-scoped override below — there is no blanket `ignore_errors`.
+#
+# Non-strict to start, deliberately. The single highest-value finding came from *precision*, not
+# strictness: `JobStore.get_clip`/`update_clip` were annotated `-> Optional[object]` while their
+# docstrings promised a `ClipResult`, and that one imprecision produced 14 of the 18 findings in
+# `api/main.py` because every caller then reached for attributes mypy could not see. Turning on
+# `disallow_untyped_defs` everywhere would have buried that behind hundreds of missing-annotation
+# reports. The ratchet at the bottom is how strictness arrives — per module, once its types are
+# actually right.
+python_version = "3.11"
+
+# The third-party surface here is large (mediapipe, faster-whisper, ffmpeg-python, yt-dlp,
+# onnxruntime, cv2) and most of it ships no type information. Without this, the run is dominated
+# by `import-untyped` noise about other people's packages, which says nothing about this codebase.
+ignore_missing_imports = true
+
+# Report the things that make a run trustworthy rather than merely quiet.
+warn_unused_configs = true
+warn_redundant_casts = true
+# `warn_unused_ignores` is on so a `# type: ignore` that has stopped being necessary is reported
+# instead of silently outliving the problem it was added for — the same reasoning as the drift
+# pins in the test suite.
+warn_unused_ignores = true
+no_implicit_optional = true
+
+# Excluded from checking rather than from the repo:
+#   tests/*  — 91 modules whose job is to poke at internals, monkeypatch attributes onto settings
+#              and construct deliberately-wrong values. Type-checking them would report the fixtures
+#              as errors and pressure the suite towards testing what mypy finds easy rather than
+#              what has broken before.
+#   .venv, storage, frontend — not source.
+exclude = '(^|/)(\.venv|storage|frontend|tests)/'
+
+
+# --- Per-module overrides -------------------------------------------------------------------
+#
+# Each of these is a *narrow* waiver with a reason, not a blanket exemption. Two of the three are
+# about a third-party union type that cannot be narrowed from here; the third is a genuine
+# refactor that does not belong in a verification-infrastructure change.
+
+[[tool.mypy.overrides]]
+# `anthropic`'s content blocks are a 12-member union (TextBlock | ThinkingBlock | ToolUseBlock |
+# ...), and only `TextBlock` carries `.text`. The code already guards with `getattr(block, "text",
+# "")`, which is the correct runtime behaviour, but mypy still reports the other 11 members — 10 of
+# the 12 findings in this module were that single expression. Narrowing properly would mean
+# importing and isinstance-checking `TextBlock` from a vendor SDK whose class layout changes
+# between minor releases, which trades a type error for a brittle runtime import.
+#
+# The openai `messages` argument is the same shape of problem: it wants a union of six TypedDicts
+# and the code builds a plain `list[dict[str, Any]]`.
+module = "worker.llm_client"
+disable_error_code = ["union-attr", "arg-type"]
+
+[[tool.mypy.overrides]]
+# `worker/engines/stems.py` threads a path through several `str | None` locals that are known
+# non-None by the time they are used, but only because of an earlier `if` in a different function.
+# Fixing it means restructuring the silence/sum command builders to carry the narrowed type, which
+# is a real change to a 4,120-line engine and needs its own PR with the stem parity tests in view.
+# Recorded here rather than silently ignored.
+module = "worker.engines.stems"
+disable_error_code = ["assignment", "arg-type"]
+
+
+# --- The ratchet ---------------------------------------------------------------------------
+#
+# `disallow_untyped_defs` on the modules whose types other modules depend on. These are the
+# interfaces — the data model, the two selection paths, and the two abstract base classes that
+# plugins implement — so an unannotated function here degrades inference everywhere downstream.
+# The list grows one module at a time; that is the point of it being a list rather than a global.
+
+[[tool.mypy.overrides]]
+module = [
+    "worker.models",
+    "worker.selection",
+    "worker.candidate_ranking",
+    "publishers.base",
+    "storage_backends.base",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

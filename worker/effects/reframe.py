@@ -19,10 +19,12 @@ fall back to the static reformat.
 
 from __future__ import annotations
 
+import logging
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Any, cast
 
 from config import settings
 
@@ -42,6 +44,8 @@ from worker.ffmpeg_utils import (
     probe,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ReframeUnavailable(RuntimeError):
     """Raised when face-tracking reframe cannot be produced (use fallback)."""
@@ -59,9 +63,7 @@ class Center:
 # --------------------------------------------------------------------------- #
 # Pure geometry / smoothing helpers (no ffmpeg or cv2 needed — unit-testable)
 # --------------------------------------------------------------------------- #
-def compute_crop_size(
-    src_w: int, src_h: int, aspect_w: int, aspect_h: int
-) -> tuple[int, int]:
+def compute_crop_size(src_w: int, src_h: int, aspect_w: int, aspect_h: int) -> tuple[int, int]:
     """Return the largest ``(w, h)`` of the target aspect that fits the source.
 
     Dimensions are rounded to even numbers (encoder-friendly).
@@ -83,15 +85,270 @@ def compute_crop_size(
     return max(2, cw), max(2, ch)
 
 
-def pick_main_face(faces: list[tuple[int, int, int, int]]) -> Optional[tuple[float, float]]:
-    """Return the centre ``(cx, cy)`` of the largest face box, or ``None``.
+@dataclass(frozen=True)
+class Detection:
+    """One detected face: an absolute-pixel box with an optional confidence.
 
-    ``faces`` is a list of ``(x, y, w, h)`` rectangles.
+    ``score`` is ``Optional`` rather than defaulted to a number because Haar supplies no
+    confidence at all. ``detectMultiScale`` can be asked for reject levels, but they are not
+    comparable across scales and are not probabilities; synthesising a score from them would
+    be the false precision this codebase declines elsewhere (see :mod:`worker.language`
+    refusing to guess a language from Han script). ``None`` means "this backend does not
+    know", which is a different statement from "confidence zero", and
+    :func:`pick_main_face` branches on the difference.
     """
-    if not faces:
+
+    x: int
+    y: int
+    w: int
+    h: int
+    score: float | None = None
+
+    @property
+    def area(self) -> int:
+        return self.w * self.h
+
+    def as_tuple(self) -> tuple[int, int, int, int]:
+        """The ``(x, y, w, h)`` form every pre-existing caller expects."""
+        return (self.x, self.y, self.w, self.h)
+
+
+def relative_box_to_pixels(
+    rel_x: float,
+    rel_y: float,
+    rel_w: float,
+    rel_h: float,
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    """Convert a detector's bounding box to an absolute-pixel box, or ``None``.
+
+    Pure, and deliberately **not inlined at the call site**. Every other detector in this
+    module reports pixels; MediaPipe's legacy ``solutions`` API reported values normalised to
+    ``[0, 1]``. A box that silently stays normalised becomes a 1-pixel face at the frame
+    origin, and *nothing downstream objects*: ``pick_main_face`` returns a centre,
+    ``FaceBox`` validates, ``build_face_tracks`` builds tracks, ``build_sendcmd`` clamps to a
+    valid window, and ffmpeg encodes successfully. The only symptom is every clip cropped to
+    the frame's left edge, visible solely in the pixels. That is the same shape as the
+    ``font_substituted:Arial`` defect, and it is why this is a named function with its own
+    tests rather than four multiplications at the call site.
+
+    **Accepts either coordinate system, on purpose.** When all four values are ``<= 1.0``
+    they are treated as normalised and scaled by the frame dimensions; otherwise they are
+    treated as already absolute and this becomes a clamp-and-validate step. That makes the
+    function correct whichever form the installed library hands over, rather than correct
+    only against the version it was written for — and the tasks API's actual answer is
+    recorded in the spec's design document (measured: **absolute pixels**, see
+    ``.kiro/specs/face-detection-upgrade/design.md``). The ambiguity is real but bounded: a
+    genuinely absolute box with every value ``<= 1`` is at most one pixel, which the
+    degeneracy check below rejects either way.
+
+    **Order is fixed: convert, then clamp, then test for degeneracy.** Testing degeneracy
+    first would admit a box lying entirely off-frame (it is non-degenerate until it is
+    clipped); clamping before converting is meaningless because the bounds are in pixels.
+    A partially visible face legitimately produces a box extending past the frame edge, so
+    clamping is what can *create* degeneracy, which is why the test has to follow it.
+    """
+    if width <= 0 or height <= 0:
         return None
-    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-    return (x + w / 2.0, y + h / 2.0)
+    try:
+        values = (float(rel_x), float(rel_y), float(rel_w), float(rel_h))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in values):
+        # NaN survives float() and then poisons every comparison and every clamp below,
+        # reaching an ffmpeg crop argument as a literal "nan".
+        return None
+
+    normalised = all(abs(v) <= 1.0 for v in values)
+    if normalised:
+        x0 = values[0] * width
+        y0 = values[1] * height
+        x1 = x0 + values[2] * width
+        y1 = y0 + values[3] * height
+    else:
+        x0, y0 = values[0], values[1]
+        x1, y1 = x0 + values[2], y0 + values[3]
+
+    # Clamp in float space, then measure what survived, then coerce to int. Measuring before
+    # the int coercion is what makes the degeneracy test meaningful: rounding a 0.1-pixel box
+    # outward would manufacture a 1-pixel "detection" out of nothing, and a box narrower than
+    # a single pixel is not a face however it arrived.
+    fx0 = max(0.0, min(float(width), min(x0, x1)))
+    fy0 = max(0.0, min(float(height), min(y0, y1)))
+    fx1 = max(0.0, min(float(width), max(x0, x1)))
+    fy1 = max(0.0, min(float(height), max(y0, y1)))
+    if (fx1 - fx0) < 1.0 or (fy1 - fy0) < 1.0:
+        return None
+
+    # No second degeneracy check after the int coercion: it would be unreachable. The float
+    # test above guarantees ``fx1 - fx0 >= 1``, and both are already inside ``[0, width]``, so
+    # ``ceil(fx1) > floor(fx0)`` necessarily. A dead guard here was not harmless -- it silently
+    # rescued a mutation that moved the degeneracy test to the wrong side of the clamp, which
+    # made the documented convert/clamp/test order unverifiable.
+    px0 = int(math.floor(fx0))
+    py0 = int(math.floor(fy0))
+    px1 = min(width, int(math.ceil(fx1)))
+    py1 = min(height, int(math.ceil(fy1)))
+    return (px0, py0, px1 - px0, py1 - py0)
+
+
+def detection_coverage(samples: Sequence[tuple[float, Sequence[object]]]) -> float:
+    """The fraction of sampled frames containing at least one detection.
+
+    ``0.0`` for an empty sample list rather than a ``ZeroDivisionError``: zero frames sampled
+    and zero frames with a face are different causes with the same honest answer, and the
+    caller distinguishes them by whether it got any samples at all.
+    """
+    if not samples:
+        return 0.0
+    hit = sum(1 for _t, boxes in samples if boxes)
+    return max(0.0, min(1.0, hit / len(samples)))
+
+
+# Marker builders. Kept as functions rather than f-strings at the call sites so the spelling
+# has exactly one definition -- these strings are the only channel a caller sees, and two
+# call sites formatting "the same" marker slightly differently is the duplicated-fact defect
+# mutation testing has caught twice in this repository.
+def face_detector_marker(resolved: str) -> str:
+    """``face_detector:{resolved}`` -- names the backend that actually ran."""
+    return f"face_detector:{resolved}"
+
+
+def face_detector_substituted_marker(requested: str, resolved: str) -> str:
+    """``face_detector_substituted:{requested}:{resolved}`` -- names **both** sides.
+
+    Following ``caption_font_substituted:{script}:{family}``: a marker naming only the
+    outcome cannot tell you what was lost, which is the whole reason the operator is reading
+    it.
+    """
+    return f"face_detector_substituted:{requested}:{resolved}"
+
+
+def low_confidence_marker(coverage: float) -> str:
+    """``reframe_low_confidence:{coverage:.2f}`` -- fixed precision, never ``str(float)``.
+
+    A marker whose text varied with float repr would make golden comparison
+    platform-dependent, and the golden renders are how the byte-parity requirement is
+    verified.
+    """
+    return f"reframe_low_confidence:{coverage:.2f}"
+
+
+def sample_rate_marker(effective_fps: float) -> str:
+    """``reframe_sample_rate:{fps:.1f}`` -- the rate that actually ran, one decimal."""
+    return f"reframe_sample_rate:{effective_fps:.1f}"
+
+
+#: Prefix :func:`resolve_detector` uses internally to encode "a substitution happened", carrying
+#: both sides so the marker can name them. Internal because the wire format callers see is the
+#: marker, and that translation happens in exactly one place -- :func:`detector_marker_for`.
+_SUBSTITUTED_PREFIX = "substituted:"
+
+
+def detector_marker_for(resolved_label: str) -> str:
+    """Turn a :func:`resolve_detector` label into the marker recorded on the clip.
+
+    One function so the two marker spellings have one decision point between them. A caller
+    doing this inline would have to remember that a substitution is spelled differently from a
+    plain resolution, and the failure mode of forgetting is a marker that says Haar ran and
+    nothing that says MediaPipe was asked for.
+    """
+    if resolved_label.startswith(_SUBSTITUTED_PREFIX):
+        requested, _, resolved = resolved_label[len(_SUBSTITUTED_PREFIX) :].partition(":")
+        return face_detector_substituted_marker(requested, resolved)
+    return face_detector_marker(resolved_label)
+
+
+def _as_detection(item: object) -> Detection | None:
+    """Coerce a ``Detection`` or a bare ``(x, y, w, h)`` tuple into a ``Detection``.
+
+    Both shapes are live: the Haar path and every existing test pass 4-tuples, the MediaPipe
+    path passes ``Detection``. Returning ``None`` for anything unusable keeps
+    :func:`pick_main_face` non-raising for callers that hand it partial data.
+    """
+    if isinstance(item, Detection):
+        return item
+    # Anything carrying x/y/w/h attributes -- chiefly :class:`FaceBox`, which the
+    # speaker-aware path deals in. FaceBox is *not* a 4-tuple: it carries a leading ``t``, so
+    # tuple unpacking below silently rejects it. Without this branch every FaceBox is dropped
+    # and the speaker path's coverage is always 0.0 -- reported as "this footage has no faces"
+    # for footage the same run just tracked successfully.
+    if all(hasattr(item, attr) for attr in ("x", "y", "w", "h")):
+        try:
+            return Detection(
+                int(item.x),  # type: ignore[attr-defined]
+                int(item.y),  # type: ignore[attr-defined]
+                int(item.w),  # type: ignore[attr-defined]
+                int(item.h),  # type: ignore[attr-defined]
+                score=getattr(item, "score", None),
+            )
+        except (TypeError, ValueError):
+            return None
+    # `cast` rather than a bare `x, y, w, h = item`: unpacking an `object` requires a
+    # `type: ignore[misc]`, and that ignore then leaves x/y/w/h with no inferred type at all, so
+    # the `Detection(...)` call below reports `has-type` four times over. The cast is a no-op at
+    # runtime, which is the point -- every iterable the tuple path accepted before still unpacks
+    # here, including the numpy rows an injected detector may hand back, and the `except` below
+    # remains the real shape check.
+    try:
+        x, y, w, h = cast("tuple[Any, Any, Any, Any]", item)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return Detection(int(x), int(y), int(w), int(h))
+    except (TypeError, ValueError):
+        return None
+
+
+def pick_main_face(faces: Sequence[object]) -> tuple[float, float] | None:
+    """Return the centre ``(cx, cy)`` of the main face box, or ``None``.
+
+    ``faces`` is a list of ``(x, y, w, h)`` rectangles **or** :class:`Detection` records; the
+    tuple form is preserved because 48 existing tests and the Haar path pass it.
+
+    Selection depends on whether confidences are present, and the two branches are kept
+    genuinely separate rather than unified behind a synthesised score:
+
+    * **No scores anywhere** -- largest area, which is the v0.11.0 behaviour *verbatim*,
+      including that ``max`` keeps the first of equal-area boxes. This is what makes the
+      byte-identical-default requirement achievable rather than merely likely.
+    * **Any score present** -- ranked on ``score * sqrt(area)``, so a large low-confidence
+      box loses to a smaller confident face. That is the point of the requirement: the crop
+      should follow a face rather than a bookshelf, and a bookshelf is usually bigger.
+
+      ``sqrt(area)`` -- the box's linear extent -- rather than ``area``, and the difference
+      decides real cases. Weighting by area makes confidence almost irrelevant: a 400x400
+      false positive at 0.10 has 62x the area of an 80x80 face at 0.95 and wins on
+      ``score * area`` by more than two to one, which is exactly the outcome this requirement
+      exists to prevent. Linear extent is also the better measure of what "dominant face"
+      means for framing: a face twice as wide occupies twice the width of the crop, not four
+      times. Since ``sqrt`` is monotonic in area, this changes no ordering when the scores
+      are equal.
+
+    A lone detection always wins regardless of its score -- with nothing to compare against,
+    a confidence is not evidence for rejecting the only thing found, and dropping it would
+    turn a low-confidence frame into a zero-detection frame, which is a different report.
+    """
+    items = [d for d in (_as_detection(f) for f in faces) if d is not None]
+    if not items:
+        return None
+    # No special case for a single detection: ``max`` over one item returns it under either
+    # key, so an explicit branch would be a second statement of the same behaviour -- and one
+    # that no test could distinguish from its absence. The property is still asserted (a lone
+    # detection wins whatever its score); it is simply a consequence of the code rather than a
+    # separate clause that could drift away from it.
+    if any(d.score is not None for d in items):
+        # A missing score among scored peers ranks on area alone (neutral multiplier) rather
+        # than as zero, which would silently discard it.
+        best = max(
+            items,
+            key=lambda d: (1.0 if d.score is None else max(0.0, d.score)) * math.sqrt(d.area),
+        )
+    else:
+        best = max(items, key=lambda d: d.area)
+    return (best.x + best.w / 2.0, best.y + best.h / 2.0)
 
 
 def ema_smooth(
@@ -157,9 +414,7 @@ def smooth_centers(
     return [Center(s.t, x, y) for s, x, y in zip(samples, xs, ys)]
 
 
-def resample_centers(
-    samples: list[Center], fps: float, duration: float
-) -> list[Center]:
+def resample_centers(samples: list[Center], fps: float, duration: float) -> list[Center]:
     """Linearly resample ``samples`` onto a uniform ``fps`` grid over ``duration``.
 
     Produces the dense, evenly-spaced centres used to emit smooth crop
@@ -260,7 +515,7 @@ class Face_Track:
     track_id: str
     boxes: list[FaceBox] = field(default_factory=list)
 
-    def center_at(self, t: float) -> Optional[tuple[float, float]]:
+    def center_at(self, t: float) -> tuple[float, float] | None:
         """Return the centre of the box nearest in time to ``t``.
 
         Returns ``None`` when the track has no boxes. Pure.
@@ -345,7 +600,7 @@ class Association:
     ``shown_order`` ranks associated ``track_id``s by total speaking duration.
     """
 
-    by_turn: dict[int, Optional[str]] = field(default_factory=dict)
+    by_turn: dict[int, str | None] = field(default_factory=dict)
     unassociated: list[int] = field(default_factory=list)
     shown_order: list[str] = field(default_factory=list)
 
@@ -367,7 +622,7 @@ def associate_faces(
         per-label track is decided from the aggregate presence across that
         label's turns, then applied to each of its turns (6.5).
     """
-    by_turn: dict[int, Optional[str]] = {}
+    by_turn: dict[int, str | None] = {}
     unassociated: list[int] = []
 
     if not turns:
@@ -418,10 +673,13 @@ def associate_faces(
 
     # Apply the per-label track to each turn; a turn whose assigned track has no
     # presence over its window (or whose label got no track) is unassociated.
+    # `turn_track` rather than reusing `tid` from the loop above: that one is a definite `str`
+    # taken from the candidate tuples, whereas these two are lookups that can miss. Sharing the
+    # name made the optional case invisible to a reader and to the type checker alike.
     for i, t in enumerate(turns):
-        tid = label_track.get(t.speaker_label)
-        if tid is not None and track_by_id[tid].presence(t.start, t.end) > 0.0:
-            by_turn[i] = tid
+        turn_track = label_track.get(t.speaker_label)
+        if turn_track is not None and track_by_id[turn_track].presence(t.start, t.end) > 0.0:
+            by_turn[i] = turn_track
         else:
             by_turn[i] = None
             unassociated.append(i)
@@ -429,9 +687,11 @@ def associate_faces(
     # Rank shown tracks by total speaking duration of their associated turns.
     duration_by_track: dict[str, float] = {}
     for i, t in enumerate(turns):
-        tid = by_turn[i]
-        if tid is not None:
-            duration_by_track[tid] = duration_by_track.get(tid, 0.0) + max(0.0, t.end - t.start)
+        turn_track = by_turn[i]
+        if turn_track is not None:
+            duration_by_track[turn_track] = duration_by_track.get(turn_track, 0.0) + max(
+                0.0, t.end - t.start
+            )
     shown_order = sorted(
         duration_by_track,
         key=lambda tid: (-duration_by_track[tid], track_order.index(tid)),
@@ -481,7 +741,7 @@ def build_face_tracks(
         assigned: set[int] = set()
         for box in frame_boxes:
             # Best IoU match among unclaimed tracks in this frame.
-            best_tr: Optional[dict] = None
+            best_tr: dict | None = None
             best_iou = 0.0
             for tr in open_tracks:
                 if id(tr) in assigned:
@@ -497,7 +757,7 @@ def build_face_tracks(
 
             # Conservative centroid fallback (within half a face width).
             best_tr = None
-            best_d: Optional[float] = None
+            best_d: float | None = None
             for tr in open_tracks:
                 if id(tr) in assigned:
                     continue
@@ -520,7 +780,7 @@ def build_face_tracks(
 # --------------------------------------------------------------------------- #
 # Frame sampling + face detection (lazy cv2) + ffmpeg application
 # --------------------------------------------------------------------------- #
-def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, int, int, int]]]]:
+def _default_haar_detector(cv2) -> Callable[[object], list[tuple[int, int, int, int]]] | None:
     """Build the default OpenCV Haar-cascade detector callable.
 
     Returns a function ``frame -> list[(x, y, w, h)]`` or ``None`` when the
@@ -535,42 +795,298 @@ def _default_haar_detector(cv2) -> Optional[Callable[[object], list[tuple[int, i
 
     def _detect(frame) -> list[tuple[int, int, int, int]]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-        )
-        return [tuple(int(v) for v in f) for f in faces]
+        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+        # Spelled out as a fixed 4-tuple rather than `tuple(int(v) for v in f)`, which produces
+        # `tuple[int, ...]` — a type that does not match the declared return and would let a
+        # detector returning 3- or 5-element rects through unnoticed. Haar rects are always
+        # (x, y, w, h), so indexing is also the shape check.
+        return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
 
     return _detect
 
 
-def _sample_face_boxes(
+#: The Face_Detector_Backend values this build understands.
+FACE_DETECTOR_BACKENDS: tuple[str, ...] = ("haar", "mediapipe")
+
+#: ``haar`` is the default because every new setting must default to previously shipped
+#: behaviour. That is not caution for its own sake: the golden and parity renders only detect
+#: an *accidental* change while they are not re-frozen each release, and switching the default
+#: detector would change the crop path -- and therefore the pixels -- in every one of them.
+DEFAULT_FACE_DETECTOR_BACKEND = "haar"
+
+
+def _mediapipe_detector(
+    min_score: float, model_path: Path
+) -> tuple[Callable[[object], list[Detection]], Callable[[], None]] | None:
+    """Build the BlazeFace detector, returning ``(detect, close)`` or ``None``.
+
+    ``mediapipe`` is imported **here** rather than at module scope, matching every other heavy
+    dependency in this package: this module must stay importable on a host with no vision
+    stack, because the capability probe and the options round-trip tests import it.
+
+    Uses ``mediapipe.tasks.python.vision.FaceDetector``. The legacy
+    ``mediapipe.solutions.face_detection`` namespace was **removed** in 0.10.x and must not be
+    reintroduced -- on the installed 0.10.35, ``dir(mediapipe)`` is exactly
+    ``['Image', 'ImageFormat', 'tasks']``. There is consequently no ``model_selection``
+    argument: near versus far range is decided by *which vendored model file is loaded*, not by
+    a constructor flag. ``tests/test_face_detection_real_binary.py`` pins the API surface so a
+    resolver upgrade that moves it fails loudly here rather than silently at render time.
+
+    Returns a ``close`` alongside the detector because MediaPipe holds a native graph that must
+    be released; the sampler calls it in a ``finally``.
+
+    Never raises and never fetches: a missing model or a construction failure returns ``None``
+    and the caller degrades to Haar with a substitution marker.
+    """
+    try:
+        # Lazy on purpose, see the docstring: this module must import on a host with no
+        # vision stack.
+        import mediapipe as mp
+        import numpy as np
+        from mediapipe.tasks.python import BaseOptions, vision
+    except Exception:
+        return None
+
+    if not model_path or not Path(model_path).is_file():
+        return None
+
+    try:
+        options = vision.FaceDetectorOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=float(min_score),
+        )
+        detector = vision.FaceDetector.create_from_options(options)
+    except Exception:
+        return None
+
+    def _detect(frame) -> list[Detection]:
+        """Detect faces in one BGR frame, returning absolute-pixel boxes.
+
+        The frame arrives from OpenCV as **BGR**; MediaPipe is told the buffer is ``SRGB``, so
+        the channels are reversed first. Passing BGR through unswapped is not a crash: the
+        model sees a blue-skinned face, detects fewer of them, and the only symptom is a
+        coverage figure lower than it should be -- which would then read as "this footage is
+        hard" rather than "the channels are backwards". ``ascontiguousarray`` because the
+        reversed view is a stride trick and MediaPipe needs a real contiguous buffer.
+        """
+        rgb = np.ascontiguousarray(frame[:, :, ::-1])
+        height, width = rgb.shape[0], rgb.shape[1]
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = detector.detect(image)
+
+        out: list[Detection] = []
+        for detection in getattr(result, "detections", None) or []:
+            box = getattr(detection, "bounding_box", None)
+            if box is None:
+                continue
+            # Measured on 0.10.35: these are ABSOLUTE PIXELS as int (see the spec's design
+            # doc). Routed through the conversion anyway, which then clamps and validates
+            # rather than scaling -- and would still be correct if the library moved back to a
+            # normalised box, which it has already changed once.
+            converted = relative_box_to_pixels(
+                box.origin_x,
+                box.origin_y,
+                box.width,
+                box.height,
+                width=width,
+                height=height,
+            )
+            if converted is None:
+                continue
+            categories = getattr(detection, "categories", None) or []
+            score = None
+            if categories:
+                raw_score = getattr(categories[0], "score", None)
+                if raw_score is not None:
+                    score = float(raw_score)
+            # No absolute minimum-size floor (Requirement 2.7): a distant face is small and is
+            # exactly what this backend was adopted to find.
+            if score is not None and score < float(min_score):
+                continue
+            out.append(Detection(*converted, score=score))
+        return out
+
+    def _close() -> None:
+        try:
+            detector.close()
+        except Exception:
+            # Releasing a native graph must not be able to fail a render that already
+            # succeeded; the process exiting reclaims it regardless.
+            pass
+
+    return _detect, _close
+
+
+def resolve_detector(
+    backend: str,
+    *,
+    injected: Callable | None = None,
+    cv2_module=None,
+    min_score: float | None = None,
+    model_dir: Path | None = None,
+) -> tuple[Callable | None, str]:
+    """Return ``(detector, resolved_label)`` -- the label names what **ran**.
+
+    The return type is the design decision worth defending: handing back a bare callable would
+    force the caller to infer which backend produced the detections, and inference is how
+    ``font_substituted:Arial`` got frozen into a golden file as correct. The label is returned
+    *by the branch that actually succeeded*.
+
+    Never raises. A detector that cannot be built returns ``(None, label)`` and the caller
+    degrades along the existing geometry ladder to a static reformat.
+
+    The ladder, in order:
+
+    1. an injected detector resolves to ``"injected"`` -- not to a backend name, because a test
+       double is not evidence that a backend works;
+    2. ``mediapipe`` requested and constructible resolves to ``"mediapipe"``;
+    3. ``mediapipe`` requested but unimportable, unconstructible, or with its vendored model
+       absent or the wrong size resolves to ``"substituted:mediapipe:haar"`` -- all four causes
+       share one label because the operator's remedy is identical in every case, while the log
+       line names the specific cause;
+    4. anything else, including an unrecognised value, resolves to ``"haar"``.
+    """
+    if injected is not None:
+        return injected, "injected"
+
+    requested = (backend or "").strip().lower()
+    if requested not in FACE_DETECTOR_BACKENDS:
+        requested = DEFAULT_FACE_DETECTOR_BACKEND
+
+    if cv2_module is None:
+        try:
+            import cv2 as cv2_module
+        except Exception:
+            cv2_module = None
+
+    def _haar() -> Callable | None:
+        if cv2_module is None:
+            return None
+        try:
+            return _default_haar_detector(cv2_module)
+        except Exception:
+            return None
+
+    if requested == "mediapipe":
+        from worker import face_models  # avoids a config import at module scope
+
+        model_path = face_models.resolve_model("mediapipe", model_dir)
+        built = None
+        if model_path is None:
+            logger.warning(
+                "face detector: mediapipe requested but its vendored model is absent or the "
+                "wrong size under %s; falling back to haar. Run "
+                "`python scripts/fetch_models.py --check`.",
+                model_dir if model_dir is not None else face_models.models_dir(),
+            )
+        else:
+            score = settings.face_detector_min_score if min_score is None else min_score
+            built = _mediapipe_detector(float(score), model_path)
+            if built is None:
+                logger.warning(
+                    "face detector: mediapipe requested but could not be imported or "
+                    "constructed; falling back to haar",
+                )
+        if built is not None:
+            detect, close = built
+            # Carried as an attribute rather than a third return value so the documented
+            # two-tuple signature holds for every backend; the sampler releases it in a
+            # `finally`. Haar has nothing to release, so the attribute is simply absent.
+            detect.close = close  # type: ignore[attr-defined]
+            return detect, "mediapipe"
+        haar = _haar()
+        return haar, "substituted:mediapipe:haar"
+
+    return _haar(), "haar"
+
+
+@dataclass(frozen=True)
+class Sample_Report:
+    """The samples, plus what was learned while producing them.
+
+    ``coverage`` is computed **here**, from the very sample set the crop path is derived from.
+    A second sampling pass could disagree with the first -- different frames, a different
+    detector state -- and the disagreement would be invisible: the reported confidence would
+    describe one set of frames while the framing was built from another.
+    """
+
+    samples: list[tuple[float, list[Detection]]]
+    resolved_backend: str
+    effective_fps: float
+    requested_fps: float
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of sampled frames containing at least one detection."""
+        return detection_coverage(self.samples)
+
+    @property
+    def capped(self) -> bool:
+        """Whether the sample cap actually reduced the rate below what was asked for.
+
+        Compared with a small tolerance rather than ``<``: the effective rate is a division of
+        two measured quantities, so an uncapped clip lands a hair either side of the requested
+        value and a bare comparison would report the cap as binding on roughly half of them.
+        """
+        return self.effective_fps < (self.requested_fps - 0.05)
+
+    def as_tuples(self) -> list[tuple[float, list[tuple[int, int, int, int]]]]:
+        """The samples in the ``(t, [(x, y, w, h), ...])`` form pre-existing callers expect."""
+        return [(t, [d.as_tuple() for d in boxes]) for t, boxes in self.samples]
+
+
+def sample_face_report(
     video: str | Path,
     *,
     sample_fps: float,
-    max_samples: Optional[int] = None,
-    detector: Optional[Callable] = None,
-) -> list[tuple[float, list[tuple[int, int, int, int]]]]:
-    """Sample frames across ``video`` and run a face detector on each.
+    max_samples: int | None = None,
+    detector: Callable | None = None,
+    backend: str | None = None,
+    min_score: float | None = None,
+    model_dir: Path | None = None,
+) -> Sample_Report:
+    """Sample frames across ``video``, detect faces, and report what happened.
 
-    Returns a list of ``(t, boxes)`` for every sampled frame (including frames
-    with no detections), where ``boxes`` is a list of ``(x, y, w, h)`` tuples.
-    The heavy vision dependency (``cv2``) is imported lazily; on a missing
-    ``cv2``, an unopenable video, or an unloadable default cascade this returns
-    ``[]`` and NEVER raises. When ``max_samples`` is given the sampling step is
-    widened so at most that many frames are returned. CPU-only.
+    The additive sibling of :func:`_sample_face_boxes`, which is now a thin wrapper over this.
+    Split this way round -- report as the implementation, tuple list as the wrapper -- because
+    the wrapper's signature and return type are load-bearing: ``FRAME_SAMPLER`` in
+    ``worker/pipeline.py`` is patched *by name*, and the existing reframe tests call it
+    directly. An additive sibling changes neither.
 
-    ``detector`` is an injected callable ``frame -> list[(x, y, w, h)]``; when
-    ``None`` the default lazy-cv2 Haar cascade is used.
+    Never raises. A missing ``cv2``, an unopenable video, or no constructible detector yields
+    an empty sample list, which the caller already treats as "degrade to the static reformat".
     """
+    requested = float(sample_fps)
+    empty = Sample_Report(
+        samples=[], resolved_backend="", effective_fps=0.0, requested_fps=requested
+    )
+
     try:
-        import cv2  # type: ignore
+        import cv2
     except Exception:
-        return []
+        return replace(empty, resolved_backend="none")
+
+    resolved_detector, label = resolve_detector(
+        backend if backend is not None else DEFAULT_FACE_DETECTOR_BACKEND,
+        injected=detector,
+        cv2_module=cv2,
+        min_score=min_score,
+        model_dir=model_dir,
+    )
+    if resolved_detector is None:
+        return replace(empty, resolved_backend=label)
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
-        return []
+        # Still report which backend was resolved: "no samples because the video would not
+        # open" and "no samples because no detector could be built" are different faults and
+        # the marker is the only place a caller can tell them apart.
+        _release_detector(resolved_detector)
+        return replace(empty, resolved_backend=label)
 
+    out: list[tuple[float, list[Detection]]] = []
+    frames_read = 0
+    fps = 30.0
     try:
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         if not fps or fps <= 0:
@@ -584,35 +1100,162 @@ def _sample_face_boxes(
             if approx > max_samples:
                 step = max(step, int(math.ceil(frame_count / max_samples)))
 
-        if detector is None:
-            detector = _default_haar_detector(cv2)
-            if detector is None:
-                return []
-
-        out: list[tuple[float, list[tuple[int, int, int, int]]]] = []
         idx = 0
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
+            frames_read = idx + 1
             if idx % step == 0:
-                boxes = list(detector(frame))
-                out.append((idx / fps, boxes))
+                out.append((idx / fps, _detect_frame(resolved_detector, idx)(frame)))
                 if max_samples and max_samples > 0 and len(out) >= max_samples:
                     break
             idx += 1
     finally:
         cap.release()
+        # Requirement 2.9: MediaPipe holds a native graph. Released here rather than by the
+        # caller, and in a `finally` so it happens even when sampling raises.
+        _release_detector(resolved_detector)
 
-    return out
+    # Effective rate from the sample count and the span actually scanned, not from the
+    # requested rate -- the point of the marker is to say what really happened.
+    scanned_seconds = frames_read / fps if fps > 0 else 0.0
+    effective = (len(out) / scanned_seconds) if scanned_seconds > 0 else 0.0
+    return Sample_Report(
+        samples=out,
+        resolved_backend=label,
+        effective_fps=effective,
+        requested_fps=requested,
+    )
+
+
+def _release_detector(detector: Callable | None) -> None:
+    """Call a backend's ``close`` if it has one. Haar has nothing to release."""
+    close = getattr(detector, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        logger.debug("face detector close() failed", exc_info=True)
+
+
+def _detect_frame(detector: Callable, idx: int) -> Callable[[object], list[Detection]]:
+    """Wrap one detector call so a frame that raises becomes a zero-detection frame.
+
+    Requirement 4.3, and deliberately **not** a rung on the degradation ladder: one bad frame
+    is not a broken backend, and aborting would discard every frame that worked. The zero also
+    lowers reported coverage, which is the honest signal -- a backend that throws on a third of
+    the frames really did find faces in fewer of them.
+    """
+
+    def _run(frame) -> list[Detection]:
+        try:
+            raw = detector(frame)
+        except Exception:
+            logger.debug("face detector raised on sampled frame %d", idx, exc_info=True)
+            return []
+        out: list[Detection] = []
+        for box in raw or []:
+            coerced = _as_detection(box)
+            if coerced is not None:
+                out.append(coerced)
+        return out
+
+    return _run
+
+
+def _sample_face_boxes(
+    video: str | Path,
+    *,
+    sample_fps: float,
+    max_samples: int | None = None,
+    detector: Callable | None = None,
+) -> list[tuple[float, list[tuple[int, int, int, int]]]]:
+    """Sample frames across ``video`` and run a face detector on each.
+
+    Returns a list of ``(t, boxes)`` for every sampled frame (including frames
+    with no detections), where ``boxes`` is a list of ``(x, y, w, h)`` tuples.
+    The heavy vision dependency (``cv2``) is imported lazily; on a missing
+    ``cv2``, an unopenable video, or an unloadable default cascade this returns
+    ``[]`` and NEVER raises. When ``max_samples`` is given the sampling step is
+    widened so at most that many frames are returned. CPU-only.
+
+    ``detector`` is an injected callable ``frame -> list[(x, y, w, h)]``; when
+    ``None`` the default lazy-cv2 Haar cascade is used.
+
+    A thin wrapper over :func:`sample_face_report` since the detection-confidence work. The
+    signature and return type are unchanged on purpose: ``FRAME_SAMPLER`` in
+    ``worker/pipeline.py`` is patched by name and the existing reframe tests call this
+    directly, so the report is an additive sibling rather than a signature change.
+    """
+    return sample_face_report(
+        video, sample_fps=sample_fps, max_samples=max_samples, detector=detector
+    ).as_tuples()
+
+
+def detect_faces_report(
+    video: str | Path,
+    *,
+    sample_fps: float | None = None,
+    max_samples: int | None = None,
+    detector: Callable | None = None,
+    backend: str | None = None,
+) -> tuple[list[list[FaceBox]], Sample_Report]:
+    """All face boxes per sampled frame, **and** what was learned finding them.
+
+    The additive sibling of :func:`detect_faces`, in the same direction as the other two pairs
+    in this module: the reporting form is the implementation and the original is a wrapper, so
+    the original's signature cannot drift out from under its callers.
+    """
+    if sample_fps is None:
+        sample_fps = settings.reframe_sample_fps
+    if max_samples is None:
+        max_samples = settings.reframe_sample_cap
+
+    report = sample_face_report(
+        video,
+        sample_fps=sample_fps,
+        max_samples=max_samples,
+        detector=detector,
+        backend=backend,
+    )
+    result: list[list[FaceBox]] = []
+    for t, boxes in report.samples:
+        result.append([FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h) for d in boxes])
+    return result, report
+
+
+def synthetic_report(
+    per_frame: Sequence[Sequence[object]], label: str, requested_fps: float
+) -> Sample_Report:
+    """A :class:`Sample_Report` describing samples that came from an injected sampler.
+
+    An injected sampler bypasses detection entirely, so there is no backend to name and no
+    measured rate. Rather than reporting nothing -- which would leave the speaker-aware path
+    silent where the single-speaker path speaks, and the requirement is that both report
+    identically -- this records ``injected`` and computes coverage from the boxes the sampler
+    actually produced. ``effective_fps`` is set to the requested rate so the cap never reads as
+    having bound: nothing was sampled, so nothing was capped.
+    """
+    samples = [
+        (float(index), [d for d in (_as_detection(b) for b in boxes) if d is not None])
+        for index, boxes in enumerate(per_frame)
+    ]
+    return Sample_Report(
+        samples=samples,
+        resolved_backend=label,
+        effective_fps=float(requested_fps),
+        requested_fps=float(requested_fps),
+    )
 
 
 def detect_faces(
     video: str | Path,
     *,
-    sample_fps: Optional[float] = None,
-    max_samples: Optional[int] = None,
-    detector: Optional[Callable] = None,
+    sample_fps: float | None = None,
+    max_samples: int | None = None,
+    detector: Callable | None = None,
 ) -> list[list[FaceBox]]:
     """Sample <= ``max_samples`` frames and return ALL face boxes per frame.
 
@@ -625,26 +1268,71 @@ def detect_faces(
     (Reqs 5.3, 5.4). CPU-only. ``detector`` is an injected callable
     ``frame -> list[(x, y, w, h)]`` (defaults to the lazy Haar cascade).
     """
-    if sample_fps is None:
-        sample_fps = settings.reframe_sample_fps
-    if max_samples is None:
-        max_samples = settings.reframe_sample_cap
-
-    per_frame = _sample_face_boxes(
+    return detect_faces_report(
         video, sample_fps=sample_fps, max_samples=max_samples, detector=detector
-    )
+    )[0]
 
-    result: list[list[FaceBox]] = []
-    for t, boxes in per_frame:
-        frame_boxes: list[FaceBox] = []
-        for b in boxes:
-            try:
-                x, y, w, h = b
-            except (TypeError, ValueError):
-                continue
-            frame_boxes.append(FaceBox(round(float(t), 3), int(x), int(y), int(w), int(h)))
-        result.append(frame_boxes)
-    return result
+
+def detector_notes(report: Sample_Report) -> list[str]:
+    """The Effects_Applied markers a :class:`Sample_Report` earns, in a fixed order.
+
+    One function so both geometry paths report identically -- the requirement is that
+    single-speaker reframe and speaker-aware reframe say the same things, and the way to
+    guarantee that is for there to be one implementation rather than two that agree today.
+
+    Three rules are encoded here rather than at the call sites:
+
+    * the resolved-backend marker is always present, because a caller cannot otherwise tell a
+      requested backend from the one that ran;
+    * the sampling-rate marker appears **only when the cap actually bound**, since its purpose
+      is to explain a *reduced* rate and emitting it always would make it noise;
+    * the low-confidence marker appears only when coverage is below the floor **and at least
+      one detection was found**. Zero coverage is already reported by the existing no-faces
+      degradation, and emitting ``reframe_low_confidence:0.00`` beside it would be a second
+      name for one condition -- the duplicated-fact pattern mutation testing has caught twice
+      in this repository.
+    """
+    notes = [detector_marker_for(report.resolved_backend)]
+    if report.capped:
+        notes.append(sample_rate_marker(report.effective_fps))
+    coverage = report.coverage
+    if coverage > 0.0 and coverage < float(settings.reframe_coverage_floor):
+        notes.append(low_confidence_marker(coverage))
+    return notes
+
+
+def track_faces_report(
+    video: str | Path,
+    sample_fps: float = 5.0,
+    *,
+    backend: str | None = None,
+    detector: Callable | None = None,
+    max_samples: int | None = None,
+) -> tuple[list[Center], Sample_Report]:
+    """The main-face centre path **and** what was learned finding it.
+
+    The additive sibling of :func:`track_faces`, in the same direction as
+    :func:`sample_face_report` is of :func:`_sample_face_boxes`: the reporting version is the
+    implementation and the original is a thin wrapper, so the original's signature -- which
+    tests and the pipeline both depend on -- cannot drift.
+    """
+    report = sample_face_report(
+        video,
+        sample_fps=sample_fps,
+        max_samples=max_samples,
+        detector=detector,
+        backend=backend,
+    )
+    samples: list[Center] = []
+    last_center: tuple[float, float] | None = None
+    for t, boxes in report.samples:
+        center = pick_main_face(boxes)
+        if center is None:
+            center = last_center
+        if center is not None:
+            samples.append(Center(round(t, 3), center[0], center[1]))
+            last_center = center
+    return samples, report
 
 
 def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
@@ -656,21 +1344,11 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
     unchanged v0.7.0 single-speaker behaviour: it keeps only the dominant face
     per sampled frame and holds the last known centre through frames with no
     detection.
-    """
-    per_frame = _sample_face_boxes(video, sample_fps=sample_fps)
-    if not per_frame:
-        return []
 
-    samples: list[Center] = []
-    last_center: Optional[tuple[float, float]] = None
-    for t, boxes in per_frame:
-        center = pick_main_face([tuple(f) for f in boxes])
-        if center is None:
-            center = last_center
-        if center is not None:
-            samples.append(Center(round(t, 3), center[0], center[1]))
-            last_center = center
-    return samples
+    A thin wrapper over :func:`track_faces_report` since the detection-confidence work; the
+    signature and return type are unchanged because existing callers and tests depend on them.
+    """
+    return track_faces_report(video, sample_fps=sample_fps)[0]
 
 
 #: Shared with every other filter-string builder; see :func:`ffmpeg_utils.escape_filter_path`.
@@ -702,14 +1380,27 @@ def apply_reframe(
     dest: str | Path,
     aspect: str = "9:16",
     sample_fps: float = 5.0,
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     smoothing: float = 0.35,
+    *,
+    backend: str | None = None,
+    detector: Callable | None = None,
+    notes: list[str] | None = None,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
     Raises :class:`ReframeUnavailable` when no usable face path is found or the
     aspect is not narrower than the source (nothing to track) so the caller can
     fall back to the static reformat.
+
+    ``backend`` selects the Face_Detector_Backend (``None`` means the configured default, which
+    is ``haar``); ``detector`` injects one outright, for tests.
+
+    ``notes`` is an **out-parameter**: when a list is passed, the detector and confidence
+    markers are appended to it. An out-parameter rather than a changed return type because the
+    return is ``Path`` and every caller and test relies on that; and appended only **after the
+    render has succeeded**, so a clip that falls back to the static reformat does not carry a
+    marker claiming a detector framed it.
     """
     if aspect not in ASPECT_PRESETS:
         raise ReframeUnavailable(f"Unknown aspect '{aspect}'")
@@ -735,7 +1426,9 @@ def apply_reframe(
         # Target isn't a tighter crop than the source; nothing to follow.
         raise ReframeUnavailable("target aspect is not narrower than source")
 
-    samples = track_faces(video, sample_fps=sample_fps)
+    samples, sample_report = track_faces_report(
+        video, sample_fps=sample_fps, backend=backend, detector=detector
+    )
     if not samples:
         raise ReframeUnavailable("no faces detected")
 
@@ -763,16 +1456,19 @@ def apply_reframe(
     y0 = origin_y + int(round(_clamp(first.cy - origin_y - crop_h / 2.0, 0, src_h - crop_h)))
 
     escaped = str(cmd_file.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    vf = (
-        f"sendcmd=f='{escaped}',"
-        f"crop={crop_w}:{crop_h}:{x0}:{y0},"
-        f"scale={tw}:{th},setsar=1"
-    )
+    vf = f"sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", vf,
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        vf,
         *h264_args(),
-        "-c:a", "copy", "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     try:
@@ -781,6 +1477,12 @@ def apply_reframe(
         raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
     finally:
         cmd_file.unlink(missing_ok=True)
+    # Only now: the render succeeded, so the markers describe a clip that exists. Appending
+    # them earlier would leave a `face_detector:*` marker on a clip that went on to fail and
+    # fall back to the static reformat, which is the marker naming a backend that framed
+    # nothing.
+    if notes is not None:
+        notes.extend(detector_notes(sample_report))
     return dest
 
 
@@ -788,7 +1490,6 @@ def _aspect_ratio_parts(aspect: str) -> tuple[int, int]:
     """Parse ``"9:16"`` -> ``(9, 16)``."""
     a, _, b = aspect.partition(":")
     return int(a), int(b)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -810,9 +1511,9 @@ def _aspect_ratio_parts(aspect: str) -> tuple[int, int]:
 # Monotonic across subtle < standard < heavy in alpha (and faster movement /
 # shorter transition as intensity increases).
 REFRAME_INTENSITY: dict[str, tuple[float, float]] = {
-    "subtle":   (0.15, 0.60),   # strongest smoothing, slowest, longest xfade
+    "subtle": (0.15, 0.60),  # strongest smoothing, slowest, longest xfade
     "standard": (0.35, 0.35),
-    "heavy":    (0.60, 0.18),   # weakest smoothing, fastest, shortest xfade
+    "heavy": (0.60, 0.18),  # weakest smoothing, fastest, shortest xfade
 }
 
 
@@ -830,7 +1531,7 @@ def intensity_params(intensity: str) -> tuple[float, float]:
     return REFRAME_INTENSITY.get(intensity, REFRAME_INTENSITY["standard"])
 
 
-def _turn_index_at(turns: list[Speaker_Turn], t: float) -> Optional[int]:
+def _turn_index_at(turns: list[Speaker_Turn], t: float) -> int | None:
     """Return the index of the turn containing time ``t`` (``start <= t < end``),
     accepting ``t == end`` for the final turn so the endpoint is covered."""
     for i, tn in enumerate(turns):
@@ -853,7 +1554,7 @@ def build_follow_active_path(
     crop_w: int,
     crop_h: int,
     intensity: str = "standard",
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     duration: float,
 ) -> list[Center]:
     """PURE: build the dense follow-active crop-centre path.
@@ -896,10 +1597,10 @@ def build_follow_active_path(
 
     # Instantaneous target centre with hold-on-gap logic.
     base: list[tuple[float, float]] = []
-    last_valid: Optional[tuple[float, float]] = None
+    last_valid: tuple[float, float] | None = None
     for t in times:
         idx = _turn_index_at(turns, t) if turns else None
-        center: Optional[tuple[float, float]] = None
+        center: tuple[float, float] | None = None
         if idx is not None:
             tid = assoc.by_turn.get(idx)
             if tid is not None:
@@ -983,7 +1684,7 @@ class Region:
     centers: tuple[Center, ...] = ()
 
 
-def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, float]]:
+def _track_mean_center(track: Face_Track | None) -> tuple[float, float] | None:
     """Average centre of a track's boxes (or ``None`` when it has no boxes)."""
     if track is None or not track.boxes:
         return None
@@ -993,14 +1694,14 @@ def _track_mean_center(track: Optional[Face_Track]) -> Optional[tuple[float, flo
 
 
 def build_region_centers(
-    track: Optional[Face_Track],
+    track: Face_Track | None,
     *,
     src_w: int,
     src_h: int,
     dst_w: int,
     dst_h: int,
     duration: float,
-    command_fps: Optional[float] = None,
+    command_fps: float | None = None,
     intensity: str = "standard",
 ) -> tuple[Center, ...]:
     """PURE: the crop-centre path for one split-screen tile (V5).
@@ -1032,7 +1733,7 @@ def build_region_centers(
 
     xs: list[float] = []
     ys: list[float] = []
-    last: Optional[tuple[float, float]] = None
+    last: tuple[float, float] | None = None
     for t in times:
         center = track.center_at(t) or last or (src_w / 2.0, src_h / 2.0)
         last = center
@@ -1052,7 +1753,7 @@ def build_region_centers(
 
 
 def _region_source_center(
-    track: Optional[Face_Track], src_w: int, src_h: int, dst_w: int, dst_h: int
+    track: Face_Track | None, src_w: int, src_h: int, dst_w: int, dst_h: int
 ) -> tuple[float, float]:
     """Return the (clamped) source-crop centre for a tile of aspect
     ``dst_w:dst_h``, centred on ``track``'s face and kept fully in-frame."""
@@ -1091,15 +1792,15 @@ def _grid_regions(
     y = 0
     for row in range(rows):
         h = base_h if row < rows - 1 else target_h - base_h * (rows - 1)
-        in_row = shown[row * 2:row * 2 + 2]
+        in_row = shown[row * 2 : row * 2 + 2]
         x = 0
         for col, tid in enumerate(in_row):
-            w = target_w if len(in_row) == 1 else (
-                target_w // 2 if col == 0 else target_w - target_w // 2
+            w = (
+                target_w
+                if len(in_row) == 1
+                else (target_w // 2 if col == 0 else target_w - target_w // 2)
             )
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, w, h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, w, h)
             regions.append(Region(x, y, w, h, src_cx, src_cy, tid))
             x += w
         y += h
@@ -1115,7 +1816,7 @@ def build_split_screen_layout(
     target_h: int,
     src_w: int,
     src_h: int,
-    max_regions: Optional[int] = None,
+    max_regions: int | None = None,
     duration: float = 0.0,
     intensity: str = "standard",
 ) -> list[Region]:
@@ -1154,9 +1855,12 @@ def build_split_screen_layout(
             return region
         centers = build_region_centers(
             track_by_id.get(region.track_id),
-            src_w=src_w, src_h=src_h,
-            dst_w=region.dst_w, dst_h=region.dst_h,
-            duration=duration, intensity=intensity,
+            src_w=src_w,
+            src_h=src_h,
+            dst_w=region.dst_w,
+            dst_h=region.dst_h,
+            duration=duration,
+            intensity=intensity,
         )
         return replace(region, centers=centers) if centers else region
 
@@ -1179,9 +1883,7 @@ def build_split_screen_layout(
         y = 0
         for k, tid in enumerate(shown):
             h = base_h if k < n - 1 else target_h - base_h * (n - 1)
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, target_w, h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, target_w, h)
             regions.append(with_motion(Region(0, y, target_w, h, src_cx, src_cy, tid)))
             y += h
     else:
@@ -1190,9 +1892,7 @@ def build_split_screen_layout(
         x = 0
         for k, tid in enumerate(shown):
             w = base_w if k < n - 1 else target_w - base_w * (n - 1)
-            src_cx, src_cy = _region_source_center(
-                track_by_id.get(tid), src_w, src_h, w, target_h
-            )
+            src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, w, target_h)
             regions.append(with_motion(Region(x, 0, w, target_h, src_cx, src_cy, tid)))
             x += w
 
@@ -1205,17 +1905,17 @@ def build_split_screen_layout(
 def build_reframe_filter(
     layout: str,
     *,
-    centers: Optional[list[Center]] = None,
-    regions: Optional[list[Region]] = None,
+    centers: list[Center] | None = None,
+    regions: list[Region] | None = None,
     crop_w: int,
     crop_h: int,
     src_w: int,
     src_h: int,
     target_w: int,
     target_h: int,
-    sendcmd_path: Optional[str] = None,
+    sendcmd_path: str | None = None,
     intensity: str = "standard",
-    tile_sendcmd_paths: Optional[Sequence[str]] = None,
+    tile_sendcmd_paths: Sequence[str] | None = None,
     origin_x: int = 0,
     origin_y: int = 0,
 ) -> tuple[list[str], str, list[str]]:
@@ -1256,8 +1956,14 @@ def build_reframe_filter(
             if rg.centers and tile_sendcmd_paths and k < len(tile_sendcmd_paths):
                 crop_name = f"crop@t{k}"
                 script = build_sendcmd(
-                    list(rg.centers), rcw, rch, src_w, src_h,
-                    origin_x=origin_x, origin_y=origin_y, target=crop_name,
+                    list(rg.centers),
+                    rcw,
+                    rch,
+                    src_w,
+                    src_h,
+                    origin_x=origin_x,
+                    origin_y=origin_y,
+                    target=crop_name,
                 )
                 tile_path = Path(tile_sendcmd_paths[k])
                 tile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1272,8 +1978,7 @@ def build_reframe_filter(
                 )
 
             parts.append(
-                f"[0:v]{prefix}{crop_name}={rcw}:{rch}:{x}:{y},"
-                f"scale={rg.dst_w}:{rg.dst_h}[{label}]"
+                f"[0:v]{prefix}{crop_name}={rcw}:{rch}:{x}:{y},scale={rg.dst_w}:{rg.dst_h}[{label}]"
             )
             labels.append(f"[{label}]")
 
@@ -1296,9 +2001,7 @@ def build_reframe_filter(
             stack = "hstack" if single_row and not single_column else "vstack"
             if single_row and single_column:
                 stack = "vstack" if portrait else "hstack"
-            graph += (
-                f";{''.join(labels)}{stack}=inputs={len(labels)},setsar=1[vout]"
-            )
+            graph += f";{''.join(labels)}{stack}=inputs={len(labels)},setsar=1[vout]"
         else:
             row_labels: list[str] = []
             for r, row in enumerate(rows):
@@ -1311,9 +2014,7 @@ def build_reframe_filter(
                 else:
                     graph += f";{joined}hstack=inputs={len(row)}{row_label}"
                 row_labels.append(row_label)
-            graph += (
-                f";{''.join(row_labels)}vstack=inputs={len(row_labels)},setsar=1[vout]"
-            )
+            graph += f";{''.join(row_labels)}vstack=inputs={len(row_labels)},setsar=1[vout]"
         return ([], graph, ["speaker_reframe:split_screen"])
 
     # follow_active (default) — mirror apply_reframe's single -vf pass.
@@ -1330,11 +2031,7 @@ def build_reframe_filter(
     y0 = int(round(_clamp(first.cy - crop_h / 2.0, 0, max(0, src_h - crop_h))))
 
     escaped = _escape_filter_path(sendcmd_path) if sendcmd_path is not None else ""
-    vf = (
-        f"sendcmd=f='{escaped}',"
-        f"crop={crop_w}:{crop_h}:{x0}:{y0},"
-        f"scale={tw}:{th},setsar=1"
-    )
+    vf = f"sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
     return ([], vf, ["speaker_reframe:follow_active"])
 
 
@@ -1346,8 +2043,10 @@ def apply_speaker_reframe(
     aspect: str = "9:16",
     layout: str = "follow_active",
     intensity: str = "standard",
-    detector: Optional[Callable] = None,
-    sampler: Optional[Callable] = None,
+    detector: Callable | None = None,
+    sampler: Callable | None = None,
+    backend: str | None = None,
+    notes: list[str] | None = None,
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -1385,8 +2084,12 @@ def apply_speaker_reframe(
     # Sample + detect faces (injected sampler overrides frame->box production).
     if sampler is not None:
         per_frame = sampler(video)
+        # An injected sampler bypassed detection, so there is no backend to name and no
+        # measured rate; the report records `injected` and computes coverage from what the
+        # sampler produced, so this path reports in the same vocabulary as the other.
+        sample_report = synthetic_report(per_frame, "injected", float(settings.reframe_sample_fps))
     else:
-        per_frame = detect_faces(video, detector=detector)
+        per_frame, sample_report = detect_faces_report(video, detector=detector, backend=backend)
 
     tracks = build_face_tracks(per_frame)
     if not tracks:
@@ -1398,37 +2101,54 @@ def apply_speaker_reframe(
     if layout not in ("follow_active", "split_screen"):
         layout = "follow_active"
 
-    regions: Optional[list[Region]] = None
+    regions: list[Region] | None = None
     if layout == "split_screen":
         regions = build_split_screen_layout(
-            turns, assoc, tracks,
-            target_w=tw, target_h=th, src_w=info.width, src_h=info.height,
+            turns,
+            assoc,
+            tracks,
+            target_w=tw,
+            target_h=th,
+            src_w=info.width,
+            src_h=info.height,
             # V5: give each tile a centre path over the clip instead of one fixed crop.
-            duration=info.duration, intensity=intensity,
+            duration=info.duration,
+            intensity=intensity,
         )
         if not regions:
             # Fewer than two associated tracks -> follow_active substitution.
             layout = "follow_active"
 
     if layout == "split_screen":
-        tile_files = [
-            dest.with_suffix(f".tile{k}.cmd") for k in range(len(regions or []))
-        ]
+        tile_files = [dest.with_suffix(f".tile{k}.cmd") for k in range(len(regions or []))]
         _ia, graph, _notes = build_reframe_filter(
             "split_screen",
             regions=regions,
-            crop_w=crop_w, crop_h=crop_h,
-            src_w=info.width, src_h=info.height,
-            target_w=tw, target_h=th,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            src_w=info.width,
+            src_h=info.height,
+            target_w=tw,
+            target_h=th,
             intensity=intensity,
             tile_sendcmd_paths=[str(p) for p in tile_files],
         )
         cmd = [
-            settings.ffmpeg_binary, "-y", "-i", str(video),
-            "-filter_complex", graph,
-            "-map", "[vout]", "-map", "0:a?",
+            settings.ffmpeg_binary,
+            "-y",
+            "-i",
+            str(video),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a?",
             *h264_args(),
-            "-c:a", "copy", "-movflags", "+faststart",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
             str(dest),
         ]
         try:
@@ -1440,13 +2160,21 @@ def apply_speaker_reframe(
             # output directory with one file per speaker per clip.
             for tile in tile_files:
                 tile.unlink(missing_ok=True)
+        if notes is not None:
+            notes.extend(detector_notes(sample_report))
         return dest
 
     # follow_active
     path = build_follow_active_path(
-        turns, assoc, tracks,
-        src_w=info.width, src_h=info.height, crop_w=crop_w, crop_h=crop_h,
-        intensity=intensity, duration=info.duration,
+        turns,
+        assoc,
+        tracks,
+        src_w=info.width,
+        src_h=info.height,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        intensity=intensity,
+        duration=info.duration,
     )
     if not path:
         raise ReframeUnavailable("no usable crop path")
@@ -1455,17 +2183,27 @@ def apply_speaker_reframe(
     _ia, vf, _notes = build_reframe_filter(
         "follow_active",
         centers=path,
-        crop_w=crop_w, crop_h=crop_h,
-        src_w=info.width, src_h=info.height,
-        target_w=tw, target_h=th,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        src_w=info.width,
+        src_h=info.height,
+        target_w=tw,
+        target_h=th,
         sendcmd_path=str(cmd_file),
         intensity=intensity,
     )
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(video),
-        "-vf", vf,
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        vf,
         *h264_args(),
-        "-c:a", "copy", "-movflags", "+faststart",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     try:
@@ -1474,4 +2212,6 @@ def apply_speaker_reframe(
         raise ReframeUnavailable(f"ffmpeg reframe failed: {exc}") from exc
     finally:
         cmd_file.unlink(missing_ok=True)
+    if notes is not None:
+        notes.extend(detector_notes(sample_report))
     return dest

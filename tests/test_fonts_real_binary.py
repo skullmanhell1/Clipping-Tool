@@ -94,10 +94,20 @@ def _fontselect_lines(subtitles_filter: str, tmp_path: Path) -> list[tuple[str, 
     """
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "verbose",
-            "-f", "lavfi", "-i", "color=black:s=540x960:d=0.1",
-            "-vf", subtitles_filter,
-            "-frames:v", "1", "-y", str(tmp_path / "probe.png"),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "verbose",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=540x960:d=0.1",
+            "-vf",
+            subtitles_filter,
+            "-frames:v",
+            "1",
+            "-y",
+            str(tmp_path / "probe.png"),
         ],
         capture_output=True,
         text=True,
@@ -317,7 +327,7 @@ def test_bundled_static_faces_are_available_without_a_system_install(host_fonts)
 
     ``subtitles_filter`` hands ``assets/fonts`` to libass as ``fontsdir``, so these
     faces render on a bare checkout. ``fc-list`` cannot see that directory, so probing
-    fontconfig alone reports them missing and the resolver substitutes them away — 
+    fontconfig alone reports them missing and the resolver substitutes them away —
     replacing a font that would have worked, which is the C1 defect in a new costume.
     """
     host_fonts("Noto Sans", "DejaVu Sans", "Liberation Sans")
@@ -344,8 +354,9 @@ def test_variable_faces_are_not_claimed_from_the_bundled_dir_alone(host_fonts):
     variable = [e for e in _manifest()["fonts"] if e["variable"]]
     assert variable, "manifest has no variable faces; this test would pass vacuously"
     for entry in variable:
-        # noqa on the message, not the rule: S608 (SQL injection) fires because the prose
-        # "select its named instance from fontsdir" reads as SELECT ... FROM to the heuristic.
+        # The suppression below sits on the message, not the rule: S608 (SQL injection) fires
+        # because the prose "select its named instance from fontsdir" reads as
+        # SELECT ... FROM to the heuristic.
         # There is no query here. Suppressed at the one line it misfires on rather than by
         # adding S608 to the tests/* ignores, which would switch the rule off for a suite that
         # does execute real SQL against sqlite.
@@ -373,9 +384,7 @@ def test_no_preset_substitutes_on_a_host_without_the_bundled_faces(host_fonts):
 @requires_ffmpeg
 @pytest.mark.real_binary
 @pytest.mark.parametrize("preset_name", sorted(caption_presets.BUILTIN_PRESETS))
-def test_preset_renders_in_its_own_face_without_a_system_install(
-    preset_name, host_fonts, tmp_path
-):
+def test_preset_renders_in_its_own_face_without_a_system_install(preset_name, host_fonts, tmp_path):
     """The same end-to-end check as above, with the host pinned rather than trusted.
 
     ``test_every_builtin_preset_renders_in_the_font_it_asks_for`` passes on a machine
@@ -458,16 +467,13 @@ def test_resolve_font_prefers_earlier_rungs():
 
     # Only a middle rung installed: that rung wins, not the terminal one.
     middle = everything[3]
-    resolved, substituted = captions.resolve_font(
-        "No Such Face", available=lambda n: n == middle
-    )
+    resolved, substituted = captions.resolve_font("No Such Face", available=lambda n: n == middle)
     assert (resolved, substituted) == (middle, True)
 
 
 def test_resolve_font_keeps_an_available_request_untouched():
     resolved, substituted = captions.resolve_font("Anton", available=lambda n: True)
     assert (resolved, substituted) == ("Anton", False)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -510,10 +516,21 @@ def test_no_preset_asks_libass_to_synthesise_bold(preset_name, tmp_path):
 
     proc = subprocess.run(
         [
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "verbose",
-            "-f", "lavfi", "-i", "color=black:s=540x960:d=0.1",
-            "-vf", captions.subtitles_filter(ass),
-            "-frames:v", "1", "-y", str(tmp_path / "weight.png"),
+            FFMPEG,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "verbose",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=540x960:d=0.1",
+            "-vf",
+            captions.subtitles_filter(ass),
+            "-frames:v",
+            "1",
+            "-y",
+            str(tmp_path / "weight.png"),
         ],
         capture_output=True,
         text=True,
@@ -585,7 +602,8 @@ def test_outline_and_shadow_come_from_the_preset(tmp_path):
         clip_duration=1.0,
     )
     style = next(
-        line for line in ass.read_text(encoding="utf-8").splitlines()
+        line
+        for line in ass.read_text(encoding="utf-8").splitlines()
         if line.startswith("Style: Default")
     )
     fields = style.split("Style: ", 1)[1].split(",")
@@ -603,7 +621,8 @@ def test_outline_and_shadow_come_from_the_preset(tmp_path):
         clip_duration=1.0,
     )
     style2 = next(
-        line for line in ass2.read_text(encoding="utf-8").splitlines()
+        line
+        for line in ass2.read_text(encoding="utf-8").splitlines()
         if line.startswith("Style: Default")
     )
     fields2 = style2.split("Style: ", 1)[1].split(",")
