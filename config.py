@@ -420,6 +420,26 @@ class Settings(BaseSettings):
         "rather than a justified one. Raise it if you can hear the difference under a music bed.",
     )
 
+    # V20: deinterlacing. Combing cropped and scaled becomes a smear no later filter can undo.
+    #
+    # Default ON, because it only ever fires when the container's declared field order AND ffmpeg's
+    # `idet` measurement both say interlaced -- and on that evidence the current output is simply
+    # wrong. Progressive sources are untouched, so an ordinary library renders identically.
+    deinterlace: bool = Field(
+        default=True,
+        description="Detect and deinterlace interlaced sources before any crop or scale (V20). "
+        "Requires BOTH the container's field_order and ffmpeg's idet to agree, because idet alone "
+        "false-positives on footage with fine horizontal detail (measured ~85% interlaced on a "
+        "definitively progressive source) and deinterlacing progressive video destroys vertical "
+        "detail irreversibly. Disagreement is recorded as inconclusive and nothing is done.",
+    )
+    deinterlace_double_rate: bool = Field(
+        default=False,
+        description="Emit one frame per field when deinterlacing, turning 25i into 50p (V20). Off "
+        "by default: it sounds like a free upgrade and interacts badly with O18's frame-rate "
+        "policy and O19's keyframe interval, both of which read the delivered rate.",
+    )
+
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #
     # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
