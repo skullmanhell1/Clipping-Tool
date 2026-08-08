@@ -34,10 +34,20 @@ requires_ffmpeg = pytest.mark.skipif(
 def _delivered_rate(path) -> float:
     proc = subprocess.run(
         [
-            FFPROBE, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=avg_frame_rate", "-of", "default=nw=1:nk=1", str(path),
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     num, _, den = (proc.stdout or "0/0").strip().partition("/")
     return float(num) / float(den) if float(den) else 0.0
@@ -53,10 +63,22 @@ def _keyframe_count(path) -> int:
     """
     proc = subprocess.run(
         [
-            FFPROBE, "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
-            "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(path),
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-skip_frame",
+            "nokey",
+            "-show_entries",
+            "frame=pts_time",
+            "-of",
+            "csv=p=0",
+            str(path),
         ],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     return sum(1 for line in proc.stdout.splitlines() if line.strip())
 
@@ -124,9 +146,7 @@ def test_the_profile_ceiling_wins_over_the_source(monkeypatch):
 
     The constraint that matters is the destination's, not the source's convenience.
     """
-    plan = fr.plan_frame_rate(
-        avg_fps=60.0, base_fps=60.0, configured_fps=30, ceiling_fps=30
-    )
+    plan = fr.plan_frame_rate(avg_fps=60.0, base_fps=60.0, configured_fps=30, ceiling_fps=30)
     assert plan.delivered_fps == 30
     assert plan.normalised is True
     assert plan.marker.endswith(":profile_ceiling")
@@ -134,9 +154,7 @@ def test_the_profile_ceiling_wins_over_the_source(monkeypatch):
 
 def test_unconditional_normalisation_is_still_available():
     """R8.8. The old blanket guarantee, for anyone who wants the certainty."""
-    plan = fr.plan_frame_rate(
-        avg_fps=24.0, base_fps=24.0, configured_fps=30, always_normalise=True
-    )
+    plan = fr.plan_frame_rate(avg_fps=24.0, base_fps=24.0, configured_fps=30, always_normalise=True)
     assert plan.delivered_fps == 30
     assert plan.normalised is True
     assert plan.marker.endswith(":forced")
@@ -155,11 +173,25 @@ def test_a_cfr_source_is_delivered_at_its_own_rate(tmp_path, rate):
     src = tmp_path / f"src{rate}.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
-            "-i", f"testsrc2=size=320x180:rate={rate}:duration=2",
-            "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:rate={rate}:duration=2",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
         ],
-        check=True, timeout=600,
+        check=True,
+        timeout=600,
     )
     from worker import ffmpeg_utils as fu
 
@@ -172,12 +204,19 @@ def test_a_cfr_source_is_delivered_at_its_own_rate(tmp_path, rate):
     dest = tmp_path / f"out{rate}.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
-            *h264_args(normalise_fps=True, delivered_fps=plan.delivered_fps,
-                       keyframe_seconds=2.0),
-            "-an", str(dest),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
+            *h264_args(normalise_fps=True, delivered_fps=plan.delivered_fps, keyframe_seconds=2.0),
+            "-an",
+            str(dest),
         ],
-        check=True, timeout=600,
+        check=True,
+        timeout=600,
     )
     assert _delivered_rate(dest) == pytest.approx(float(rate), abs=0.05)
 
@@ -200,17 +239,28 @@ def test_gate_av_sync_holds_at_every_platform_frame_rate(tmp_path, rate):
     """
     from worker.ffmpeg_utils import h264_args
 
-    src = sync.make_sync_fixture(
-        tmp_path / f"sync{rate}.mp4", event_at=1.0, duration=3.0, fps=rate
-    )
+    src = sync.make_sync_fixture(tmp_path / f"sync{rate}.mp4", event_at=1.0, duration=3.0, fps=rate)
     dest = tmp_path / f"delivered{rate}.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
             *h264_args(normalise_fps=True, delivered_fps=rate, keyframe_seconds=2.0),
-            "-c:a", "aac", "-ar", "48000", "-ac", "2", str(dest),
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(dest),
         ],
-        check=True, timeout=900,
+        check=True,
+        timeout=900,
     )
 
     report = sync.measure_sync(dest, label=f"delivered at {rate}fps")
@@ -234,11 +284,24 @@ def test_gate_av_sync_holds_when_a_source_is_resampled(tmp_path):
     dest = tmp_path / "resampled.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
             *h264_args(normalise_fps=True, delivered_fps=30, keyframe_seconds=2.0),
-            "-c:a", "aac", "-ar", "48000", "-ac", "2", str(dest),
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(dest),
         ],
-        check=True, timeout=900,
+        check=True,
+        timeout=900,
     )
     report = sync.measure_sync(dest, label="vfr resampled to 30")
     assert abs(report.offset_ms) <= sync.TOLERANCE_MS, report
@@ -249,8 +312,15 @@ def test_gate_av_sync_holds_when_a_source_is_resampled(tmp_path):
 
 @pytest.mark.parametrize(
     ("fps", "seconds", "expected"),
-    [(24, 2.0, 48), (25, 2.0, 50), (30, 2.0, 60), (50, 2.0, 100), (60, 2.0, 120),
-     (30, 1.0, 30), (30, 4.0, 120)],
+    [
+        (24, 2.0, 48),
+        (25, 2.0, 50),
+        (30, 2.0, 60),
+        (50, 2.0, 100),
+        (60, 2.0, 120),
+        (30, 1.0, 30),
+        (30, 4.0, 120),
+    ],
 )
 def test_the_keyframe_interval_is_derived_from_the_delivered_rate(fps, seconds, expected):
     """R6.2, and precisely why O19 belongs with O18.
@@ -307,20 +377,42 @@ def test_the_delivered_file_actually_contains_more_keyframes_than_before(tmp_pat
     src = tmp_path / "src.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
-            "-i", "testsrc2=size=320x180:rate=30:duration=6",
-            "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=30:duration=6",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
         ],
-        check=True, timeout=600,
+        check=True,
+        timeout=600,
     )
     dest = tmp_path / "keyed.mp4"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
             *h264_args(normalise_fps=True, delivered_fps=30, keyframe_seconds=2.0),
-            "-an", str(dest),
+            "-an",
+            str(dest),
         ],
-        check=True, timeout=600,
+        check=True,
+        timeout=600,
     )
     # 6 s at 2 s intervals: at least three, allowing for scene-change keyframes on top.
     assert _keyframe_count(dest) >= 3, "the interval did not reach the delivered file"

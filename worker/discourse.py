@@ -31,8 +31,9 @@ because these run over transcript text that has already been through ASR and a h
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any
 
 _WORD_RE = re.compile(r"[A-Za-z']+")
 
@@ -42,25 +43,70 @@ _WORD_RE = re.compile(r"[A-Za-z']+")
 
 #: Words that open a genuine question. Deliberately not just "?" - ASR punctuation is unreliable,
 #: and Whisper omits question marks on rising-intonation questions fairly often.
-_QUESTION_OPENERS = frozenset({
-    "how", "why", "what", "when", "where", "who", "which", "whose",
-    "is", "are", "was", "were", "do", "does", "did", "can", "could",
-    "should", "would", "will", "have", "has", "am",
-})
+_QUESTION_OPENERS = frozenset(
+    {
+        "how",
+        "why",
+        "what",
+        "when",
+        "where",
+        "who",
+        "which",
+        "whose",
+        "is",
+        "are",
+        "was",
+        "were",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "have",
+        "has",
+        "am",
+    }
+)
 
 #: Phrases that promise an enumeration. These are the strongest self-contained-clip signal in the
 #: set: a speaker who says "three things" has committed to a structure with an end.
 _LIST_MARKERS: tuple[str, ...] = (
-    "here's why", "heres why", "here is why",
-    "here's how", "heres how", "here is how",
-    "the reason", "the reasons",
-    "first of all", "firstly", "secondly", "thirdly",
-    "number one", "number two", "number three",
-    "step one", "step two", "step three",
-    "the problem is", "the point is", "the trick is", "the key is",
-    "let me explain", "let me show you",
-    "three things", "two things", "four things", "five things",
-    "three reasons", "two reasons", "three ways", "two ways", "five ways",
+    "here's why",
+    "heres why",
+    "here is why",
+    "here's how",
+    "heres how",
+    "here is how",
+    "the reason",
+    "the reasons",
+    "first of all",
+    "firstly",
+    "secondly",
+    "thirdly",
+    "number one",
+    "number two",
+    "number three",
+    "step one",
+    "step two",
+    "step three",
+    "the problem is",
+    "the point is",
+    "the trick is",
+    "the key is",
+    "let me explain",
+    "let me show you",
+    "three things",
+    "two things",
+    "four things",
+    "five things",
+    "three reasons",
+    "two reasons",
+    "three ways",
+    "two ways",
+    "five ways",
     "the bottom line",
 )
 
@@ -74,12 +120,34 @@ _COUNT_WORDS = frozenset({"two", "three", "four", "five", "six", "seven", "ten"}
 #: unanswered question is the lowest-scoring shape here, so reading these as questions would push
 #: most conversational speech to the bottom of the ranking - a penalty applied to the way people
 #: talk rather than to anything about the clip.
-_TAG_QUESTIONS = frozenset({
-    "right", "yeah", "yes", "no", "okay", "ok", "see", "get it", "innit",
-    "you know", "you know what i mean", "know what i mean", "if that makes sense",
-    "isn't it", "isnt it", "is it", "don't you", "dont you", "do you",
-    "aren't they", "arent they", "you feel me", "make sense", "does that make sense",
-})
+_TAG_QUESTIONS = frozenset(
+    {
+        "right",
+        "yeah",
+        "yes",
+        "no",
+        "okay",
+        "ok",
+        "see",
+        "get it",
+        "innit",
+        "you know",
+        "you know what i mean",
+        "know what i mean",
+        "if that makes sense",
+        "isn't it",
+        "isnt it",
+        "is it",
+        "don't you",
+        "dont you",
+        "do you",
+        "aren't they",
+        "arent they",
+        "you feel me",
+        "make sense",
+        "does that make sense",
+    }
+)
 
 
 def _strip_tag_question(sentence: str) -> str:
@@ -176,7 +244,7 @@ def detect_structure(text: str) -> Structure:
             # Answered when *substantive* speech follows. A trailing "right?" or "you know?" is
             # not an unanswered question, it is a filler tag - and treating it as one would
             # penalise ordinary conversational speech everywhere it appears.
-            following = sum(len(_WORD_RE.findall(s)) for s in sentences[position + 1:])
+            following = sum(len(_WORD_RE.findall(s)) for s in sentences[position + 1 :])
             if following >= 4:
                 answered = True
             break
@@ -195,19 +263,68 @@ def detect_structure(text: str) -> Structure:
 
 #: Words that mark a passage as emphatic. Grouped by strength rather than scored individually,
 #: because a hand-tuned per-word weight is false precision on a list this short.
-_STRONG = frozenset({
-    "insane", "crazy", "unbelievable", "shocking", "terrifying", "devastating",
-    "incredible", "amazing", "brutal", "horrific", "outrageous", "furious",
-    "obsessed", "desperate", "destroyed", "exploded", "collapsed", "screaming",
-    "hate", "love", "terrified", "humiliated", "betrayed", "life-changing",
-})
-_MODERATE = frozenset({
-    "never", "always", "everything", "nothing", "everyone", "nobody",
-    "worst", "best", "biggest", "hardest", "easiest", "fastest",
-    "huge", "massive", "tiny", "completely", "totally", "absolutely",
-    "literally", "actually", "honestly", "seriously", "really",
-    "must", "need", "wrong", "right", "failed", "won", "lost",
-})
+_STRONG = frozenset(
+    {
+        "insane",
+        "crazy",
+        "unbelievable",
+        "shocking",
+        "terrifying",
+        "devastating",
+        "incredible",
+        "amazing",
+        "brutal",
+        "horrific",
+        "outrageous",
+        "furious",
+        "obsessed",
+        "desperate",
+        "destroyed",
+        "exploded",
+        "collapsed",
+        "screaming",
+        "hate",
+        "love",
+        "terrified",
+        "humiliated",
+        "betrayed",
+        "life-changing",
+    }
+)
+_MODERATE = frozenset(
+    {
+        "never",
+        "always",
+        "everything",
+        "nothing",
+        "everyone",
+        "nobody",
+        "worst",
+        "best",
+        "biggest",
+        "hardest",
+        "easiest",
+        "fastest",
+        "huge",
+        "massive",
+        "tiny",
+        "completely",
+        "totally",
+        "absolutely",
+        "literally",
+        "actually",
+        "honestly",
+        "seriously",
+        "really",
+        "must",
+        "need",
+        "wrong",
+        "right",
+        "failed",
+        "won",
+        "lost",
+    }
+)
 
 #: Above this fraction of upper-case words, the passage is shouting.
 _CAPS_FRACTION = 0.3
@@ -272,21 +389,52 @@ def emotional_intensity(text: str) -> Intensity:
 #: earlier. Both are fatal to a standalone clip and invisible to every other signal - a window can
 #: be fast, loud, well-paced and still open on "and that's why".
 _DANGLING_OPENERS: tuple[str, ...] = (
-    "and", "but", "so", "because", "which", "or", "nor", "yet",
-    "also", "then", "anyway", "however", "therefore", "meanwhile",
-    "plus", "besides",
+    "and",
+    "but",
+    "so",
+    "because",
+    "which",
+    "or",
+    "nor",
+    "yet",
+    "also",
+    "then",
+    "anyway",
+    "however",
+    "therefore",
+    "meanwhile",
+    "plus",
+    "besides",
 )
 
 #: Back-reference openers: a pronoun or demonstrative with no antecedent inside the clip.
 _DEICTIC_OPENERS: tuple[str, ...] = (
-    "this", "that", "these", "those", "it", "they", "he", "she", "him", "her",
-    "them", "his", "hers", "their",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "they",
+    "he",
+    "she",
+    "him",
+    "her",
+    "them",
+    "his",
+    "hers",
+    "their",
 )
 
 #: Phrases that explicitly point outside the clip.
 _BACK_REFERENCES: tuple[str, ...] = (
-    "as i said", "as i mentioned", "like i said", "going back to",
-    "as we discussed", "remember when", "earlier i", "we talked about",
+    "as i said",
+    "as i mentioned",
+    "like i said",
+    "going back to",
+    "as we discussed",
+    "remember when",
+    "earlier i",
+    "we talked about",
 )
 
 
@@ -391,7 +539,7 @@ def annotate_candidates(candidates: Iterable[Any]) -> None:
         features.update(describe(text))
 
 
-def prompt_note(text: str) -> Optional[str]:
+def prompt_note(text: str) -> str | None:
     """A short phrase describing this passage's structure, for the S10 prompt annotation.
 
     Words rather than numbers, for the reason S10 records: the model is picking moments, not doing

@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from config import settings
 
@@ -70,9 +71,12 @@ OUTPUT_LEVEL = "4.0"
 #: Deliberately *not* configurable, unlike CRF and preset: there is no good reason to ship
 #: a clip a player will refuse to open.
 H264_COMPAT_ARGS: tuple[str, ...] = (
-    "-pix_fmt", OUTPUT_PIX_FMT,
-    "-profile:v", OUTPUT_PROFILE,
-    "-level", OUTPUT_LEVEL,
+    "-pix_fmt",
+    OUTPUT_PIX_FMT,
+    "-profile:v",
+    OUTPUT_PROFILE,
+    "-level",
+    OUTPUT_LEVEL,
 )
 
 #: Resampling algorithms swscale accepts, for O17's ``scaler_flags`` setting.
@@ -82,7 +86,13 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
 #: false sharpening rather than a real improvement. A useful reminder that a single metric is
 #: not a verdict.
 SCALER_FLAGS: tuple[str, ...] = (
-    "bicubic", "bilinear", "lanczos", "spline", "neighbor", "area", "gauss",
+    "bicubic",
+    "bilinear",
+    "lanczos",
+    "spline",
+    "neighbor",
+    "area",
+    "gauss",
 )
 
 #: Default resampling algorithm (O17).
@@ -126,7 +136,7 @@ def scaler_args() -> list[str]:
     return ["-sws_flags", value]
 
 
-def _compat_args(encoder: "VideoEncoder") -> list[str]:
+def _compat_args(encoder: VideoEncoder) -> list[str]:
     """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
 
     Built *from* the tuple rather than respelling it, and that is the whole point of this function
@@ -181,8 +191,9 @@ def h264_args(
     *,
     normalise_fps: bool = False,
     vbv_cap: bool = False,
-    delivered_fps: Optional[int] = None,
-    keyframe_seconds: Optional[float] = None,
+    delivered_fps: int | None = None,
+    keyframe_seconds: float | None = None,
+    colour_tags: Sequence[str] = (),
 ) -> list[str]:
     """The standard libx264 arguments for an encode.
 
@@ -209,6 +220,17 @@ def h264_args(
     falls back to ``libx264`` whenever a configured hardware encoder is not usable on this
     machine - so the return value is always a working argv, and the quality flag always matches
     the encoder rather than being ``-crf`` regardless.
+
+    ``colour_tags`` (O14) appends ``-colorspace``/``-color_primaries``/``-color_trc``/
+    ``-color_range`` describing what is being delivered. Built by
+    :func:`worker.colour.colour_tag_args` and passed in rather than computed here, because this
+    function has no access to the source and R3.2 requires the tags to describe the *delivered*
+    content -- which only the caller, holding the :class:`worker.colour.Colour_Plan`, knows.
+
+    It defaults to empty for a specific reason rather than convenience:
+    ``tests/test_script_and_placement.py`` asserts the exact argv this returns, and that drift
+    pin is worth keeping. An unconditional addition here would have needed the pin re-frozen,
+    which is how a golden ends up frozen around a change nobody reviewed.
     """
     # O8: hardware encoding, when one is configured *and* proven to work on this machine.
     #
@@ -263,6 +285,13 @@ def h264_args(
         # A two-second buffer, the usual pairing: large enough that a brief complex passage
         # is not visibly starved, small enough that the cap still means something.
         args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
+    # O14. Last, so a tag can never be read as an argument to one of the flags above.
+    #
+    # These are container/stream *metadata*, not encoder settings: they tell a player how to
+    # interpret the samples rather than changing them. That is why they are safe on an
+    # intermediate as well as a final render -- and why they are wanted there. Pass 2 reads the
+    # file pass 1 wrote, so an untagged intermediate is a pass that has to guess.
+    args += list(colour_tags)
     return args
 
 
@@ -355,10 +384,14 @@ def aac_args() -> list[str]:
 
     bitrate = output_profiles.resolve_audio_bitrate_kbps()
     return [
-        "-c:a", "aac",
-        "-b:a", f"{bitrate}k",
-        "-ar", str(int(settings.output_sample_rate)),
-        "-ac", str(int(settings.output_channels)),
+        "-c:a",
+        "aac",
+        "-b:a",
+        f"{bitrate}k",
+        "-ar",
+        str(int(settings.output_sample_rate)),
+        "-ac",
+        str(int(settings.output_channels)),
     ]
 
 
@@ -432,13 +465,29 @@ class MediaInfo:
     video_codec: str = ""
     audio_codec: str = ""
     size_bytes: int = 0
+    # O13/O14/O15: the source's colour signalling. `probe()` already asks ffprobe for
+    # `-show_streams`, so **these fields were already in the JSON it parsed and were being
+    # thrown away** -- this is a field-reading change, not a new probe (R1.3).
+    #
+    # Appended last and defaulted for the same reason the O10 fields above were: several tests
+    # construct MediaInfo positionally, so inserting a field anywhere else silently shifts every
+    # one of their arguments by one.
+    #
+    # Empty string means "ffprobe did not report it", which is a distinct answer from any value
+    # it could have reported (R1.4). `worker.colour` is what interprets these; nothing here
+    # guesses.
+    color_transfer: str = ""
+    color_primaries: str = ""
+    color_space: str = ""
+    color_range: str = ""
     # O18: the container's *base* rate, alongside the average `fps` above. Both come from the
     # same ffprobe call that was already being made -- for a CFR file they agree, and for VFR
     # `r_frame_rate` reports the base while `avg_frame_rate` reports what the file contains.
     # That divergence is the whole CFR/VFR signal, and it was being discarded.
     #
-    # Appended last and defaulted, for the reason the comment above records: several tests
-    # construct MediaInfo positionally.
+    # Appended after the colour fields rather than before them, on the same rule both comments
+    # state: positional constructions reach the first eight fields, so anything new goes on the
+    # end, and putting this ahead of colour would shift four fields that already shipped.
     base_fps: float = 0.0
 
 
@@ -457,9 +506,7 @@ def _default_timeout(cmd: list[str]) -> float:
     return float(settings.ffmpeg_timeout_seconds)
 
 
-def _run(
-    cmd: list[str], *, timeout: Optional[float] = None
-) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess:
     """Run a command, returning the completed process or raising ``FFmpegError``.
 
     Every invocation is bounded. Jobs are processed by a thread pool with a single
@@ -502,9 +549,7 @@ def _run(
         ) from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "").strip().splitlines()[-15:]
-        raise FFmpegError(
-            f"Command failed ({' '.join(cmd[:2])} ...): " + "\n".join(tail)
-        ) from exc
+        raise FFmpegError(f"Command failed ({' '.join(cmd[:2])} ...): " + "\n".join(tail)) from exc
     return proc
 
 
@@ -579,6 +624,13 @@ def probe(path: str | Path) -> MediaInfo:
         video_codec=str(video.get("codec_name") or ""),
         audio_codec=str((audio or {}).get("codec_name") or ""),
         size_bytes=size_bytes,
+        # Lower-cased on the way in so callers compare against one vocabulary. Absent stays
+        # absent: `or ""` rather than a default value, because "the stream did not say" is the
+        # fact `worker.colour` needs in order to decline to tone-map (R1.4, R1.7).
+        color_transfer=str(video.get("color_transfer") or "").lower(),
+        color_primaries=str(video.get("color_primaries") or "").lower(),
+        color_space=str(video.get("color_space") or "").lower(),
+        color_range=str(video.get("color_range") or "").lower(),
     )
 
 
@@ -588,6 +640,9 @@ def cut_segment(
     end: float,
     dest: str | Path,
     reencode: bool = True,
+    *,
+    video_filters: str = "",
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Cut ``[start, end]`` (seconds) from ``source`` into ``dest``.
 
@@ -599,6 +654,12 @@ def cut_segment(
         reencode: When ``True`` (default) re-encode for frame-accurate cuts,
             which is what downstream captioning/reformatting needs. When
             ``False`` attempt a fast stream copy (keyframe-aligned, less exact).
+        video_filters: A ``-vf`` chain applied to this pass (O13). This is the only pass with no
+            geometry or grade of its own, which makes it the correct home for the colour
+            conversion: R2.2 requires the tone-map to run before any scale, and every later pass
+            scales. Empty by default, so an SDR source produces the identical argv it always did.
+        colour_tags: Output colour metadata (O14), from
+            :func:`worker.colour.colour_tag_args`.
 
     Returns:
         The ``dest`` path as a :class:`~pathlib.Path`.
@@ -610,10 +671,33 @@ def cut_segment(
     dest.parent.mkdir(parents=True, exist_ok=True)
     duration = end - start
 
-    cmd = [settings.ffmpeg_binary, "-y", "-ss", f"{start:.3f}", "-i", str(source),
-           "-t", f"{duration:.3f}"]
+    cmd = [
+        settings.ffmpeg_binary,
+        "-y",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(source),
+        "-t",
+        f"{duration:.3f}",
+    ]
     if reencode:
-        cmd += [*h264_args(), *aac_args()]
+        # O13: the colour conversion goes here, on the first pass, and nowhere else.
+        #
+        # This is the earliest point at which we hold the original samples, and R2.2 requires the
+        # tone-map to precede every colour-dependent operation *and* all scaling. The geometry
+        # pass scales; the composite pass grades. Both are downstream of this, so converting here
+        # is the only placement that satisfies both halves of that requirement.
+        if video_filters:
+            cmd += ["-vf", video_filters]
+        cmd += [*h264_args(colour_tags=colour_tags), *aac_args()]
+    elif video_filters:
+        # A stream copy cannot apply a filter. Rather than silently dropping the conversion --
+        # which would deliver an untone-mapped clip while the plan's marker claimed otherwise,
+        # the worst combination available -- the copy is abandoned in favour of honouring it.
+        # Callers asking for both are asking for something incoherent, and the colour is the
+        # part that shows.
+        cmd += ["-vf", video_filters, *h264_args(colour_tags=colour_tags), *aac_args()]
     else:
         cmd += ["-c", "copy"]
     cmd += ["-movflags", "+faststart", str(dest)]
@@ -693,10 +777,7 @@ def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -
         # The source is discarded rather than blurred: nothing derived from it is wanted.
         return f"[bg]scale={tw}:{th},drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[bgb];"
     if style == "color":
-        return (
-            f"[bg]scale={tw}:{th},"
-            f"drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill[bgb];"
-        )
+        return f"[bg]scale={tw}:{th},drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill[bgb];"
     if style == "gradient":
         return (
             f"[bg]{cover},boxblur=luma_radius=20:luma_power=1,"
@@ -705,10 +786,7 @@ def background_chain(style: str, tw: int, th: int, *, color: str = "0x0F172A") -
         )
     # blur, and the fallback for an unknown style - the previous behaviour, so an unrecognised
     # value degrades to what shipped before rather than to no background at all.
-    return (
-        f"[bg]{cover},boxblur=luma_radius=40:luma_power=1,"
-        f"eq=brightness=-0.1[bgb];"
-    )
+    return f"[bg]{cover},boxblur=luma_radius=40:luma_power=1,eq=brightness=-0.1[bgb];"
 
 
 def reformat_aspect(
@@ -719,6 +797,7 @@ def reformat_aspect(
     *,
     background: str = "blur",
     background_color: str = "0x0F172A",
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Reformat ``source`` to a target ``aspect`` ratio.
 
@@ -764,11 +843,17 @@ def reformat_aspect(
         raise ValueError(f"Unknown mode '{mode}'. Valid: 'crop_blur', 'pad'.")
 
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-vf", vf,
-        *h264_args(),
-        "-c:a", "copy",
-        "-movflags", "+faststart",
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-vf",
+        vf,
+        *h264_args(colour_tags=colour_tags),
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     _run(cmd)
@@ -787,7 +872,7 @@ def detect_letterbox(
     *,
     probe_seconds: float = 8.0,
     skip_seconds: float = 1.0,
-) -> Optional[tuple[int, int, int, int]]:
+) -> tuple[int, int, int, int] | None:
     """The content rectangle of ``source`` as ``(w, h, x, y)``, or ``None`` (V16).
 
     Source footage is very often already letterboxed - a 16:9 video exported inside a 1:1
@@ -812,13 +897,22 @@ def detect_letterbox(
         return None
 
     command = [
-        settings.ffmpeg_binary, "-nostdin", "-hide_banner",
-        "-ss", f"{max(0.0, float(skip_seconds)):.3f}",
-        "-t", f"{max(0.5, float(probe_seconds)):.3f}",
-        "-i", str(source),
+        settings.ffmpeg_binary,
+        "-nostdin",
+        "-hide_banner",
+        "-ss",
+        f"{max(0.0, float(skip_seconds)):.3f}",
+        "-t",
+        f"{max(0.5, float(probe_seconds)):.3f}",
+        "-i",
+        str(source),
         # round=2 keeps the result even, which libx264's 4:2:0 subsampling requires anyway.
-        "-vf", "cropdetect=limit=24:round=2:reset=0",
-        "-an", "-f", "null", "-",
+        "-vf",
+        "cropdetect=limit=24:round=2:reset=0",
+        "-an",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
@@ -864,9 +958,18 @@ def extract_audio(source: str | Path, dest: str | Path, sample_rate: int = 16000
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_binary, "-y", "-i", str(source),
-        "-vn", "-ac", "1", "-ar", str(sample_rate),
-        "-c:a", "pcm_s16le", str(dest),
+        settings.ffmpeg_binary,
+        "-y",
+        "-i",
+        str(source),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-c:a",
+        "pcm_s16le",
+        str(dest),
     ]
     _run(cmd)
     return dest
@@ -879,8 +982,17 @@ def generate_thumbnail(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_binary, "-y", "-ss", f"{max(at, 0):.3f}", "-i", str(source),
-        "-frames:v", "1", "-vf", f"scale={width}:-2", str(dest),
+        settings.ffmpeg_binary,
+        "-y",
+        "-ss",
+        f"{max(at, 0):.3f}",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={width}:-2",
+        str(dest),
     ]
     _run(cmd)
     return dest

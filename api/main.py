@@ -35,7 +35,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -229,7 +229,7 @@ app.add_middleware(ClipsAuthMiddleware)
 class OptionsModel(BaseModel):
     """Processing options accepted from the UI (all optional, sane defaults)."""
 
-    language: Optional[str] = None
+    language: str | None = None
     translate: bool = False
     clip_length: str = "auto"
     aspect: str = "9:16"
@@ -243,25 +243,25 @@ class OptionsModel(BaseModel):
     vibe: str = ""
     platform: str = "generic"
     hashtag_count: int = 5
-    range_start: Optional[float] = None
-    range_end: Optional[float] = None
+    range_start: float | None = None
+    range_end: float | None = None
     metadata: bool = True
     # Phase 3 — publishing
     publish_to: list[str] = []
     campaign_id: str = ""
     publish_mode: str = "review"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     # Phase 4 — visual effects (all individually toggleable)
-    reframe: bool = False
-    zoom: bool = False
-    transitions: bool = False
-    hook_title: bool = False
+    reframe: bool = True
+    zoom: bool = True
+    transitions: bool = True
+    hook_title: bool = True
     music: str = ""
     music_volume: float = 0.12
-    fades: bool = False
+    fades: bool = True
     color: str = ""
-    progress_bar: bool = False
-    emoji: str = "off"
+    progress_bar: bool = True
+    emoji: str = "standard"
     emoji_mode: str = "keyword"
     emoji_animate: bool = True
     filler_removal: bool = False
@@ -270,9 +270,9 @@ class OptionsModel(BaseModel):
     # Tier 1 — Feature A: animated caption presets
     caption_preset: str = "karaoke"
     caption_animation: str = ""
-    caption_keyword_highlight: bool = False
+    caption_keyword_highlight: bool = True
     caption_keyword_ai: bool = False
-    caption_emoji: bool = False
+    caption_emoji: bool = True
     # Tier 1 — Feature B: b-roll overlays
     broll: bool = False
     broll_intensity: str = "standard"
@@ -280,7 +280,7 @@ class OptionsModel(BaseModel):
     broll_provider: str = ""
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = ""
-    visual_selection: bool = False
+    visual_selection: bool = True
     # Tier 1 — cross-cutting
     permissibility_mode: bool = False
     # v0.8.0 — Speaker diarisation & multi-speaker reframe (default OFF)
@@ -316,29 +316,71 @@ class OptionsModel(BaseModel):
     stem_backend: str = "auto"
     stem_model: str = "htdemucs"
     stem_retain_stems: bool = False
+    # U6 brand kit. These were absent, and their absence was silent: FastAPI matches a
+    # request body against this model and drops unrecognised keys without a 422, so the UI's
+    # font, CTA, colour pickers and logo sliders all sent values that were discarded on
+    # arrival. `ProcessingOptions` has always carried them and the renderer has always
+    # honoured them, so nothing was broken except the wiring between the two.
+    brand_font: str = ""
+    brand_primary_color: str = ""
+    brand_highlight_color: str = ""
+    brand_cta: str = ""
+    brand_logo: str = ""
+    brand_logo_position: str = "top_right"
+    brand_logo_scale: float = 0.16
+    brand_logo_opacity: float = 0.85
+    # AU1/AU2/AU7. These three default ON, which is why their absence was easy to miss: a
+    # caller could not observe them failing to switch on, only failing to switch OFF. An
+    # operator disabling loudness normalisation on a clip that is already mastered, or
+    # silence trimming on one where the boundaries are deliberate, was ignored.
+    loudness_normalise: bool = True
+    music_duck: bool = True
+    trim_silence: bool = True
+    # Written next to the clip as .srt/.vtt. Present on the upload form but not here, so it
+    # worked for an uploaded file and was dropped for the same job submitted as a URL.
+    subtitle_sidecar: bool = False
+    # A named built-in bundle (podcast / gaming / talking_head / educational), expanded by
+    # `ProcessingOptions.from_dict`, which has always supported it. `/api/profiles/builtin`
+    # advertises the four, so they were offered by the API and accepted by nothing.
+    profile: str = ""
 
     def to_options(self) -> ProcessingOptions:
-        return ProcessingOptions.from_dict(self.model_dump())
+        """The options this request actually asked for.
+
+        ``exclude_unset`` is load-bearing, for two reasons.
+
+        It is what lets ``profile`` work at all. ``from_dict`` expands a named bundle and then
+        lets explicit keys win, which is the right precedence - but ``model_dump()`` emits
+        *every* field, so every one of them counted as explicit and the bundle was overridden
+        in full, every time. ``/api/profiles/builtin`` advertises four profiles that were
+        therefore accepted and silently ignored.
+
+        And it makes :class:`ProcessingOptions` the single source of truth for a default. A
+        field the caller did not mention now never reaches ``from_dict``, so the dataclass
+        default applies rather than this model's restatement of it - which had drifted on ten
+        fields, all of them the U1 default-on effects.
+        """
+        return ProcessingOptions.from_dict(self.model_dump(exclude_unset=True))
 
 
 class ClipEditModel(BaseModel):
     """Editable clip metadata fields (all optional; only provided ones apply)."""
 
-    title: Optional[str] = None
-    title_alternatives: Optional[list[str]] = None
-    description: Optional[str] = None
-    hashtags: Optional[list[str]] = None
-    hook_text: Optional[str] = None
-    cta: Optional[str] = None
-    mentions: Optional[list[str]] = None
-    thumbnail_text: Optional[str] = None
+    title: str | None = None
+    title_alternatives: list[str] | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    hook_text: str | None = None
+    cta: str | None = None
+    mentions: list[str] | None = None
+    thumbnail_text: str | None = None
 
 
 class RegenerateRequest(BaseModel):
     """Request to regenerate a single metadata field for a clip."""
 
     field: str
-    platform: Optional[str] = None
+    platform: str | None = None
 
 
 class CaptionPreviewModel(BaseModel):
@@ -401,7 +443,7 @@ class PublishClipRequest(BaseModel):
     platforms: list[str] = []
     campaign_id: str = ""
     mode: str = "auto"
-    schedule_at: Optional[float] = None
+    schedule_at: float | None = None
     routes: dict[str, dict[str, str]] = {}
 
 
@@ -420,9 +462,9 @@ class CampaignModel(BaseModel):
 class StorageSettingsModel(BaseModel):
     """User-tunable storage settings (runtime-persisted)."""
 
-    retention_days: Optional[int] = None
-    auto_delete_temp: Optional[bool] = None
-    delete_local_after_publish: Optional[bool] = None
+    retention_days: int | None = None
+    auto_delete_temp: bool | None = None
+    delete_local_after_publish: bool | None = None
 
 
 class ProfileModel(BaseModel):
@@ -503,8 +545,7 @@ def info() -> dict[str, object]:
             # before spending a render finding out. Colours are added in `#RRGGBB` form
             # alongside the ASS originals, because a colour input cannot display `&H00FFFFFF`.
             "caption_preset_details": [
-                _preset_detail(preset)
-                for preset in caption_presets.BUILTIN_PRESETS.values()
+                _preset_detail(preset) for preset in caption_presets.BUILTIN_PRESETS.values()
             ],
             "caption_animations": ["none", "pop", "typewriter", "karaoke_fill"],
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
@@ -521,9 +562,7 @@ def info() -> dict[str, object]:
             "face_detectors": _face_detector_domains(),
             "reframe_intensities": list(ProcessingOptions._REFRAME_INTENSITIES),
         },
-        "broll_available": bool(
-            settings.broll_provider_api_key and settings.broll_allow_download
-        ),
+        "broll_available": bool(settings.broll_provider_api_key and settings.broll_allow_download),
         "storage_backend": settings.storage_backend.value,
         "retention_choices": list(RETENTION_CHOICES),
         # Advanced AV engines foundation (additive; Reqs 20.1, 20.2, 20.6).
@@ -589,9 +628,7 @@ def _engines_info() -> tuple[list[dict[str, object]], dict[str, Any]]:
     return rows, capabilities
 
 
-def _add_engine_option_domains(
-    rows: list[dict[str, object]], capabilities: dict[str, Any]
-) -> None:
+def _add_engine_option_domains(rows: list[dict[str, object]], capabilities: dict[str, Any]) -> None:
     """Advertise engine-specific option domains inside the ``capabilities`` block.
 
     The per-engine row stays generic (`id`/`stage`/`priority`/`flag`/
@@ -714,7 +751,7 @@ def _face_detector_domains() -> list[dict]:
                     import mediapipe  # noqa: F401
 
                     available = True
-        except Exception as exc:  # noqa: BLE001 - report per backend, never fail the endpoint
+        except Exception as exc:  # report per backend, never fail the endpoint
             detail = f"{type(exc).__name__}"
         entry: dict = {"name": name, "available": available}
         if detail:
@@ -832,10 +869,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
                 if limit > 0 and written > limit:
                     raise HTTPException(
                         status_code=413,
-                        detail=(
-                            f"{safe_name!r} exceeds the maximum upload size of "
-                            f"{limit} bytes"
-                        ),
+                        detail=(f"{safe_name!r} exceeds the maximum upload size of {limit} bytes"),
                     )
                 out.write(chunk)
     except BaseException:
@@ -853,7 +887,7 @@ async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
 @app.post("/api/upload", tags=["jobs"], dependencies=[Depends(rate_limit)])
 async def upload(
     files: list[UploadFile] = File(...),
-    language: Optional[str] = Form(None),
+    language: str | None = Form(None),
     translate: bool = Form(False),
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
@@ -866,24 +900,24 @@ async def upload(
     vibe: str = Form(""),
     platform: str = Form("generic"),
     hashtag_count: int = Form(5),
-    range_start: Optional[float] = Form(None),
-    range_end: Optional[float] = Form(None),
+    range_start: float | None = Form(None),
+    range_end: float | None = Form(None),
     metadata: bool = Form(True),
     publish_to: str = Form(""),
     campaign_id: str = Form(""),
     publish_mode: str = Form("review"),
-    schedule_at: Optional[float] = Form(None),
+    schedule_at: float | None = Form(None),
     # Phase 4 — visual effects
-    reframe: bool = Form(False),
-    zoom: bool = Form(False),
-    transitions: bool = Form(False),
-    hook_title: bool = Form(False),
+    reframe: bool = Form(True),
+    zoom: bool = Form(True),
+    transitions: bool = Form(True),
+    hook_title: bool = Form(True),
     music: str = Form(""),
     music_volume: float = Form(0.12),
-    fades: bool = Form(False),
+    fades: bool = Form(True),
     color: str = Form(""),
-    progress_bar: bool = Form(False),
-    emoji: str = Form("off"),
+    progress_bar: bool = Form(True),
+    emoji: str = Form("standard"),
     emoji_mode: str = Form("keyword"),
     emoji_animate: bool = Form(True),
     filler_removal: bool = Form(False),
@@ -892,9 +926,9 @@ async def upload(
     # Tier 1 — Feature A: animated caption presets
     caption_preset: str = Form("karaoke"),
     caption_animation: str = Form(""),
-    caption_keyword_highlight: bool = Form(False),
+    caption_keyword_highlight: bool = Form(True),
     caption_keyword_ai: bool = Form(False),
-    caption_emoji: bool = Form(False),
+    caption_emoji: bool = Form(True),
     # Tier 1 — Feature B: b-roll overlays
     broll: bool = Form(False),
     broll_intensity: str = Form("standard"),
@@ -902,7 +936,7 @@ async def upload(
     broll_provider: str = Form(""),
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = Form(""),
-    visual_selection: bool = Form(False),
+    visual_selection: bool = Form(True),
     # Tier 1 — cross-cutting
     permissibility_mode: bool = Form(False),
     # v0.8.0 — Speaker diarisation & multi-speaker reframe
@@ -923,31 +957,48 @@ async def upload(
     # "not supplied", so the field keeps its ``ProcessingOptions`` default;
     # anything else is normalised by ``ProcessingOptions.from_dict`` (the flag)
     # or coerced by the engine's ``resolve_options`` (every other field).
-    kinetic_typography_enabled: Optional[str] = Form(None),
-    kinetic_style: Optional[str] = Form(None),
-    kinetic_reveal: Optional[str] = Form(None),
-    kinetic_font: Optional[str] = Form(None),
-    kinetic_max_lines: Optional[str] = Form(None),
-    kinetic_max_line_width: Optional[str] = Form(None),
-    kinetic_safe_area_x_pct: Optional[str] = Form(None),
-    kinetic_safe_area_y_pct: Optional[str] = Form(None),
-    kinetic_motion_ms: Optional[str] = Form(None),
-    kinetic_confidence_floor: Optional[str] = Form(None),
+    kinetic_typography_enabled: str | None = Form(None),
+    kinetic_style: str | None = Form(None),
+    kinetic_reveal: str | None = Form(None),
+    kinetic_font: str | None = Form(None),
+    kinetic_max_lines: str | None = Form(None),
+    kinetic_max_line_width: str | None = Form(None),
+    kinetic_safe_area_x_pct: str | None = Form(None),
+    kinetic_safe_area_y_pct: str | None = Form(None),
+    kinetic_motion_ms: str | None = Form(None),
+    kinetic_confidence_floor: str | None = Form(None),
     # Stem inpainting engine (default OFF). Loose optional strings for exactly the
     # reason the kinetic fields above are: a typed Form parameter makes FastAPI reject
     # an unrecognised payload with 422, but an unrecognised value must never fail the
     # job — it must fall back to the documented default (Reqs 18.1, 18.5).
-    stem_inpainting_enabled: Optional[str] = Form(None),
-    stem_mix_preset: Optional[str] = Form(None),
-    stem_gain_vocals: Optional[str] = Form(None),
-    stem_gain_music: Optional[str] = Form(None),
-    stem_gain_other: Optional[str] = Form(None),
-    stem_repair_mode: Optional[str] = Form(None),
-    stem_repair_window_ms: Optional[str] = Form(None),
-    stem_declick: Optional[str] = Form(None),
-    stem_backend: Optional[str] = Form(None),
-    stem_model: Optional[str] = Form(None),
-    stem_retain_stems: Optional[str] = Form(None),
+    stem_inpainting_enabled: str | None = Form(None),
+    stem_mix_preset: str | None = Form(None),
+    stem_gain_vocals: str | None = Form(None),
+    stem_gain_music: str | None = Form(None),
+    stem_gain_other: str | None = Form(None),
+    stem_repair_mode: str | None = Form(None),
+    stem_repair_window_ms: str | None = Form(None),
+    stem_declick: str | None = Form(None),
+    stem_backend: str | None = Form(None),
+    stem_model: str | None = Form(None),
+    stem_retain_stems: str | None = Form(None),
+    # U6 brand kit, and the three default-on audio switches. Declared as loose `str | None`
+    # for the same reason the engine fields above are: an unparseable value should fall back
+    # to the documented default rather than 422 a whole upload, and `ProcessingOptions
+    # .from_dict` already does that coercion. `None` means "not sent", and is filtered out
+    # below so the dataclass default applies rather than a null overwriting it.
+    brand_font: str | None = Form(None),
+    brand_primary_color: str | None = Form(None),
+    brand_highlight_color: str | None = Form(None),
+    brand_cta: str | None = Form(None),
+    brand_logo: str | None = Form(None),
+    brand_logo_position: str | None = Form(None),
+    brand_logo_scale: str | None = Form(None),
+    brand_logo_opacity: str | None = Form(None),
+    loudness_normalise: str | None = Form(None),
+    music_duck: str | None = Form(None),
+    trim_silence: str | None = Form(None),
+    profile: str | None = Form(None),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -957,9 +1008,13 @@ async def upload(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    # Kinetic typography fields, forwarded only when actually supplied so an
-    # omitted field keeps its documented ProcessingOptions default (Req 17.4).
-    kinetic_form: dict[str, Optional[str]] = {
+    # Loosely-typed form fields, forwarded only when actually supplied so an omitted field
+    # keeps its documented ProcessingOptions default (Req 17.4) rather than being overwritten
+    # with a null. Renamed from `kinetic_form`: it started as the kinetic engine's fields,
+    # then took the stem engine's, and now the brand kit and the three default-on audio
+    # switches - a name describing a third of its contents is how the next person adds a
+    # field to the signature and forgets this dict.
+    optional_form: dict[str, str | None] = {
         "kinetic_typography_enabled": kinetic_typography_enabled,
         "kinetic_style": kinetic_style,
         "kinetic_reveal": kinetic_reveal,
@@ -981,6 +1036,18 @@ async def upload(
         "stem_backend": stem_backend,
         "stem_model": stem_model,
         "stem_retain_stems": stem_retain_stems,
+        "brand_font": brand_font,
+        "brand_primary_color": brand_primary_color,
+        "brand_highlight_color": brand_highlight_color,
+        "brand_cta": brand_cta,
+        "brand_logo": brand_logo,
+        "brand_logo_position": brand_logo_position,
+        "brand_logo_scale": brand_logo_scale,
+        "brand_logo_opacity": brand_logo_opacity,
+        "loudness_normalise": loudness_normalise,
+        "music_duck": music_duck,
+        "trim_silence": trim_silence,
+        "profile": profile,
     }
 
     options = ProcessingOptions.from_dict(
@@ -1037,7 +1104,7 @@ async def upload(
             "reframe_layout": reframe_layout,
             "reframe_intensity": reframe_intensity,
             "face_detector": face_detector,
-            **{key: value for key, value in kinetic_form.items() if value is not None},
+            **{key: value for key, value in optional_form.items() if value is not None},
         }
     )
 
@@ -1058,9 +1125,7 @@ async def upload(
 
     manager = get_manager()
     if len(saved) == 1:
-        job = manager.submit(
-            "file", saved[0]["source"], options, title=saved[0]["title"]
-        )
+        job = manager.submit("file", saved[0]["source"], options, title=saved[0]["title"])
         return {"jobs": [job.to_dict()]}
 
     batch_id = manager.submit_batch(saved, options)
@@ -1110,7 +1175,8 @@ def cancel_job(job_id: str) -> dict:
         "state": "cancelling" if was_running else "cancelled",
         "detail": (
             "Stopping at the next checkpoint; a pass already in progress will finish first."
-            if was_running else "Stopped before processing began."
+            if was_running
+            else "Stopped before processing began."
         ),
     }
 
@@ -1203,7 +1269,7 @@ def resume_job(job_id: str) -> dict:
         raise HTTPException(
             status_code=409,
             detail="This job was interrupted before it chose its clips, so there is nothing to "
-                   "resume. Re-submit the source.",
+            "resume. Re-submit the source.",
         )
     if not manager.resume(job_id):
         raise HTTPException(
@@ -1293,9 +1359,7 @@ def _set_review(job_id: str, clip_ids: list[str], state: str, note: str) -> list
         else:
             updated.append(clip.to_dict())
     if missing and not updated:
-        raise HTTPException(
-            status_code=404, detail=f"No such clip(s): {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=404, detail=f"No such clip(s): {', '.join(missing)}")
     # A partial result is reported rather than raised: the point of a batch action is to get
     # through a list, and failing the whole call because one clip has since been deleted would
     # discard the decisions the user made about all the others.
@@ -1442,12 +1506,14 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
         raise HTTPException(
             status_code=422,
             detail=f"Too many cuts: {len(req.cuts)} (limit {trim.MAX_CUTS}). Each cut adds a "
-                   "pair of filters to the render graph.",
+            "pair of filters to the render graph.",
         )
 
     try:
         updated = rerender_module.rerender_clip(
-            job, clip, option_overrides=req.settings or None,
+            job,
+            clip,
+            option_overrides=req.settings or None,
             cuts=[(c.start, c.end) for c in req.cuts],
         )
     except rerender_module.RerenderError as exc:
@@ -1466,7 +1532,11 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
     return (stored or updated).to_dict()
 
 
-@app.post("/api/jobs/{job_id}/clips/{clip_id}/regenerate", tags=["metadata"], dependencies=[Depends(rate_limit)])
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/regenerate",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
 def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> dict:
     """Regenerate a single metadata field for a clip via the LLM.
 
@@ -1539,25 +1609,32 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     clip = manager.store.get_clip(job_id, clip_id)
     if job is None or clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
-    if req.mode not in ("auto","review"):
+    if req.mode not in ("auto", "review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
-    path=Path(settings.clips_dir)/job_id/clip.filename
-    ids=get_publish_manager().submit(job_id=job_id,clip=clip,video_path=path,
-      platforms=req.platforms,campaign_id=req.campaign_id,mode=req.mode,
-      schedule_at=req.schedule_at,route_overrides=req.routes)
+    path = Path(settings.clips_dir) / job_id / clip.filename
+    ids = get_publish_manager().submit(
+        job_id=job_id,
+        clip=clip,
+        video_path=path,
+        platforms=req.platforms,
+        campaign_id=req.campaign_id,
+        mode=req.mode,
+        schedule_at=req.schedule_at,
+        route_overrides=req.routes,
+    )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")
-    return {"attempt_ids":ids,"attempts":[get_history().get_attempt(i) for i in ids]}
+    return {"attempt_ids": ids, "attempts": [get_history().get_attempt(i) for i in ids]}
 
 
 @app.get("/api/history", tags=["publishing"])
-def history(limit: int=200, platform: str="") -> dict:
-    return get_history().history(max(1,min(limit,500)),platform)
+def history(limit: int = 200, platform: str = "") -> dict:
+    return get_history().history(max(1, min(limit, 500)), platform)
 
 
 @app.get("/api/publish-attempts/{attempt_id}", tags=["publishing"])
 def publish_attempt(attempt_id: str) -> dict:
-    item=get_history().get_attempt(attempt_id)
+    item = get_history().get_attempt(attempt_id)
     if not item:
         raise HTTPException(status_code=404, detail="Publish attempt not found")
     return item
@@ -1631,9 +1708,7 @@ def _resume_attempt(attempt_id: str, *, force_direct: bool) -> dict:
     # now is far better than a "file no longer exists" failure minutes later.
     video_path = Path(str(request.get("video_path") or ""))
     if not video_path.is_file():
-        raise HTTPException(
-            status_code=409, detail=f"Clip file no longer exists: {video_path}"
-        )
+        raise HTTPException(status_code=409, detail=f"Clip file no longer exists: {video_path}")
 
     store.update_attempt(
         attempt_id,
@@ -1666,13 +1741,11 @@ def approve_publish_attempt(attempt_id: str) -> dict:
 #:
 #: An attempt that is uploading or finished has no future to move. ``failed`` is excluded too:
 #: rescheduling a failure would look like a retry while skipping every check ``/retry`` performs.
-RESCHEDULABLE_PUBLISH_STATES = frozenset(
-    {PublishState.QUEUED.value, PublishState.SCHEDULED.value}
-)
+RESCHEDULABLE_PUBLISH_STATES = frozenset({PublishState.QUEUED.value, PublishState.SCHEDULED.value})
 
 
 @app.get("/api/schedule", tags=["publishing"])
-def schedule_window(start: Optional[float] = None, end: Optional[float] = None) -> dict:
+def schedule_window(start: float | None = None, end: float | None = None) -> dict:
     """Publish attempts scheduled within a window, for the calendar view (PB7).
 
     Defaults to the 30 days around now. Returns every state, not just pending ones: a calendar
@@ -1706,12 +1779,9 @@ def schedule_suggestions(platform: str = "", days: int = 7, per_day: int = 2) ->
     taken = [
         float(a["scheduled_at"])
         for a in get_history().scheduled_between(now, now + horizon * 86400)
-        if a.get("scheduled_at")
-        and (not platform or a.get("platform") == platform)
+        if a.get("scheduled_at") and (not platform or a.get("platform") == platform)
     ]
-    found = best_times.suggest(
-        platform, days=horizon, per_day=each, now=now, taken=taken
-    )
+    found = best_times.suggest(platform, days=horizon, per_day=each, now=now, taken=taken)
     return {
         "platform": platform,
         "basis": best_times.BASIS,
@@ -1735,15 +1805,14 @@ def reschedule_publish_attempt(attempt_id: str, req: RescheduleModel) -> dict:
         raise HTTPException(
             status_code=409,
             detail=f"Attempt is {state!r}; only "
-                   f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
+            f"{sorted(RESCHEDULABLE_PUBLISH_STATES)} can be rescheduled",
         )
     when = float(req.schedule_at)
     # A time in the past means "publish now", which is a legitimate request, but it must be
     # recorded as `queued` rather than left `scheduled` in the past - the scheduler treats both as
     # due, and a state that disagrees with the clock is what makes a queue hard to reason about.
     state_now = (
-        PublishState.SCHEDULED.value if when > time.time() + 1
-        else PublishState.QUEUED.value
+        PublishState.SCHEDULED.value if when > time.time() + 1 else PublishState.QUEUED.value
     )
     store.update_attempt(attempt_id, scheduled_at=when, state=state_now)
     return store.get_attempt(attempt_id) or {}
@@ -1854,14 +1923,16 @@ def delete_source(job_id: str, confirm: bool = False) -> dict:
     it, and it refuses to act without explicit confirmation.
     """
     if not confirm:
-        raise HTTPException(status_code=400,
-                            detail="Deleting the original source requires confirm=true")
+        raise HTTPException(
+            status_code=400, detail="Deleting the original source requires confirm=true"
+        )
     job = get_manager().store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.input_type != "file":
-        raise HTTPException(status_code=400,
-                            detail="Only uploaded/downloaded source files can be deleted here")
+        raise HTTPException(
+            status_code=400, detail="Only uploaded/downloaded source files can be deleted here"
+        )
     src = Path(job.source).resolve()
     uploads_root = Path(settings.uploads_dir).resolve()
     if uploads_root not in src.parents:
@@ -1916,8 +1987,11 @@ def save_profile(req: ProfileModel) -> dict:
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Profile name is required")
     prof = get_profile_store().save(
-        req.name, req.settings, req.publishing,
-        profile_id=req.id, make_default=req.make_default,
+        req.name,
+        req.settings,
+        req.publishing,
+        profile_id=req.id,
+        make_default=req.make_default,
     )
     return prof.to_dict()
 
@@ -1971,26 +2045,33 @@ def watch_options(options: OptionsModel) -> dict:
 # Clip downloads. The primary download is a ZIP containing video + metadata TXT.
 # ---------------------------------------------------------------------------
 def _clip_metadata_text(clip) -> str:
-    return (f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
-            f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
-            f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n")
+    return (
+        f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
+        f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
+        f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n"
+    )
 
 
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
 def download_clip(job_id: str, filename: str) -> StreamingResponse:
     safe_name = Path(filename).name
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
-    job=get_manager().store.get(job_id)
-    clip=next((c for c in job.clips if c.filename==safe_name),None) if job else None
+    job = get_manager().store.get(job_id)
+    clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
-    buf=io.BytesIO()
-    with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as archive:
-        archive.write(path,arcname=safe_name)
-        archive.writestr(f"{Path(safe_name).stem}_metadata.txt",_clip_metadata_text(clip))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(path, arcname=safe_name)
+        archive.writestr(f"{Path(safe_name).stem}_metadata.txt", _clip_metadata_text(clip))
     buf.seek(0)
-    return StreamingResponse(buf,media_type="application/zip",headers={
-      "Content-Disposition":f'attachment; filename="{Path(safe_name).stem}_package.zip"'})
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{Path(safe_name).stem}_package.zip"'
+        },
+    )
 
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
@@ -1999,7 +2080,7 @@ def download_video_only(job_id: str, filename: str) -> FileResponse:
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Clip not found")
-    return FileResponse(path,filename=safe_name,media_type="video/mp4")
+    return FileResponse(path, filename=safe_name, media_type="video/mp4")
 
 
 # ---------------------------------------------------------------------------
@@ -2033,6 +2114,7 @@ def fallback_index_html() -> str:
     Every probe is individually guarded: this page must render when things are broken, since
     that is precisely when it is read.
     """
+
     def _row(label: str, value: str, ok: bool = True) -> str:
         colour = "#3fb950" if ok else "#f85149"
         return (
@@ -2049,8 +2131,9 @@ def fallback_index_html() -> str:
         # reader nothing, and a missing binary is the single most common reason a deploy of
         # this app does not work. shutil.which answers the question they actually have.
         resolved = shutil.which(str(settings.ffmpeg_binary))
-        rows.append(_row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})",
-                         bool(resolved)))
+        rows.append(
+            _row("ffmpeg", resolved or f"NOT FOUND ({settings.ffmpeg_binary})", bool(resolved))
+        )
     except Exception:
         rows.append(_row("ffmpeg", "could not be resolved", ok=False))
 
@@ -2074,10 +2157,12 @@ def fallback_index_html() -> str:
         # listed" on a perfectly healthy instance, the exact class of failure this page exists
         # to make visible.
         engines, _capabilities = _engines_info()
-        names = ", ".join(
-            f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}"
-            for e in engines
-        ) or "none registered"
+        names = (
+            ", ".join(
+                f"{e['id']}{'' if e.get('available', True) else ' (unavailable)'}" for e in engines
+            )
+            or "none registered"
+        )
         rows.append(_row("Engines", names))
     except Exception:
         rows.append(_row("Engines", "could not be listed", ok=False))

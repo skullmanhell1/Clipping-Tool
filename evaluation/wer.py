@@ -23,36 +23,83 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
 
 #: Numbers written as digits are folded to words so "10" and "ten" do not count as an error.
 #: Only 0-20 and the round tens: past that the mapping needs a real number-to-words library,
 #: and an incomplete mapping is worse than none because it would fold some numbers and not
 #: others, making the score depend on which numbers the speaker happened to use.
 _NUMBER_WORDS = {
-    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
-    "6": "six", "7": "seven", "8": "eight", "9": "nine", "10": "ten",
-    "11": "eleven", "12": "twelve", "13": "thirteen", "14": "fourteen",
-    "15": "fifteen", "16": "sixteen", "17": "seventeen", "18": "eighteen",
-    "19": "nineteen", "20": "twenty", "30": "thirty", "40": "forty",
-    "50": "fifty", "60": "sixty", "70": "seventy", "80": "eighty", "90": "ninety",
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+    "10": "ten",
+    "11": "eleven",
+    "12": "twelve",
+    "13": "thirteen",
+    "14": "fourteen",
+    "15": "fifteen",
+    "16": "sixteen",
+    "17": "seventeen",
+    "18": "eighteen",
+    "19": "nineteen",
+    "20": "twenty",
+    "30": "thirty",
+    "40": "forty",
+    "50": "fifty",
+    "60": "sixty",
+    "70": "seventy",
+    "80": "eighty",
+    "90": "ninety",
 }
 
 #: Contractions are expanded rather than stripped of their apostrophe, because "dont" is not a
 #: word and would then be a substitution against any reference that spells it properly.
 _CONTRACTIONS = {
-    "dont": "do not", "doesnt": "does not", "didnt": "did not", "wont": "will not",
-    "cant": "can not", "cannot": "can not", "couldnt": "could not",
-    "shouldnt": "should not", "wouldnt": "would not", "isnt": "is not",
-    "arent": "are not", "wasnt": "was not", "werent": "were not",
-    "hasnt": "has not", "havent": "have not", "hadnt": "had not",
-    "im": "i am", "ive": "i have", "ill": "i will", "id": "i would",
-    "youre": "you are", "youve": "you have", "youll": "you will",
-    "hes": "he is", "shes": "she is", "its": "it is", "thats": "that is",
-    "theres": "there is", "theyre": "they are", "theyve": "they have",
-    "were": "we are", "weve": "we have", "lets": "let us", "gonna": "going to",
-    "wanna": "want to", "kinda": "kind of",
+    "dont": "do not",
+    "doesnt": "does not",
+    "didnt": "did not",
+    "wont": "will not",
+    "cant": "can not",
+    "cannot": "can not",
+    "couldnt": "could not",
+    "shouldnt": "should not",
+    "wouldnt": "would not",
+    "isnt": "is not",
+    "arent": "are not",
+    "wasnt": "was not",
+    "werent": "were not",
+    "hasnt": "has not",
+    "havent": "have not",
+    "hadnt": "had not",
+    "im": "i am",
+    "ive": "i have",
+    "ill": "i will",
+    "id": "i would",
+    "youre": "you are",
+    "youve": "you have",
+    "youll": "you will",
+    "hes": "he is",
+    "shes": "she is",
+    "its": "it is",
+    "thats": "that is",
+    "theres": "there is",
+    "theyre": "they are",
+    "theyve": "they have",
+    "were": "we are",
+    "weve": "we have",
+    "lets": "let us",
+    "gonna": "going to",
+    "wanna": "want to",
+    "kinda": "kind of",
 }
 
 _PUNCT_RE = re.compile(r"[^\w\s']", re.UNICODE)
@@ -66,14 +113,16 @@ _WS_RE = re.compile(r"\s+")
 #: Two substitutions per contraction, on every reference written by a human rather than pasted
 #: from a terminal - and it would have inflated every model's score equally, so the comparison
 #: would still have looked plausible.
-_APOSTROPHES = str.maketrans({
-    "\u2019": "'",   # right single quotation mark
-    "\u2018": "'",   # left single quotation mark
-    "\u02bc": "'",   # modifier letter apostrophe
-    "\u00b4": "'",   # acute accent used as an apostrophe
-    "\u0060": "'",   # grave accent used as an apostrophe
-    "\uff07": "'",   # fullwidth apostrophe
-})
+_APOSTROPHES = str.maketrans(
+    {
+        "\u2019": "'",  # right single quotation mark
+        "\u2018": "'",  # left single quotation mark
+        "\u02bc": "'",  # modifier letter apostrophe
+        "\u00b4": "'",  # acute accent used as an apostrophe
+        "\u0060": "'",  # grave accent used as an apostrophe
+        "\uff07": "'",  # fullwidth apostrophe
+    }
+)
 
 
 def normalise(text: str) -> list[str]:
@@ -174,9 +223,9 @@ def word_error_rate(reference: str, hypothesis: str, *, max_examples: int = 10) 
                 costs[i][j] = costs[i - 1][j - 1]
             else:
                 costs[i][j] = 1 + min(
-                    costs[i - 1][j - 1],   # substitution
-                    costs[i - 1][j],       # deletion
-                    costs[i][j - 1],       # insertion
+                    costs[i - 1][j - 1],  # substitution
+                    costs[i - 1][j],  # deletion
+                    costs[i][j - 1],  # insertion
                 )
 
     subs = dels = ins = 0

@@ -29,7 +29,6 @@ import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ class FontMetrics:
 
 
 @lru_cache(maxsize=32)
-def _load_metrics(font_path: str) -> Optional[FontMetrics]:
+def _load_metrics(font_path: str) -> FontMetrics | None:
     """Advance widths for the font at ``font_path``, or ``None`` when unreadable.
 
     Cached because a cue is measured word by word and a job renders many cues: parsing a TTF per
@@ -93,7 +92,7 @@ def _load_metrics(font_path: str) -> Optional[FontMetrics]:
         return None
 
 
-def metrics_for_font(font_name: str) -> Optional[FontMetrics]:
+def metrics_for_font(font_name: str) -> FontMetrics | None:
     """Metrics for a *family name*, resolved against the vendored fonts, or ``None``.
 
     Resolution goes through the same manifest the renderer uses, so a name that libass will
@@ -105,7 +104,7 @@ def metrics_for_font(font_name: str) -> Optional[FontMetrics]:
 
 
 @lru_cache(maxsize=64)
-def _font_file(font_name: str) -> Optional[Path]:
+def _font_file(font_name: str) -> Path | None:
     """The vendored file for ``font_name``, or ``None``."""
     try:
         import json
@@ -256,8 +255,13 @@ def fits_in_lines(
     if not words:
         return True
     wrapped = wrap_text(
-        text, font=font, font_size=font_size, max_width_px=max_width_px,
-        max_lines=max_lines, spacing=spacing, scale_x=scale_x,
+        text,
+        font=font,
+        font_size=font_size,
+        max_width_px=max_width_px,
+        max_lines=max_lines,
+        spacing=spacing,
+        scale_x=scale_x,
     )
     return sum(len(line.split()) for line in wrapped) == len(words)
 

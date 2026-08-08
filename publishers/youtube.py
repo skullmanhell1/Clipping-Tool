@@ -1,8 +1,8 @@
 """YouTube Data API v3 resumable uploader (OAuth refresh-token flow)."""
+
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 import httpx
 
@@ -46,20 +46,26 @@ class YouTubePublisher(BasePublisher):
         return self._history
 
     def status(self, account_id=""):
-        ok = all([
-            settings.youtube_client_id,
-            settings.youtube_client_secret,
-            settings.youtube_refresh_token,
-        ])
+        ok = all(
+            [
+                settings.youtube_client_id,
+                settings.youtube_client_secret,
+                settings.youtube_refresh_token,
+            ]
+        )
         account = account_id or (settings.youtube_channel_id or "")
         expires_at = None
         if ok:
             cached = self._cached_token(account)
             expires_at = cached.get("expires_at") if cached else None
         return PublisherStatus(
-            self.name, ok, ok, True,
+            self.name,
+            ok,
+            ok,
+            True,
             "ready" if ok else "not_configured",
-            "OAuth ready; vertical videos publish as Shorts" if ok
+            "OAuth ready; vertical videos publish as Shorts"
+            if ok
             else "Set YouTube OAuth client ID, secret, and refresh token",
             account,
             token_expires_at=expires_at,
@@ -68,7 +74,7 @@ class YouTubePublisher(BasePublisher):
         )
 
     # ------------------------------------------------------------------ PB4 --
-    def _cached_token(self, account_id: str) -> Optional[dict]:
+    def _cached_token(self, account_id: str) -> dict | None:
         try:
             return self.history.get_token(self.name, account_id)
         except Exception:
@@ -114,9 +120,7 @@ class YouTubePublisher(BasePublisher):
 
         token, expires_at = self._exchange()
         try:
-            self.history.save_token(
-                self.name, token, account_id=account, expires_at=expires_at
-            )
+            self.history.save_token(self.name, token, account_id=account, expires_at=expires_at)
         except Exception:
             pass  # Caching is an optimisation; the token in hand is still good.
         return token
@@ -133,9 +137,7 @@ class YouTubePublisher(BasePublisher):
 
     def invalidate_credentials(self, account_id: str = "") -> None:
         try:
-            self.history.clear_token(
-                self.name, account_id or (settings.youtube_channel_id or "")
-            )
+            self.history.clear_token(self.name, account_id or (settings.youtube_channel_id or ""))
         except Exception:
             pass
 
@@ -185,16 +187,19 @@ class YouTubePublisher(BasePublisher):
             init.raise_for_status()
             location = init.headers["location"]
             with request.video_path.open("rb") as f:
-                upload = self.client.put(
-                    location, content=f, headers={"Content-Type": "video/mp4"}
-                )
+                upload = self.client.put(location, content=f, headers={"Content-Type": "video/mp4"})
             upload.raise_for_status()
             data = upload.json()
             vid = data.get("id", "")
             state = PublishState.PRIVATE if privacy == "private" else PublishState.PUBLISHED
             return PublishResult(
-                True, state, self.name, f"https://youtube.com/shorts/{vid}", vid,
-                message=f"Uploaded as {privacy}", raw=data,
+                True,
+                state,
+                self.name,
+                f"https://youtube.com/shorts/{vid}",
+                vid,
+                message=f"Uploaded as {privacy}",
+                raw=data,
             )
         except Exception as exc:
             return PublishResult(False, PublishState.FAILED, self.name, error=str(exc))

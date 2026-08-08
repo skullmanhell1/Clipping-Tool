@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 
@@ -61,7 +61,7 @@ def _repeated_token_run(text: str) -> int:
     return longest
 
 
-def _mean_word_probability(segment: Any) -> Optional[float]:
+def _mean_word_probability(segment: Any) -> float | None:
     words = getattr(segment, "words", None) or []
     values = []
     for word in words:
@@ -89,12 +89,11 @@ class FilterResult:
     def reasons(self) -> list[str]:
         """Each drop as ``"<reason> @ <start>-<end>"``, for a log a human will read."""
         return [
-            f"{reason} @ {segment.start:.2f}-{segment.end:.2f}"
-            for segment, reason in self.dropped
+            f"{reason} @ {segment.start:.2f}-{segment.end:.2f}" for segment, reason in self.dropped
         ]
 
 
-def _looks_invented(segment: Any) -> Optional[str]:
+def _looks_invented(segment: Any) -> str | None:
     """Why ``segment`` looks hallucinated, or ``None``.
 
     Two independent signals must agree before anything is dropped for confidence reasons.

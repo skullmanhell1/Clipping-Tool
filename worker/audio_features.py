@@ -29,8 +29,9 @@ from __future__ import annotations
 import re
 import statistics
 import subprocess
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any
 
 from config import settings
 
@@ -115,10 +116,16 @@ def energy_envelope(
     )
     cmd = [
         settings.ffmpeg_binary,
-        "-nostdin", "-hide_banner",
-        "-i", str(path),
-        "-af", graph,
-        "-vn", "-f", "null", "-",
+        "-nostdin",
+        "-hide_banner",
+        "-i",
+        str(path),
+        "-af",
+        graph,
+        "-vn",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -142,7 +149,7 @@ def _readings_in_window(
     return out
 
 
-def source_median_energy(envelope: Sequence[tuple[float, float]]) -> Optional[float]:
+def source_median_energy(envelope: Sequence[tuple[float, float]]) -> float | None:
     """The source's own median energy in dBFS, ignoring silence.
 
     Silent windows are excluded before the median is taken. A video with a long silent
@@ -170,7 +177,7 @@ class Energy:
         self,
         readings: Sequence[float],
         *,
-        baseline: Optional[float] = None,
+        baseline: float | None = None,
     ) -> None:
         if readings:
             self.mean_db = sum(readings) / len(readings)
@@ -206,7 +213,7 @@ def energy_in_window(
     start: float,
     end: float,
     *,
-    baseline: Optional[float] = None,
+    baseline: float | None = None,
 ) -> Energy:
     """Energy features for ``[start, end]`` (S2). Pure - the envelope is already measured."""
     return Energy(_readings_in_window(envelope, float(start), float(end)), baseline=baseline)
@@ -234,7 +241,7 @@ def detect_onsets(
     only its first - otherwise one door slam becomes four "beats" a second apart.
     """
     onsets: list[float] = []
-    previous_db: Optional[float] = None
+    previous_db: float | None = None
     for t, db in envelope:
         if previous_db is not None and (db - previous_db) >= rise_db:
             if not onsets or (t - onsets[-1]) >= min_gap:

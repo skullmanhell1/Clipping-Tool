@@ -189,9 +189,7 @@ def test_p4_at_most_one_main_face_and_a_lone_detection_wins(boxes, scores):
     score -- with nothing to compare against, a confidence is not evidence for discarding the
     only face found.
     """
-    detections = [
-        Detection(*b, score=scores[i % len(scores)]) for i, b in enumerate(boxes)
-    ]
+    detections = [Detection(*b, score=scores[i % len(scores)]) for i, b in enumerate(boxes)]
     picked = pick_main_face(detections)
     assert picked is not None
     assert isinstance(picked, tuple) and len(picked) == 2
@@ -304,7 +302,7 @@ def test_the_model_check_fails_and_names_a_truncated_file(tmp_path):
     models = tmp_path / "models"
     models.mkdir()
     original = _ROOT / "assets" / "models" / entry.filename
-    (models / entry.filename).write_bytes(original.read_bytes()[: 1024])
+    (models / entry.filename).write_bytes(original.read_bytes()[:1024])
 
     result = _run_check("--models-dir", str(models))
     assert result.returncode != 0
@@ -321,11 +319,10 @@ def test_the_model_check_fails_and_names_a_missing_file(tmp_path):
     assert MODEL_MANIFEST[0].filename in (result.stdout + result.stderr)
 
 
-
 # --------------------------------------------------------------------------- #
 # 2.4 — backend resolution and substitution                                    #
 # --------------------------------------------------------------------------- #
-from worker.effects.reframe import (  # noqa: E402 - grouped with its own section
+from worker.effects.reframe import (  # grouped with its own section
     DEFAULT_FACE_DETECTOR_BACKEND,
     FACE_DETECTOR_BACKENDS,
     detector_marker_for,
@@ -430,11 +427,11 @@ def test_an_unbuildable_cascade_yields_none_rather_than_raising():
     """Requirement 4.4 — the bottom rung: no detector at all, and still no exception."""
 
     class _NoCascade:
-        class data:  # noqa: N801 - mirrors cv2.data
+        class data:  # mirrors cv2.data
             haarcascades = "/nonexistent/"
 
         @staticmethod
-        def CascadeClassifier(_path):  # noqa: N802 - mirrors the cv2 API
+        def CascadeClassifier(_path):  # mirrors the cv2 API
             class _Empty:
                 @staticmethod
                 def empty():
@@ -476,7 +473,6 @@ def test_the_resolved_label_never_names_a_backend_that_did_not_run(tmp_path):
                 _released(detector)
 
 
-
 # --------------------------------------------------------------------------- #
 # Gaps found by the mutation run (task 7.3), each pinning one line that had     #
 # nothing observing it.                                                        #
@@ -496,8 +492,10 @@ def test_the_cap_tolerance_is_not_a_bare_comparison():
 
     def report(effective, requested):
         return Sample_Report(
-            samples=[], resolved_backend="haar",
-            effective_fps=effective, requested_fps=requested,
+            samples=[],
+            resolved_backend="haar",
+            effective_fps=effective,
+            requested_fps=requested,
         )
 
     # Within tolerance: measurement noise, not a bound cap.

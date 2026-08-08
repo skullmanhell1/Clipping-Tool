@@ -1,0 +1,122 @@
+{
+  "_comment": [
+    "Mutation spec for the colour group: O13 tone-mapping, O14 delivered colour tags, O15 range.",
+    "",
+    "Attacked in the order the design asks for, which is by how *plausible* the wrong output looks",
+    "rather than by how likely the mistake is. Nothing in this feature raises. A clip that was",
+    "tone-mapped twice, or tone-mapped when it should not have been, is still a valid H.264 file of",
+    "the right duration with captions in the right places -- it just looks wrong, and only to",
+    "someone who has seen the original. That is the whole reason this spec exists.",
+    "",
+    "The first two are the ones to care about:",
+    "  double_tone_map          -- compresses the range twice; delivers a flat, muddy picture",
+    "  tone_map_unknown_source  -- destroys a correct SDR picture that merely failed to declare itself",
+    "",
+    "Both were the design's named worst cases before any of this was written, and both are",
+    "invisible to every other test in the project.",
+    "",
+    "Note the `command` runs the two colour test modules plus test_output_compat.py. The third is",
+    "there because O14's tags have to keep the O1/O2 contract intact -- a mutation that satisfied",
+    "the colour tests by dropping -pix_fmt would otherwise escape."
+  ],
+
+  "command": [
+    ".venv/bin/python", "-m", "pytest",
+    "tests/test_colour_pipeline.py", "tests/test_probe_colour.py", "tests/test_output_compat.py",
+    "-q", "-x"
+  ],
+
+  "mutations": [
+    {
+      "name": "double_tone_map",
+      "file": "worker/colour.py",
+      "old": "        return Colour_Plan(\n            source_range=self.source_range,\n            filters=(),",
+      "new": "        return Colour_Plan(\n            source_range=self.source_range,\n            filters=self.filters,",
+      "why": "R2.8's exact failure: consumed() stops spending the chain, so the cut and the composite both tone-map. Range compressed twice yields a flat, muddy clip that still looks like a photograph of something. No error, no marker difference, and the metadata is still correct -- so only a test that counts applications can see it."
+    },
+    {
+      "name": "tone_map_unknown_source",
+      "file": "worker/colour.py",
+      "old": "    if value in SDR_TRANSFERS:\n        return Dynamic_Range.SDR\n    return Dynamic_Range.UNKNOWN",
+      "new": "    if value in SDR_TRANSFERS:\n        return Dynamic_Range.SDR\n    return Dynamic_Range.HDR",
+      "why": "R1.7 inverted: an unrecognised transfer function becomes HDR and gets tone-mapped. Destroys any correct picture carrying a transfer we have not enumerated -- and the asymmetry is the point, since tone-mapping SDR is far more visibly damaging than failing to tone-map HDR."
+    },
+    {
+      "name": "absent_transfer_treated_as_sdr",
+      "file": "worker/colour.py",
+      "old": "    if not value:\n        return Dynamic_Range.UNKNOWN",
+      "new": "    if not value:\n        return Dynamic_Range.SDR",
+      "why": "R1.4/R1.7: collapses 'the stream did not say' into 'the stream said Rec.709'. Harmless for tone-mapping (both decline) but it destroys the distinction the marker reports, so an operator loses the one clue that the source was untagged."
+    },
+    {
+      "name": "infer_hdr_from_bit_depth",
+      "file": "worker/colour.py",
+      "old": "HDR_TRANSFERS: frozenset[str] = frozenset({HDR_TRANSFER_PQ, HDR_TRANSFER_HLG})",
+      "new": "HDR_TRANSFERS: frozenset[str] = frozenset({HDR_TRANSFER_PQ, HDR_TRANSFER_HLG, \"bt2020-10\", \"bt2020-12\"})",
+      "why": "R1.6's forbidden inference, in its most tempting form: the values contain '2020' and read like HDR. They are wide *gamut*, not high dynamic *range*, and wide-gamut SDR is ordinary graded footage."
+    },
+    {
+      "name": "copy_source_tags_onto_tone_mapped_output",
+      "file": "worker/colour.py",
+      "old": "        tags = colour_tag_args(\n            transfer=BT709, primaries=BT709, matrix=BT709, colour_range=out_range\n        )",
+      "new": "        tags = colour_tag_args(\n            transfer=transfer, primaries=primaries, matrix=matrix, colour_range=out_range\n        )",
+      "why": "R3.2's named failure: tone-mapped samples labelled smpte2084/bt2020. Strictly worse than writing no tags, because a player that reads them applies an HDR EOTF to SDR content and is confidently wrong instead of falling back to a correct assumption."
+    },
+    {
+      "name": "claim_rec709_for_an_unconverted_source",
+      "file": "worker/colour.py",
+      "old": "        tags = colour_tag_args(\n            transfer=(transfer or \"\").strip().lower(),\n            primaries=(primaries or \"\").strip().lower(),\n            matrix=(matrix or \"\").strip().lower(),",
+      "new": "        tags = colour_tag_args(\n            transfer=BT709,\n            primaries=BT709,\n            matrix=BT709,",
+      "why": "R3.2 from the other side: a Rec.601 source passed through untouched gets labelled Rec.709. The tempting mutation, since almost everything really is Rec.709 -- which is exactly why the honest branch has to be pinned."
+    },
+    {
+      "name": "range_conversion_dropped",
+      "file": "worker/colour.py",
+      "old": "    if not src or src == dst:\n        return \"\"\n    return f\"scale=in_range={src}:out_range={dst}\"",
+      "new": "    if not src or src == dst:\n        return \"\"\n    return \"\"",
+      "why": "O15/R3.3: full-range footage passes through as though limited. Crushes blacks and clips highlights on phone footage -- the most common colour defect in the wild -- while the file still declares tv, so it is mis-tagged as well as wrong."
+    },
+    {
+      "name": "range_conversion_inverted",
+      "file": "worker/colour.py",
+      "old": "    return f\"scale=in_range={src}:out_range={dst}\"",
+      "new": "    return f\"scale=in_range={dst}:out_range={src}\"",
+      "why": "The same conversion applied backwards. Produces a washed, low-contrast image rather than a crushed one, and reads as a grading choice rather than a bug."
+    },
+    {
+      "name": "tone_map_probe_fails_open",
+      "file": "worker/colour.py",
+      "old": "        return TONEMAP_REQUIRED_FILTERS[0]\n    return \"\"",
+      "new": "        return \"\"\n    return \"\"",
+      "why": "R2.5: makes the capability probe fail *open*, so a build with no libzimg is told zscale exists. The result is a filter-graph configuration error and a failed job -- the one outcome the requirement forbids, and worse than the defect being fixed."
+    },
+    {
+      "name": "injected_prober_ignored",
+      "file": "worker/colour.py",
+      "old": "        report = Capability_Report(prober) if prober is not None else get_report()",
+      "new": "        report = get_report(prober)",
+      "why": "The defect this code was actually written with, and the reason the comment above it is long. get_report() honours a prober only on first construction, so in any process that has already probed anything the injected one is accepted and silently ignored -- every negative test then passes against the real ffmpeg for the wrong reason. Two tests here failed exactly this way before it was fixed."
+    },
+    {
+      "name": "tone_map_ignores_the_disabled_setting",
+      "file": "worker/colour.py",
+      "old": "        if not tone_map_enabled:\n            markers.append(\"tone_map_skipped:disabled\")",
+      "new": "        if False:\n            markers.append(\"tone_map_skipped:disabled\")",
+      "why": "An operator who switched tone-mapping off gets it anyway. R12's rule that a setting must be honoured, and the kind of thing nobody checks because the default is on."
+    },
+    {
+      "name": "colour_chain_appended_instead_of_prepended",
+      "file": "worker/colour.py",
+      "old": "    return f\"{chain},{existing}\"",
+      "new": "    return f\"{existing},{chain}\"",
+      "why": "R2.2: tone-mapping after the crop and scale. Interpolating PQ-coded values treats perceptual quantities as light and leaves haloes that survive to the delivered file. Still renders, still looks like a picture."
+    },
+    {
+      "name": "tags_prepended_to_the_encode_args",
+      "file": "worker/ffmpeg_utils.py",
+      "old": "    args += list(colour_tags)\n    return args",
+      "new": "    return list(colour_tags) + args",
+      "why": "Declared `equivalent: true` on the first run and the harness caught it, which was the right answer and not the expected one. The reasoning was that ffmpeg parses output options by name rather than position, so either end is fine -- true of ffmpeg, irrelevant to the test, which pins `tagged[:len(h264_args())] == h264_args()` so that tags are appended and never interleaved. Left as a live mutation with the wrong claim removed: the ordering is asserted, so a change to it should fail, and a mistaken `equivalent` flag is exactly the kind of unexamined excuse the tool warns about."
+    }
+  ]
+}
