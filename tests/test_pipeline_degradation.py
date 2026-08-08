@@ -1365,8 +1365,12 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         rec.events.append("cut")
         return av_touch(dest)
 
-    def fake_filler(source, keeps, dest, **_colour):
-        # `**_colour` absorbs O14's `colour_tags`; see the note on `fake_cut` above.
+    def fake_filler(source, keeps, dest, **_kw):
+        # `**_kw` absorbs both O18/O19's `delivered_fps`/`keyframe_seconds` and O14's
+        # `colour_tags`. This double stands in for the real concat to assert clip accounting,
+        # so the encode argv is not its subject -- but a stub narrower than the function it
+        # replaces fails on the call rather than on the assertion, which is a confusing way to
+        # learn a parameter was added.
         rec.events.append("filler")
         return av_touch(dest)
 
