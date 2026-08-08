@@ -629,6 +629,26 @@ class ClipResult:
     #   - ``faces_none``                     zero face tracks detected
     #   - ``speaker_reframe_degraded``       speaker-aware geometry unusable/failed;
     #                                        fell back along the chain
+    #
+    #   O13/O14/O15 -- colour. Every one of these names the *resolved* outcome, never the
+    #   request, because a marker echoing back a setting the operator already knows they set
+    #   tells them nothing:
+    #   - ``tone_map:<operator>:<transfer>``  HDR converted to SDR Rec.709; names the operator
+    #                                        that actually ran and the transfer detected
+    #                                        (smpte2084 = PQ, arib-std-b67 = HLG)
+    #   - ``tone_map_degraded:ffmpeg_filter:<name>``
+    #                                        an HDR source was delivered untone-mapped because
+    #                                        this ffmpeg lacks the filter. Not a failure: R2.5
+    #                                        forbids failing a job over tone-mapping
+    #   - ``tone_map_skipped:disabled``      HDR source, conversion switched off by the
+    #                                        operator. Distinct from the marker above on
+    #                                        purpose -- one is a choice, the other a limitation
+    #   - ``colour_range_converted:<from>:<to>``
+    #                                        full-range source squeezed to limited (O15)
+    #   - ``colour_range_assumed:<range>``   the source declared no range, so this default was
+    #                                        applied. One of the few *guards* that does record a
+    #                                        marker, because "we assumed limited" is the first
+    #                                        fact worth having when the blacks look wrong
     effects_applied: list[str] = field(default_factory=list)
 
     # --- Tier 1: provenance for composited b-roll assets ------------------

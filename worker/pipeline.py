@@ -28,6 +28,7 @@ from pathlib import Path
 from config import settings
 from worker import captions as cap
 from worker import (
+    colour,
     diarization,
     intermediate_cache,
     segmentation,
@@ -171,6 +172,28 @@ def run_pipeline(
     if info.duration <= 0:
         raise ValueError("Source video has zero duration")
 
+    # O13/O14/O15: decide the colour treatment once, here, from the probe just performed.
+    #
+    # Once per *job* rather than per clip because colour is a property of the source, not of a
+    # window into it. Deciding it per clip would re-probe nothing new and would open the door to
+    # two clips from one source being tone-mapped differently, which is the kind of inconsistency
+    # nobody notices until two clips are cut together.
+    #
+    # The plan is empty for SDR and for unknown sources, which is the overwhelming majority --
+    # so this adds no filter, no marker and no argv change to an ordinary render.
+    colour_plan = colour.plan_colour(
+        transfer=info.color_transfer,
+        primaries=info.color_primaries,
+        matrix=info.color_space,
+        source_range=info.color_range,
+        tone_map_enabled=bool(settings.tone_mapping),
+        operator=str(settings.tone_map_operator),
+        target_nits=int(settings.tone_map_target_nits),
+        delivery_range=str(settings.delivery_colour_range),
+    )
+    # The tags travel to every pass; the *filters* are spent by the first one that runs (R2.8).
+    colour_tags = colour_plan.tags
+
     # SOURCE-stage engines run at most once per source, reusing the probe just
     # performed to build the job's shared Time_Base — no additional ffprobe pass
     # is added (Reqs 3.5, 13.2, 13.7, 19.3, 19.4).
@@ -220,7 +243,7 @@ def run_pipeline(
                     translate=True,
                     vocabulary=getattr(options, "vocabulary", "") or "",
                 )
-            except Exception as exc:  # see below
+            except Exception as exc:
                 # Deliberately broad: this is an extra track on a job whose expensive work is
                 # still ahead of it, and every failure mode of a model call (OOM, a missing
                 # weight file, a corrupt download) is a reason to ship the clips without the
@@ -395,7 +418,25 @@ def run_pipeline(
                 applied.append("silence_trimmed")
 
         # 1. cut the selected segment
-        fu.cut_segment(source, c.start, c.end, raw)
+        #
+        # O13: this is where the colour conversion happens, and the only place it happens. The
+        # cut is the one pass with no geometry and no grade of its own, so it is the only
+        # placement that satisfies R2.2's "before any colour-dependent operation *and* before
+        # scaling" -- the geometry pass scales and the composite pass grades.
+        fu.cut_segment(
+            source,
+            c.start,
+            c.end,
+            raw,
+            video_filters=colour_plan.filter_chain,
+            colour_tags=colour_tags,
+        )
+        # Spent. Every later pass in this clip carries the tags and none of them re-converts
+        # (R2.8): tone-mapping twice compresses the range twice and delivers a flat, muddy
+        # picture that still looks like a plausible image, which makes it far worse to diagnose
+        # than no tone-map at all.
+        clip_colour = colour_plan.consumed()
+        applied = colour.merge_markers(applied, colour_plan)
 
         # 2. AI metadata first, so the hook title is available to the renderer.
         clip_text = c.text or cap_text(transcript, c.start, c.end)
@@ -441,7 +482,7 @@ def run_pipeline(
         if pending is not None:
             trimmed = temp_dir / f"trim_{clip_id}.mp4"
             try:
-                filler.apply_keep_intervals(raw, pending, trimmed)
+                filler.apply_keep_intervals(raw, pending, trimmed, colour_tags=clip_colour.tags)
                 raw.unlink(missing_ok=True)
                 raw = trimmed
                 words = filler.rebase_words(words, pending)
@@ -505,6 +546,7 @@ def run_pipeline(
                     sampler=FRAME_SAMPLER,
                     backend=options.face_detector,
                     notes=applied,
+                    colour_tags=clip_colour.tags,
                 )
                 # Record the applied-layout marker (Req 14.5) and attach the
                 # per-source diarisation provenance notes (Reqs 4.2/4.4/16.5).
@@ -522,10 +564,17 @@ def run_pipeline(
                         backend=options.face_detector,
                         detector=FACE_DETECTOR,
                         notes=applied,
+                        colour_tags=clip_colour.tags,
                     )
                     applied.append("reframe")
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
-                    fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+                    fu.reformat_aspect(
+                        raw,
+                        geo,
+                        aspect=options.aspect,
+                        mode="crop_blur",
+                        colour_tags=clip_colour.tags,
+                    )
         elif options.reframe:
             try:
                 reframe.apply_reframe(
@@ -535,12 +584,25 @@ def run_pipeline(
                     backend=options.face_detector,
                     detector=FACE_DETECTOR,
                     notes=applied,
+                    colour_tags=clip_colour.tags,
                 )
                 applied.append("reframe")
             except (reframe.ReframeUnavailable, fu.FFmpegError):
-                fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+                fu.reformat_aspect(
+                    raw,
+                    geo,
+                    aspect=options.aspect,
+                    mode="crop_blur",
+                    colour_tags=clip_colour.tags,
+                )
         else:
-            fu.reformat_aspect(raw, geo, aspect=options.aspect, mode="crop_blur")
+            fu.reformat_aspect(
+                raw,
+                geo,
+                aspect=options.aspect,
+                mode="crop_blur",
+                colour_tags=clip_colour.tags,
+            )
 
         # 4b. GEOMETRY-stage engines, after the untouched ladder above. As at the
         #     audio stage, replacement media is adopted only when an engine
@@ -604,6 +666,7 @@ def run_pipeline(
                 llm_client=llm_client,
                 broll_resolver=broll_resolver,
                 engine_contributions=(compose.contributions if compose is not None else None),
+                colour_tags=clip_colour.tags,
                 # A17: which music track this clip gets, when the mood has several. Built from
                 # facts that survive a re-run - the source's name, the clip's ordinal and its
                 # source-relative start - so the same job produces the same beds while ten clips

@@ -888,10 +888,16 @@ def av_ffmpeg_free_pipeline(pl, render_calls, *, spans=AV_CLIP_SPANS):
     def fake_probe(path):
         return info
 
-    def fake_cut(source, start, end, dest, reencode=True):
+    def fake_cut(source, start, end, dest, reencode=True, **_colour):
+        # `**_colour` absorbs O13/O14's `video_filters`/`colour_tags`. This double stands in
+        # for the real cut to assert *clip accounting*, so the colour argv is not its
+        # subject -- but a stub with a narrower signature than the function it replaces
+        # fails on the call rather than on the assertion, which is a confusing way to learn
+        # that a parameter was added.
         return av_touch(dest)
 
-    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur"):
+    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur", **_colour):
+        # `**_colour` absorbs O14's `colour_tags`; see the note on `fake_cut` above.
         return av_touch(dest)
 
     def fake_thumbnail(source, dest, at=0.0, width=640):
@@ -1350,15 +1356,22 @@ def p34_stubbed_media(module, rec, *, spans=AV_CLIP_SPANS, duration=AV_SOURCE_DU
         rec.probes += 1
         return info
 
-    def fake_cut(source, start, end, dest, reencode=True):
+    def fake_cut(source, start, end, dest, reencode=True, **_colour):
+        # `**_colour` absorbs O13/O14's `video_filters`/`colour_tags`. This double stands in
+        # for the real cut to assert *clip accounting*, so the colour argv is not its
+        # subject -- but a stub with a narrower signature than the function it replaces
+        # fails on the call rather than on the assertion, which is a confusing way to learn
+        # that a parameter was added.
         rec.events.append("cut")
         return av_touch(dest)
 
-    def fake_filler(source, keeps, dest):
+    def fake_filler(source, keeps, dest, **_colour):
+        # `**_colour` absorbs O14's `colour_tags`; see the note on `fake_cut` above.
         rec.events.append("filler")
         return av_touch(dest)
 
-    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur"):
+    def fake_reformat(source, dest, aspect="9:16", mode="crop_blur", **_colour):
+        # `**_colour` absorbs O14's `colour_tags`; see the note on `fake_cut` above.
         rec.events.append("geometry")
         return av_touch(dest)
 

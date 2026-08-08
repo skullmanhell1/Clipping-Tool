@@ -14,6 +14,7 @@ Pipeline:
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -228,7 +229,13 @@ def _seam_fades(duration: float, fade_s: float, *, lead: bool, tail: bool) -> st
     return chain
 
 
-def apply_keep_intervals(source: str | Path, keeps: list[Interval], dest: str | Path) -> Path:
+def apply_keep_intervals(
+    source: str | Path,
+    keeps: list[Interval],
+    dest: str | Path,
+    *,
+    colour_tags: Sequence[str] = (),
+) -> Path:
     """Concatenate ``keeps`` from ``source`` into ``dest`` in one ffmpeg pass.
 
     Uses ``trim``/``atrim`` + ``concat``. Assumes the source has audio (clips
@@ -271,7 +278,7 @@ def apply_keep_intervals(source: str | Path, keeps: list[Interval], dest: str | 
         "[v]",
         "-map",
         "[a]",
-        *h264_args(normalise_fps=True, vbv_cap=True),
+        *h264_args(normalise_fps=True, vbv_cap=True, colour_tags=colour_tags),
         *aac_args(),
         "-movflags",
         "+faststart",

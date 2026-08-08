@@ -968,7 +968,7 @@ def resolve_detector(
             return None
 
     if requested == "mediapipe":
-        from worker import face_models  # avoids a config import at module scope
+        from worker import face_models
 
         model_path = face_models.resolve_model("mediapipe", model_dir)
         built = None
@@ -1386,6 +1386,7 @@ def apply_reframe(
     backend: str | None = None,
     detector: Callable | None = None,
     notes: list[str] | None = None,
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1464,7 +1465,7 @@ def apply_reframe(
         str(video),
         "-vf",
         vf,
-        *h264_args(),
+        *h264_args(colour_tags=colour_tags),
         "-c:a",
         "copy",
         "-movflags",
@@ -2047,6 +2048,7 @@ def apply_speaker_reframe(
     sampler: Callable | None = None,
     backend: str | None = None,
     notes: list[str] | None = None,
+    colour_tags: Sequence[str] = (),
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -2144,7 +2146,7 @@ def apply_speaker_reframe(
             "[vout]",
             "-map",
             "0:a?",
-            *h264_args(),
+            *h264_args(colour_tags=colour_tags),
             "-c:a",
             "copy",
             "-movflags",
@@ -2199,7 +2201,7 @@ def apply_speaker_reframe(
         str(video),
         "-vf",
         vf,
-        *h264_args(),
+        *h264_args(colour_tags=colour_tags),
         "-c:a",
         "copy",
         "-movflags",
