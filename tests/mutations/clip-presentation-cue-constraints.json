@@ -1,0 +1,102 @@
+{
+  "_comment": [
+    "Mutation spec for C24 (cue legibility floors) and C25 (linguistic line breaking).",
+    "",
+    "The two mutations that matter are the ones producing output that still looks like captions:",
+    "  overlap_allowed        -- two lines on screen at once; a rendering fault, not a legibility one",
+    "  word_spans_stretched   -- karaoke stops tracking speech while every line still appears on time",
+    "",
+    "Neither raises. Both are only visible in the pixels, and the second is the more insidious:",
+    "the caption appears at the right moment and the highlight then drifts through it, which reads",
+    "as a bad transcription rather than as a timing bug."
+  ],
+
+  "command": [".venv/bin/python", "-m", "pytest", "tests/test_cue_constraints.py", "-q", "-x"],
+
+  "mutations": [
+    {
+      "name": "overlap_allowed",
+      "file": "worker/cue_constraints.py",
+      "old": "        target_end = min(cue.start + needed, ceiling)",
+      "new": "        target_end = cue.start + needed",
+      "why": "R4.4's exact failure: the extension ignores the next cue's start, so two cues occupy the screen together. libass renders both, stacked or overlapping depending on preset, and nothing errors."
+    },
+    {
+      "name": "word_spans_stretched",
+      "file": "worker/cue_constraints.py",
+      "old": "            cue = replace(cue, end=target_end)",
+      "new": "            cue = replace(cue, end=target_end, word_spans=tuple((s, target_end) for s, _ in cue.word_spans))",
+      "why": "R4.8. The cue's window and its words' timings are different things, and karaoke fills track the second. Stretching the spans makes every highlight sweep slower than the speech it follows -- the captions appear on time and then drift through the line, which reads as a bad transcription."
+    },
+    {
+      "name": "disabled_path_not_a_no_op",
+      "file": "worker/cue_constraints.py",
+      "old": "    if min_seconds <= 0 and max_reading_rate <= 0:\n        # Disabled: return the input objects themselves, not copies. R4.10 asks for bit-identical\n        # and this is the strongest available form of it.\n        return list(cues), report",
+      "new": "    if min_seconds <= 0 and max_reading_rate <= 0:\n        return [replace(c, end=c.end + 1e-9) for c in cues], report",
+      "why": "R4.10/R4.12. A one-nanosecond nudge on every cue with the feature switched off. Invisible in playback, and it moves every parity golden and caption fixture in the project -- which is how a re-freeze gets done for a change nobody made."
+    },
+    {
+      "name": "merge_ignores_the_width_budget",
+      "file": "worker/cue_constraints.py",
+      "old": "            if fit is None or fit.fits(merged_text):",
+      "new": "            if True:",
+      "why": "R4.7's proviso. Trades an unreadable cue for a truncated one, which is worse: a brief caption is still correct, a clipped one is wrong."
+    },
+    {
+      "name": "clip_end_ignored",
+      "file": "worker/cue_constraints.py",
+      "old": "        elif clip_end is not None:\n            ceiling = float(clip_end)",
+      "new": "        elif clip_end is not None:\n            ceiling = float(clip_end) + 10.0",
+      "why": "R4.6. A caption outliving the video: some players hold the last subtitle, some drop it, so the symptom is player-dependent and therefore hard to reproduce from a report."
+    },
+    {
+      "name": "reading_rate_counts_spaces",
+      "file": "worker/cue_constraints.py",
+      "old": "        length = len(cue.text.replace(\" \", \"\"))\n        if length:",
+      "new": "        length = len(cue.text)\n        if length:",
+      "why": "A subtler arithmetic error: spaces are not read, so counting them inflates the demanded duration by roughly the word count and extends cues that did not need it. Every reading is still plausible."
+    },
+    {
+      "name": "binding_words_ignored",
+      "file": "worker/cue_constraints.py",
+      "old": "        if words[i - 1].lower().strip(\".,!?;:\\\"'\") in BINDING_WORDS:",
+      "new": "        if False:",
+      "why": "R5.2. Lines start breaking after 'the' and 'of' again, which is the single most recognisable tell of machine-made captions -- and C25's whole reason for existing."
+    },
+    {
+      "name": "proper_noun_penalty_outranks_binding",
+      "file": "worker/cue_constraints.py",
+      "old": "            score += 2",
+      "new": "            score += 1",
+      "why": "Collapses the two penalties to equal weight, so a stranded article ties with a split proper noun. The ordering is deliberate: a capitalised run is only a proxy and has false positives at the start of a sentence, whereas a stranded article is always wrong."
+    },
+    {
+      "name": "candidates_filtered_instead_of_ranked",
+      "file": "worker/cue_constraints.py",
+      "old": "    positions.sort(key=penalty)\n    return positions",
+      "new": "    return [i for i in positions if penalty(i)[0] == 0]",
+      "why": "R5.4. A cue with no linguistically acceptable break now gets NO break, which is an overflowing line -- worse than an inelegant one. The tempting mutation, because filtering reads as cleaner than ranking."
+    },
+    {
+      "name": "linguistic_rules_applied_to_every_language",
+      "file": "worker/cue_constraints.py",
+      "old": "    if (language or \"\").lower().split(\"-\")[0] not in LINGUISTIC_LANGUAGES:\n        return None",
+      "new": "    pass",
+      "why": "R5.8. BINDING_WORDS is an English function-word list; applied to German or French it produces confident nonsense, and the output still looks like a deliberate break."
+    },
+    {
+      "name": "linguistic_breaking_on_by_default",
+      "file": "worker/cue_constraints.py",
+      "old": "    enabled: bool = False,",
+      "new": "    enabled: bool = True,",
+      "why": "R5.9. An unmeasured default turned on, which moves caption fixtures for a change no preference trial supported."
+    },
+    {
+      "name": "relaxation_not_recorded",
+      "file": "worker/cue_constraints.py",
+      "old": "            report.relaxed.append(\"merge_would_overflow\")",
+      "new": "            pass",
+      "why": "R4.5. The cue is still delivered short and now nothing says why. An absent feature with no explanation is indistinguishable from a broken one, which is the rule the whole marker catalogue exists to enforce."
+    }
+  ]
+}
