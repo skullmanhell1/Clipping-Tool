@@ -373,7 +373,52 @@ class Settings(BaseSettings):
     # x264 quality/speed. Previously hard-coded at eight call sites across five modules.
     # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
-    x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
+    x264_preset: str = Field(
+        default="veryfast",
+        description="x264 speed/efficiency preset. MEASURED and deliberately unchanged (O16): "
+        "on a 4K->1080x1920 downscale, slower presets beat veryfast by +0.68..+1.14 VMAF on one "
+        "source and LOST by -0.19..-0.59 VMAF on another. What they reliably bought was a smaller "
+        "file at equal CRF, not fidelity. See eval/baselines/encode_presets_v0.11.0.json.",
+    )
+
+    # O17: resampling algorithm, applied uniformly to every scale in a job.
+    #
+    # Default `bicubic` is swscale's own default, so this changes no pixels. That is the *measured*
+    # outcome, not caution -- lanczos came in within noise on the downscale R5.5 nominates, so
+    # R5.6 applies: keep the default, record the finding.
+    scaler_flags: str = Field(
+        default="bicubic",
+        description="swscale resampling algorithm: bicubic | bilinear | lanczos | spline | "
+        "neighbor | area | gauss (O17). MEASURED: lanczos is within noise of bicubic on a "
+        "4K->1080x1920 downscale (VMAF -0.07, SSIM +0.0009), bilinear is measurably worse "
+        "(VMAF -2.80). Default unchanged; the same value applies to every scale in a job.",
+    )
+
+    # O18: frame-rate policy. The blanket `-r 30` was correct for VFR and wrong for CFR 24.
+    frame_rate_policy: str = Field(
+        default="auto",
+        description="Delivered frame rate policy (O18): 'auto' preserves a constant-rate source "
+        "already at 24/25/30/50/60 and normalises everything else; 'always' restores the previous "
+        "unconditional resample to OUTPUT_FPS. 'auto' exists because resampling CFR 24 to 30 adds "
+        "3:2 judder to footage that had none; 'always' exists because VFR really does drift "
+        "captions and some operators want the one guarantee.",
+    )
+
+    # O19: keyframe interval. Nothing set -g, so x264's default of 250 frames applied (~8s at 30).
+    keyframe_seconds: float = Field(
+        default=2.0,
+        description="Keyframe interval for delivered clips, in seconds (O19). Expressed in "
+        "seconds rather than frames because O18 makes the delivered rate vary, and a fixed frame "
+        "count would silently mean 2s at 30fps and 1s at 60fps. Scene-change keyframes are kept.",
+    )
+
+    # O20: delivered audio bitrate.
+    audio_bitrate_kbps: int = Field(
+        default=128,
+        description="AAC bitrate for delivered clips, in kbps (O20). UNMEASURED and therefore "
+        "unchanged: this project has no audio-fidelity instrument, so 128 is the shipped value "
+        "rather than a justified one. Raise it if you can hear the difference under a music bed.",
+    )
 
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #

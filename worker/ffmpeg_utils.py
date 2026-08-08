@@ -79,6 +79,62 @@ H264_COMPAT_ARGS: tuple[str, ...] = (
     OUTPUT_LEVEL,
 )
 
+#: Resampling algorithms swscale accepts, for O17's ``scaler_flags`` setting.
+#:
+#: ``neighbor`` is included for completeness and is a bad choice: it *scores* +0.75 VMAF on a
+#: 4K downscale while losing 1.02 dB of PSNR, which is VMAF being fooled by nearest-neighbour's
+#: false sharpening rather than a real improvement. A useful reminder that a single metric is
+#: not a verdict.
+SCALER_FLAGS: tuple[str, ...] = (
+    "bicubic",
+    "bilinear",
+    "lanczos",
+    "spline",
+    "neighbor",
+    "area",
+    "gauss",
+)
+
+#: Default resampling algorithm (O17).
+#:
+#: ``bicubic`` is swscale's own default, so this changes **no pixels** relative to v0.11.0 -- and
+#: that is the measured outcome rather than caution. Measured on a 4K -> 1080x1920 downscale, the
+#: exact case R5.5 nominates as where a difference should appear:
+#:
+#:     bilinear   VMAF -2.796   SSIM -0.002307   PSNR -0.21
+#:     lanczos    VMAF -0.071   SSIM +0.000896   PSNR +0.03
+#:     spline     VMAF -0.758   SSIM +0.000368   PSNR +0.02
+#:     neighbor   VMAF +0.749   SSIM -0.005048   PSNR -1.02
+#:
+#: ``lanczos`` is the algorithm usually recommended for downscaling and it is **within noise**
+#: here: three thousandths of a dB and nine ten-thousandths of SSIM, with VMAF marginally
+#: negative. R5.6 is explicit about what to do with that -- keep the current default and record
+#: the finding -- so the default stays ``bicubic`` and the setting exists for anyone whose footage
+#: separates them. `bilinear` is the one clear result: measurably worse, and worth knowing because
+#: it is what several ffmpeg wrappers pass by default.
+DEFAULT_SCALER_FLAGS = "bicubic"
+
+
+def scaler_args() -> list[str]:
+    """``-sws_flags`` for one ffmpeg invocation (O17, R5.1-R5.3).
+
+    **One flag per invocation, covering every ``scale=`` in that graph**, which is what satisfies
+    R5.3's "the same flags on every scale in a single job". That requirement is independent of
+    which algorithm wins the measurement: with three passes and nine scaling sites, two stages
+    resampling differently produces compounding softness that cannot be attributed to any one
+    stage. Uniformity is the deliverable; the algorithm is a setting.
+
+    Emitted as a global option rather than per-filter for the same reason `H264_COMPAT_ARGS` is
+    one constant: a per-`scale=` `flags=` argument would have to be threaded to all nine sites,
+    and the failure mode of reaching eight of them is silent.
+    """
+    value = str(settings.scaler_flags or DEFAULT_SCALER_FLAGS)
+    if value not in SCALER_FLAGS:
+        # An unrecognised algorithm applies the documented default rather than raising: swscale
+        # errors out on an unknown name, which would turn a typo in a setting into a failed job.
+        value = DEFAULT_SCALER_FLAGS
+    return ["-sws_flags", value]
+
 
 def _compat_args(encoder: VideoEncoder) -> list[str]:
     """:data:`H264_COMPAT_ARGS`, adapted to ``encoder``'s requirements (O8).
@@ -135,6 +191,8 @@ def h264_args(
     *,
     normalise_fps: bool = False,
     vbv_cap: bool = False,
+    delivered_fps: int | None = None,
+    keyframe_seconds: float | None = None,
     colour_tags: Sequence[str] = (),
 ) -> list[str]:
     """The standard libx264 arguments for an encode.
@@ -185,14 +243,40 @@ def h264_args(
     choice = video_encoders.resolve_encoder()
     encoder = choice.encoder
 
-    args = ["-c:v", encoder.name]
+    # O17: uniform resampling for every `scale=` in this invocation. Placed here rather than at
+    # the nine call sites because that is what makes "identical flags on every scale in a job"
+    # (R5.3) true by construction instead of by review -- the same argument that centralised these
+    # encoder flags after a missing `-pix_fmt` reached seven of eight sites.
+    args = scaler_args()
+    args += ["-c:v", encoder.name]
     args += encoder.preset_args(str(settings.x264_preset))
     # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
     # different scale. See worker/video_encoders.py for the table.
     args += encoder.quality_args(int(settings.x264_crf))
     args += _compat_args(encoder)
     if normalise_fps:
-        args += ["-r", str(int(settings.output_fps))]
+        # O18: the delivered rate, which is not always the configured one any more.
+        #
+        # `delivered_fps` comes from `worker.frame_rate.plan_frame_rate`, which preserves a CFR
+        # source already at a platform rate instead of resampling it. Absent, this falls back to
+        # `output_fps` -- the pre-O18 behaviour verbatim, so a caller that has not been taught the
+        # policy keeps the blanket guarantee rather than silently losing it.
+        rate = int(delivered_fps) if delivered_fps else int(settings.output_fps)
+        args += ["-r", str(rate)]
+        if keyframe_seconds:
+            # O19: `-g`, derived from the rate actually being delivered (R6.2).
+            #
+            # Final renders only, which is why this is an explicit parameter rather than something
+            # inferred from `normalise_fps`: constraining an encoder whose output is about to be
+            # re-encoded costs quality for no delivered benefit, the same reasoning `vbv_cap`
+            # already applies.
+            #
+            # Deliberately **no** `-sc_threshold 0` (R6.5). Forcing a fixed GOP would put an
+            # I-frame in the wrong place on every cut, which is worse for both quality and seeking
+            # than the uneven spacing scene detection produces.
+            from worker.frame_rate import keyframe_interval_frames
+
+            args += ["-g", str(keyframe_interval_frames(rate, keyframe_seconds))]
     if vbv_cap:
         # O7: the platform profile's ceiling when one is active, else the configured value.
         from worker import output_profiles
@@ -284,11 +368,26 @@ def aac_args() -> list[str]:
     side on some players, and a surround layout is silently downmixed by whatever decoder
     gets it first, if at all.
     """
+    # O20: the bitrate is now configurable, and the default is **unchanged at 128k**.
+    #
+    # R7.5 requires a measured justification before the default moves, and this repository has no
+    # audio-fidelity instrument. M9 measures video only -- SSIM, PSNR and VMAF are all image
+    # metrics -- so there is nothing here that could compare 128k against 192k except an opinion.
+    # Adding a setting is honest; changing the default on the strength of "128k is thin under a
+    # music bed" would be the unmeasured-default substitution O16's measurement just argued
+    # against. An operator who can hear the difference can now change it; the project does not
+    # claim to know.
+    #
+    # Clamped to the platform profile's ceiling where one is active, for the same reason `vbv_cap`
+    # is: an oversized upload is rejected after the render has already been paid for.
+    from worker import output_profiles
+
+    bitrate = output_profiles.resolve_audio_bitrate_kbps()
     return [
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        f"{bitrate}k",
         "-ar",
         str(int(settings.output_sample_rate)),
         "-ac",
@@ -381,6 +480,15 @@ class MediaInfo:
     color_primaries: str = ""
     color_space: str = ""
     color_range: str = ""
+    # O18: the container's *base* rate, alongside the average `fps` above. Both come from the
+    # same ffprobe call that was already being made -- for a CFR file they agree, and for VFR
+    # `r_frame_rate` reports the base while `avg_frame_rate` reports what the file contains.
+    # That divergence is the whole CFR/VFR signal, and it was being discarded.
+    #
+    # Appended after the colour fields rather than before them, on the same rule both comments
+    # state: positional constructions reach the first eight fields, so anything new goes on the
+    # end, and putting this ahead of colour would shift four fields that already shipped.
+    base_fps: float = 0.0
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -445,6 +553,20 @@ def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.Complete
     return proc
 
 
+def _fraction(value: object) -> float:
+    """Parse ffprobe's ``"30000/1001"`` rate notation. Returns 0.0 when unreadable.
+
+    Extracted because `probe()` now reads two rate fields and parsing them differently is exactly
+    the duplicated-fact defect mutation testing keeps finding here: the CFR/VFR decision compares
+    them, so a discrepancy in the parsing would read as a discrepancy in the file.
+    """
+    try:
+        num, _, den = str(value or "0/0").partition("/")
+        return float(num) / float(den) if float(den) else 0.0
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
 def probe(path: str | Path) -> MediaInfo:
     """Return :class:`MediaInfo` for ``path`` via ffprobe.
 
@@ -498,6 +620,7 @@ def probe(path: str | Path) -> MediaInfo:
         height=int(video.get("height") or 0),
         fps=round(fps, 3),
         has_audio=audio is not None,
+        base_fps=_fraction(video.get("r_frame_rate")),
         video_codec=str(video.get("codec_name") or ""),
         audio_codec=str((audio or {}).get("codec_name") or ""),
         size_bytes=size_bytes,

@@ -707,7 +707,19 @@ def test_o8_the_default_output_is_byte_identical_to_before():
     from worker.ffmpeg_utils import h264_args
 
     assert settings.video_encoder == "libx264"
+    # O17 added `-sws_flags bicubic` at the front. The pin fired on that, which is exactly what it
+    # is for, so the update is recorded here rather than made quietly:
+    #
+    # **the argv changed and the output did not.** `bicubic` is swscale's own default, so every
+    # `scale=` was already resampling this way; stating it explicitly is what makes R5.3's "the
+    # same flags on every scale in a job" true rather than incidental. That is why this test's
+    # name still holds and why no golden or parity fixture needed re-freezing.
+    #
+    # If a future change makes this pin fire again, the question to answer first is the same one:
+    # does the *output* move, or only the argv? Only the second kind of change may update the pin.
     assert h264_args() == [
+        "-sws_flags",
+        "bicubic",
         "-c:v",
         "libx264",
         "-preset",
