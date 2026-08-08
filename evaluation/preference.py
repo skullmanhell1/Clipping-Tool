@@ -35,7 +35,6 @@ import random
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 #: The three answers a trial can have. `DECLINE` is a first-class outcome, not a missing value.
 CHOICE_A = "a"
@@ -95,7 +94,7 @@ class Preference_Set:
     trials: tuple[Trial, ...] = ()
     baseline: str = ""
     candidate: str = ""
-    seed: Optional[int] = None
+    seed: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -120,7 +119,7 @@ def build_set(
     *,
     baseline: str = "baseline",
     candidate: str = "candidate",
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> Preference_Set:
     """Build a blind, order-randomised trial set from ``(baseline_path, candidate_path)`` pairs.
 
@@ -303,9 +302,7 @@ render();
 """
 
 
-def write_session(
-    preference_set: Preference_Set, directory: str | Path
-) -> dict[str, Path]:
+def write_session(preference_set: Preference_Set, directory: str | Path) -> dict[str, Path]:
     """Write the blind page, the blind trial list, and the answer key.
 
     Three files, and the split is the whole point: ``index.html`` and ``trials.json`` contain **no

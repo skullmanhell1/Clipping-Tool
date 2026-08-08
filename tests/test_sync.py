@@ -60,9 +60,7 @@ def test_a_deliberate_offset_is_measured_as_that_offset(tmp_path):
 @pytest.mark.real_binary
 def test_a_negative_offset_is_measured_with_its_sign(tmp_path):
     """Audio arriving *early* is a different defect and must not be reported as the same one."""
-    path = sync.make_sync_fixture(
-        tmp_path / "early.mp4", event_at=1.5, audio_offset=-0.200
-    )
+    path = sync.make_sync_fixture(tmp_path / "early.mp4", event_at=1.5, audio_offset=-0.200)
     report = sync.measure_sync(path)
     assert report.offset_ms == pytest.approx(-200.0, abs=40.0), report
 
@@ -122,15 +120,35 @@ def test_a_silent_file_is_refused_not_reported_as_synchronised(tmp_path):
 
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=320x180:r=25:d=2",
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:r=25:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
             "-shortest",
-            "-vf", "drawbox=x=0:y=0:w=iw:h=ih:color=white@1.0:t=fill:enable='between(t,1.0,1.04)'",
-            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-vf",
+            "drawbox=x=0:y=0:w=iw:h=ih:color=white@1.0:t=fill:enable='between(t,1.0,1.04)'",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
             str(silent),
         ],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
     with pytest.raises(SyncError, match="silent|onset"):
@@ -146,14 +164,32 @@ def test_a_file_with_no_visual_event_is_refused(tmp_path):
     dark = tmp_path / "dark.mp4"
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=320x180:r=25:d=2",
-            "-f", "lavfi", "-i",
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:r=25:d=2",
+            "-f",
+            "lavfi",
+            "-i",
             "aevalsrc='if(between(t,1.0,1.05), 0.8*sin(2*PI*1000*t), 0)':d=2:s=48000",
-            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
             str(dark),
         ],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
     with pytest.raises(SyncError, match="no visual event"):
@@ -203,12 +239,34 @@ def test_path_b_a_vfr_source_survives_normalisation_to_cfr(tmp_path):
     normalised = tmp_path / "cfr_b.mp4"
     proc = subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-ar", "48000", "-ac", "2", str(normalised),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(normalised),
         ],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True,
+        text=True,
+        timeout=900,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -235,9 +293,7 @@ def test_path_c_a_keep_interval_concat_does_not_shift_the_timeline(tmp_path):
     source = sync.make_sync_fixture(tmp_path / "src_c.mp4", event_at=2.5, duration=4.0)
     joined = tmp_path / "concat_c.mp4"
     # Drop 0.5 s from the middle, keeping the event well inside the second kept region.
-    filler.apply_keep_intervals(
-        source, [Interval(0.0, 1.5), Interval(2.0, 4.0)], joined
-    )
+    filler.apply_keep_intervals(source, [Interval(0.0, 1.5), Interval(2.0, 4.0)], joined)
 
     report = sync.measure_sync(joined, label="keep-interval concat")
     assert abs(report.offset_ms) <= sync.TOLERANCE_MS, report
