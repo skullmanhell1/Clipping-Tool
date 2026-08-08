@@ -84,8 +84,22 @@ MAX_DETAIL_LENGTH = 160
 FFMPEG_FILTER_TIMEOUT = 20.0
 """Wall-clock ceiling for the local ``ffmpeg -filters`` listing."""
 
-FFMPEG_FILTER_FLAG_WIDTH = 3
-"""Width of the flags column in ``ffmpeg -filters`` output (e.g. ``T..``, ``TSC``)."""
+FFMPEG_FILTER_FLAG_WIDTHS = frozenset({2, 3})
+"""Widths of the flags column in ``ffmpeg -filters`` output.
+
+Three through ffmpeg 7 (``T..``, ``TSC`` — timeline, slice threading, command), and two
+on builds that dropped the command flag from the listing (``.S``, ``TS``), which is what
+ffmpeg does from 8.x. A *set* of accepted widths rather than one number for the same
+reason :data:`FFMPEG_FILTER_FLAG_CHARS` is the whole uppercase alphabet: this column is
+not a stable interface, and the failure mode when an assumption about it breaks is silent.
+
+That is not hypothetical. The alphabet was generalised for exactly this reason while the
+width was left hardcoded at 3, and the width is what changed: against a build printing two
+flags, every row was rejected, ``_ffmpeg_filter_names`` returned an empty set, and so every
+``ffmpeg_filter:`` probe reported unavailable. Nothing raised — each engine simply
+degraded, which is the same "one fact stated in two places" shape as the defects this
+module was written to catch.
+"""
 
 FFMPEG_FILTER_FLAG_CHARS = frozenset(string.ascii_uppercase + ".")
 """Alphabet of the flags column: a flag letter, or ``.`` where the flag is unset.
@@ -289,7 +303,7 @@ def _ffmpeg_filter_names() -> set[str]:
         # rows are only accepted when it is present.
         if (
             len(parts) >= 3
-            and len(parts[0]) == FFMPEG_FILTER_FLAG_WIDTH
+            and len(parts[0]) in FFMPEG_FILTER_FLAG_WIDTHS
             and set(parts[0]) <= FFMPEG_FILTER_FLAG_CHARS
             and FFMPEG_FILTER_PAD_SEPARATOR in parts[2]
         ):
