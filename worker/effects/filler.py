@@ -234,6 +234,8 @@ def apply_keep_intervals(
     keeps: list[Interval],
     dest: str | Path,
     *,
+    delivered_fps: int | None = None,
+    keyframe_seconds: float | None = None,
     colour_tags: Sequence[str] = (),
 ) -> Path:
     """Concatenate ``keeps`` from ``source`` into ``dest`` in one ffmpeg pass.
@@ -278,7 +280,13 @@ def apply_keep_intervals(
         "[v]",
         "-map",
         "[a]",
-        *h264_args(normalise_fps=True, vbv_cap=True, colour_tags=colour_tags),
+        *h264_args(
+            normalise_fps=True,
+            vbv_cap=True,
+            delivered_fps=delivered_fps,
+            keyframe_seconds=keyframe_seconds,
+            colour_tags=colour_tags,
+        ),
         *aac_args(),
         "-movflags",
         "+faststart",

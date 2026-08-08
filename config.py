@@ -394,6 +394,24 @@ class Settings(BaseSettings):
         "(VMAF -2.80). Default unchanged; the same value applies to every scale in a job.",
     )
 
+    # O18: frame-rate policy. The blanket `-r 30` was correct for VFR and wrong for CFR 24.
+    frame_rate_policy: str = Field(
+        default="auto",
+        description="Delivered frame rate policy (O18): 'auto' preserves a constant-rate source "
+        "already at 24/25/30/50/60 and normalises everything else; 'always' restores the previous "
+        "unconditional resample to OUTPUT_FPS. 'auto' exists because resampling CFR 24 to 30 adds "
+        "3:2 judder to footage that had none; 'always' exists because VFR really does drift "
+        "captions and some operators want the one guarantee.",
+    )
+
+    # O19: keyframe interval. Nothing set -g, so x264's default of 250 frames applied (~8s at 30).
+    keyframe_seconds: float = Field(
+        default=2.0,
+        description="Keyframe interval for delivered clips, in seconds (O19). Expressed in "
+        "seconds rather than frames because O18 makes the delivered rate vary, and a fixed frame "
+        "count would silently mean 2s at 30fps and 1s at 60fps. Scene-change keyframes are kept.",
+    )
+
     # O20: delivered audio bitrate.
     audio_bitrate_kbps: int = Field(
         default=128,
