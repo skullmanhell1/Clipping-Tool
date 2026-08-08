@@ -29,6 +29,7 @@ from config import settings
 from worker import captions as cap
 from worker import (
     colour,
+    deinterlace,
     diarization,
     frame_rate,
     intermediate_cache,
@@ -173,6 +174,20 @@ def run_pipeline(
     if info.duration <= 0:
         raise ValueError("Source video has zero duration")
 
+    # V20: scan type, decided once per source. Combing that reaches the crop and scale becomes a
+    # smear no later filter can undo, so this goes **first** -- ahead of the tone-map, because
+    # tone-mapping interleaved fields blends two different moments in time.
+    #
+    # Detection requires the container's `field_order` AND `idet` to agree. Measured: `idet` alone
+    # reads ~85% interlaced on a definitively progressive source with fine horizontal detail, and
+    # deinterlacing progressive footage destroys vertical detail irreversibly. Disagreement is
+    # therefore reported as inconclusive and nothing is done.
+    deinterlace_chain, deinterlace_markers, _scan = deinterlace.plan(
+        source,
+        enabled=bool(settings.deinterlace),
+        double_rate=bool(settings.deinterlace_double_rate),
+    )
+
     # O18/O19: decide the delivered frame rate once, from the probe just taken.
     #
     # The previous blanket `-r 30` was right about VFR and wrong about CFR 24, which it resampled
@@ -211,6 +226,17 @@ def run_pipeline(
         target_nits=int(settings.tone_map_target_nits),
         delivery_range=str(settings.delivery_colour_range),
     )
+
+    def _source_repair_chain() -> str:
+        """Deinterlace, then colour. The order is the requirement, not a preference.
+
+        V20/R9.2 puts deinterlacing before every crop and scale, and before the tone-map: mapping
+        interleaved fields blends two different moments in time. O13/R2.2 puts the tone-map before
+        every colour-dependent operation. Composed here so the ordering lives in one place rather
+        than at each encode site.
+        """
+        return ",".join(part for part in (deinterlace_chain, colour_plan.filter_chain) if part)
+
     # The tags travel to every pass; the *filters* are spent by the first one that runs (R2.8).
     colour_tags = colour_plan.tags
 
@@ -448,7 +474,7 @@ def run_pipeline(
             c.start,
             c.end,
             raw,
-            video_filters=colour_plan.filter_chain,
+            video_filters=_source_repair_chain(),
             colour_tags=colour_tags,
         )
         # Spent. Every later pass in this clip carries the tags and none of them re-converts
@@ -457,9 +483,13 @@ def run_pipeline(
         # than no tone-map at all.
         clip_colour = colour_plan.consumed()
         applied = colour.merge_markers(applied, colour_plan)
-        # O18: record what was delivered and whether it was resampled (R8.10). After
-        # `merge_markers`, which rebinds `applied` — appending before it would drop this marker
-        # on every clip, and a missing marker is invisible in a render that otherwise succeeds.
+        # Both marker groups go here, after `merge_markers`, which rebinds `applied` — appending
+        # before it would drop them on every clip, and a missing degradation marker is invisible
+        # in a render that otherwise succeeds.
+        for _marker in deinterlace_markers:
+            if _marker not in applied:
+                applied.append(_marker)
+        # O18: record what was delivered and whether it was resampled (R8.10).
         if _rate_plan.marker:
             applied.append(_rate_plan.marker)
 

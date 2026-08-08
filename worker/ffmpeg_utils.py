@@ -489,6 +489,10 @@ class MediaInfo:
     # state: positional constructions reach the first eight fields, so anything new goes on the
     # end, and putting this ahead of colour would shift four fields that already shipped.
     base_fps: float = 0.0
+    # V20: the container's declared scan type (`tt`/`bb`/`tb`/`bt` = interlaced, `progressive`).
+    # Already present in the `-show_streams` JSON `probe()` parses, like the colour fields above --
+    # a field-reading change, not a new probe. Appended last, on the same rule.
+    field_order: str = ""
 
 
 def _default_timeout(cmd: list[str]) -> float:
@@ -631,6 +635,7 @@ def probe(path: str | Path) -> MediaInfo:
         color_primaries=str(video.get("color_primaries") or "").lower(),
         color_space=str(video.get("color_space") or "").lower(),
         color_range=str(video.get("color_range") or "").lower(),
+        field_order=str(video.get("field_order") or "").lower(),
     )
 
 

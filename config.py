@@ -420,6 +420,26 @@ class Settings(BaseSettings):
         "rather than a justified one. Raise it if you can hear the difference under a music bed.",
     )
 
+    # V20: deinterlacing. Combing cropped and scaled becomes a smear no later filter can undo.
+    #
+    # Default ON, because it only ever fires when the container's declared field order AND ffmpeg's
+    # `idet` measurement both say interlaced -- and on that evidence the current output is simply
+    # wrong. Progressive sources are untouched, so an ordinary library renders identically.
+    deinterlace: bool = Field(
+        default=True,
+        description="Detect and deinterlace interlaced sources before any crop or scale (V20). "
+        "Requires BOTH the container's field_order and ffmpeg's idet to agree, because idet alone "
+        "false-positives on footage with fine horizontal detail (measured ~85% interlaced on a "
+        "definitively progressive source) and deinterlacing progressive video destroys vertical "
+        "detail irreversibly. Disagreement is recorded as inconclusive and nothing is done.",
+    )
+    deinterlace_double_rate: bool = Field(
+        default=False,
+        description="Emit one frame per field when deinterlacing, turning 25i into 50p (V20). Off "
+        "by default: it sounds like a free upgrade and interacts badly with O18's frame-rate "
+        "policy and O19's keyframe interval, both of which read the delivered rate.",
+    )
+
     # V22: headroom. reframe centres the crop on the face centre, which is the most recognisable
     # auto-crop tell -- a human editor puts the eyes near the upper third -- and it pushes the mouth
     # towards the middle of a 9:16 frame, which is exactly where captions sit.
@@ -469,6 +489,33 @@ class Settings(BaseSettings):
         "'tv' is what H.264 streaming means by default and what platforms expect; full-range "
         "sources are converted rather than passed through, which is what stops phone footage "
         "crushing its blacks.",
+    )
+
+    # C24: cue legibility floors. `words_to_cues` has only ceilings, so fast speech produces cues
+    # of about 0.3s -- nine frames, a flicker rather than a caption.
+    #
+    # BOTH DEFAULT TO OFF, which reproduces v0.11.0 exactly (R4.12). Neither has been measured
+    # against anything, and M10 (caption alignment error) plus M12 (preference trials) are the
+    # instruments that would justify a value. A floor turned on unmeasured would move every golden
+    # and re-freeze the parity fixtures around a number nobody checked.
+    min_cue_seconds: float = Field(
+        default=0.0,
+        description="Minimum seconds a caption stays on screen; 0 disables (C24). PROVISIONAL "
+        "and off: a useful value is probably near 0.8-1.0s, but 'probably' is why it ships off. "
+        "Cues are extended into free time, then merged, and never made to overlap.",
+    )
+    max_reading_rate: float = Field(
+        default=0.0,
+        description="Maximum characters per second a caption may demand; 0 disables (C24). "
+        "PROVISIONAL and off. Broadcast subtitling clusters around 15-20 CPS, but short-form "
+        "captions are larger and shorter so the right figure here is not known.",
+    )
+    # C25: linguistic line breaking. Width-only breaking splits proper nouns and article-noun pairs.
+    caption_linguistic_breaks: bool = Field(
+        default=False,
+        description="Prefer line breaks at linguistic boundaries over pure measured width (C25). "
+        "PROVISIONAL and off (R5.9). English only -- the rules are a hand-audited function-word "
+        "list, so other languages fall back to width-based breaking. The width budget always wins.",
     )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
@@ -664,6 +711,19 @@ class Settings(BaseSettings):
     # to run scripts/eval_selection.py against labelled footage and move them. What *is*
     # defensible without labels is that all four beat "keep the longest segments", which is what
     # they replace (S11).
+    # S3: pitch variation as a ranking feature. Costs one additional pass over the source audio
+    # (R4.7's allowance), so it is opt-in rather than free -- unlike the energy envelope, which the
+    # pipeline was already paying for.
+    #
+    # Default OFF, and the reason is the same one that keeps every selection weight where it is:
+    # there is no labelled benchmark (S1/M4), so nothing can show that adding this signal improves
+    # the ranking rather than merely changing it. `eval/labels/` contains a .gitkeep.
+    selection_pitch_feature: bool = Field(
+        default=False,
+        description="Measure pitch variation per candidate and attach it to the features used for "
+        "ranking and for the LLM prompt (S3). Costs one extra audio pass. PROVISIONAL and off: "
+        "without the S1 labelled benchmark, an added signal cannot be shown to improve selection.",
+    )
     selection_weight_hook: float = Field(
         default=0.40,
         description="Weight of the S6 hook score in fallback ranking. Highest of the four "
