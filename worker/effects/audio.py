@@ -28,12 +28,26 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, TypeAlias
 
 from config import settings
 from worker.ffmpeg_utils import _run, escape_filter_path
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Type-checking only; the runtime import stays inside `presence_available`, because
+    # `capabilities` shells out to `ffmpeg -filters` on first use. `worker/colour.py` and
+    # `worker/deinterlace.py` guard theirs the same way.
+    from worker.engines.capabilities import Capability_Status
+
+#: A capability prober, matching `worker.engines.capabilities.Prober`. Restated rather than imported
+#: so this module keeps no runtime dependency on that one.
+#:
+#: Declared as a `TypeAlias` rather than a bare assignment because mypy treats the latter as a
+#: *variable* and rejects it in an annotation position.
+Prober: TypeAlias = Callable[[str], "Capability_Status"]
 
 # Per-mood synthesis parameters: two tones (root + interval) and a tremolo rate.
 # Frequencies are chosen to be pleasant and unobtrusive; this is a mood *bed*,
@@ -567,6 +581,147 @@ def speech_repair_chain(*, denoise: str | None = None, deess: str | None = None)
     return [f for f in (denoise_filter(denoise), deesser_filter(deess)) if f]
 
 
+#: Presence-chain band centres and widths (AU11).
+#:
+#: The only spectral shaping anywhere in this module before now was a ``lowpass`` inside the music
+#: synthesiser. ``loudnorm`` sets *level*; it does nothing for *spectrum*, so a clip normalised to
+#: exactly the right LUFS can still be muddy and hard to follow on a phone speaker -- which is where
+#: almost all of this footage is watched.
+#:
+#: Three bands, each doing one job:
+#:
+#: * **80 Hz high-pass.** Handling noise, desk thumps, HVAC and proximity rumble all live below
+#:   speech. Removing them costs nothing intelligible and buys headroom the limiter would otherwise
+#:   spend on inaudible energy. A phone speaker cannot reproduce this band at all, so on the target
+#:   device it is pure waste.
+#: * **250 Hz cut.** The "boxy" region. A gentle dip here is what makes speech sound less like it
+#:   was recorded in a small room.
+#: * **2.8 kHz lift.** Consonant definition. This is the band that carries intelligibility rather
+#:   than loudness -- the difference between hearing that someone spoke and hearing *which words*.
+#:
+#: All three are gentle by design. Aggressive shaping is recognisable as processing, and a clip that
+#: sounds processed is worse than one that sounds slightly dull.
+PRESENCE_HIGHPASS_HZ = 80
+PRESENCE_MUD_HZ = 250
+PRESENCE_MUD_WIDTH = 1.2
+PRESENCE_LIFT_HZ = 2800
+PRESENCE_LIFT_WIDTH = 1.4
+
+#: Gain at full strength, in dB, for the cut and the lift.
+#:
+#: 3 dB either way at strength 1.0. Deliberately small: this is a *presence* chain, not a rescue
+#: chain, and AU4/AU5 already exist for damaged audio.
+PRESENCE_MUD_DB = -3.0
+PRESENCE_LIFT_DB = 3.0
+
+#: Compressor settings for the dynamic-control half.
+#:
+#: A gentle 2:1 above -18 dB with a slow release, which evens out the difference between a speaker
+#: leaning in and sitting back without pumping. ``makeup`` is deliberately left at unity: the
+#: two-pass ``loudnorm`` downstream is what sets final level, and making up gain here would move the
+#: measurement it depends on for no benefit.
+PRESENCE_COMP_THRESHOLD_DB = -18.0
+PRESENCE_COMP_RATIO_MAX = 2.0
+PRESENCE_COMP_ATTACK_MS = 8
+PRESENCE_COMP_RELEASE_MS = 220
+
+#: Filters the presence chain needs. ``acompressor`` and ``equalizer`` are in every mainstream
+#: build; probed rather than assumed, per the project's standing rule.
+PRESENCE_FILTERS: tuple[str, ...] = ("highpass", "equalizer", "acompressor")
+
+
+def clamp_presence(strength: float) -> float:
+    """Bring a presence strength into ``[0.0, 1.0]``.
+
+    Out-of-range and unusable values resolve to ``0.0`` -- off -- rather than to full strength. A
+    mistyped setting should do nothing, not process every clip as hard as possible.
+    """
+    try:
+        value = float(strength)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value:  # NaN
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
+def presence_available(prober: Prober | None = None) -> bool:
+    """Whether this ffmpeg has the filters the presence chain needs.
+
+    Two failure routes, and they resolve differently — which is worth writing down because the
+    obvious reading of the ``except`` below is wrong:
+
+    * **The import fails** (a broken or partial tree) → ``True``, so an optional enhancement is not
+      disabled by an unrelated packaging problem.
+    * **The prober itself raises** → ``False``. That is not this function's doing:
+      ``Capability_Report._probe`` catches everything a prober throws and returns an unavailable
+      status, so the exception never reaches the handler here. The chain is then simply not applied.
+
+    The second is acceptable where it would not be for the tone-map or deinterlace probes. Those
+    emit filters a build may genuinely lack, so a wrong answer fails the render;
+    ``highpass``/``equalizer``/``acompressor`` are in every mainstream build, and declining an
+    optional, default-off enhancement costs nothing anyone will notice.
+    """
+    try:
+        from worker.engines.capabilities import Capability_Report, get_report
+
+        report = Capability_Report(prober) if prober is not None else get_report()
+        return all(report.status(f"ffmpeg_filter:{name}").available for name in PRESENCE_FILTERS)
+    except Exception:
+        return True
+
+
+def presence_chain(strength: float, *, prober: Prober | None = None) -> list[str]:
+    """The speech presence and dynamic-control filters (AU11).
+
+    Returns ``[]`` at strength 0, which is the default -- so the audio graph is byte-identical to
+    before this existed unless somebody opts in (R6.6).
+
+    **Speech only** (R6.5). This returns a fragment for the *speech* branch of the graph; the caller
+    applies it before the music bed and b-roll are mixed in. Shaping a music bed for consonant
+    definition would be meaningless, and compressing it would fight the ducking AU2 already does.
+
+    **Before loudness normalisation** (R6.2). Every filter here changes the signal's level as well
+    as its spectrum, so measuring loudness first and shaping afterwards would deliver something
+    other than what was measured. The two-pass ``loudnorm`` runs downstream and is untouched (R6.3).
+
+    **No makeup gain and no limiting.** Both belong to ``AU1``/``AU3``, which already do them
+    correctly; duplicating either here would move the measurement they depend on.
+    """
+    amount = clamp_presence(strength)
+    if amount <= 0:
+        return []
+    if not presence_available(prober):
+        return []
+
+    # Every gain scales with strength, so the control is genuinely continuous rather than a
+    # three-position switch. Rounded to 2 dp because ffmpeg parses these as floats and an
+    # 18-digit repr in a filter string is noise in every log and every test failure.
+    mud_db = round(PRESENCE_MUD_DB * amount, 2)
+    lift_db = round(PRESENCE_LIFT_DB * amount, 2)
+    ratio = round(1.0 + (PRESENCE_COMP_RATIO_MAX - 1.0) * amount, 2)
+
+    return [
+        f"highpass=f={PRESENCE_HIGHPASS_HZ}",
+        f"equalizer=f={PRESENCE_MUD_HZ}:t=q:w={PRESENCE_MUD_WIDTH}:g={mud_db}",
+        f"equalizer=f={PRESENCE_LIFT_HZ}:t=q:w={PRESENCE_LIFT_WIDTH}:g={lift_db}",
+        (
+            f"acompressor=threshold={PRESENCE_COMP_THRESHOLD_DB}dB:"
+            f"ratio={ratio}:attack={PRESENCE_COMP_ATTACK_MS}:"
+            f"release={PRESENCE_COMP_RELEASE_MS}:makeup=1"
+        ),
+    ]
+
+
+def presence_marker(strength: float) -> str:
+    """The ``Effects_Applied`` entry, naming the resolved strength (R6.8).
+
+    Empty at zero: a marker on every clip is noise, and noise is what stops a marker being read.
+    """
+    amount = clamp_presence(strength)
+    return f"speech_presence:{amount:.2f}" if amount > 0 else ""
+
+
 #: Integrated-loudness targets per publish platform, in LUFS.
 #:
 #: A clip quieter than the platform's target is turned *up* on playback, which lifts its
@@ -603,7 +758,7 @@ class LoudnessStats:
     target_offset: float
 
 
-def measure_loudness(source: str | Path) -> LoudnessStats | None:
+def measure_loudness(source: str | Path, *, prefilters: Sequence[str] = ()) -> LoudnessStats | None:
     """Measure ``source``'s loudness with ``loudnorm``'s analysis pass (AU1).
 
     This is the first of the two passes. Single-pass ``loudnorm`` has to guess as it goes,
@@ -611,10 +766,33 @@ def measure_loudness(source: str | Path) -> LoudnessStats | None:
     normalised on less information than the rest. Measuring first lets the second pass
     apply one linear gain, which reaches the target without touching dynamics.
 
+    ``prefilters`` are applied **before** the measurement, and exist because that linear gain is
+    only correct for the signal it was measured from (AU11/R6.10).
+
+    This was a real defect, found by measuring the delivered file rather than by review. AU11's
+    presence chain runs on the speech branch before ``loudnorm``, and it *removes energy*: an 80 Hz
+    high-pass, a 250 Hz cut and a compressor all reduce level. With the measurement taken from the
+    unshaped source, the second pass applied a gain computed for a louder signal than the one it
+    was given, and the delivered clip landed **-17.5 LUFS against a -14 target** -- 3.6 LU quiet.
+    Every platform would then turn it *up*, lifting the noise floor, which is the exact harm AU1
+    exists to prevent.
+
+    So anything that alters level between here and the second pass has to be measured through.
+    Empty by default, which is the pre-AU11 behaviour verbatim.
+
     Decodes but encodes nothing (``-f null``). Returns ``None`` on any failure - no audio
     track, a corrupt file, an ffmpeg without ``loudnorm`` - so the caller renders without
     normalisation instead of failing the clip.
     """
+    measure_chain = ",".join(
+        [
+            *prefilters,
+            (
+                f"loudnorm=I={settings.loudness_target_lufs}:"
+                f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json"
+            ),
+        ]
+    )
     cmd = [
         settings.ffmpeg_binary,
         "-nostdin",
@@ -622,8 +800,7 @@ def measure_loudness(source: str | Path) -> LoudnessStats | None:
         "-i",
         str(source),
         "-af",
-        f"loudnorm=I={settings.loudness_target_lufs}:"
-        f"TP={settings.loudness_true_peak_db}:LRA={_LOUDNORM_LRA}:print_format=json",
+        measure_chain,
         "-f",
         "null",
         "-",

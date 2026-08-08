@@ -606,6 +606,14 @@ class ClipResult:
     #   - ``broll_asset_failed``          a b-roll asset could not be resolved/decoded
     #   - ``broll_license_unknown``       a b-roll asset was dropped (unknown license)
     #   - ``broll_degraded``              b-roll disabled after a build/compose error
+    #   - ``compositor_degraded``         the single composite pass failed and the clip
+    #                                    shipped un-composited: no captions, hook, look,
+    #                                    emoji, b-roll or music, whatever was requested.
+    #                                    The most severe degradation recorded here, and it
+    #                                    needs its own marker because the compositor also
+    #                                    returns "nothing to do" when no effect is enabled -
+    #                                    without this the two are indistinguishable on the
+    #                                    finished record.
     #   - ``visual_selection``            visual/keyframe-aided selection was used
     #   - ``visual_degraded``             visual selection fell back to transcript-only
     #   - ``music_degraded:synthesised``  the "music" bed is the synthesised two-tone

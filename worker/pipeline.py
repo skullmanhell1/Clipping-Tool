@@ -767,12 +767,31 @@ def run_pipeline(
                 music_select_key=f"{Path(source).name}:{idx}:{c.start:.3f}",
             )
         except fu.FFmpegError:
+            # Ship the un-composited clip rather than failing the job, per the degradation
+            # contract. Recorded as a marker *and* logged: this was previously a bare
+            # `rendered = None`, and because `render_clip` also returns `None` legitimately
+            # (when no effect is enabled) the two cases were indistinguishable afterwards.
+            # A clip that silently lost every effect looked exactly like a clip that was
+            # never asked for any.
+            logger.warning(
+                "compositor failed for clip %s; shipping it without effects",
+                clip_id,
+                exc_info=True,
+            )
+            applied.append("compositor_degraded")
             rendered = None
         if rendered is not None:
             applied.extend(rendered.effects_applied)
             if rendered.broll_records:
                 broll_assets = rendered.broll_records
         else:
+            # `final` and `geo` are in different trees, and the destination's parent can be
+            # gone by now: the retention sweeper used to remove any empty directory it saw,
+            # and `storage/clips/<job_id>/` is empty until this first clip lands. Recreating
+            # it keeps the fallback a fallback - without this, `replace` raises
+            # FileNotFoundError and the *degradation path itself* fails the whole job, which
+            # is the one outcome this branch exists to prevent.
+            final.parent.mkdir(parents=True, exist_ok=True)
             geo.replace(final)
         if compose is not None:
             applied.extend(compose.markers)

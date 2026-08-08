@@ -491,6 +491,22 @@ class Settings(BaseSettings):
         "classifies as a screen recording.",
     )
 
+    # AU11: speech presence. `loudnorm` sets LEVEL; the only spectral shaping anywhere in the audio
+    # path was a lowpass inside the music synthesiser. So a clip normalised to exactly the right
+    # LUFS can still be muddy and hard to follow on a phone speaker -- which is where nearly all of
+    # this footage is watched.
+    #
+    # DEFAULT ZERO (R6.6). R6.7 requires a preference trial (M12) rather than an assertion, and this
+    # is audible processing: a clip that sounds processed is worse than one that sounds slightly
+    # dull, so the value is not something to guess at.
+    speech_presence: float = Field(
+        default=0.0,
+        description="Speech presence and dynamic-control strength, 0.0-1.0 (AU11). Applies an "
+        "80Hz high-pass, a gentle 250Hz cut, a 2.8kHz consonant lift and a soft 2:1 compressor to "
+        "the SPEECH branch only, before loudness normalisation. 0 disables. PROVISIONAL and zero: "
+        "audible processing needs a preference trial, not an opinion.",
+    )
+
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #
     # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
