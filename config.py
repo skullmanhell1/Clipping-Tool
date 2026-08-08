@@ -676,6 +676,19 @@ class Settings(BaseSettings):
     # to run scripts/eval_selection.py against labelled footage and move them. What *is*
     # defensible without labels is that all four beat "keep the longest segments", which is what
     # they replace (S11).
+    # S3: pitch variation as a ranking feature. Costs one additional pass over the source audio
+    # (R4.7's allowance), so it is opt-in rather than free -- unlike the energy envelope, which the
+    # pipeline was already paying for.
+    #
+    # Default OFF, and the reason is the same one that keeps every selection weight where it is:
+    # there is no labelled benchmark (S1/M4), so nothing can show that adding this signal improves
+    # the ranking rather than merely changing it. `eval/labels/` contains a .gitkeep.
+    selection_pitch_feature: bool = Field(
+        default=False,
+        description="Measure pitch variation per candidate and attach it to the features used for "
+        "ranking and for the LLM prompt (S3). Costs one extra audio pass. PROVISIONAL and off: "
+        "without the S1 labelled benchmark, an added signal cannot be shown to improve selection.",
+    )
     selection_weight_hook: float = Field(
         default=0.40,
         description="Weight of the S6 hook score in fallback ranking. Highest of the four "
