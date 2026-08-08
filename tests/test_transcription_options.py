@@ -70,11 +70,19 @@ def test_the_vocabulary_changes_the_cache_key():
     setting would look broken in a way nothing downstream could report.
     """
     base = transcript_cache.cache_key(
-        "abc", model="small", language=None, translate=False, beam_size=5,
+        "abc",
+        model="small",
+        language=None,
+        translate=False,
+        beam_size=5,
         asr_config=transcript_cache.asr_fingerprint(""),
     )
     with_vocab = transcript_cache.cache_key(
-        "abc", model="small", language=None, translate=False, beam_size=5,
+        "abc",
+        model="small",
+        language=None,
+        translate=False,
+        beam_size=5,
         asr_config=transcript_cache.asr_fingerprint("Kubernetes"),
     )
     assert base != with_vocab
@@ -151,10 +159,18 @@ def test_the_harness_and_the_pipeline_agree_on_the_default_key():
     from evaluation.harness import _harness_key
 
     monkey_free = transcript_cache.cache_key(
-        "deadbeef", model=settings.whisper_model, language=None, translate=False, beam_size=5,
+        "deadbeef",
+        model=settings.whisper_model,
+        language=None,
+        translate=False,
+        beam_size=5,
     )
     explicit = transcript_cache.cache_key(
-        "deadbeef", model=settings.whisper_model, language=None, translate=False, beam_size=5,
+        "deadbeef",
+        model=settings.whisper_model,
+        language=None,
+        translate=False,
+        beam_size=5,
         asr_config=transcript_cache.asr_fingerprint(""),
     )
     assert monkey_free == explicit
@@ -201,7 +217,7 @@ def test_the_alpha_runs_the_right_way_round():
 
 
 def test_a_word_with_no_probability_reads_as_confident():
-    """"Unknown" must not mean "unsure".
+    """ "Unknown" must not mean "unsure".
 
     Treating a missing probability as doubt would dim every caption on any transcript without
     per-word confidence - the same failure C11 had, where a rule that fired on everything was
@@ -284,7 +300,7 @@ def test_substitution_examples_are_reported():
 
 
 def test_stemming_is_not_applied():
-    """"engineer" for "engineers" is a mistake a viewer sees; a stemmer would hide it."""
+    """ "engineer" for "engineers" is a mistake a viewer sees; a stemmer would hide it."""
     assert wer.word_error_rate("the engineers left", "the engineer left").wer > 0.0
 
 
@@ -304,7 +320,7 @@ def test_aggregate_pools_errors_rather_than_averaging_rates():
 
     One short difficult file would then dominate a figure meant to describe the whole dataset.
     """
-    short_bad = wer.word_error_rate("a b", "x y")            # 2 words, 100%
+    short_bad = wer.word_error_rate("a b", "x y")  # 2 words, 100%
     long_good = wer.word_error_rate(" ".join(["w"] * 98), " ".join(["w"] * 98))  # 98 words, 0%
     pooled = wer.aggregate([short_bad, long_good])
     assert pooled.reference_words == 100

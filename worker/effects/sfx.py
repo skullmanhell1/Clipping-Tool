@@ -26,9 +26,9 @@ something to acquire by upgrading.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
 
 from config import settings
 from worker.ffmpeg_utils import _run
@@ -82,7 +82,7 @@ class SfxHit:
     trigger: str
 
 
-def find_user_sting(name: str) -> Optional[Path]:
+def find_user_sting(name: str) -> Path | None:
     """A user-supplied ``sfx_dir/<name>.<ext>``, or ``None``."""
     base = Path(getattr(settings, "sfx_dir", "") or "")
     if not base.is_dir():
@@ -94,7 +94,7 @@ def find_user_sting(name: str) -> Optional[Path]:
     return None
 
 
-def synth_filter(name: str) -> Optional[str]:
+def synth_filter(name: str) -> str | None:
     """The lavfi source description that generates ``name``, or ``None`` if it cannot be.
 
     Kept as a filter string rather than a rendered asset so the parameters are reviewable in one
@@ -119,7 +119,7 @@ def synth_filter(name: str) -> Optional[str]:
     return None
 
 
-def resolve_sting(name: str, temp_dir: str | Path) -> tuple[Optional[Sting], str]:
+def resolve_sting(name: str, temp_dir: str | Path) -> tuple[Sting | None, str]:
     """Resolve ``name`` to a file, returning ``(sting, marker)``.
 
     A user file always wins: it is a real recording, and the synthesised versions exist so that the
@@ -142,12 +142,25 @@ def resolve_sting(name: str, temp_dir: str | Path) -> tuple[Optional[Sting], str
     if not (dest.exists() and dest.stat().st_size > 0):
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            _run([
-                settings.ffmpeg_binary, "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", description,
-                "-ar", "48000", "-ac", "1", str(dest),
-            ])
-        except Exception as exc:      # noqa: BLE001 - a sting is never worth losing a clip over
+            _run(
+                [
+                    settings.ffmpeg_binary,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    description,
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "1",
+                    str(dest),
+                ]
+            )
+        except Exception as exc:  # a sting is never worth losing a clip over
             logger.warning("AU9: could not synthesise the %s sting: %s", name, exc)
             return None, f"sfx_missing:{name}"
     return Sting(name, dest, SOURCE_SYNTHESISED), ""

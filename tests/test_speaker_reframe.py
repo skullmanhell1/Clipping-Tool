@@ -14,6 +14,7 @@ functions under test (``build_face_tracks``, ``associate_faces``,
 so the dependency-injection wiring is exercised without cv2 (``detect_faces``'
 own ffmpeg/cv2 sampling behaviour is covered by task 5.17).
 """
+
 from __future__ import annotations
 
 from hypothesis import given, settings
@@ -61,7 +62,7 @@ def _per_frame_boxes(draw):
         t = round(fi * 0.2, 3)
         if bases and draw(st.booleans()):
             frame: list[FaceBox] = []
-            for (bx, by, bw, bh) in bases:
+            for bx, by, bw, bh in bases:
                 jx = draw(st.integers(min_value=-3, max_value=3))
                 jy = draw(st.integers(min_value=-3, max_value=3))
                 frame.append(FaceBox(t, bx + jx, by + jy, bw, bh))
@@ -92,9 +93,7 @@ def _turns_and_tracks(draw):
         end = start + dur
         if end > horizon:
             break
-        turns.append(
-            Speaker_Turn(draw(st.sampled_from(_LABELS)), round(start, 3), round(end, 3))
-        )
+        turns.append(Speaker_Turn(draw(st.sampled_from(_LABELS)), round(start, 3), round(end, 3)))
         cursor = end
 
     n_tracks = draw(st.integers(min_value=0, max_value=3))
@@ -316,7 +315,6 @@ def test_turn_with_no_overlapping_track_is_unassociated():
     assert assoc.shown_order == []
 
 
-
 # =========================================================================== #
 # Task 5.16 — Unit tests: filter shape, tile arithmetic, layout substitution   #
 # =========================================================================== #
@@ -385,8 +383,12 @@ def test_build_reframe_filter_follow_active_shape_and_sendcmd(tmp_path):
     input_args, vf, notes = build_reframe_filter(
         "follow_active",
         centers=centers,
-        crop_w=404, crop_h=720, src_w=1280, src_h=720,
-        target_w=1080, target_h=1920,
+        crop_w=404,
+        crop_h=720,
+        src_w=1280,
+        src_h=720,
+        target_w=1080,
+        target_h=1920,
         sendcmd_path=str(cmd_file),
     )
     assert input_args == []
@@ -410,16 +412,30 @@ def test_build_split_screen_layout_2up_vertical_tile_arithmetic():
         Face_Track("F1", [FaceBox(0.0, 100, 200, 80, 80), FaceBox(0.2, 100, 200, 80, 80)]),
         Face_Track("F2", [FaceBox(0.0, 1400, 200, 80, 80), FaceBox(0.2, 1400, 200, 80, 80)]),
     ]
-    assoc = Association(by_turn={0: "F1", 1: "F2"}, unassociated=[],
-                        shown_order=["F1", "F2"])
+    assoc = Association(by_turn={0: "F1", 1: "F2"}, unassociated=[], shown_order=["F1", "F2"])
     regions = build_split_screen_layout(
-        [], assoc, tracks,
-        target_w=1080, target_h=1920, src_w=1920, src_h=1080,
+        [],
+        assoc,
+        tracks,
+        target_w=1080,
+        target_h=1920,
+        src_w=1920,
+        src_h=1080,
         max_regions=2,
     )
     assert len(regions) == 2
-    assert (regions[0].dst_x, regions[0].dst_y, regions[0].dst_w, regions[0].dst_h) == (0, 0, 1080, 960)
-    assert (regions[1].dst_x, regions[1].dst_y, regions[1].dst_w, regions[1].dst_h) == (0, 960, 1080, 960)
+    assert (regions[0].dst_x, regions[0].dst_y, regions[0].dst_w, regions[0].dst_h) == (
+        0,
+        0,
+        1080,
+        960,
+    )
+    assert (regions[1].dst_x, regions[1].dst_y, regions[1].dst_w, regions[1].dst_h) == (
+        0,
+        960,
+        1080,
+        960,
+    )
     assert regions[0].track_id == "F1" and regions[1].track_id == "F2"
 
 
@@ -433,27 +449,38 @@ def test_build_reframe_filter_split_screen_stack_direction():
         Face_Track("F1", [FaceBox(0.0, 100, 200, 80, 80)]),
         Face_Track("F2", [FaceBox(0.0, 1400, 200, 80, 80)]),
     ]
-    assoc = Association(by_turn={0: "F1", 1: "F2"}, unassociated=[],
-                        shown_order=["F1", "F2"])
+    assoc = Association(by_turn={0: "F1", 1: "F2"}, unassociated=[], shown_order=["F1", "F2"])
 
     portrait_regions = build_split_screen_layout(
-        [], assoc, tracks, target_w=1080, target_h=1920,
-        src_w=1920, src_h=1080, max_regions=2)
+        [], assoc, tracks, target_w=1080, target_h=1920, src_w=1920, src_h=1080, max_regions=2
+    )
     _ia, graph_p, notes_p = build_reframe_filter(
-        "split_screen", regions=portrait_regions,
-        crop_w=0, crop_h=0, src_w=1920, src_h=1080,
-        target_w=1080, target_h=1920)
+        "split_screen",
+        regions=portrait_regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1080,
+        target_h=1920,
+    )
     assert "vstack" in graph_p and "hstack" not in graph_p
     assert "[vout]" in graph_p
     assert notes_p == ["speaker_reframe:split_screen"]
 
     landscape_regions = build_split_screen_layout(
-        [], assoc, tracks, target_w=1920, target_h=1080,
-        src_w=1920, src_h=1080, max_regions=2)
+        [], assoc, tracks, target_w=1920, target_h=1080, src_w=1920, src_h=1080, max_regions=2
+    )
     _ia, graph_l, _n = build_reframe_filter(
-        "split_screen", regions=landscape_regions,
-        crop_w=0, crop_h=0, src_w=1920, src_h=1080,
-        target_w=1920, target_h=1080)
+        "split_screen",
+        regions=landscape_regions,
+        crop_w=0,
+        crop_h=0,
+        src_w=1920,
+        src_h=1080,
+        target_w=1920,
+        target_h=1080,
+    )
     assert "hstack" in graph_l and "vstack" not in graph_l
 
 
@@ -473,8 +500,12 @@ def test_apply_speaker_reframe_unknown_layout_substitutes_follow_active(monkeypa
     dest = tmp_path / "out.mp4"
 
     reframe.apply_speaker_reframe(
-        "src.mp4", dest, turns=turns, aspect="9:16",
-        layout="totally-bogus-layout", sampler=sampler,
+        "src.mp4",
+        dest,
+        turns=turns,
+        aspect="9:16",
+        layout="totally-bogus-layout",
+        sampler=sampler,
     )
     assert len(calls) == 1
     cmd = calls[0]
@@ -494,9 +525,12 @@ def test_apply_speaker_reframe_split_screen_below_two_tracks_substitutes(monkeyp
     calls = _recording_run(monkeypatch)
     sampler_one = CannedSampler(_frames([(100, 300, 120, 120)]))
     reframe.apply_speaker_reframe(
-        "src.mp4", tmp_path / "one.mp4",
-        turns=[Speaker_Turn("S1", 0.0, 2.0)], aspect="9:16",
-        layout="split_screen", sampler=sampler_one,
+        "src.mp4",
+        tmp_path / "one.mp4",
+        turns=[Speaker_Turn("S1", 0.0, 2.0)],
+        aspect="9:16",
+        layout="split_screen",
+        sampler=sampler_one,
     )
     assert len(calls) == 1
     assert "-vf" in calls[0] and "-filter_complex" not in calls[0]
@@ -505,9 +539,12 @@ def test_apply_speaker_reframe_split_screen_below_two_tracks_substitutes(monkeyp
     calls2 = _recording_run(monkeypatch)
     sampler_two = CannedSampler(_frames([(100, 300, 120, 120), (1000, 300, 120, 120)]))
     reframe.apply_speaker_reframe(
-        "src.mp4", tmp_path / "two.mp4",
+        "src.mp4",
+        tmp_path / "two.mp4",
         turns=[Speaker_Turn("S1", 0.0, 1.0), Speaker_Turn("S2", 1.0, 2.0)],
-        aspect="9:16", layout="split_screen", sampler=sampler_two,
+        aspect="9:16",
+        layout="split_screen",
+        sampler=sampler_two,
     )
     assert len(calls2) == 1
     assert "-filter_complex" in calls2[0] and "-vf" not in calls2[0]
@@ -525,8 +562,7 @@ def test_apply_speaker_reframe_split_screen_below_two_tracks_substitutes(monkeyp
 
 
 def _caption_words():
-    return [FakeWord(0.2, 0.6, "hello"), FakeWord(0.7, 1.1, "there"),
-            FakeWord(1.2, 1.6, "friend")]
+    return [FakeWord(0.2, 0.6, "hello"), FakeWord(0.7, 1.1, "there"), FakeWord(1.2, 1.6, "friend")]
 
 
 @requires_ffmpeg
@@ -537,14 +573,17 @@ def test_follow_active_renders_at_target_resolution(make_video, tmp_path):
     produces an output at the 9:16 target resolution in a single pass.
     """
     src = make_video("src.mp4", duration=2.0, w=1280, h=720)
-    sampler = CannedSampler(_frames([(180, 300, 140, 140), (960, 300, 140, 140)],
-                                    duration=2.0))
+    sampler = CannedSampler(_frames([(180, 300, 140, 140), (960, 300, 140, 140)], duration=2.0))
     turns = [Speaker_Turn("S1", 0.0, 1.0), Speaker_Turn("S2", 1.0, 2.0)]
     dest = tmp_path / "follow.mp4"
 
     out = reframe.apply_speaker_reframe(
-        src, dest, turns=turns, aspect="9:16",
-        layout="follow_active", sampler=sampler,
+        src,
+        dest,
+        turns=turns,
+        aspect="9:16",
+        layout="follow_active",
+        sampler=sampler,
     )
     assert Path(out).exists()
     assert probe_size(out) == ASPECT_PRESETS["9:16"]
@@ -559,8 +598,7 @@ def test_split_screen_single_ffmpeg_pass_at_target(make_video, tmp_path, monkeyp
     at the 9:16 target resolution.
     """
     src = make_video("src.mp4", duration=2.0, w=1280, h=720)
-    sampler = CannedSampler(_frames([(150, 300, 140, 140), (1000, 300, 140, 140)],
-                                    duration=2.0))
+    sampler = CannedSampler(_frames([(150, 300, 140, 140), (1000, 300, 140, 140)], duration=2.0))
     turns = [Speaker_Turn("S1", 0.0, 1.0), Speaker_Turn("S2", 1.0, 2.0)]
     dest = tmp_path / "split.mp4"
 
@@ -574,8 +612,12 @@ def test_split_screen_single_ffmpeg_pass_at_target(make_video, tmp_path, monkeyp
     monkeypatch.setattr(reframe, "_run", _spy)
 
     out = reframe.apply_speaker_reframe(
-        src, dest, turns=turns, aspect="9:16",
-        layout="split_screen", sampler=sampler,
+        src,
+        dest,
+        turns=turns,
+        aspect="9:16",
+        layout="split_screen",
+        sampler=sampler,
     )
     # Exactly one ffmpeg invocation for the whole geometry stage.
     assert len(calls) == 1
@@ -594,20 +636,27 @@ def test_geometry_prepared_clip_flows_into_compositor(make_video, png_asset, tmp
     ADDITIONAL geometry pass.
     """
     src = make_video("src.mp4", duration=2.0, w=1280, h=720)
-    sampler = CannedSampler(_frames([(180, 300, 140, 140), (960, 300, 140, 140)],
-                                    duration=2.0))
+    sampler = CannedSampler(_frames([(180, 300, 140, 140), (960, 300, 140, 140)], duration=2.0))
     turns = [Speaker_Turn("S1", 0.0, 1.0), Speaker_Turn("S2", 1.0, 2.0)]
     geo = tmp_path / "geo.mp4"
     reframe.apply_speaker_reframe(
-        src, geo, turns=turns, aspect="9:16",
-        layout="follow_active", sampler=sampler,
+        src,
+        geo,
+        turns=turns,
+        aspect="9:16",
+        layout="follow_active",
+        sampler=sampler,
     )
     assert probe_size(geo) == ASPECT_PRESETS["9:16"]
 
     asset = png_asset("e.png")
     opts = ProcessingOptions(captions=True, emoji="heavy")
     result = compositor.render_clip(
-        geo, tmp_path / "final.mp4", opts, _caption_words(), tmp_path,
+        geo,
+        tmp_path / "final.mp4",
+        opts,
+        _caption_words(),
+        tmp_path,
         emoji_resolver=lambda c: asset,
     )
     assert result is not None

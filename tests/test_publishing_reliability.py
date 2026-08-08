@@ -65,8 +65,15 @@ class _ScriptedPublisher:
 
     def status(self, account_id=""):
         return PublisherStatus(
-            self.name, True, True, True, "ready", "ready", account_id,
-            token_expires_at=self._expires_at, token_kind=self._token_kind,
+            self.name,
+            True,
+            True,
+            True,
+            "ready",
+            "ready",
+            account_id,
+            token_expires_at=self._expires_at,
+            token_kind=self._token_kind,
         )
 
     def is_configured(self):
@@ -100,9 +107,7 @@ def video(tmp_path):
 
 
 def _manager(store, publisher, monkeypatch):
-    manager = PublishManager(
-        publishers={publisher.name: publisher}, history=store, autostart=False
-    )
+    manager = PublishManager(publishers={publisher.name: publisher}, history=store, autostart=False)
     # Preflight probes the file with ffprobe; the fixture is not real video.
     monkeypatch.setattr(
         "publishers.preflight.validate_clip",
@@ -232,9 +237,11 @@ def test_pb5_zero_retries_restores_single_shot_behaviour(monkeypatch):
 
 def test_pb5_a_transient_failure_is_rescheduled_not_failed(store, video, monkeypatch):
     monkeypatch.setattr(app_settings, "publish_max_retries", 3, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(False, PublishState.FAILED, "tiktok", error="503 Service Unavailable"),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(False, PublishState.FAILED, "tiktok", error="503 Service Unavailable"),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -248,9 +255,11 @@ def test_pb5_a_transient_failure_is_rescheduled_not_failed(store, video, monkeyp
 
 
 def test_pb5_a_permanent_failure_fails_immediately(store, video, monkeypatch):
-    publisher = _ScriptedPublisher([
-        PublishResult(False, PublishState.FAILED, "tiktok", error="Video is too long"),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(False, PublishState.FAILED, "tiktok", error="Video is too long"),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -266,10 +275,12 @@ def test_pb5_a_permanent_failure_fails_immediately(store, video, monkeypatch):
 def test_pb5_a_retry_that_succeeds_publishes(store, video, monkeypatch):
     monkeypatch.setattr(app_settings, "publish_max_retries", 3, raising=False)
     monkeypatch.setattr(app_settings, "publish_retry_base_seconds", 1.0, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(False, PublishState.FAILED, "tiktok", error="502 Bad Gateway"),
-        PublishResult(True, PublishState.PUBLISHED, "tiktok", url="https://example/ok"),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(False, PublishState.FAILED, "tiktok", error="502 Bad Gateway"),
+            PublishResult(True, PublishState.PUBLISHED, "tiktok", url="https://example/ok"),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -290,10 +301,12 @@ def test_pb5_a_retry_that_succeeds_publishes(store, video, monkeypatch):
 def test_pb5_retries_are_exhausted_and_say_so(store, video, monkeypatch):
     monkeypatch.setattr(app_settings, "publish_max_retries", 2, raising=False)
     monkeypatch.setattr(app_settings, "publish_retry_base_seconds", 1.0, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(False, PublishState.FAILED, "tiktok", error="503 Service Unavailable")
-        for _ in range(5)
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(False, PublishState.FAILED, "tiktok", error="503 Service Unavailable")
+            for _ in range(5)
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -314,9 +327,11 @@ def test_pb5_retries_are_exhausted_and_say_so(store, video, monkeypatch):
 def test_pb5_review_required_is_never_retried_automatically(store, video, monkeypatch):
     """The line PB5 must not cross: that state is waiting on a person."""
     monkeypatch.setattr(app_settings, "publish_max_retries", 3, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(True, PublishState.REVIEW_REQUIRED, "tiktok", message="approve first"),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(True, PublishState.REVIEW_REQUIRED, "tiktok", message="approve first"),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -327,9 +342,7 @@ def test_pb5_review_required_is_never_retried_automatically(store, video, monkey
     assert item["completed_at"] is not None
 
 
-def test_pb5_review_required_is_not_retried_even_with_a_transient_error(
-    store, video, monkeypatch
-):
+def test_pb5_review_required_is_not_retried_even_with_a_transient_error(store, video, monkeypatch):
     """Pins the *state* guard, not the error classification.
 
     The previous test passes either way: a review_required result carries no error, so the
@@ -343,12 +356,17 @@ def test_pb5_review_required_is_not_retried_even_with_a_transient_error(
     is how it eventually gets posted without anyone approving it.
     """
     monkeypatch.setattr(app_settings, "publish_max_retries", 3, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(
-            True, PublishState.REVIEW_REQUIRED, "tiktok",
-            error="503 Service Unavailable", message="approval check timed out",
-        ),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(
+                True,
+                PublishState.REVIEW_REQUIRED,
+                "tiktok",
+                error="503 Service Unavailable",
+                message="approval check timed out",
+            ),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     attempt_id = _submit(manager, video)
 
@@ -362,9 +380,11 @@ def test_pb5_review_required_is_not_retried_even_with_a_transient_error(
 def test_pb5_a_retrying_attempt_does_not_delete_the_local_clip(store, video, monkeypatch):
     """The file is needed for the next try."""
     monkeypatch.setattr(app_settings, "publish_max_retries", 3, raising=False)
-    publisher = _ScriptedPublisher([
-        PublishResult(False, PublishState.FAILED, "tiktok", error="timed out"),
-    ])
+    publisher = _ScriptedPublisher(
+        [
+            PublishResult(False, PublishState.FAILED, "tiktok", error="timed out"),
+        ]
+    )
     manager = _manager(store, publisher, monkeypatch)
     _submit(manager, video)
     manager.run_due_once()
@@ -443,7 +463,9 @@ def test_pb4_an_expiring_token_is_exchanged_again(store, monkeypatch):
     pub = YouTubePublisher(client=_Client(), history=store)
     # Cached, but inside the safety margin.
     store.save_token(
-        "youtube", "stale", account_id="chan",
+        "youtube",
+        "stale",
+        account_id="chan",
         expires_at=time.time() + youtube_module.TOKEN_EXPIRY_MARGIN_S / 2,
     )
     assert pub._token() == "tok1"
@@ -590,8 +612,12 @@ def test_pb6_the_description_is_cut_at_a_sentence_boundary():
 def test_pb6_short_copy_is_left_alone():
     """Tailoring is a fit, not a rewrite: text that already fits must be untouched."""
     request = {
-        "video_path": "/tmp/c.mp4", "title": "Short title", "description": "Short body.",
-        "hashtags": ["#a"], "cta": "Go", "mentions": [],
+        "video_path": "/tmp/c.mp4",
+        "title": "Short title",
+        "description": "Short body.",
+        "hashtags": ["#a"],
+        "cta": "Go",
+        "mentions": [],
     }
     tailored = tailoring.tailor_request(request, "youtube")
     assert tailored["title"] == "Short title"
@@ -667,12 +693,20 @@ def test_pb6_llm_tailoring_is_off_by_default():
 def test_pb7_the_window_query_returns_attempts_in_range(store, video):
     now = time.time()
     inside = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=now + 3600, state="scheduled",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=now + 3600,
+        state="scheduled",
     )
     store.create_attempt(
-        job_id="j", clip_id="1", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=now + 40 * 86400, state="scheduled",
+        job_id="j",
+        clip_id="1",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=now + 40 * 86400,
+        state="scheduled",
     )
     found = store.scheduled_between(now, now + 86400)
     assert [a["id"] for a in found] == [inside]
@@ -682,8 +716,12 @@ def test_pb7_the_window_includes_finished_attempts(store, video):
     """A calendar that hid what already published would show an empty week that was full."""
     now = time.time()
     store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=now - 3600, state="published",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=now - 3600,
+        state="published",
     )
     found = store.scheduled_between(now - 86400, now)
     assert len(found) == 1
@@ -766,8 +804,12 @@ def test_pb7_suggestions_endpoint_returns_the_basis(client):
 
 def test_pb7_a_pending_attempt_can_be_rescheduled(client, store, video):
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() + 60, state="scheduled",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() + 60,
+        state="scheduled",
     )
     when = time.time() + 7200
     response = client.patch(
@@ -780,8 +822,12 @@ def test_pb7_a_pending_attempt_can_be_rescheduled(client, store, video):
 def test_pb7_rescheduling_into_the_past_queues_it_now(client, store, video):
     """A state that disagrees with the clock is what makes a queue hard to reason about."""
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() + 600, state="scheduled",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() + 600,
+        state="scheduled",
     )
     response = client.patch(
         f"/api/publish-attempts/{attempt_id}/schedule",
@@ -795,8 +841,12 @@ def test_pb7_rescheduling_into_the_past_queues_it_now(client, store, video):
 def test_pb7_only_pending_attempts_can_be_rescheduled(client, store, video, state):
     """`failed` is excluded too: that would be a retry that skipped every check /retry makes."""
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() + 60, state=state,
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() + 60,
+        state=state,
     )
     response = client.patch(
         f"/api/publish-attempts/{attempt_id}/schedule",
@@ -807,8 +857,12 @@ def test_pb7_only_pending_attempts_can_be_rescheduled(client, store, video, stat
 
 def test_pb7_a_pending_attempt_can_be_cancelled(client, store, video):
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() + 60, state="scheduled",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() + 60,
+        state="scheduled",
     )
     response = client.post(f"/api/publish-attempts/{attempt_id}/cancel")
     assert response.status_code == 200
@@ -820,8 +874,12 @@ def test_pb7_a_pending_attempt_can_be_cancelled(client, store, video):
 def test_pb7_a_cancelled_attempt_is_kept_not_deleted(client, store, video):
     """A row that vanishes is indistinguishable from one that never existed."""
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() + 60, state="queued",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() + 60,
+        state="queued",
     )
     client.post(f"/api/publish-attempts/{attempt_id}/cancel")
     assert store.get_attempt(attempt_id) is not None
@@ -831,8 +889,12 @@ def test_pb7_a_cancelled_attempt_is_not_picked_up_by_the_scheduler(
     client, store, video, monkeypatch
 ):
     attempt_id = store.create_attempt(
-        job_id="j", clip_id="0", platform="tiktok", request={"video_path": str(video)},
-        scheduled_at=time.time() - 10, state="queued",
+        job_id="j",
+        clip_id="0",
+        platform="tiktok",
+        request={"video_path": str(video)},
+        scheduled_at=time.time() - 10,
+        state="queued",
     )
     client.post(f"/api/publish-attempts/{attempt_id}/cancel")
     publisher = _ScriptedPublisher([PublishResult(True, PublishState.PUBLISHED, "tiktok")])

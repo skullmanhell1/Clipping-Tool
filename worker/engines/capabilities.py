@@ -37,11 +37,11 @@ import importlib.util
 import shutil
 import string
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 __all__ = [
     "Capability_Kind",
@@ -63,13 +63,13 @@ __all__ = [
 class Capability_Kind(str, Enum):
     """Probeable capability kinds (Req 5.1); mirrors the str-Enum style of ``Engine_Stage``."""
 
-    PYTHON_PKG = "python_pkg"        # python_pkg:demucs      -> importlib.util.find_spec
-    BINARY = "binary"                # binary:ffprobe         -> shutil.which
+    PYTHON_PKG = "python_pkg"  # python_pkg:demucs      -> importlib.util.find_spec
+    BINARY = "binary"  # binary:ffprobe         -> shutil.which
     FFMPEG_FILTER = "ffmpeg_filter"  # ffmpeg_filter:atempo   -> settings.ffmpeg_binary -filters
-    FONT = "font"                    # font:Impact            -> captions.font_available
-    PROVIDER_KEY = "provider_key"    # provider_key:broll     -> settings.<name>_api_key
-    MODEL = "model"                  # model:htdemucs         -> registered locator
-    LLM = "llm"                      # bare "llm"             -> llm_client.llm_available
+    FONT = "font"  # font:Impact            -> captions.font_available
+    PROVIDER_KEY = "provider_key"  # provider_key:broll     -> settings.<name>_api_key
+    MODEL = "model"  # model:htdemucs         -> registered locator
+    LLM = "llm"  # bare "llm"             -> llm_client.llm_available
 
 
 LLM_CAPABILITY = "llm"
@@ -84,8 +84,22 @@ MAX_DETAIL_LENGTH = 160
 FFMPEG_FILTER_TIMEOUT = 20.0
 """Wall-clock ceiling for the local ``ffmpeg -filters`` listing."""
 
-FFMPEG_FILTER_FLAG_WIDTH = 3
-"""Width of the flags column in ``ffmpeg -filters`` output (e.g. ``T..``, ``TSC``)."""
+FFMPEG_FILTER_FLAG_WIDTHS = frozenset({2, 3})
+"""Widths of the flags column in ``ffmpeg -filters`` output.
+
+Three through ffmpeg 7 (``T..``, ``TSC`` — timeline, slice threading, command), and two
+on builds that dropped the command flag from the listing (``.S``, ``TS``), which is what
+ffmpeg does from 8.x. A *set* of accepted widths rather than one number for the same
+reason :data:`FFMPEG_FILTER_FLAG_CHARS` is the whole uppercase alphabet: this column is
+not a stable interface, and the failure mode when an assumption about it breaks is silent.
+
+That is not hypothetical. The alphabet was generalised for exactly this reason while the
+width was left hardcoded at 3, and the width is what changed: against a build printing two
+flags, every row was rejected, ``_ffmpeg_filter_names`` returned an empty set, and so every
+``ffmpeg_filter:`` probe reported unavailable. Nothing raised — each engine simply
+degraded, which is the same "one fact stated in two places" shape as the defects this
+module was written to catch.
+"""
 
 FFMPEG_FILTER_FLAG_CHARS = frozenset(string.ascii_uppercase + ".")
 """Alphabet of the flags column: a flag letter, or ``.`` where the flag is unset.
@@ -142,11 +156,11 @@ def _error_detail(exc: BaseException) -> str:
     return _short(f"{name}: {message}")
 
 
-def _unavailable(capability_id: str, detail: str) -> "Capability_Status":
+def _unavailable(capability_id: str, detail: str) -> Capability_Status:
     return Capability_Status(capability_id=capability_id, available=False, detail=detail)
 
 
-def _available(capability_id: str, detail: str) -> "Capability_Status":
+def _available(capability_id: str, detail: str) -> Capability_Status:
     return Capability_Status(capability_id=capability_id, available=True, detail=detail)
 
 
@@ -196,7 +210,7 @@ class Capability_Status:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Capability_Status":
+    def from_dict(cls, data: Mapping[str, Any]) -> Capability_Status:
         """Rebuild from :meth:`to_dict` output, tolerating missing/hostile fields."""
         if not isinstance(data, Mapping):
             return cls(capability_id="", available=False, detail="")
@@ -207,13 +221,13 @@ class Capability_Status:
         )
 
 
-Prober = Callable[[str], Capability_Status]     # injectable (Req 5.7)
+Prober = Callable[[str], Capability_Status]  # injectable (Req 5.7)
 
 #: ``model:<name>`` locators registered by engines; empty by default so an absent
 #: model with downloading disabled reports unavailable (Req 21.5). A locator is a
 #: zero-argument callable returning the local path of the model, or ``None`` when
 #: it is not present on disk. Locators must never download (Req 5.6).
-MODEL_LOCATORS: dict[str, Callable[[], Optional[Path]]] = {}
+MODEL_LOCATORS: dict[str, Callable[[], Path | None]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +303,7 @@ def _ffmpeg_filter_names() -> set[str]:
         # rows are only accepted when it is present.
         if (
             len(parts) >= 3
-            and len(parts[0]) == FFMPEG_FILTER_FLAG_WIDTH
+            and len(parts[0]) in FFMPEG_FILTER_FLAG_WIDTHS
             and set(parts[0]) <= FFMPEG_FILTER_FLAG_CHARS
             and FFMPEG_FILTER_PAD_SEPARATOR in parts[2]
         ):
@@ -409,7 +423,7 @@ def default_prober(capability_id: str) -> Capability_Status:
         if kind == Capability_Kind.LLM.value:
             return _probe_llm(identifier)
         return _unavailable(identifier, f"unknown capability kind: {_short(identifier)}")
-    except BaseException as exc:  # noqa: BLE001 - totality is the contract (Req 5.3)
+    except BaseException as exc:  # totality is the contract (Req 5.3)
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         return _unavailable(identifier, _error_detail(exc))
@@ -419,7 +433,7 @@ class Capability_Report:
     """Per-process cache of Capability_Id -> Capability_Status (Req 6)."""
 
     def __init__(self, prober: Prober | None = None) -> None:
-        self._prober = prober or default_prober      # Req 5.7
+        self._prober = prober or default_prober  # Req 5.7
         self._cache: dict[str, Capability_Status] = {}
 
     def status(self, capability_id: str) -> Capability_Status:
@@ -443,7 +457,7 @@ class Capability_Report:
         """
         try:
             result = self._prober(capability_id)
-        except BaseException as exc:  # noqa: BLE001 - Req 5.3
+        except BaseException as exc:  # Req 5.3
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             return _unavailable(capability_id, _error_detail(exc))
@@ -465,7 +479,7 @@ class Capability_Report:
         """Whether ``capability_id`` is available (cached — Reqs 6.2, 6.3)."""
         return bool(self.status(capability_id).available)
 
-    def first_missing(self, capability_ids: Iterable[str]) -> Optional[str]:
+    def first_missing(self, capability_ids: Iterable[str]) -> str | None:
         """First unavailable id in declaration order, else ``None`` (Req 7.1)."""
         for capability_id in self._iter_ids(capability_ids):
             if not self.available(capability_id):
@@ -509,7 +523,7 @@ class Capability_Report:
         self._cache.pop(_as_text(capability_id), None)
 
 
-_REPORT: Optional[Capability_Report] = None
+_REPORT: Capability_Report | None = None
 
 
 def get_report(prober: Prober | None = None) -> Capability_Report:

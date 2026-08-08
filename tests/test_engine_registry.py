@@ -18,9 +18,8 @@ fixture before *and* after each test, so test order can never matter.
 
 Everything here is pure and offline: no ffmpeg, no probe, no filesystem.
 """
-from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from __future__ import annotations
 
 import pytest
 from hypothesis import given, settings
@@ -39,7 +38,7 @@ from worker.engines.registry import (
 
 #: Every stage a registry can be asked about, so "for every stage" assertions are
 #: exhaustive rather than sampled.
-ALL_STAGES: Tuple[Engine_Stage, ...] = tuple(Engine_Stage)
+ALL_STAGES: tuple[Engine_Stage, ...] = tuple(Engine_Stage)
 
 
 @pytest.fixture(autouse=True)
@@ -54,9 +53,7 @@ def clean_default_registry():
     reset_registry()
 
 
-def _engines_for(
-    registrations: List[Tuple[str, Engine_Stage, int]]
-) -> Dict[str, FakeEngine]:
+def _engines_for(registrations: list[tuple[str, Engine_Stage, int]]) -> dict[str, FakeEngine]:
     """One :class:`FakeEngine` per registration triple, keyed by Engine_Id.
 
     A single instance per id is shared by every registry in a test, so ordering
@@ -69,8 +66,8 @@ def _engines_for(
 
 
 def _expected_ids(
-    registrations: List[Tuple[str, Engine_Stage, int]], stage: Engine_Stage
-) -> List[str]:
+    registrations: list[tuple[str, Engine_Stage, int]], stage: Engine_Stage
+) -> list[str]:
     """The Engine_Ids of ``stage``, in the design's ``(priority, engine_id)`` order.
 
     Independent restatement of Req 2.5 — it sorts the *generated* triples rather
@@ -148,7 +145,7 @@ def test_p4_stage_lookup_partitions_registry_and_lookup_round_trips(registration
 
     # The per-stage lists partition the registry: every engine appears exactly once
     # across all stages, and the union is precisely what was registered (Req 2.1).
-    listed: List[FakeEngine] = []
+    listed: list[FakeEngine] = []
     for candidate in ALL_STAGES:
         for engine in registry.for_stage(candidate):
             assert engine.stage is candidate
@@ -209,7 +206,7 @@ def test_p5_duplicate_engine_id_registration_is_a_named_error(
 
     # Same guarantee while replaying a generated set that carries a duplicate id.
     replay = Engine_Registry()
-    accepted: Dict[str, FakeEngine] = {}
+    accepted: dict[str, FakeEngine] = {}
     for candidate_id, candidate_stage, priority in registrations:
         engine = FakeEngine(candidate_id, candidate_stage, priority=priority)
         if candidate_id in accepted:

@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 
@@ -87,10 +87,10 @@ def cache_key(
     source_hash: str,
     *,
     model: str,
-    language: Optional[str],
+    language: str | None,
     translate: bool,
     beam_size: int,
-    asr_config: Optional[str] = None,
+    asr_config: str | None = None,
 ) -> str:
     """The cache key for a transcript: the content plus everything that shaped it.
 
@@ -198,7 +198,7 @@ def load(key: str, cache_dir: str | Path | None = None):
         return None
 
 
-def store(key: str, transcript: Any, cache_dir: str | Path | None = None) -> Optional[Path]:
+def store(key: str, transcript: Any, cache_dir: str | Path | None = None) -> Path | None:
     """Cache ``transcript`` under ``key``. Best-effort; returns the path written.
 
     Written to a temporary file and then renamed, because a job killed mid-write would
@@ -209,9 +209,7 @@ def store(key: str, transcript: Any, cache_dir: str | Path | None = None) -> Opt
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".json.partial")
-        temporary.write_text(
-            json.dumps(transcript_to_dict(transcript), indent=1), encoding="utf-8"
-        )
+        temporary.write_text(json.dumps(transcript_to_dict(transcript), indent=1), encoding="utf-8")
         temporary.replace(path)
         return path
     except (OSError, TypeError, ValueError):

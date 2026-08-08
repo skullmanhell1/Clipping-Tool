@@ -1,4 +1,5 @@
 """Tests for face-tracking reframe: pure geometry/smoothing + ffmpeg apply."""
+
 from __future__ import annotations
 
 import pytest
@@ -65,8 +66,7 @@ def test_apply_reframe_with_synthetic_track(make_video, tmp_path, monkeypatch):
     # disagreement would be invisible), so it calls the reporting sibling. ``track_faces`` keeps
     # its signature and remains the public single-speaker entry point.
     def fake_track_report(video, sample_fps=5.0, **_kwargs):
-        centres = [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360),
-                   rf.Center(2.0, 980, 360)]
+        centres = [rf.Center(0.0, 300, 360), rf.Center(1.0, 640, 360), rf.Center(2.0, 980, 360)]
         report = rf.synthetic_report([[(0, 0, 10, 10)]] * 3, "injected", sample_fps)
         return centres, report
 
@@ -88,7 +88,6 @@ def test_apply_reframe_no_faces_raises(make_video, tmp_path, monkeypatch):
     )
     with pytest.raises(rf.ReframeUnavailable):
         rf.apply_reframe(src, tmp_path / "out.mp4", aspect="9:16")
-
 
 
 # --------------------------------------------------------------------------- #
@@ -131,9 +130,7 @@ def test_the_report_carries_the_same_samples_as_the_wrapper(make_video, tmp_path
         return [(1, 2, 3, 4)]
 
     report = rf.sample_face_report(src, sample_fps=2.0, detector=fake_detector)
-    assert report.as_tuples() == rf._sample_face_boxes(
-        src, sample_fps=2.0, detector=fake_detector
-    )
+    assert report.as_tuples() == rf._sample_face_boxes(src, sample_fps=2.0, detector=fake_detector)
     assert report.resolved_backend == "injected"
     assert report.coverage == 1.0
 
@@ -183,7 +180,7 @@ def test_the_backend_close_is_called_even_when_sampling_raises(make_video, monke
             pass
 
         @staticmethod
-        def isOpened():  # noqa: N802 - mirrors the cv2 API
+        def isOpened():  # mirrors the cv2 API
             return True
 
         @staticmethod
@@ -225,9 +222,7 @@ def test_an_unopenable_video_reports_no_samples_and_never_raises():
     built" are different faults, and the resolved label is the only place a caller can tell
     them apart.
     """
-    report = rf.sample_face_report(
-        "/nonexistent/video.mp4", sample_fps=2.0, detector=lambda _f: []
-    )
+    report = rf.sample_face_report("/nonexistent/video.mp4", sample_fps=2.0, detector=lambda _f: [])
     assert report.samples == []
     assert report.coverage == 0.0
     assert report.resolved_backend == "injected"
