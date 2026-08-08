@@ -455,6 +455,28 @@ class Settings(BaseSettings):
         "a preference trial, not an opinion. Applied after smoothing and clamped to valid pixels.",
     )
 
+    # V24: screen-recording and graphics detection. A 16:9 slide cropped to 9:16 delivers an
+    # unreadable middle third, and the pipeline had no notion of content type at all.
+    #
+    # ON by default, and defensible because the classifier is deliberately high-precision: it calls
+    # `screen` only for content that is BOTH temporally static and flat, which camera footage cannot
+    # be (sensor noise prevents a zero temporal difference). Measured on six fixtures with zero false
+    # positives on camera footage; two genuinely-synthetic classes are missed and fall through to
+    # `unknown`, which runs the existing behaviour unchanged. See worker/content_class.py.
+    content_class_detect: bool = Field(
+        default=True,
+        description="Detect screen recordings and graphics per clip, and fit them into the frame "
+        "instead of cropping into them (V24). High precision by design: only static, flat content "
+        "is classified, everything else is 'unknown' and behaves exactly as before. Animation and "
+        "screen recordings of moving video are known to be missed.",
+    )
+    content_class_override: str = Field(
+        default="auto",
+        description="Force content handling: auto | camera | screen (V24). An operator who knows "
+        "what they uploaded should not have to argue with a classifier. An unrecognised value "
+        "falls back to 'auto' rather than raising.",
+    )
+
     # AU11: speech presence. `loudnorm` sets LEVEL; the only spectral shaping anywhere in the audio
     # path was a lowpass inside the music synthesiser. So a clip normalised to exactly the right
     # LUFS can still be muddy and hard to follow on a phone speaker -- which is where nearly all of

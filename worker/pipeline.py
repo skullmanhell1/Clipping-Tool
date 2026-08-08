@@ -29,6 +29,7 @@ from config import settings
 from worker import captions as cap
 from worker import (
     colour,
+    content_class,
     deinterlace,
     diarization,
     frame_rate,
@@ -589,7 +590,34 @@ def run_pipeline(
         #    branch (``if options.reframe ... else ...``) with identical
         #    ``effects_applied`` — no diarisation, no new markers, no behavioural
         #    change (Reqs 16.4, 17.2).
-        if options.speaker_reframe:
+        # V24: classify this clip's content before choosing geometry (R1, R6).
+        #
+        # Per clip rather than per source, because a recording that alternates between a camera and a
+        # shared screen has to be judged where the clip actually is. High precision by design: only
+        # a static, flat source is called `screen`, and everything else is `unknown`, which runs the
+        # ladder below exactly as before (R5). Missing a slide costs nothing new; letterboxing a face
+        # would waste half the frame.
+        clip_content = content_class.classify(
+            raw,
+            override=str(getattr(settings, "content_class_override", "auto")),
+            enabled=bool(getattr(settings, "content_class_detect", True)),
+        )
+        if clip_content.marker not in applied and clip_content.content is not None:
+            if clip_content.content.value != "unknown":
+                applied.append(clip_content.marker)
+
+        if content_class.fit_instead_of_crop(clip_content):
+            # R3/R4: fit the whole frame instead of cropping into it, and skip face tracking
+            # entirely -- a detector run against a slide finds nothing, so this saves a decode
+            # rather than changing a look. `pad` reuses the existing geometry path; no third mode.
+            fu.reformat_aspect(
+                raw,
+                geo,
+                aspect=options.aspect,
+                mode="pad",
+                colour_tags=clip_colour.tags,
+            )
+        elif options.speaker_reframe:
             # Derive clip-relative turns from the once-per-source diarisation,
             # rebased onto the tightened timeline when filler removal changed the
             # clip so turns stay aligned to the rebased words (Reqs 13.3-13.5).
