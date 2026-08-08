@@ -1,12 +1,20 @@
 """Lightweight fakes for HTTP clients and publishers used across tests."""
+
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class FakeResponse:
-    def __init__(self, *, json_data: Any = None, headers: Optional[dict] = None,
-                 status_code: int = 200, raise_exc: Optional[Exception] = None):
+    def __init__(
+        self,
+        *,
+        json_data: Any = None,
+        headers: dict | None = None,
+        status_code: int = 200,
+        raise_exc: Exception | None = None,
+    ):
         self._json = json_data if json_data is not None else {}
         self.headers = headers or {}
         self.status_code = status_code
@@ -47,37 +55,37 @@ class FakeS3Client:
     def __init__(self):
         self.objects: dict[tuple[str, str], bytes] = {}
 
-    def put_object(self, Bucket, Key, Body):  # noqa: N803
+    def put_object(self, Bucket, Key, Body):
         self.objects[(Bucket, Key)] = Body if isinstance(Body, (bytes, bytearray)) else Body.read()
         return {}
 
-    def upload_file(self, filename, Bucket, Key):  # noqa: N803
+    def upload_file(self, filename, Bucket, Key):
         with open(filename, "rb") as fh:
             self.objects[(Bucket, Key)] = fh.read()
         return {}
 
-    def get_object(self, Bucket, Key):  # noqa: N803
+    def get_object(self, Bucket, Key):
         import io as _io
 
         return {"Body": _io.BytesIO(self.objects[(Bucket, Key)])}
 
-    def head_object(self, Bucket, Key):  # noqa: N803
+    def head_object(self, Bucket, Key):
         if (Bucket, Key) not in self.objects:
             raise KeyError("404")
         return {"ContentLength": len(self.objects[(Bucket, Key)])}
 
-    def delete_object(self, Bucket, Key):  # noqa: N803
+    def delete_object(self, Bucket, Key):
         self.objects.pop((Bucket, Key), None)
         return {}
 
-    def generate_presigned_url(self, op, Params, ExpiresIn):  # noqa: N803
+    def generate_presigned_url(self, op, Params, ExpiresIn):
         return f"https://s3.example.com/{Params['Bucket']}/{Params['Key']}?sig=abc"
 
     def get_paginator(self, name):
         objects = self.objects
 
         class _Paginator:
-            def paginate(self, Bucket, Prefix=""):  # noqa: N803
+            def paginate(self, Bucket, Prefix=""):
                 contents = [
                     {"Key": k, "ContentLength": len(v)}
                     for (b, k), v in objects.items()
@@ -91,8 +99,15 @@ class FakeS3Client:
 class FakePublisher:
     """A configurable BasePublisher stand-in for scheduler/manager tests."""
 
-    def __init__(self, name="fake", result=None, min_interval_seconds=0.0,
-                 configured=True, direct_publish=True, message="ok"):
+    def __init__(
+        self,
+        name="fake",
+        result=None,
+        min_interval_seconds=0.0,
+        configured=True,
+        direct_publish=True,
+        message="ok",
+    ):
         self.name = name
         self.min_interval_seconds = min_interval_seconds
         self._result = result
@@ -109,8 +124,13 @@ class FakePublisher:
         from publishers.base import PublisherStatus
 
         return PublisherStatus(
-            self.name, self._configured, self._configured, self._direct_publish,
-            "ready" if self._configured else "not_configured", self._message, account_id,
+            self.name,
+            self._configured,
+            self._configured,
+            self._direct_publish,
+            "ready" if self._configured else "not_configured",
+            self._message,
+            account_id,
             not self._direct_publish,
         )
 
@@ -120,10 +140,14 @@ class FakePublisher:
         self.published.append(request)
         if self._result is not None:
             return self._result
-        return PublishResult(True, PublishState.PUBLISHED, self.name,
-                             url=f"https://example.com/{self.name}", external_id="ext123",
-                             message="ok")
-
+        return PublishResult(
+            True,
+            PublishState.PUBLISHED,
+            self.name,
+            url=f"https://example.com/{self.name}",
+            external_id="ext123",
+            message="ok",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -179,7 +203,6 @@ class RecordingDownloader:
         return self._result
 
 
-
 # --------------------------------------------------------------------------- #
 # Speaker-diarisation test doubles (speaker-diarization-reframe)
 # --------------------------------------------------------------------------- #
@@ -213,7 +236,6 @@ class RaisingDiarizationBackend:
         raise self._exc
 
 
-
 # --------------------------------------------------------------------------- #
 # Speaker-reframe face-detection test double (speaker-diarization-reframe)
 # --------------------------------------------------------------------------- #
@@ -238,9 +260,7 @@ class FakeFaceDetector:
     def __init__(self, boxes=None, script=None):
         self._boxes = [tuple(b) for b in boxes] if boxes is not None else None
         self._script = (
-            [[tuple(b) for b in frame] for frame in script]
-            if script is not None
-            else None
+            [[tuple(b) for b in frame] for frame in script] if script is not None else None
         )
         self.calls: list = []
 
@@ -254,7 +274,6 @@ class FakeFaceDetector:
         if self._boxes is not None:
             return list(self._boxes)
         return []
-
 
 
 # --------------------------------------------------------------------------- #
@@ -278,7 +297,6 @@ class CannedSampler:
     def __call__(self, video):
         self.calls.append(video)
         return [list(frame) for frame in self._per_frame]
-
 
 
 # --------------------------------------------------------------------------- #
@@ -814,7 +832,6 @@ class RecordingStorage(_BaseStorage):
         return _Path("memory") / _normalize_key(key)
 
 
-
 # --------------------------------------------------------------------------- #
 # Audio stem-inpainting test doubles (audio-stem-inpainting, task 2.2)         #
 #                                                                              #
@@ -1099,7 +1116,9 @@ class Fake_Separator_Backend:
                         source_pcm
                         if source_pcm is not None
                         else _triangle_pcm(
-                            n_frames, channels, period=self._period_for(stem, seed),
+                            n_frames,
+                            channels,
+                            period=self._period_for(stem, seed),
                             peak=self.peak,
                         )
                     )
@@ -1125,8 +1144,9 @@ class Raising_Separator_Backend:
     via a delegate, so retry/degradation ladders can be exercised too.
     """
 
-    def __init__(self, backend_id="raiser", exc=None, *, requires_network=False, after=0,
-                 delegate=None):
+    def __init__(
+        self, backend_id="raiser", exc=None, *, requires_network=False, after=0, delegate=None
+    ):
         self.backend_id = str(backend_id)
         self.requires_network = bool(requires_network)
         self.exc = exc if exc is not None else RuntimeError("separator backend unavailable")
@@ -1145,9 +1165,7 @@ class Raising_Separator_Backend:
     def separate(self, source, dest_dir, *, fmt, seed, timeout_s):
         self.calls.append(Separate_Call(_Path(source), _Path(dest_dir), fmt, seed, timeout_s))
         if len(self.calls) <= self.after:
-            return self.delegate.separate(
-                source, dest_dir, fmt=fmt, seed=seed, timeout_s=timeout_s
-            )
+            return self.delegate.separate(source, dest_dir, fmt=fmt, seed=seed, timeout_s=timeout_s)
         raise self.exc
 
 
@@ -1341,9 +1359,7 @@ class Recording_Command_Runner:
             )
         if index < len(self.responses):
             return self._completed(argv, self.responses[index])
-        return _subprocess.CompletedProcess(
-            list(argv), self.returncode, self.stdout, self.stderr
-        )
+        return _subprocess.CompletedProcess(list(argv), self.returncode, self.stdout, self.stderr)
 
     # --- recording helpers ------------------------------------------------
     @property
@@ -1476,7 +1492,11 @@ class Seam_Note_Fixtures:
     )
     #: Every hostile family at once, with no valid seam anywhere.
     ALL_HOSTILE = (
-        MALFORMED_PREFIX + MALFORMED_VALUE + NON_FINITE + NEGATIVE + OUT_OF_BOUNDS
+        MALFORMED_PREFIX
+        + MALFORMED_VALUE
+        + NON_FINITE
+        + NEGATIVE
+        + OUT_OF_BOUNDS
         + OTHER_ENGINE_NOTES
     )
 

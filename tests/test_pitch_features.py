@@ -30,11 +30,25 @@ requires_ffmpeg = pytest.mark.skipif(
 def _tone(path, hz: float, seconds: float = 1.5):
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
-            "-i", f"aevalsrc='0.5*sin(2*PI*{hz}*t)':d={seconds}:s=16000",
-            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(path),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc='0.5*sin(2*PI*{hz}*t)':d={seconds}:s=16000",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(path),
         ],
-        check=True, timeout=300,
+        check=True,
+        timeout=300,
     )
     return path
 
@@ -44,11 +58,27 @@ def _concat(path, parts):
     listing.write_text("".join(f"file '{p.name}'\n" for p in parts), encoding="utf-8")
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "concat", "-safe", "0", "-i", str(listing),
-            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(path),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(listing),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(path),
         ],
-        check=True, timeout=300,
+        check=True,
+        timeout=300,
     )
     return path
 
@@ -117,6 +147,7 @@ def test_the_measurement_is_relative_to_the_speakers_own_median(tmp_path):
     This is the requirement that stops the feature rewarding people for having high voices. The two
     fixtures are an octave apart in absolute pitch and identical in relative movement.
     """
+
     def spread(low_hz, high_hz, tag):
         a = _tone(tmp_path / f"{tag}a.wav", low_hz)
         b = _tone(tmp_path / f"{tag}b.wav", high_hz)
@@ -174,8 +205,17 @@ def _imported_modules() -> set[str]:
 def test_no_randomness_or_model_dependency_in_the_module():
     """R4.3, R4.8, asserted structurally so a later "improvement" cannot add one quietly."""
     imported = _imported_modules()
-    for forbidden in ("random", "torch", "onnxruntime", "librosa", "parselmouth",
-                      "requests", "urllib", "numpy", "scipy"):
+    for forbidden in (
+        "random",
+        "torch",
+        "onnxruntime",
+        "librosa",
+        "parselmouth",
+        "requests",
+        "urllib",
+        "numpy",
+        "scipy",
+    ):
         assert forbidden not in imported, f"{forbidden} is imported; {sorted(imported)}"
 
 
@@ -266,6 +306,7 @@ def test_annotate_candidates_matches_the_existing_feature_convention():
 
 def test_annotate_candidates_tolerates_a_candidate_without_features():
     """The selector builds candidates on several paths; one without the dict must not raise."""
+
     class Bare:
         start, end = 0.0, 1.0
 
@@ -289,8 +330,11 @@ def test_the_prompt_annotation_is_qualitative_and_never_a_number():
     """
     for spread in (0.0, 1.0, 2.0, 4.0, 8.0, 20.0):
         pitch = pf.Pitch(
-            median_hz=150.0, variation_semitones=spread,
-            variation=min(1.0, spread / 6.0), voiced_frames=50, reliable=True,
+            median_hz=150.0,
+            variation_semitones=spread,
+            variation=min(1.0, spread / 6.0),
+            voiced_frames=50,
+            reliable=True,
         )
         phrase = pf.describe(pitch)
         assert phrase
@@ -322,11 +366,23 @@ def test_reading_rejects_a_format_it_cannot_interpret(tmp_path):
     stereo = tmp_path / "stereo.wav"
     subprocess.run(
         [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
-            "-i", "aevalsrc='0.5*sin(2*PI*150*t)|0.5*sin(2*PI*150*t)':d=0.5:s=16000",
-            "-ac", "2", "-c:a", "pcm_s16le", str(stereo),
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc='0.5*sin(2*PI*150*t)|0.5*sin(2*PI*150*t)':d=0.5:s=16000",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s16le",
+            str(stereo),
         ],
-        check=True, timeout=300,
+        check=True,
+        timeout=300,
     )
     with pytest.raises(ValueError, match="mono"):
         pf.read_mono_wav(stereo)

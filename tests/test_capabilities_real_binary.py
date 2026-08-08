@@ -113,19 +113,18 @@ def test_the_parser_finds_as_many_filters_as_ffmpeg_lists():
     """
     proc = subprocess.run(
         [FFMPEG, "-hide_banner", "-filters"],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     listing = (proc.stdout or "") + (proc.stderr or "")
     # Count rows that carry a pad spec, which is what makes a line a filter row.
-    rows = [
-        line for line in listing.splitlines()
-        if "->" in line and len(line.split()) >= 4
-    ]
+    rows = [line for line in listing.splitlines() if "->" in line and len(line.split()) >= 4]
 
     parsed = _ffmpeg_filter_names()
     assert len(parsed) == len(rows), (
-        f"ffmpeg printed {len(rows)} filter rows but the parser produced "
-        f"{len(parsed)} names"
+        f"ffmpeg printed {len(rows)} filter rows but the parser produced {len(parsed)} names"
     )
 
 
@@ -164,10 +163,12 @@ def test_every_filter_an_engine_declares_agrees_with_the_binary():
     mismatches = {
         name: (truth, probed)
         for name in declared
-        for truth, probed in [(
-            _filter_exists_independently(name),
-            default_prober(f"ffmpeg_filter:{name}").available,
-        )]
+        for truth, probed in [
+            (
+                _filter_exists_independently(name),
+                default_prober(f"ffmpeg_filter:{name}").available,
+            )
+        ]
         if truth != probed
     }
     assert not mismatches, f"probe disagrees with ffmpeg for: {mismatches}"

@@ -40,7 +40,9 @@ def test_the_generic_profile_reproduces_the_old_margins_exactly():
     difference that surfaces later as an unexplained golden-file mismatch.
     """
     assert cap.safe_area_margins(1080, 1920, "none") == {
-        "top": 200, "bottom": 220, "side": 80,
+        "top": 200,
+        "bottom": 220,
+        "side": 80,
     }
 
 
@@ -73,9 +75,7 @@ def test_a_centred_caption_gets_no_vertical_margin():
 
 
 def test_an_unknown_platform_falls_back_to_the_generic_profile():
-    assert cap.safe_area_margins(1080, 1920, "myspace") == cap.safe_area_margins(
-        1080, 1920, "none"
-    )
+    assert cap.safe_area_margins(1080, 1920, "myspace") == cap.safe_area_margins(1080, 1920, "none")
 
 
 def test_a_negative_offset_cannot_push_text_into_the_chrome():
@@ -142,7 +142,10 @@ def test_a_zero_scale_means_unset_rather_than_invisible():
 def test_junk_metrics_do_not_break_the_style_line():
     line = cap._preset_style_line(
         CaptionPreset(name="t", scale_x="wide", scale_y=None, spacing="tight"),
-        "Anton", 96, 2, 220,
+        "Anton",
+        96,
+        2,
+        220,
     )
     assert ",100,100,0," in line, line
 
@@ -189,8 +192,9 @@ def test_the_punch_is_clamped_and_survives_junk():
 def test_the_new_preset_fields_round_trip():
     """A field missing from to_dict/from_dict is silently lost by every path that persists a
     preset - it appears to work until reload."""
-    preset = CaptionPreset(name="t", punch_scale=0.3, punch_ms=90, spacing=3,
-                           scale_x=95, scale_y=102)
+    preset = CaptionPreset(
+        name="t", punch_scale=0.3, punch_ms=90, spacing=3, scale_x=95, scale_y=102
+    )
     assert CaptionPreset.from_dict(preset.to_dict()) == preset
     for name, builtin in BUILTIN_PRESETS.items():
         assert CaptionPreset.from_dict(builtin.to_dict()) == builtin, name
@@ -211,8 +215,9 @@ def test_a_masked_word_keeps_its_first_letter_its_length_and_its_punctuation():
     assert cap.mask_profanity("Shit,") == "S***,"
 
 
-@pytest.mark.parametrize("innocent", ["classic", "Scunthorpe", "assess", "cocktail",
-                                      "bitter", "shitake", "hello"])
+@pytest.mark.parametrize(
+    "innocent", ["classic", "Scunthorpe", "assess", "cocktail", "bitter", "shitake", "hello"]
+)
 def test_innocent_words_are_never_masked(innocent):
     """Substring matching produces exactly these, and a masked word inside an innocent one is
     far more conspicuous than an unmasked profanity - the viewer can see the tool got it wrong."""
@@ -236,8 +241,9 @@ def test_masking_changes_only_the_drawn_text(monkeypatch):
     different word to the rest of the pipeline."""
     monkeypatch.setattr(settings, "caption_mask_profanity", True)
     word = W(1.0, 1.5, "shit")
-    span = cap.build_word_span(word, CaptionPreset(name="t", animation="karaoke_fill"),
-                               False, cue_start=1.0)
+    span = cap.build_word_span(
+        word, CaptionPreset(name="t", animation="karaoke_fill"), False, cue_start=1.0
+    )
     assert word.text == "shit", "the word object was mutated"
     assert "\\kf50" in span, "the timing changed with the text"
 
@@ -423,8 +429,13 @@ def test_the_mix_does_not_double_fade_the_bed():
 # --------------------------------------------------------------------------- #
 def _asset(root: Path, name: str = "clip_a.mp4", **kw) -> broll.AssetRef:
     (root / name).write_bytes(b"stub")
-    fields = {"provider": "pexels", "source_id": "123", "license": "Pexels",
-              "attribution": "by X", "kind": "video"}
+    fields = {
+        "provider": "pexels",
+        "source_id": "123",
+        "license": "Pexels",
+        "attribution": "by X",
+        "kind": "video",
+    }
     fields.update(kw)
     return broll.AssetRef(path=str(root / name), **fields)
 
@@ -460,8 +471,9 @@ def test_a_sidecar_that_outlived_its_asset_is_ignored():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         broll.record_asset_license(
-            broll.AssetRef(path=str(root / "gone.mp4"), kind="video", provider="p",
-                           source_id="1", license="L"),
+            broll.AssetRef(
+                path=str(root / "gone.mp4"), kind="video", provider="p", source_id="1", license="L"
+            ),
             "gone",
         )
         assert broll.cached_asset(root, "gone") is None
@@ -487,8 +499,9 @@ def test_recording_a_licence_never_raises_when_the_path_is_unusable():
     with tempfile.TemporaryDirectory() as d:
         blocker = Path(d) / "not-a-directory"
         blocker.write_bytes(b"x")
-        asset = broll.AssetRef(path=str(blocker / "x.mp4"), kind="video", provider="p",
-                               source_id="1", license="L")
+        asset = broll.AssetRef(
+            path=str(blocker / "x.mp4"), kind="video", provider="p", source_id="1", license="L"
+        )
         assert broll.record_asset_license(asset, "k") is None
 
 
@@ -504,8 +517,7 @@ def test_the_external_provider_serves_the_cache_before_downloading():
             calls.append(keyword)
             return None
 
-        provider = broll.ExternalProvider("key", "https://x", downloader=downloader,
-                                         cache_dir=root)
+        provider = broll.ExternalProvider("key", "https://x", downloader=downloader, cache_dir=root)
         hit = provider.search("ocean")
         assert hit is not None and hit.license == "Pexels"
         assert calls == [], "the downloader was called despite a cache hit"
@@ -520,8 +532,7 @@ def test_a_download_is_recorded_so_the_next_run_can_use_it():
         def downloader(keyword, api_key, base_url, cache_dir):
             return _asset(Path(cache_dir), "fetched.mp4")
 
-        provider = broll.ExternalProvider("key", "https://x", downloader=downloader,
-                                         cache_dir=root)
+        provider = broll.ExternalProvider("key", "https://x", downloader=downloader, cache_dir=root)
         assert provider.search("ocean") is not None
         assert broll.load_asset_license(root / "fetched.mp4") is not None
         assert broll.cached_asset(root, "ocean") is not None

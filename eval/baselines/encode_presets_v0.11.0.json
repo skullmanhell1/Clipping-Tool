@@ -1,0 +1,132 @@
+{
+  "what_this_is": "O16/O17 measured on a 4K->1080x1920 downscale, the case R5.5 nominates as where a resampling difference should appear. Candidate vs the SAME filter graph at slow/crf12, so the encode is isolated. Two sources, deliberately unlike each other.",
+  "ffmpeg": "7.0.2-static (johnvansickle)",
+  "geometry": "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+  "reference": {
+    "preset": "slow",
+    "crf": 12
+  },
+  "sources": {
+    "A_testsrc2": "synthetic pattern, hard edges, high contrast",
+    "B_noise_bars": "SMPTE bars + temporal/uniform noise + slight blur; grain and gradients"
+  },
+  "presets": {
+    "A_testsrc2": {
+      "veryfast": {
+        "vmaf": 96.927,
+        "vmaf_min": 94.753,
+        "ssim": 0.99866,
+        "psnr": 47.12,
+        "sec": 2.17,
+        "mb": 1.95
+      },
+      "faster": {
+        "vmaf": 98.065,
+        "vmaf_min": 95.913,
+        "ssim": 0.99895,
+        "psnr": 48.58,
+        "sec": 2.57,
+        "mb": 2.18
+      },
+      "fast": {
+        "vmaf": 97.604,
+        "vmaf_min": 96.032,
+        "ssim": 0.99907,
+        "psnr": 49.11,
+        "sec": 2.77,
+        "mb": 2.13
+      },
+      "medium": {
+        "vmaf": 97.749,
+        "vmaf_min": 95.932,
+        "ssim": 0.9991,
+        "psnr": 49.18,
+        "sec": 2.8,
+        "mb": 2.11
+      }
+    },
+    "B_noise_bars": {
+      "veryfast": {
+        "vmaf": 98.278,
+        "ssim": 0.93765,
+        "psnr": 41.97,
+        "sec": 7.6,
+        "mb": 4.67
+      },
+      "faster": {
+        "vmaf": 97.693,
+        "ssim": 0.93545,
+        "psnr": 41.85,
+        "sec": 8.02,
+        "mb": 3.06
+      },
+      "fast": {
+        "vmaf": 98.094,
+        "ssim": 0.93327,
+        "psnr": 41.73,
+        "sec": 10.51,
+        "mb": 2.84
+      },
+      "medium": {
+        "vmaf": 98.07,
+        "ssim": 0.9336,
+        "psnr": 41.75,
+        "sec": 11.44,
+        "mb": 2.86
+      }
+    }
+  },
+  "preset_decision": {
+    "changed": false,
+    "kept": "veryfast",
+    "why": "The two sources CONTRADICT each other. On A every slower preset beat veryfast (+0.677..+1.137 VMAF); on B every slower preset was worse (-0.185..-0.586 VMAF). R4.3 permits a default change only if the measurement shows a fidelity improvement, and this does not show one. What slower presets DID reliably produce was a smaller file at equal CRF (-1.61..-1.83 MB on B), which is what x264 presets actually trade -- compression efficiency, not fidelity. Anyone optimising for upload size rather than encode time has a real reason to move this; anyone expecting a quality gain does not.",
+    "time_cost_if_changed": "faster x1.05-x1.19, fast x1.28-x1.38, medium x1.29-x1.51, paid three times per clip"
+  },
+  "scalers": {
+    "B_noise_bars": {
+      "bicubic": {
+        "vmaf": 98.278,
+        "ssim": 0.93765,
+        "psnr": 41.97,
+        "sec": 7.64
+      },
+      "bilinear": {
+        "vmaf": 95.483,
+        "ssim": 0.93535,
+        "psnr": 41.77,
+        "sec": 7.49
+      },
+      "lanczos": {
+        "vmaf": 98.207,
+        "ssim": 0.93855,
+        "psnr": 42.0,
+        "sec": 7.73
+      },
+      "spline": {
+        "vmaf": 97.521,
+        "ssim": 0.93802,
+        "psnr": 41.99,
+        "sec": 7.81
+      },
+      "neighbor": {
+        "vmaf": 99.027,
+        "ssim": 0.93261,
+        "psnr": 40.95,
+        "sec": 7.52
+      }
+    }
+  },
+  "scaler_decision": {
+    "changed": false,
+    "kept": "bicubic",
+    "why": "lanczos -- the algorithm usually recommended for downscaling -- is WITHIN NOISE of bicubic: VMAF -0.071, SSIM +0.000896, PSNR +0.03. R5.6 is explicit that a measurement which cannot distinguish the candidates means keeping the default and recording the finding. bicubic is also swscale's own default, so no pixels move and no fixture needed re-freezing.",
+    "one_clear_result": "bilinear is measurably worse (VMAF -2.796) and is what several ffmpeg wrappers pass by default, so it is worth knowing not to.",
+    "metric_disagreement": "neighbor scored the BEST VMAF (+0.749) while losing 1.02 dB PSNR and 0.005 SSIM. That is VMAF being fooled by nearest-neighbour's false sharpening. It is the clearest evidence in this repo that a single metric is not a verdict -- worth remembering given M9 exists precisely to let numbers settle arguments."
+  },
+  "audio_o20": {
+    "changed": false,
+    "kept_kbps": 128,
+    "why": "NOT MEASURED. M9's three metrics are all image metrics, so nothing here can compare 128k against 192k. R7.5 wants a measurement before the default moves; the setting is the honest deliverable and the default is not a claim."
+  },
+  "caveat": "Two synthetic sources. Neither is real footage, and the contradiction between them is itself the argument for not generalising from either. A bake-off on your own material would be worth more than both."
+}

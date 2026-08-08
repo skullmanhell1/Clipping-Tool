@@ -17,9 +17,9 @@ git cat-file -e origin/main:worker/script_support.py && echo "main is current" \
 ```
 
 **2. Then read `docs/IMPROVEMENT_PLAN.md`.** It is the prioritised backlog — 154 numbered items with
-a priority and effort estimate each, every current value quoted from the code. **140 are now
-implemented.** The 14 that remain are listed in [§3](#3-what-is-actually-left), and most are blocked
-on something other than effort.
+a priority and effort estimate each, every current value quoted from the code. **142 are now
+implemented.** The 12 that remain are listed in [§3](#3-what-is-actually-left), and all but one are
+blocked on something other than effort.
 
 > If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
 > figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
@@ -34,9 +34,22 @@ when a constant changes, and one module reports "I cannot do this" rather than d
 
 ## 1. Where the work is
 
-Version `0.11.0`. The Phase 1–4 pass was built as a stack of PRs and they have all been merged —
-but into **each other**, not into `main`. Consolidated onto one branch (`integrate/main-sync`) which
-is what carries the lot onto `main`:
+**Resolved: all of this is on `main`.** `main` is at `5ed1b24` (PR #111) and the probe in "Start here"
+passes. Landed since this table was written: #83 face detection, #86, #92, #94, #106 (the API and UI
+silently dropped or contradicted 24 options), #107/#108 (the five new specs, documentation only), #109
+(**I9** — ruff `UP`/`B`, `ruff format` enforced, `black` removed), #110 (**O13**–**O15** HDR
+tone-mapping), #111 (**M9**–**M12** render-fidelity measurement, which is what introduced the VMAF
+ffmpeg requirement in §2), #114 CodeQL, #115, and #10. So two Appendix B claims are **no longer true**:
+`vmaf`/`ssim`/`psnr` and `tonemap`/`zscale` now exist in the tree.
+
+Version `0.11.0`, and note `CHANGELOG.md` still carries a large `[Unreleased]` section above it — an
+entire release of work with `VERSION` unbumped. Naming that release is a human decision and has not
+been made.
+
+The original problem is kept below because its *shape* recurs whenever PRs are stacked, and this is
+the reference for untangling it. The Phase 1–4 pass was built as a stack of PRs which were all merged
+— but into **each other**, not into `main` — then consolidated onto one branch
+(`integrate/main-sync`) to carry the lot across:
 
 | Merged PR | Items | Backend tests |
 | --- | --- | --- |
@@ -69,27 +82,46 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
+Measured on `5ed1b24`. Figures in older revisions of this table, and the `1994`/`98` pair in
+`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md`, are historical snapshots — take a fresh
+measurement rather than trusting any of them, including this one.
+
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2030 passed, 0 skipped, 0 warnings** |
-| `npm run test:run` | **141 passed** |
+| `pytest` | **2292 passed, 0 failed, 0 skipped, 0 warnings** |
+| `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
+| `ruff format --check .` | clean — 207 files (I9; blocking in CI) |
+| `mypy .` | clean — 106 source files |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
-| `scripts/docker_smoke.sh` | builds and serves; image ~1.48 GB |
+| `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified` |
+| `scripts/smoke_reel.py` | renders; 15 effects incl. `music_degraded:synthesised` |
+| `scripts/docker_smoke.sh` | builds and serves; prints `I12 OK` |
 | `npm audit --audit-level=critical` | exits 0 |
 
 **Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
-README's Testing section. The full backend suite takes about five minutes.
+README's Testing section. The full backend suite takes about **five minutes** (290 s measured).
 
-`npm audit` still reports **9 high advisories** and that is a decision, not an oversight: a
-`brace-expansion` DoS reachable only through eslint's own `minimatch` chain. Both available fixes
-were tried and both are worse than the finding — `npm audit fix --force` *downgrades*
-`eslint-plugin-react` to 7.22.0, and overriding `brace-expansion` to a patched 5.x breaks
-`minimatch@3` so eslint crashes outright. Hence the gate is `--audit-level=critical`.
+**`VMAF_FFMPEG_BINARY` must point at a libvmaf-capable ffmpeg or the M9 fidelity tests fail**, several
+steps from the cause. The distro/static ffmpeg on `PATH` does not have the filter; CI pins a separate
+BtbN build by URL *and* sha256 and asserts `-filters` lists `libvmaf` before running anything. Do the
+same locally — see the "Fetch the VMAF-capable ffmpeg" step in `.github/workflows/ci.yml`. Pinning is
+deliberate: `compare()` refuses to difference readings taken across builds, so a silently updated
+libvmaf would invalidate every stored baseline with nothing to point at.
+
+`npm audit` reports **0 vulnerabilities**. An earlier note here recorded 9 high advisories via a
+`brace-expansion` DoS in eslint's `minimatch` chain as accepted, because neither available fix was
+better than the finding. That advisory is gone from the tree; the two that replaced it — `js-yaml`
+(via `eslint` → `@eslint/eslintrc`) and `nanoid` (via `postcss`) — did have clean fixes and are
+pinned in `frontend/package.json` under `overrides`, each to a patched release inside the major its
+dependent already requires. Verified not to be a functional bump: `npm ci` resolves the same tree and
+the three build outputs are identical by sha256 with and without them. The gate stays at
+`--audit-level=critical` because that history repeats — it is a floor, not a statement that `high` is
+tolerable.
 
 ## 3. What is actually left
 
-13 items. Only two are a matter of effort.
+12 items. Only one is a matter of effort.
 
 **`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
 knowing where the seams ended up, because the next person to touch trimming will meet them:
@@ -105,7 +137,16 @@ second pass.
 | Item | What | Why it was left |
 | --- | --- | --- |
 | **U12** | Multi-user auth and per-user storage | Single-tenant today. A product decision as much as a technical one. |
-| **I9** | Adopt `black`, plus ruff `UP` (~450 findings) and `B` (~30) | **Do this after the chain merges, on its own branch.** It touches nearly every file and will conflict with all four open PRs. |
+
+**`I9` is done** — `UP` and `B` are enabled, `ruff format` is enforced in CI, and `black` has been
+removed rather than left listed and unrun. Two consequences outlive the sweep. First, **`RUF100` is
+now on, and it is load-bearing rather than tidiness**: `ruff format` rewraps lines, and a `# noqa`
+does not travel with the code it was written for — four in `publishers/` were carried off their
+violation by the formatter in this very change. A suppression stranded on a line with no violation
+is invisible without `RUF100`, and hides a real finding the day that code changes. Second, **prose
+mentioning `noqa` is parsed as a directive**; a comment opening `# noqa on the message...` is read
+as a *blanket* suppression of the whole line. Two were found and reworded. If you write about
+suppressions in a comment, keep the token out of a parseable position.
 
 ### Blocked on model weights CI cannot have
 
@@ -224,6 +265,15 @@ caller sees.
 
 ### Small things that will bite
 
+- **Mocking `subprocess.run` does not reach a `shutil.which` gate sitting in front of it.**
+  `WhopPublisher.status` probes for the Node interpreter (I7) before `publish` shells out, so the whop
+  upload tests faked the bridge's whole response and were then refused before it ran — they were
+  really asserting on whether the *host* had `node` on `PATH`. Not a skip: the publisher returns a
+  `FAILED` result, so the assertion fails outright. CI's runner ships Node, so it only showed up on a
+  sandbox without it. `tests/test_publishers.py` now stubs the probe via `_pretend_node_is_installed`,
+  and a fourth test covers the missing-runtime branch that the stub would otherwise leave uncovered.
+  Availability probes in front of a subprocess are the normal shape here, so when you mock a
+  subprocess, check what gates it.
 - **The transcript cache is keyed on file *content*, not path.** `transcript_cache.hash_source`
   digests the bytes, so two tests that write the same placeholder payload to different `tmp_path`
   files share one cache entry. A test asserting a cache *miss* then passes or fails depending on

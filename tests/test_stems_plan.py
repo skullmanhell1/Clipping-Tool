@@ -147,9 +147,7 @@ def test_p1_planning_is_pure_and_never_mutates_the_caller(
         duration=seam_case["duration"],
         time_base=time_base,
         words=words,
-        capabilities=_report(
-            ml=ml, mapping={"model:" + stems.resolve_model(options): ml}
-        ),
+        capabilities=_report(ml=ml, mapping={"model:" + stems.resolve_model(options): ml}),
         runner=runner,
     )
     before = dataclasses.asdict(ctx.options)
@@ -225,13 +223,21 @@ def test_p2_equal_inputs_produce_equal_plans_that_name_their_environment(
     caps = {"model:" + stems.resolve_model(options): ml}
 
     first = stems.plan_stems_from_context(
-        _context(options=options, notes=seam_case["notes"], duration=duration,
-                 capabilities=_report(ml=ml, mapping=caps))
+        _context(
+            options=options,
+            notes=seam_case["notes"],
+            duration=duration,
+            capabilities=_report(ml=ml, mapping=caps),
+        )
     )
     second = stems.plan_stems_from_context(
-        _context(options=stems.Stem_Options.parse(supplied),
-                 notes=tuple(seam_case["notes"]), duration=duration, words=words,
-                 capabilities=_report(ml=ml, mapping=caps))
+        _context(
+            options=stems.Stem_Options.parse(supplied),
+            notes=tuple(seam_case["notes"]),
+            duration=duration,
+            words=words,
+            capabilities=_report(ml=ml, mapping=caps),
+        )
     )
 
     assert first.to_dict() == second.to_dict()
@@ -290,8 +296,7 @@ def test_p7_seam_intake_is_robust_and_windows_are_normalised(
         {"repair_mode": repair_mode, "repair_window_ms": window_ms, "backend": "ffmpeg"}
     )
     plan = stems.plan_stems_from_context(
-        _context(options=options, notes=seam_case["notes"], duration=duration,
-                 time_base=time_base)
+        _context(options=options, notes=seam_case["notes"], duration=duration, time_base=time_base)
     )
 
     assert list(plan.seams) == sorted(set(seam_case["expected_seams"]))
@@ -300,7 +305,7 @@ def test_p7_seam_intake_is_robust_and_windows_are_normalised(
     covered: list[float] = []
     for window in plan.windows:
         assert 0.0 <= window.start < window.end <= duration
-        assert window.start >= previous_end          # sorted and pairwise disjoint
+        assert window.start >= previous_end  # sorted and pairwise disjoint
         previous_end = window.end
         assert list(window.seams) == sorted(window.seams)
         covered.extend(window.seams)
@@ -312,10 +317,14 @@ def test_p7_seam_intake_is_robust_and_windows_are_normalised(
         assert covered, "a planned window must name the Seam(s) it repairs"
 
     # Re-planning the same context reproduces the same windows (idempotent intake).
-    assert plan.to_dict()["windows"] == stems.plan_stems_from_context(
-        _context(options=options, notes=seam_case["notes"], duration=duration,
-                 time_base=time_base)
-    ).to_dict()["windows"]
+    assert (
+        plan.to_dict()["windows"]
+        == stems.plan_stems_from_context(
+            _context(
+                options=options, notes=seam_case["notes"], duration=duration, time_base=time_base
+            )
+        ).to_dict()["windows"]
+    )
 
     # Repair_Mode "off" plans no window at all, whatever the notes say (Req 7.10).
     quiet = stems.plan_stems_from_context(
@@ -329,7 +338,6 @@ def test_p7_seam_intake_is_robust_and_windows_are_normalised(
     assert quiet.windows == ()
     assert list(quiet.seams) == list(plan.seams)
     assert math.isfinite(quiet.duration)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -428,12 +436,23 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
     keeps = [Interval(0.0, 1.0), Interval(2.0, 3.5), Interval(4.0, 4.25)]
 
     host.run_stage(
-        Engine_Stage.AUDIO, clip_id="c1", source="s.mp4", clip_path=None,
-        clip_start=0.0, clip_end=2.75, duration=2.75, filler_plan=keeps,
+        Engine_Stage.AUDIO,
+        clip_id="c1",
+        source="s.mp4",
+        clip_path=None,
+        clip_start=0.0,
+        clip_end=2.75,
+        duration=2.75,
+        filler_plan=keeps,
     )
     host.run_stage(
-        Engine_Stage.AUDIO, clip_id="c2", source="s.mp4", clip_path=None,
-        clip_start=0.0, clip_end=2.75, duration=2.75,
+        Engine_Stage.AUDIO,
+        clip_id="c2",
+        source="s.mp4",
+        clip_path=None,
+        clip_start=0.0,
+        clip_end=2.75,
+        duration=2.75,
     )
 
     # The Seam notes are *appended*: the host's own ``fps_fallback:`` note (this host has
@@ -442,7 +461,6 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
     assert seam_only == ("filler_seam:1.000", "filler_seam:2.500")
     assert recorded[0][: len(recorded[0]) - 2] == recorded[1]
     assert not any(n.startswith("filler_seam:") for n in recorded[1])
-
 
 
 # =========================================================================== #
@@ -454,17 +472,17 @@ def test_seam_notes_reach_the_audio_stage_context_and_nothing_else_changes(
 # fast return, because only the former distinguishes "skipped before doing anything" from
 # "did the work and threw it away".
 
-import time as _time  # noqa: E402
-from pathlib import Path as _Path  # noqa: E402
+import time as _time
+from pathlib import Path as _Path
 
-from tests.fakes import (  # noqa: E402
+from tests.fakes import (
     Recording_Command_Runner as _Runner,
 )
 from tests.fakes import (
     StaticProber as _Prober,
 )
-from worker.engines.artifacts import allocate_workspace as _alloc  # noqa: E402
-from worker.engines.base import (  # noqa: E402
+from worker.engines.artifacts import allocate_workspace as _alloc
+from worker.engines.base import (
     Engine_Context as _Ctx,
 )
 from worker.engines.base import (
@@ -473,8 +491,8 @@ from worker.engines.base import (
 from worker.engines.base import (
     Engine_Status as _Status,
 )
-from worker.engines.capabilities import Capability_Report as _Report  # noqa: E402
-from worker.engines.timebase import Time_Base as _TB  # noqa: E402
+from worker.engines.capabilities import Capability_Report as _Report
+from worker.engines.timebase import Time_Base as _TB
 
 
 class _CountingBackend:
@@ -497,15 +515,26 @@ def _p8_context(root: _Path, options, runner, *, enabled_options=None):
     if not clip.exists():
         clip.write_bytes(b"\x00" * 64)
     return _Ctx(
-        job_id="job", clip_id="clip_a", engine_id=stems.ENGINE_ID, stage=_Stage.AUDIO,
-        source_path=clip, clip_path=clip, time_base=_TB(sample_rate=48000),
-        clip_start=0.0, clip_end=3.0, duration=3.0,
+        job_id="job",
+        clip_id="clip_a",
+        engine_id=stems.ENGINE_ID,
+        stage=_Stage.AUDIO,
+        source_path=clip,
+        clip_path=clip,
+        time_base=_TB(sample_rate=48000),
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
         options=options if enabled_options is None else enabled_options,
-        options_digest="p8", seed=1,
+        options_digest="p8",
+        seed=1,
         workspace=_alloc(root / "ws", "job", "clip_a", stems.ENGINE_ID, "p8"),
         capabilities=_Report(prober=_Prober({}, default=True)),
-        permissibility=False, deadline=_time.monotonic() + 120.0, time_budget_s=120.0,
-        notes=("filler_seam:1.500",), deps={"runner": runner},
+        permissibility=False,
+        deadline=_time.monotonic() + 120.0,
+        time_budget_s=120.0,
+        notes=("filler_seam:1.500",),
+        deps={"runner": runner},
     )
 
 
@@ -523,19 +552,23 @@ def test_p8_the_noop_configuration_costs_nothing(option_map: dict, tmp_path_fact
     """
     root = tmp_path_factory.mktemp("p8")
     options = stems.resolve_stem_options(
-        type("O", (), {
-            **{f"stem_{k}": v for k, v in option_map.items()},
-            # Force the no-op shape: neutral gains, no repair.
-            "stem_mix_preset": "custom",
-            "stem_gain_vocals": 1.0,
-            "stem_gain_music": 1.0,
-            "stem_gain_other": 1.0,
-            "stem_repair_mode": "off",
-        })()
+        type(
+            "O",
+            (),
+            {
+                **{f"stem_{k}": v for k, v in option_map.items()},
+                # Force the no-op shape: neutral gains, no repair.
+                "stem_mix_preset": "custom",
+                "stem_gain_vocals": 1.0,
+                "stem_gain_music": 1.0,
+                "stem_gain_other": 1.0,
+                "stem_repair_mode": "off",
+            },
+        )()
     )
-    assert stems.plan_is_noop(
-        stems.plan_stems(opts=options, duration=3.0)
-    ), "the generated options were not the no-op configuration"
+    assert stems.plan_is_noop(stems.plan_stems(opts=options, duration=3.0)), (
+        "the generated options were not the no-op configuration"
+    )
 
     runner = _Runner()
     backend = _CountingBackend()
@@ -578,26 +611,35 @@ def test_p8_a_disabled_flag_costs_nothing_for_any_options(
     registry.register(engine)
     options = ProcessingOptions.from_dict(
         {f"stem_{k}": v for k, v in option_map.items()}
-    )                                          # stem_inpainting_enabled stays False
+    )  # stem_inpainting_enabled stays False
     assert options.stem_inpainting_enabled is False
 
     temp_dir = root / "temp"
     host = Engine_Host(
-        options, job_id="job", temp_dir=temp_dir, registry=registry,
+        options,
+        job_id="job",
+        temp_dir=temp_dir,
+        registry=registry,
         capabilities=_Report(prober=_Prober({}, default=True)),
     )
 
-    assert host.active is False                # no probe, no allocation, nothing
+    assert host.active is False  # no probe, no allocation, nothing
 
     clip = root / "clip.mp4"
     clip.write_bytes(b"\x00" * 64)
     outcome = host.run_stage(
-        _Stage.AUDIO, clip_id="clip_a", source=str(clip), clip_path=clip,
-        clip_start=0.0, clip_end=3.0, duration=3.0, notes=("filler_seam:1.500",),
+        _Stage.AUDIO,
+        clip_id="clip_a",
+        source=str(clip),
+        clip_path=clip,
+        clip_start=0.0,
+        clip_end=3.0,
+        duration=3.0,
+        notes=("filler_seam:1.500",),
     )
 
     assert outcome.media is None
-    assert outcome.markers == []               # skipped contributes no marker
+    assert outcome.markers == []  # skipped contributes no marker
     assert runner.calls == []
     assert backend.calls == 0
     assert not temp_dir.exists() or not list(temp_dir.rglob("stem_inpainting__*"))

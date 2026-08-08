@@ -53,7 +53,6 @@ def test_vocabularies_match_the_strategies_mirror() -> None:
     )
 
 
-
 # --------------------------------------------------------------------------- #
 # P3 — round-trip and digest separation (task 4.5)                            #
 # --------------------------------------------------------------------------- #
@@ -85,17 +84,15 @@ def test_p3_options_round_trip_and_digest_separates_distinct_values(
         assert stems.Stem_Options.parse(value.to_dict()) == value
         # every field present, sorted keys, JSON-native
         assert sorted(value.to_dict()) == [
-            entry.name for entry in sorted(dataclasses.fields(stems.Stem_Options),
-                                           key=lambda e: e.name)
+            entry.name
+            for entry in sorted(dataclasses.fields(stems.Stem_Options), key=lambda e: e.name)
         ]
         json.dumps(value.to_dict())
 
     # -- digest: equal iff the field values are equal -------------------------
     same_values = left.to_dict() == right.to_dict()
     assert (options_digest(left) == options_digest(right)) is same_values
-    assert options_digest(left) == options_digest(
-        stems.Stem_Options.parse(left.to_dict())
-    )
+    assert options_digest(left) == options_digest(stems.Stem_Options.parse(left.to_dict()))
 
 
 # --------------------------------------------------------------------------- #
@@ -128,12 +125,21 @@ def test_p4_parsing_is_total_under_hostile_input(
     """
     payload = dict(mapping)
     payload["repair_window_ms"] = window
-    for name in ("mix_preset", "repair_mode", "backend", "model", "declick",
-                 "retain_stems", "gain_vocals", "gain_music", "gain_other"):
+    for name in (
+        "mix_preset",
+        "repair_mode",
+        "backend",
+        "model",
+        "declick",
+        "retain_stems",
+        "gain_vocals",
+        "gain_music",
+        "gain_other",
+    ):
         if name not in payload:
             payload[name] = hostile
 
-    options = stems.Stem_Options.parse(payload)          # must not raise
+    options = stems.Stem_Options.parse(payload)  # must not raise
 
     assert options.mix_preset in stems.MIX_PRESET_CHOICES
     assert options.repair_mode in stems.REPAIR_MODES
@@ -159,9 +165,7 @@ def test_p4_parsing_is_total_under_hostile_input(
 #: adds them to ``ProcessingOptions`` as declared fields; until then they are attached as
 #: instance attributes, which is exactly the ``getattr`` surface the projection reads (the
 #: same arrangement ``tests/test_kinetic_plan.py`` uses for the ``kinetic_*`` settings).
-_STEM_ATTRS = tuple(
-    "stem_" + entry.name for entry in dataclasses.fields(stems.Stem_Options)
-)
+_STEM_ATTRS = tuple("stem_" + entry.name for entry in dataclasses.fields(stems.Stem_Options))
 
 
 # Feature: audio-stem-inpainting, Property 5: Option resolution is idempotent and
@@ -191,7 +195,7 @@ def test_p5_resolution_is_idempotent_and_survives_the_options_round_trip(
     """
     options = ProcessingOptions()
     for name in _STEM_ATTRS:
-        field = name[len("stem_"):]
+        field = name[len("stem_") :]
         value = supplied[field] if field in supplied else None
         setattr(options, name, value)
     # ... plus one hostile payload per plausible key, to exercise the coercion path.

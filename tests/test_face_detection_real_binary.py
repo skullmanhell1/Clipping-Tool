@@ -119,9 +119,7 @@ def test_the_removed_solutions_namespace_is_not_relied_upon():
     ]
     # The docstrings deliberately *name* the removed namespace to warn about it, so only
     # executable references count: a line that is not a comment and not inside prose.
-    executable = [
-        line for line in offending if not line.lstrip().startswith("#") and "=" in line
-    ]
+    executable = [line for line in offending if not line.lstrip().startswith("#") and "=" in line]
     assert executable == [], f"reframe.py appears to call the removed namespace: {executable}"
 
 

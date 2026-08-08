@@ -27,7 +27,7 @@ platform per clip, which is why it is opt-in rather than automatic.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 from config import settings
 from worker.metadata import PlatformProfile, get_profile
@@ -121,9 +121,7 @@ def fit_caption(
     return fitted, cta, tags
 
 
-def _regenerate_description(
-    transcript_text: str, platform: str, hashtag_count: int
-) -> Optional[str]:
+def _regenerate_description(transcript_text: str, platform: str, hashtag_count: int) -> str | None:
     """Ask the LLM for a description written *for* ``platform``, or ``None``.
 
     Returns ``None`` on any failure - no LLM configured, a model error, an empty answer - and the
@@ -139,7 +137,10 @@ def _regenerate_description(
             return None
         options = ProcessingOptions(platform=platform, hashtag_count=hashtag_count)
         value = regenerate_field(
-            "description", transcript_text, options, platform=platform,
+            "description",
+            transcript_text,
+            options,
+            platform=platform,
             hashtag_count=hashtag_count,
         )
         text = str(value or "").strip()

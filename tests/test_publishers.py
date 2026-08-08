@@ -1,4 +1,5 @@
 """Adapter tests for each platform publisher with mocked HTTP/subprocess."""
+
 from __future__ import annotations
 
 import json
@@ -15,9 +16,15 @@ from tests.fakes import FakeHTTPClient, FakeResponse
 
 
 def _request(video_file, **overrides):
-    kwargs = dict(video_path=video_file, title="Great clip",
-                  description="desc", hashtags=["#a", "#b"], cta="Follow",
-                  mentions=["@me"], mode="auto")
+    kwargs = dict(
+        video_path=video_file,
+        title="Great clip",
+        description="desc",
+        hashtags=["#a", "#b"],
+        cta="Follow",
+        mentions=["@me"],
+        mode="auto",
+    )
     kwargs.update(overrides)
     return PublishRequest(**kwargs)
 
@@ -85,8 +92,12 @@ def test_tiktok_draft_when_not_approved(monkeypatch, video_file):
     def handler(method, url, kwargs):
         if "/init/" in url:
             seen["init"] = url
-        return FakeResponse(json_data={"data": {"upload_url": "https://up", "publish_id": "p1"},
-                                       "error": {"code": "ok"}})
+        return FakeResponse(
+            json_data={
+                "data": {"upload_url": "https://up", "publish_id": "p1"},
+                "error": {"code": "ok"},
+            }
+        )
 
     pub = TikTokPublisher(client=FakeHTTPClient(handler))
     result = pub.publish(_request(video_file, mode="auto"))
@@ -102,8 +113,12 @@ def test_tiktok_direct_post_when_approved(monkeypatch, video_file):
     def handler(method, url, kwargs):
         if "/init/" in url:
             seen["init"] = url
-        return FakeResponse(json_data={"data": {"upload_url": "https://up", "publish_id": "p2"},
-                                       "error": {"code": "ok"}})
+        return FakeResponse(
+            json_data={
+                "data": {"upload_url": "https://up", "publish_id": "p2"},
+                "error": {"code": "ok"},
+            }
+        )
 
     pub = TikTokPublisher(client=FakeHTTPClient(handler))
     result = pub.publish(_request(video_file, mode="auto"))
@@ -210,11 +225,36 @@ def test_x_chunked_upload_and_post(monkeypatch, video_file):
 # --------------------------------------------------------------------------- #
 # Whop (Node @whop/sdk bridge via subprocess)
 # --------------------------------------------------------------------------- #
+def _pretend_node_is_installed(monkeypatch, whop_mod):
+    """Stub the Node *interpreter* probe that `WhopPublisher.status` gates on.
+
+    `status()` checks `shutil.which(settings.whop_node_binary)` (I7), and mocking `subprocess.run`
+    does not reach that: a test can fake the bridge's entire response and still be refused before
+    the bridge is ever invoked. Without this stub the two upload tests below were really asserting
+    on whether the *host* happened to have Node on `PATH` — they passed on a machine with it and
+    failed with "Node (node) is not installed" on one without. That is an undeclared host
+    dependency, and because the publisher returns a `FAILED` result rather than raising, it fails
+    the assertion outright instead of skipping. CI's runner ships Node, so it stayed hidden there.
+
+    A test that mocks the bridge is asserting on the publisher's own logic, so the availability
+    probe guarding the call it just mocked has to be stubbed too. Availability probes in front of a
+    subprocess are the normal shape in this codebase (I7), not an exception.
+    """
+    monkeypatch.setattr(whop_mod.shutil, "which", lambda _binary: "/usr/bin/node")
+
+
 def test_whop_not_configured(monkeypatch, video_file):
+    import publishers.whop as whop_mod
+
     monkeypatch.setattr(settings, "whop_api_key", None)
+    # Stubbed for the same reason, plus one of its own: with a host that has no Node this test
+    # passed for the wrong reason, and would have kept passing if the missing-key branch were
+    # deleted. Asserting on the message is what ties it to the branch it is named for.
+    _pretend_node_is_installed(monkeypatch, whop_mod)
     pub = WhopPublisher()
     result = pub.publish(_request(video_file))
     assert result.state == PublishState.FAILED
+    assert "WHOP_API_KEY" in (result.error or "")
 
 
 def test_whop_upload_and_attach(monkeypatch, video_file):
@@ -224,11 +264,13 @@ def test_whop_upload_and_attach(monkeypatch, video_file):
     def fake_run(cmd, **kwargs):
         payload = json.loads(kwargs["input"])
         assert payload["target_type"] == "chat"
-        out = json.dumps({"success": True, "file_id": "file_1",
-                          "url": "https://whop/file_1", "attached": True})
+        out = json.dumps(
+            {"success": True, "file_id": "file_1", "url": "https://whop/file_1", "attached": True}
+        )
         return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
 
     monkeypatch.setattr(whop_mod.subprocess, "run", fake_run)
+    _pretend_node_is_installed(monkeypatch, whop_mod)
     pub = WhopPublisher()
     result = pub.publish(_request(video_file, target_type="chat", target_id="ch1"))
     assert result.success
@@ -241,16 +283,44 @@ def test_whop_upload_without_target_is_review(monkeypatch, video_file):
     import publishers.whop as whop_mod
 
     def fake_run(cmd, **kwargs):
-        out = json.dumps({"success": True, "file_id": "file_2",
-                          "url": "https://whop/file_2", "attached": False})
+        out = json.dumps(
+            {"success": True, "file_id": "file_2", "url": "https://whop/file_2", "attached": False}
+        )
         return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
 
     monkeypatch.setattr(whop_mod.subprocess, "run", fake_run)
+    _pretend_node_is_installed(monkeypatch, whop_mod)
     pub = WhopPublisher()
     result = pub.publish(_request(video_file))
     assert result.success
     assert result.state == PublishState.REVIEW_REQUIRED
     assert result.external_id == "file_2"
+
+
+def test_whop_reports_a_missing_node_runtime_rather_than_failing_at_publish(
+    monkeypatch, video_file
+):
+    """I7's own guarantee, asserted directly rather than left to the host's `PATH`.
+
+    The three tests above stub the probe, so without this one nothing covers the branch they are
+    stubbing — and that branch is the whole point of I7: an image built without the optional ~200 MB
+    Node install has the committed bridge script and nothing to run it with, and the publisher is
+    supposed to say so up front instead of raising `FileNotFoundError` out of `subprocess` at
+    publish time. Deleting the `runtime` check now fails here instead of depending on which machine
+    the suite runs on.
+    """
+    import publishers.whop as whop_mod
+
+    monkeypatch.setattr(settings, "whop_api_key", "key")
+    monkeypatch.setattr(whop_mod.shutil, "which", lambda _binary: None)
+
+    def explode(*_args, **_kwargs):  # pragma: no cover - proves the bridge is never reached
+        raise AssertionError("publish() must refuse before invoking the bridge")
+
+    monkeypatch.setattr(whop_mod.subprocess, "run", explode)
+    result = WhopPublisher().publish(_request(video_file))
+    assert result.state == PublishState.FAILED
+    assert "is not installed" in (result.error or "")
 
 
 # --------------------------------------------------------------------------- #

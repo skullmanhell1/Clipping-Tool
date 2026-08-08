@@ -36,7 +36,6 @@ What a profile controls, and what it does not:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from config import settings
 from worker.ffmpeg_utils import OUTPUT_SHORT_SIDES
@@ -67,7 +66,7 @@ class OutputProfile:
     #: VBV ceiling in kbps.
     max_bitrate_kbps: int
     #: Longest clip this destination should be given, in seconds, or ``None`` for no opinion.
-    max_duration_s: Optional[float]
+    max_duration_s: float | None
 
     @property
     def size(self) -> tuple[int, int]:
@@ -100,7 +99,7 @@ _DURATION_OVERRIDES: dict[str, float] = {
 }
 
 
-def _duration_ceiling(platform: str) -> Optional[float]:
+def _duration_ceiling(platform: str) -> float | None:
     """The platform's own maximum duration.
 
     An override wins where the product is stricter than the upload limit; otherwise this is read
@@ -136,7 +135,7 @@ _PLATFORM_SHAPES: dict[str, tuple[str, int]] = {
 }
 
 
-def profile_for(platform: str) -> Optional[OutputProfile]:
+def profile_for(platform: str) -> OutputProfile | None:
     """The output profile for ``platform``, or ``None`` when there is no entry.
 
     ``None`` means "no platform-specific opinion", and every caller treats that as "use the
@@ -158,7 +157,7 @@ def profile_for(platform: str) -> Optional[OutputProfile]:
     )
 
 
-def active_profile() -> Optional[OutputProfile]:
+def active_profile() -> OutputProfile | None:
     """The profile named by ``settings.output_platform``, or ``None`` when unset."""
     return profile_for(str(getattr(settings, "output_platform", "") or ""))
 
@@ -198,7 +197,30 @@ def resolve_max_bitrate_kbps() -> int:
     return profile.max_bitrate_kbps
 
 
-def duration_ceiling_s() -> Optional[float]:
+def resolve_audio_bitrate_kbps() -> int:
+    """The delivered AAC bitrate (O20, R7.1-R7.4).
+
+    Mirrors :func:`resolve_max_bitrate_kbps` exactly rather than inventing a second shape: the
+    configured value wins, and a platform ceiling applies only where the operator has not chosen
+    for themselves. Stating the rule twice differently is how two settings that look alike come to
+    behave differently, which is the kind of surprise nobody debugs quickly.
+
+    The default is **unchanged at 128k**. R7.5 wants a measurement first and this project has no
+    audio-fidelity instrument -- M9's three metrics are all image metrics -- so there is nothing
+    that could justify moving it beyond an assertion.
+    """
+    configured = int(getattr(settings, "audio_bitrate_kbps", 128) or 128)
+    # Never exceed the profile's audio ceiling where it defines one (R7.3), and never let an
+    # intermediate carry more than the final will (R7.6) -- intermediates use this same value, so
+    # that holds by construction.
+    profile = active_profile()
+    ceiling = getattr(profile, "max_audio_bitrate_kbps", None) if profile else None
+    if ceiling:
+        return min(configured, int(ceiling))
+    return configured
+
+
+def duration_ceiling_s() -> float | None:
     """The active profile's duration ceiling, or ``None``."""
     profile = active_profile()
     return None if profile is None else profile.max_duration_s

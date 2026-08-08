@@ -20,7 +20,6 @@ from __future__ import annotations
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,10 +76,10 @@ class Settings(BaseSettings):
     # Unset means "allow everything", because an existing deployment must not lose access on
     # upgrade - the same reasoning the CORS wildcard default follows. Startup logs a loud
     # warning in that case, and refuses to boot outright under ENVIRONMENT=production.
-    api_auth_token: Optional[str] = Field(
+    api_auth_token: str | None = Field(
         default=None,
         description="Shared secret required on /api/* and /clips/*. Unset = no auth (a "
-                    "startup warning is logged; refused outright in production).",
+        "startup warning is logged; refused outright in production).",
     )
     # Rate limiting is in-process on purpose. `redis` and `rq` are declared dependencies that
     # nothing imports, and adding a live Redis requirement to make the app safe would turn an
@@ -104,7 +103,7 @@ class Settings(BaseSettings):
     url_ingest_allow_private: bool = Field(
         default=False,
         description="Allow URL ingest from loopback/link-local/private address ranges. "
-                    "Leave false unless you are deliberately ingesting from a LAN host.",
+        "Leave false unless you are deliberately ingesting from a LAN host.",
     )
     # Whether to believe X-Forwarded-For when identifying a client for rate limiting. False by
     # default because a client can forge the header when the app is directly exposed, and
@@ -114,7 +113,7 @@ class Settings(BaseSettings):
     trust_forwarded_for: bool = Field(
         default=False,
         description="Trust X-Forwarded-For for client identity. Enable only when running "
-                    "behind a proxy that sets it.",
+        "behind a proxy that sets it.",
     )
 
     # --------------------------------------------------------------- queue --
@@ -134,19 +133,17 @@ class Settings(BaseSettings):
         default=LLMProvider.OPENAI,
         description="Which LLM provider the pluggable client should use.",
     )
-    openai_api_key: Optional[str] = Field(default=None, description="OpenAI key.")
+    openai_api_key: str | None = Field(default=None, description="OpenAI key.")
     openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model.")
     # Optional custom base URL for any OpenAI-compatible endpoint (e.g. a local
     # Ollama / LM Studio server, or a proxy). Leave unset for real OpenAI.
-    openai_base_url: Optional[str] = Field(
+    openai_base_url: str | None = Field(
         default=None, description="Custom OpenAI-compatible base URL."
     )
-    anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic key.")
-    anthropic_model: str = Field(
-        default="claude-3-5-sonnet-latest", description="Anthropic model."
-    )
+    anthropic_api_key: str | None = Field(default=None, description="Anthropic key.")
+    anthropic_model: str = Field(default="claude-3-5-sonnet-latest", description="Anthropic model.")
     # Google Gemini (used via its OpenAI-compatible endpoint).
-    gemini_api_key: Optional[str] = Field(default=None, description="Gemini API key.")
+    gemini_api_key: str | None = Field(default=None, description="Gemini API key.")
     gemini_model: str = Field(default="gemini-2.0-flash", description="Gemini model.")
     gemini_base_url: str = Field(
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -177,7 +174,7 @@ class Settings(BaseSettings):
     whisper_initial_prompt: str = Field(
         default="",
         description="Text prepended to the ASR decode to bias it towards expected "
-                    "vocabulary (T4). Per-video terms belong in the job's `vocabulary`.",
+        "vocabulary (T4). Per-video terms belong in the job's `vocabulary`.",
     )
     # ----------------------------------------------------- VAD (T5) --------
     # Voice-activity detection was switched on with every parameter left at the library's
@@ -186,13 +183,13 @@ class Settings(BaseSettings):
     whisper_vad_filter: bool = Field(
         default=True,
         description="Run Silero VAD before decoding (T5). Off passes the whole track to the "
-                    "model, which is slower and hallucinates more over music and silence.",
+        "model, which is slower and hallucinates more over music and silence.",
     )
     whisper_vad_threshold: float = Field(
         default=0.5,
         description="Speech probability above which VAD calls a frame speech (T5). Lower "
-                    "keeps quiet or distant speech that the default discards; higher "
-                    "rejects more noise.",
+        "keeps quiet or distant speech that the default discards; higher "
+        "rejects more noise.",
     )
     whisper_vad_min_silence_ms: int = Field(
         default=2000,
@@ -201,12 +198,12 @@ class Settings(BaseSettings):
     whisper_vad_min_speech_ms: int = Field(
         default=250,
         description="Speech shorter than this (ms) is discarded by VAD (T5). Raising it "
-                    "drops interjections - 'yeah', a laugh - which may be the punchline.",
+        "drops interjections - 'yeah', a laugh - which may be the punchline.",
     )
     whisper_vad_speech_pad_ms: int = Field(
         default=400,
         description="Padding (ms) kept either side of detected speech (T5). Too little "
-                    "clips the first and last phoneme of each utterance.",
+        "clips the first and last phoneme of each utterance.",
     )
 
     # ------------------------------------------------------------- storage --
@@ -242,7 +239,7 @@ class Settings(BaseSettings):
     transcript_cache_dir: Path = Field(
         default=BASE_DIR / "storage" / "transcripts",
         description="Directory of cached transcripts (T8), keyed by source content hash and "
-                    "the ASR parameters that produced them.",
+        "the ASR parameters that produced them.",
     )
     # T3: Whisper invents text over music, applause and silence, and gets stuck in decode
     # loops. Every threshold here is set so that two independent signals must agree before a
@@ -255,39 +252,39 @@ class Settings(BaseSettings):
     transcript_no_speech_threshold: float = Field(
         default=0.6,
         description="Whisper no_speech_prob at or above which a segment is suspect (T3). "
-                    "Never acted on alone: quiet but real speech scores high here.",
+        "Never acted on alone: quiet but real speech scores high here.",
     )
     transcript_logprob_threshold: float = Field(
         default=-1.0,
         description="Mean token log-probability at or below which a segment is suspect (T3). "
-                    "Must coincide with a high no_speech_prob before anything is dropped.",
+        "Must coincide with a high no_speech_prob before anything is dropped.",
     )
     transcript_max_token_run: int = Field(
         default=4,
         description="Identical consecutive tokens that mark a decode loop (T3). No speaker "
-                    "says the same word four times with nothing in between.",
+        "says the same word four times with nothing in between.",
     )
     transcript_max_segment_repeats: int = Field(
         default=2,
         description="Consecutive segments repeating the same phrase before the repeats are "
-                    "dropped (T3) - a loop spanning segment boundaries.",
+        "dropped (T3) - a loop spanning segment boundaries.",
     )
     transcript_min_word_probability: float = Field(
         default=0.35,
         description="Mean word probability below which a repetitive segment is treated as a "
-                    "loop over non-speech (T3).",
+        "loop over non-speech (T3).",
     )
     transcript_filter_keep_floor: float = Field(
         default=0.5,
         description="Minimum share of segments that must survive filtering (T3). Below it "
-                    "nothing is dropped: if most of a transcript looks invented the "
-                    "thresholds are wrong for that audio, and emptying it is worse than "
-                    "keeping a poor transcript.",
+        "nothing is dropped: if most of a transcript looks invented the "
+        "thresholds are wrong for that audio, and emptying it is worse than "
+        "keeping a poor transcript.",
     )
     transcript_cache_enabled: bool = Field(
         default=True,
         description="Reuse a cached transcript when the source content and ASR settings "
-                    "match (T8). Turn off to force re-transcription.",
+        "match (T8). Turn off to force re-transcription.",
     )
     temp_dir: Path = Field(
         default=BASE_DIR / "storage" / "temp",
@@ -300,7 +297,9 @@ class Settings(BaseSettings):
     # Default number of days finished clips are retained before cleanup.
     # 0 means "keep forever". This is the *default*; the effective value is
     # user-tunable at runtime (see runtime_config.py / the Storage settings UI).
-    retention_days: int = Field(default=30, description="Clip retention window (days); 0 = keep forever.")
+    retention_days: int = Field(
+        default=30, description="Clip retention window (days); 0 = keep forever."
+    )
     # Auto-delete a job's scratch/temp files when it finishes (toggleable).
     auto_delete_temp: bool = Field(default=True, description="Delete temp files after each job.")
     # Delete the local clip copy once it has been published (never the source).
@@ -308,33 +307,56 @@ class Settings(BaseSettings):
         default=False, description="Delete the local clip after a successful publish."
     )
     # How often the background retention sweeper runs.
-    retention_sweep_hours: float = Field(default=6.0, description="Retention sweep interval (hours).")
+    retention_sweep_hours: float = Field(
+        default=6.0, description="Retention sweep interval (hours)."
+    )
     # Low-disk warning thresholds surfaced in the UI.
-    disk_warn_free_gb: float = Field(default=2.0, description="Warn when free space drops below this (GB).")
-    disk_warn_percent: float = Field(default=90.0, description="Warn when used space exceeds this (%).")
+    disk_warn_free_gb: float = Field(
+        default=2.0, description="Warn when free space drops below this (GB)."
+    )
+    disk_warn_percent: float = Field(
+        default=90.0, description="Warn when used space exceeds this (%)."
+    )
     # Runtime-mutable settings + saved profiles are persisted here.
     runtime_config_path: Path = Field(default=BASE_DIR / "storage" / "runtime_config.json")
     profiles_path: Path = Field(default=BASE_DIR / "storage" / "profiles.json")
 
     # --------------------------------------------------------- updates -----
     # GitHub repo (owner/name) used by the "check for updates" feature.
-    github_repo: str = Field(default="skullmanhell1/Clipping-Tool", description="owner/name for update checks.")
-    update_check_enabled: bool = Field(default=True, description="Enable GitHub release update checks.")
+    github_repo: str = Field(
+        default="skullmanhell1/Clipping-Tool", description="owner/name for update checks."
+    )
+    update_check_enabled: bool = Field(
+        default=True, description="Enable GitHub release update checks."
+    )
 
     # --------------------------------------------------------------- s3 ----
-    s3_bucket: Optional[str] = Field(default=None, description="S3 bucket name.")
-    s3_region: Optional[str] = Field(default=None, description="S3 region.")
-    s3_access_key_id: Optional[str] = Field(default=None, description="S3 access key.")
-    s3_secret_access_key: Optional[str] = Field(
-        default=None, description="S3 secret key."
-    )
-    s3_endpoint_url: Optional[str] = Field(
+    s3_bucket: str | None = Field(default=None, description="S3 bucket name.")
+    s3_region: str | None = Field(default=None, description="S3 region.")
+    s3_access_key_id: str | None = Field(default=None, description="S3 access key.")
+    s3_secret_access_key: str | None = Field(default=None, description="S3 secret key.")
+    s3_endpoint_url: str | None = Field(
         default=None, description="Optional custom S3-compatible endpoint."
     )
 
     # ------------------------------------------------------------- ffmpeg --
     ffmpeg_binary: str = Field(default="ffmpeg", description="Path to ffmpeg binary.")
     ffprobe_binary: str = Field(default="ffprobe", description="Path to ffprobe binary.")
+    # VMAF is measured with its own binary because no single build serves both jobs.
+    # `libvmaf` is not compiled into the ffmpeg any mainstream distribution ships, so the
+    # fidelity gate cannot measure VMAF with the primary binary; but the builds that do carry
+    # `libvmaf` are third-party, and the one tested here signals colour differently — it leaves
+    # `color_transfer` and `color_primaries` unset where the distribution build writes them,
+    # which the colour-pipeline tests read. Swapping the primary binary to gain VMAF therefore
+    # trades one set of failures for another.
+    #
+    # Empty means "use `ffmpeg_binary`", which keeps the single-binary default: VMAF is then
+    # available only if the primary build happens to have `libvmaf`, and reported unavailable by
+    # name if not. Set this only to point the VMAF measurement at a build that has it.
+    vmaf_ffmpeg_binary: str = Field(
+        default="",
+        description="Path to an ffmpeg built with libvmaf, for VMAF only. Empty = use ffmpeg_binary.",
+    )
     # Wall-clock ceilings for media subprocesses. Jobs run in a thread pool with a
     # single worker, so an ffmpeg that hangs (an unreachable network input, a
     # malformed file that stalls a demuxer, a filter waiting on a pad that never
@@ -351,7 +373,115 @@ class Settings(BaseSettings):
     # x264 quality/speed. Previously hard-coded at eight call sites across five modules.
     # Lower CRF is higher quality and a larger file; 18-23 is the sane range.
     x264_crf: int = Field(default=20, description="x264 CRF (quality); lower = better.")
-    x264_preset: str = Field(default="veryfast", description="x264 speed/efficiency preset.")
+    x264_preset: str = Field(
+        default="veryfast",
+        description="x264 speed/efficiency preset. MEASURED and deliberately unchanged (O16): "
+        "on a 4K->1080x1920 downscale, slower presets beat veryfast by +0.68..+1.14 VMAF on one "
+        "source and LOST by -0.19..-0.59 VMAF on another. What they reliably bought was a smaller "
+        "file at equal CRF, not fidelity. See eval/baselines/encode_presets_v0.11.0.json.",
+    )
+
+    # O17: resampling algorithm, applied uniformly to every scale in a job.
+    #
+    # Default `bicubic` is swscale's own default, so this changes no pixels. That is the *measured*
+    # outcome, not caution -- lanczos came in within noise on the downscale R5.5 nominates, so
+    # R5.6 applies: keep the default, record the finding.
+    scaler_flags: str = Field(
+        default="bicubic",
+        description="swscale resampling algorithm: bicubic | bilinear | lanczos | spline | "
+        "neighbor | area | gauss (O17). MEASURED: lanczos is within noise of bicubic on a "
+        "4K->1080x1920 downscale (VMAF -0.07, SSIM +0.0009), bilinear is measurably worse "
+        "(VMAF -2.80). Default unchanged; the same value applies to every scale in a job.",
+    )
+
+    # O18: frame-rate policy. The blanket `-r 30` was correct for VFR and wrong for CFR 24.
+    frame_rate_policy: str = Field(
+        default="auto",
+        description="Delivered frame rate policy (O18): 'auto' preserves a constant-rate source "
+        "already at 24/25/30/50/60 and normalises everything else; 'always' restores the previous "
+        "unconditional resample to OUTPUT_FPS. 'auto' exists because resampling CFR 24 to 30 adds "
+        "3:2 judder to footage that had none; 'always' exists because VFR really does drift "
+        "captions and some operators want the one guarantee.",
+    )
+
+    # O19: keyframe interval. Nothing set -g, so x264's default of 250 frames applied (~8s at 30).
+    keyframe_seconds: float = Field(
+        default=2.0,
+        description="Keyframe interval for delivered clips, in seconds (O19). Expressed in "
+        "seconds rather than frames because O18 makes the delivered rate vary, and a fixed frame "
+        "count would silently mean 2s at 30fps and 1s at 60fps. Scene-change keyframes are kept.",
+    )
+
+    # O20: delivered audio bitrate.
+    audio_bitrate_kbps: int = Field(
+        default=128,
+        description="AAC bitrate for delivered clips, in kbps (O20). UNMEASURED and therefore "
+        "unchanged: this project has no audio-fidelity instrument, so 128 is the shipped value "
+        "rather than a justified one. Raise it if you can hear the difference under a music bed.",
+    )
+
+    # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
+    #
+    # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
+    # new output setting defaults to previously shipped behaviour. That rule exists to keep the
+    # parity goldens able to detect an *accidental* change, and it is the right rule -- but it
+    # protects goldens, not defects. Shipping HDR footage through a pipeline with no tone-map
+    # delivers grey, flat, desaturated output; defaulting the fix to off would mean the default
+    # install keeps producing knowingly incorrect colour (R2.11).
+    #
+    # It costs nothing on SDR sources: the plan is empty unless the source's transfer function
+    # positively reports PQ or HLG, so an SDR library renders byte-identically to before.
+    tone_mapping: bool = Field(
+        default=True,
+        description="Tone-map HDR (PQ/HLG) sources to SDR Rec.709 for delivery (O13). "
+        "On by default: the alternative is knowingly delivering incorrect colour. "
+        "No effect on SDR sources, which are detected by transfer function only.",
+    )
+    tone_map_operator: str = Field(
+        default="hable",
+        description="Tone-mapping operator: hable | mobius | reinhard | clip | linear (O13). "
+        "'hable' preserves shadow and highlight detail at slight cost to contrast. "
+        "Provisional, not measured -- the right operator is content-dependent.",
+    )
+    tone_map_target_nits: int = Field(
+        default=100,
+        description="Target peak luminance in nits for tone-mapping (O13). 100 is the SDR "
+        "reference white most displays are calibrated near. Provisional, not measured.",
+    )
+    delivery_colour_range: str = Field(
+        default="tv",
+        description="Colour range for delivered files: tv (limited) or pc (full) (O15). "
+        "'tv' is what H.264 streaming means by default and what platforms expect; full-range "
+        "sources are converted rather than passed through, which is what stops phone footage "
+        "crushing its blacks.",
+    )
+
+    # C24: cue legibility floors. `words_to_cues` has only ceilings, so fast speech produces cues
+    # of about 0.3s -- nine frames, a flicker rather than a caption.
+    #
+    # BOTH DEFAULT TO OFF, which reproduces v0.11.0 exactly (R4.12). Neither has been measured
+    # against anything, and M10 (caption alignment error) plus M12 (preference trials) are the
+    # instruments that would justify a value. A floor turned on unmeasured would move every golden
+    # and re-freeze the parity fixtures around a number nobody checked.
+    min_cue_seconds: float = Field(
+        default=0.0,
+        description="Minimum seconds a caption stays on screen; 0 disables (C24). PROVISIONAL "
+        "and off: a useful value is probably near 0.8-1.0s, but 'probably' is why it ships off. "
+        "Cues are extended into free time, then merged, and never made to overlap.",
+    )
+    max_reading_rate: float = Field(
+        default=0.0,
+        description="Maximum characters per second a caption may demand; 0 disables (C24). "
+        "PROVISIONAL and off. Broadcast subtitling clusters around 15-20 CPS, but short-form "
+        "captions are larger and shorter so the right figure here is not known.",
+    )
+    # C25: linguistic line breaking. Width-only breaking splits proper nouns and article-noun pairs.
+    caption_linguistic_breaks: bool = Field(
+        default=False,
+        description="Prefer line breaks at linguistic boundaries over pure measured width (C25). "
+        "PROVISIONAL and off (R5.9). English only -- the rules are a hand-audited function-word "
+        "list, so other languages fall back to width-based breaking. The width budget always wins.",
+    )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most
@@ -367,13 +497,13 @@ class Settings(BaseSettings):
     scene_snap_window_s: float = Field(
         default=2.0,
         description="Seconds either side of a clip start to scan for a cut (S9). Narrow on "
-                    "purpose: detection decodes video, and scanning a whole source to move a "
-                    "boundary by under a second is disproportionate.",
+        "purpose: detection decodes video, and scanning a whole source to move a "
+        "boundary by under a second is disproportionate.",
     )
     scene_snap_max_shift_s: float = Field(
         default=1.0,
         description="Furthest a clip start may be moved to reach a cut (S9). Beyond this the "
-                    "boundary the selector chose is kept.",
+        "boundary the selector chose is kept.",
     )
 
     # O3: deliverables are encoded at a constant frame rate. A variable-frame-rate source -
@@ -382,16 +512,16 @@ class Settings(BaseSettings):
     output_fps: int = Field(
         default=30,
         description="Constant frame rate for delivered clips (O3). Sources with variable "
-                    "frame rate are resampled to this, which is what keeps burned captions "
-                    "in sync.",
+        "frame rate are resampled to this, which is what keeps burned captions "
+        "in sync.",
     )
     # O4: a VBV ceiling for delivered clips. -crf sets a quality target with no bitrate
     # limit, so a busy clip can balloon past a platform's file-size cap and be rejected.
     output_max_bitrate_kbps: int = Field(
         default=12000,
         description="Peak video bitrate for delivered clips in kbit/s (O4); -bufsize is "
-                    "twice this. Generous for 1080x1920 at 30 fps, so it only engages on "
-                    "genuinely complex footage.",
+        "twice this. Generous for 1080x1920 at 30 fps, so it only engages on "
+        "genuinely complex footage.",
     )
     # AU8: neither was set anywhere, so output sample rate and channel count were whatever
     # the source happened to be - 44.1 kHz mono from a phone, 48 kHz 5.1 from a camera.
@@ -407,21 +537,21 @@ class Settings(BaseSettings):
     loudness_target_lufs: float = Field(
         default=-14.0,
         description="Integrated loudness target in LUFS for platforms without a specific "
-                    "target (AU1). YouTube is about -14; TikTok and Instagram sit nearer "
-                    "-11, and are set per platform in worker.effects.audio.",
+        "target (AU1). YouTube is about -14; TikTok and Instagram sit nearer "
+        "-11, and are set per platform in worker.effects.audio.",
     )
     loudness_true_peak_db: float = Field(
         default=-1.0,
         description="True-peak ceiling in dBTP for loudness normalisation (AU1). -1 leaves "
-                    "headroom for the lossy encoder, which can overshoot the sample peak.",
+        "headroom for the lossy encoder, which can overshoot the sample peak.",
     )
     # AU3: a true-peak limiter at the end of the audio chain, using
     # loudness_true_peak_db as its ceiling so there is one source of truth for it.
     true_peak_limit_enabled: bool = Field(
         default=True,
         description="Apply a true-peak limiter at the end of the audio chain (AU3), at "
-                    "loudness_true_peak_db. Guards the paths where loudness normalisation "
-                    "does not run, where a hot source plus a music bed can exceed full scale.",
+        "loudness_true_peak_db. Guards the paths where loudness normalisation "
+        "does not run, where a hot source plus a music bed can exceed full scale.",
     )
     # AU2: how hard the music bed is pushed down while someone is speaking.
     # V10: filler removal joins the kept segments sample-exactly, so every seam was a step
@@ -429,13 +559,13 @@ class Settings(BaseSettings):
     filler_seam_fade_ms: int = Field(
         default=12,
         description="Audio fade length in milliseconds at each filler-removal seam (V10). "
-                    "Long enough to remove the click, short enough not to be audible as a "
-                    "fade; 0 disables it and restores the hard cut.",
+        "Long enough to remove the click, short enough not to be audible as a "
+        "fade; 0 disables it and restores the hard cut.",
     )
     music_duck_ratio: float = Field(
         default=8.0,
         description="Compression ratio for ducking music under speech (AU2). Higher ducks "
-                    "harder; 1.0 disables ducking and restores the flat mix.",
+        "harder; 1.0 disables ducking and restores the flat mix.",
     )
 
     # ------------------------------------------------------------ assets ---
@@ -446,13 +576,13 @@ class Settings(BaseSettings):
     font_assets_dir: Path = Field(
         default=BASE_DIR / "assets" / "fonts",
         description="Directory of bundled caption fonts (see assets/fonts.json). "
-                    "Passed to libass as 'fontsdir' so appearance does not depend on "
-                    "which fonts the host has installed.",
+        "Passed to libass as 'fontsdir' so appearance does not depend on "
+        "which fonts the host has installed.",
     )
     music_dir: Path = Field(
         default=BASE_DIR / "assets" / "music",
         description="Optional directory of user-supplied mood music beds "
-                    "(e.g. music/upbeat.mp3). Falls back to a synthesised bed.",
+        "(e.g. music/upbeat.mp3). Falls back to a synthesised bed.",
     )
 
     # ------------------------------------------------------- effects (P4) --
@@ -462,7 +592,7 @@ class Settings(BaseSettings):
     emoji_cdn_base: str = Field(
         default="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/512",
         description="Fallback base URL for emoji PNGs (Noto Emoji 512px, OFL-1.1). "
-                    "Only consulted for a glyph missing from emoji_assets_dir.",
+        "Only consulted for a glyph missing from emoji_assets_dir.",
     )
     # Allow the emoji overlay to fetch a missing PNG at render time.
     #
@@ -472,7 +602,7 @@ class Settings(BaseSettings):
     emoji_allow_download: bool = Field(
         default=False,
         description="Fetch a missing emoji PNG from emoji_cdn_base at render time. Off by "
-                    "default: the built-in set is vendored under assets/emoji.",
+        "default: the built-in set is vendored under assets/emoji.",
     )
     # Default background-music level (0..1) mixed under the original audio.
     music_default_volume: float = Field(
@@ -487,8 +617,8 @@ class Settings(BaseSettings):
     music_allow_synthesis: bool = Field(
         default=True,
         description="Allow the synthesised two-tone fallback bed when no user track "
-                    "exists in music_dir. Clips using it are marked "
-                    "music_degraded:synthesised.",
+        "exists in music_dir. Clips using it are marked "
+        "music_degraded:synthesised.",
     )
 
     # ------------------------------------------- b-roll (Tier 1) ----------
@@ -507,10 +637,10 @@ class Settings(BaseSettings):
         default="", description="Default external b-roll provider name ('' = none)."
     )
     # Bring-your-own-key credentials for the external b-roll provider.
-    broll_provider_api_key: Optional[str] = Field(
+    broll_provider_api_key: str | None = Field(
         default=None, description="API key for the external b-roll provider (BYOK)."
     )
-    broll_provider_base_url: Optional[str] = Field(
+    broll_provider_base_url: str | None = Field(
         default=None, description="Base URL for the external b-roll provider."
     )
     # External b-roll downloading is OFF by default (opt-in only).
@@ -562,7 +692,7 @@ class Settings(BaseSettings):
     selection_weight_hook: float = Field(
         default=0.40,
         description="Weight of the S6 hook score in fallback ranking. Highest of the four "
-                    "because retention is decided in the opening seconds.",
+        "because retention is decided in the opening seconds.",
     )
     selection_weight_pace: float = Field(
         default=0.20,
@@ -575,7 +705,7 @@ class Settings(BaseSettings):
     selection_weight_length: float = Field(
         default=0.20,
         description="Weight of how closely the clip matches the requested length. Replaces the "
-                    "old rule that simply kept the longest segments.",
+        "old rule that simply kept the longest segments.",
     )
     # S7/S8/S12: what the passage says, not just how it was delivered.
     #
@@ -590,14 +720,14 @@ class Settings(BaseSettings):
     selection_weight_standalone: float = Field(
         default=0.20,
         description="Weight of standalone completeness (S12). The highest of the three text "
-                    "signals: nothing downstream can supply context a clip is missing, whereas "
-                    "boundary snapping can still fix an unfinished ending.",
+        "signals: nothing downstream can supply context a clip is missing, whereas "
+        "boundary snapping can still fix an unfinished ending.",
     )
     selection_weight_intensity: float = Field(
         default=0.10,
         description="Weight of lexical emotional intensity (S8). The lowest: it overlaps with "
-                    "the S2 energy signal, and double-counting emphasis would let one loud, "
-                    "strongly-worded moment dominate a whole source.",
+        "the S2 energy signal, and double-counting emphasis would let one loud, "
+        "strongly-worded moment dominate a whole source.",
     )
     # S15: how much two candidates may overlap before the lower-scoring one is dropped.
     # Measured as a fraction of the *shorter* candidate, so a short clip wholly inside a long
@@ -605,12 +735,12 @@ class Settings(BaseSettings):
     selection_max_overlap: float = Field(
         default=0.5,
         description="Max overlap (fraction of the shorter clip) before a candidate is treated "
-                    "as a duplicate (S15). 1.0 disables overlap de-duplication.",
+        "as a duplicate (S15). 1.0 disables overlap de-duplication.",
     )
     selection_max_text_similarity: float = Field(
         default=0.7,
         description="Max content-word Jaccard similarity before two candidates are treated as "
-                    "the same moment (S15). 1.0 disables text de-duplication.",
+        "the same moment (S15). 1.0 disables text de-duplication.",
     )
     # S6: relative weights inside the hook score itself.
     hook_weight_promptness: float = Field(
@@ -625,20 +755,20 @@ class Settings(BaseSettings):
     hook_weight_text: float = Field(
         default=0.15,
         description="Weight of textual opener signals in the hook score (S6). Lowest on "
-                    "purpose: a keyword list is the component most easily fired by coincidence.",
+        "purpose: a keyword list is the component most easily fired by coincidence.",
     )
     # S2: energy envelope resolution. One reading per this many seconds, measured in a single
     # ffmpeg astats pass over the source.
     energy_envelope_window_s: float = Field(
         default=1.0,
         description="Seconds per audio-energy reading (S2). Smaller resolves individual words "
-                    "and adds noise; larger blurs the laughs and shouts worth detecting.",
+        "and adds noise; larger blurs the laughs and shouts worth detecting.",
     )
     # S10: show the measured per-segment features to the LLM alongside the transcript text.
     selection_features_in_prompt: bool = Field(
         default=True,
         description="Annotate transcript lines with measured pace/energy in the selection "
-                    "prompt (S10), so the model can see that a moment was loud or animated.",
+        "prompt (S10), so the model can see that a moment was loud or animated.",
     )
 
     # How long the per-area directory sizes reported by /api/storage may be reused.
@@ -658,20 +788,20 @@ class Settings(BaseSettings):
     caption_safe_area: str = Field(
         default="",
         description="Platform safe-area profile for caption margins (C12): tiktok | instagram "
-                    "| youtube | none. Empty uses the generic profile, which is identical to "
-                    "the previous hard-coded margins.",
+        "| youtube | none. Empty uses the generic profile, which is identical to "
+        "the previous hard-coded margins.",
     )
     caption_offset_px: int = Field(
         default=0,
         description="Extra pixels between the caption and its edge (C13). Positive only; a "
-                    "negative value would push text into the chrome the safe area avoids.",
+        "negative value would push text into the chrome the safe area avoids.",
     )
     # C22: burned captions are permanent, so masking is a publishing decision rather than a
     # default - a creator whose voice is profane should not be censored by their own tool.
     caption_mask_profanity: bool = Field(
         default=False,
         description="Mask profanity in burned captions (C22), keeping the first letter and the "
-                    "word's length so the sentence stays readable.",
+        "word's length so the sentence stays readable.",
     )
 
     # ------------- speaker diarisation & multi-speaker reframe (v0.8.0) ----
@@ -718,7 +848,7 @@ class Settings(BaseSettings):
     reframe_reset_on_cut: bool = Field(
         default=True,
         description="Reset reframe tracking at shot changes (V4). Costs one video-only decode "
-                    "per reframed clip; off restores smoothing straight through cuts.",
+        "per reframed clip; off restores smoothing straight through cuts.",
     )
 
     # ------------------------------------------- face detection (V-faces) --
@@ -729,13 +859,13 @@ class Settings(BaseSettings):
     face_detector_backend: str = Field(
         default="haar",
         description="Face detector backend when a job does not specify one: haar | mediapipe. "
-                    "haar is the shipped cascade; mediapipe uses the vendored BlazeFace model "
-                    "and finds faces in profile and at a distance that Haar misses.",
+        "haar is the shipped cascade; mediapipe uses the vendored BlazeFace model "
+        "and finds faces in profile and at a distance that Haar misses.",
     )
     face_detector_min_score: float = Field(
         default=0.5,
         description="Minimum MediaPipe detection confidence (0..1); below this a detection is "
-                    "discarded. Haar supplies no confidence, so this affects mediapipe only.",
+        "discarded. Haar supplies no confidence, so this affects mediapipe only.",
     )
     # A *starting* value, not a measured one, and worth being explicit about: 0.35 is the point
     # at which the crop path is interpolated across more frames than it is anchored by. Choosing
@@ -744,12 +874,12 @@ class Settings(BaseSettings):
     reframe_coverage_floor: float = Field(
         default=0.35,
         description="Detection coverage below which framing is reported low-confidence "
-                    "(reframe_low_confidence). A starting value, not a measured one.",
+        "(reframe_low_confidence). A starting value, not a measured one.",
     )
     face_model_dir: Path = Field(
         default=BASE_DIR / "assets" / "models",
         description="Directory holding the vendored detector models. A setting because the "
-                    "container and the working tree put them in different places.",
+        "container and the working tree put them in different places.",
     )
 
     # ------------------------------------------- output geometry (O5, O9) --
@@ -760,7 +890,7 @@ class Settings(BaseSettings):
     output_short_side: int = Field(
         default=1080,
         description="Output short side in pixels (O9): 720, 1080, 1440 or 2160. 1080 is the "
-                    "short-form consensus. An unrecognised value falls back to 1080.",
+        "short-form consensus. An unrecognised value falls back to 1080.",
     )
 
     # ----------------------------------------------- look details (V11, V13) --
@@ -770,7 +900,7 @@ class Settings(BaseSettings):
     background_style: str = Field(
         default="blur",
         description="Letterbox background: blur | mirror | black | color | gradient (V11). "
-                    "'black' is the honest choice for screen recordings.",
+        "'black' is the honest choice for screen recordings.",
     )
     background_color: str = Field(
         default="0x0F172A",
@@ -784,7 +914,7 @@ class Settings(BaseSettings):
     progress_bar_style: str = Field(
         default="bar",
         description="Progress bar style: bar | track (V13). 'track' adds a dim full-width rail "
-                    "so how much is left is visible, not only how much has passed.",
+        "so how much is left is visible, not only how much has passed.",
     )
     progress_bar_color: str = Field(
         default="0x22D3EE", description="Progress bar fill colour (V13)."
@@ -801,116 +931,116 @@ class Settings(BaseSettings):
     video_encoder: str = Field(
         default="libx264",
         description="H.264 encoder: libx264 | auto | h264_nvenc | h264_qsv | "
-                    "h264_videotoolbox | h264_vaapi (O8). 'auto' probes for a working hardware "
-                    "encoder by actually encoding a frame - a listed encoder is not a usable "
-                    "one, and this ffmpeg lists h264_v4l2m2m while failing on the first frame. "
-                    "Anything unavailable falls back to libx264; a *named* request that falls "
-                    "back records an encoder_unavailable marker, because silently ignoring it is "
-                    "how someone spends a week believing their GPU is in use. Default is "
-                    "libx264, not auto: hardware encoders are not comparable with x264 at the "
-                    "same nominal quality, so 'auto' would change existing output the first time "
-                    "it landed on a machine with a GPU.",
+        "h264_videotoolbox | h264_vaapi (O8). 'auto' probes for a working hardware "
+        "encoder by actually encoding a frame - a listed encoder is not a usable "
+        "one, and this ffmpeg lists h264_v4l2m2m while failing on the first frame. "
+        "Anything unavailable falls back to libx264; a *named* request that falls "
+        "back records an encoder_unavailable marker, because silently ignoring it is "
+        "how someone spends a week believing their GPU is in use. Default is "
+        "libx264, not auto: hardware encoders are not comparable with x264 at the "
+        "same nominal quality, so 'auto' would change existing output the first time "
+        "it landed on a machine with a GPU.",
     )
     # AU9: sound-effect stings on transitions and emoji.
     sfx_dir: Path = Field(
         default=BASE_DIR / "assets" / "sfx",
         description="Directory of your own sting files as <name>.wav (pop, click, whoosh, swipe) "
-                    "(AU9). A user file always wins over the synthesised version.",
+        "(AU9). A user file always wins over the synthesised version.",
     )
     sfx_mode: str = Field(
         default="off",
         description="Where sound-effect stings are placed: off | emoji | transitions | both "
-                    "(AU9). Off by default - an audible change to every clip is not something to "
-                    "acquire by upgrading. 'pop' and 'click' are synthesised honestly, because a "
-                    "pop IS a band-passed noise burst. 'whoosh' and 'swipe' are NOT synthesised: "
-                    "a whoosh needs a filter that moves across the sound and ffmpeg cannot express "
-                    "a time-varying filter frequency in one pass, so a static band-passed noise "
-                    "swell would be a hiss shipped under a name promising a sweep. Those need a "
-                    "file in SFX_DIR; without one the sting is skipped and the clip records "
-                    "sfx_missing:<name>.",
+        "(AU9). Off by default - an audible change to every clip is not something to "
+        "acquire by upgrading. 'pop' and 'click' are synthesised honestly, because a "
+        "pop IS a band-passed noise burst. 'whoosh' and 'swipe' are NOT synthesised: "
+        "a whoosh needs a filter that moves across the sound and ffmpeg cannot express "
+        "a time-varying filter frequency in one pass, so a static band-passed noise "
+        "swell would be a hiss shipped under a name promising a sweep. Those need a "
+        "file in SFX_DIR; without one the sting is skipped and the clip records "
+        "sfx_missing:<name>.",
     )
     sfx_volume: float = Field(
         default=0.35,
         ge=0.0,
         le=1.0,
         description="Sting level relative to full scale (AU9). Mixed with amix normalize=0, so a "
-                    "sting never lowers the speech - with normalisation on, adding one accent "
-                    "would make the whole clip 1/n quieter.",
+        "sting never lowers the speech - with normalisation on, adding one accent "
+        "would make the whole clip 1/n quieter.",
     )
     # V15: keep captions off the speaker's mouth.
     caption_avoid_faces: bool = Field(
         default=False,
         description="Move the caption to another of the nine C13 positions when it would cover a "
-                    "detected face's mouth (V15). Off by default for two reasons: it costs a "
-                    "face-detection pass over the clip, which a render that never had a collision "
-                    "would be paying for nothing, and it changes placement on the clips it does "
-                    "act on. It only ever acts on an actual overlap, keeps the horizontal "
-                    "alignment the preset chose, and when no position clears the face - a close-up "
-                    "filling the frame - it changes nothing and records "
-                    "caption_face_overlap_unavoidable rather than moving the text from the mouth "
-                    "to the eyes.",
+        "detected face's mouth (V15). Off by default for two reasons: it costs a "
+        "face-detection pass over the clip, which a render that never had a collision "
+        "would be paying for nothing, and it changes placement on the clips it does "
+        "act on. It only ever acts on an actual overlap, keeps the horizontal "
+        "alignment the preset chose, and when no position clears the face - a close-up "
+        "filling the frame - it changes nothing and records "
+        "caption_face_overlap_unavoidable rather than moving the text from the mouth "
+        "to the eyes.",
     )
     # A22: motion on b-roll stills, and a dip in the bed under b-roll.
     broll_ken_burns: bool = Field(
         default=False,
         description="Slow zoom-and-drift on b-roll *stills* (A22). A still that sits motionless "
-                    "over moving footage is the clearest sign a clip was assembled rather than "
-                    "edited. Off by default because it changes the shipped look: with it on, "
-                    "stills are cover-cropped into a fixed 16:9 box (zoompan needs an explicit "
-                    "output size) instead of keeping their own aspect. Video assets already move "
-                    "and are never affected.",
+        "over moving footage is the clearest sign a clip was assembled rather than "
+        "edited. Off by default because it changes the shipped look: with it on, "
+        "stills are cover-cropped into a fixed 16:9 box (zoompan needs an explicit "
+        "output size) instead of keeping their own aspect. Video assets already move "
+        "and are never affected.",
     )
     broll_ken_burns_zoom: float = Field(
         default=0.12,
         ge=0.0,
         le=1.0,
         description="How far a b-roll still zooms over its window, as a fraction (A22). 0.12 is "
-                    "12% over the whole window - deliberately small: motion that is noticeable "
-                    "on a 2-second overlay is distracting rather than cinematic. Zero disables "
-                    "the motion even with BROLL_KEN_BURNS on.",
+        "12% over the whole window - deliberately small: motion that is noticeable "
+        "on a 2-second overlay is distracting rather than cinematic. Zero disables "
+        "the motion even with BROLL_KEN_BURNS on.",
     )
     broll_duck: float = Field(
         default=0.0,
         ge=0.0,
         le=1.0,
         description="How far the music bed dips while a b-roll overlay is on screen, as a "
-                    "fraction (A22). 0 (default) leaves the audio graph untouched; 0.35 is a "
-                    "clearly audible accent. Applied to the *bed* only, never the mix - the "
-                    "b-roll is illustrating what is being said, so ducking the speech would "
-                    "invert the point. Additional to the AU2 speech duck, not instead of it.",
+        "fraction (A22). 0 (default) leaves the audio graph untouched; 0.35 is a "
+        "clearly audible accent. Applied to the *bed* only, never the mix - the "
+        "b-roll is illustrating what is being said, so ducking the speech would "
+        "invert the point. Additional to the AU2 speech duck, not instead of it.",
     )
     # A13: which artwork set the emoji overlay draws from.
     emoji_style: str = Field(
         default="noto",
         description="Emoji artwork set: noto | twemoji | openmoji (A13). Only Noto is vendored; "
-                    "the others are fetched on demand and so need EMOJI_ALLOW_DOWNLOAD or a "
-                    "prior 'scripts/fetch_emoji.py --style <name>'. A glyph missing from the "
-                    "selected style falls back to the vendored Noto file rather than dropping "
-                    "the overlay. An unknown value resolves to noto rather than failing the job.",
+        "the others are fetched on demand and so need EMOJI_ALLOW_DOWNLOAD or a "
+        "prior 'scripts/fetch_emoji.py --style <name>'. A glyph missing from the "
+        "selected style falls back to the vendored Noto file rather than dropping "
+        "the overlay. An unknown value resolves to noto rather than failing the job.",
     )
     # C19: where an emoji overlay sits relative to the captions.
     emoji_placement: str = Field(
         default="spread",
         description="Emoji placement: spread (three slots across the frame, the shipped "
-                    "behaviour) or caption (just clear of the caption block, C19). 'caption' "
-                    "only makes sense because C19 puts the emoji on the word the caption "
-                    "highlights - a glyph beside a caption illustrating a different word would "
-                    "read as a mistake.",
+        "behaviour) or caption (just clear of the caption block, C19). 'caption' "
+        "only makes sense because C19 puts the emoji on the word the caption "
+        "highlights - a glyph beside a caption illustrating a different word would "
+        "read as a mistake.",
     )
     # C20: pick the caption's outline/box colour from the video behind it.
     caption_auto_contrast: bool = Field(
         default=False,
         description="Sample the region a caption will occupy and choose a dark or light outline "
-                    "for legibility (C20). Off by default: it costs three seeks per clip and "
-                    "changes rendered output. Never alters the fill colour, which is a brand "
-                    "decision.",
+        "for legibility (C20). Off by default: it costs three seeks per clip and "
+        "changes rendered output. Never alters the fill colour, which is a brand "
+        "decision.",
     )
     # V17: score a few candidate frames for the thumbnail instead of taking a fixed position,
     # which on a clip opening on a cut or a blink chose exactly the wrong still.
     smart_thumbnail: bool = Field(
         default=True,
         description="Score candidate frames when choosing the thumbnail (V17). Costs a few "
-                    "small decodes per clip; off restores the fixed midpoint frame.",
+        "small decodes per clip; off restores the fixed midpoint frame.",
     )
     # Default number of regions for split-screen reframe (2-up).
     split_screen_max_regions: int = Field(
@@ -920,23 +1050,23 @@ class Settings(BaseSettings):
     color_lut: str = Field(
         default="",
         description="Path to a .cube/.3dl 3D LUT applied after the colour preset (V18). "
-                    "Empty means no LUT. A missing or unreadable file is ignored rather "
-                    "than failing the render.",
+        "Empty means no LUT. A missing or unreadable file is ignored rather "
+        "than failing the render.",
     )
     # V19: ease the Ken Burns ramp instead of moving at a constant rate.
     zoom_ease: bool = Field(
         default=False,
         description="Ease the Ken Burns push in and out instead of ramping linearly (V19). "
-                    "Same start and end zoom; only the curve between them changes. Off by "
-                    "default because it changes the rendered output, and every visual setting "
-                    "here defaults to the previously shipped behaviour so the v0.8.0 parity "
-                    "gate stays meaningful.",
+        "Same start and end zoom; only the curve between them changes. Off by "
+        "default because it changes the rendered output, and every visual setting "
+        "here defaults to the previously shipped behaviour so the v0.8.0 parity "
+        "gate stays meaningful.",
     )
     # V19: bump the zoom on detected audio accents.
     beat_sync_zoom: bool = Field(
         default=False,
         description="Add a short scale bump at detected audio onsets (V19). Off by default: "
-                    "it suits music-led footage and is a distraction on talking-head clips.",
+        "it suits music-led footage and is a distraction on talking-head clips.",
     )
     beat_sync_rise_db: float = Field(
         default=6.0,
@@ -946,70 +1076,70 @@ class Settings(BaseSettings):
     auto_deletterbox: bool = Field(
         default=True,
         description="Detect and crop existing letterbox/pillarbox bars before reframing (V16). "
-                    "Without this, reframing already-boxed footage centres the crop on the "
-                    "bars and bakes them into the output.",
+        "Without this, reframing already-boxed footage centres the crop on the "
+        "bars and bakes them into the output.",
     )
     # O7: target one platform's output profile rather than one file for every destination.
     output_platform: str = Field(
         default="",
         description="Target platform output profile: tiktok | instagram | youtube | "
-                    "youtube_shorts | x | whop (O7). Empty means use the explicit output "
-                    "settings. Controls resolution, bitrate ceiling and the clip-length cap; "
-                    "the aspect is advisory so it cannot override a user's choice.",
+        "youtube_shorts | x | whop (O7). Empty means use the explicit output "
+        "settings. Controls resolution, bitrate ceiling and the clip-length cap; "
+        "the aspect is advisory so it cannot override a user's choice.",
     )
     # O12: burned-in captions, a selectable soft track, or both.
     caption_mode: str = Field(
         default="burned",
         description="How captions are delivered: burned | soft | both (O12). 'soft' adds a "
-                    "selectable mov_text track instead of burning pixels; note mov_text is "
-                    "plain text, so preset animation and highlighting are lost in that track.",
+        "selectable mov_text track instead of burning pixels; note mov_text is "
+        "plain text, so preset animation and highlighting are lost in that track.",
     )
     # T10: an English subtitle track alongside the original-language captions.
     subtitle_translation: bool = Field(
         default=False,
         description="Add a translated (English) subtitle track and sidecar beside the "
-                    "original-language captions (T10). A bool rather than a target language "
-                    "because Whisper's translate task only ever produces English, so a "
-                    "language field would be a control that silently ignores its value. Costs "
-                    "a second ASR pass over the source (cached separately by T8), so it is off "
-                    "by default and skipped entirely when the source is already English.",
+        "original-language captions (T10). A bool rather than a target language "
+        "because Whisper's translate task only ever produces English, so a "
+        "language field would be a control that silently ignores its value. Costs "
+        "a second ASR pass over the source (cached separately by T8), so it is off "
+        "by default and skipped entirely when the source is already English.",
     )
     # AU4: speech de-noise.
     speech_denoise: str = Field(
         default="off",
         description="Speech de-noise strength: off | light | standard | strong (AU4). Uses "
-                    "afftdn, or arnndn when SPEECH_DENOISE_MODEL points at a real model file.",
+        "afftdn, or arnndn when SPEECH_DENOISE_MODEL points at a real model file.",
     )
     speech_denoise_model: str = Field(
         default="",
         description="Path to an arnndn .rnnn model (AU4). ffmpeg ships no models, so this is "
-                    "empty by default and afftdn is used instead. A configured-but-missing "
-                    "file degrades to afftdn rather than failing the render.",
+        "empty by default and afftdn is used instead. A configured-but-missing "
+        "file degrades to afftdn rather than failing the render.",
     )
     # AU5: sibilance reduction.
     deesser: str = Field(
         default="off",
         description="De-esser strength: off | light | standard | strong (AU5). De-reverb is "
-                    "not included: ffmpeg has no de-reverb filter, and approximating one with "
-                    "a high-pass would be mislabelling it.",
+        "not included: ffmpeg has no de-reverb filter, and approximating one with "
+        "a high-pass would be mislabelling it.",
     )
     # V14: a closing call-to-action over the tail of the clip. Empty disables it.
     end_card_text: str = Field(
         default="",
         description="Call-to-action shown over the last seconds of every clip (V14). Empty "
-                    "disables it, which is the previous behaviour.",
+        "disables it, which is the previous behaviour.",
     )
     end_card_seconds: float = Field(
         default=2.0,
         description="How long the end card is held (V14). Capped at half the clip so a short "
-                    "clip is not mostly call-to-action.",
+        "clip is not mostly call-to-action.",
     )
     # V8: how often the follow-active crop position is updated.
     reframe_command_fps: float = Field(
         default=24.0,
         description="Crop-position updates per second for follow-active reframe (V8). Was 12, "
-                    "which is visible as stepping on fast movement. Costs only sendcmd script "
-                    "size, not decode time.",
+        "which is visible as stepping on fast movement. Costs only sendcmd script "
+        "size, not decode time.",
     )
 
     # ---------------------------------------------------------- publishers --
@@ -1036,7 +1166,7 @@ class Settings(BaseSettings):
     publish_max_retries: int = Field(
         default=3,
         description="Automatic retries per publish attempt for transient failures (PB5). 0 "
-                    "disables automatic retry, restoring the previous single-shot behaviour.",
+        "disables automatic retry, restoring the previous single-shot behaviour.",
     )
     publish_retry_base_seconds: float = Field(
         default=30.0, description="First retry delay; doubles per retry (PB5)."
@@ -1048,56 +1178,56 @@ class Settings(BaseSettings):
     intermediate_cache_enabled: bool = Field(
         default=True,
         description="Cache silence maps, energy envelopes and sampled keyframes by source "
-                    "content hash (I3). T8 already caches transcripts; these are the other "
-                    "whole-file decodes that repeated on every run of the same video.",
+        "content hash (I3). T8 already caches transcripts; these are the other "
+        "whole-file decodes that repeated on every run of the same video.",
     )
-    intermediate_cache_dir: Optional[Path] = Field(
+    intermediate_cache_dir: Path | None = Field(
         default=None,
         description="Where I3 intermediates live. Defaults to <temp_dir>/intermediates.",
     )
     intermediate_cache_max_entries: int = Field(
         default=200,
         description="Cache entries retained before the oldest are pruned (I3). 0 disables "
-                    "pruning, which on a long-lived instance is a slow disk leak.",
+        "pruning, which on a long-lived instance is a slow disk leak.",
     )
     # PB4: how early an expiring access token is renewed.
     publish_token_refresh_margin_seconds: float = Field(
         default=300.0,
         description="Refresh an OAuth access token this long before it expires (PB4). An upload "
-                    "takes tens of seconds, so a token expiring mid-request costs the whole file.",
+        "takes tens of seconds, so a token expiring mid-request costs the whole file.",
     )
     # PB6: regenerate copy per destination rather than fitting the existing text.
     publish_tailor_with_llm: bool = Field(
         default=False,
         description="Regenerate the description for each destination platform on publish (PB6). "
-                    "Off by default: it costs one model call per platform per clip. When off, "
-                    "the existing copy is fitted to the platform's limits at sentence "
-                    "boundaries instead of being truncated mid-word.",
+        "Off by default: it costs one model call per platform per clip. When off, "
+        "the existing copy is fitted to the platform's limits at sentence "
+        "boundaries instead of being truncated mid-word.",
     )
-    public_base_url: Optional[str] = Field(default=None)
+    public_base_url: str | None = Field(default=None)
     # Whop (@whop/sdk Node bridge)
-    whop_api_key: Optional[str] = Field(default=None)
-    whop_company_id: Optional[str] = Field(default=None)
+    whop_api_key: str | None = Field(default=None)
+    whop_company_id: str | None = Field(default=None)
     whop_node_binary: str = Field(default="node")
     # YouTube OAuth
-    youtube_client_id: Optional[str] = Field(default=None)
-    youtube_client_secret: Optional[str] = Field(default=None)
-    youtube_refresh_token: Optional[str] = Field(default=None)
-    youtube_channel_id: Optional[str] = Field(default=None)
+    youtube_client_id: str | None = Field(default=None)
+    youtube_client_secret: str | None = Field(default=None)
+    youtube_refresh_token: str | None = Field(default=None)
+    youtube_channel_id: str | None = Field(default=None)
     # TikTok Content Posting API
-    tiktok_access_token: Optional[str] = Field(default=None)
-    tiktok_open_id: Optional[str] = Field(default=None)
+    tiktok_access_token: str | None = Field(default=None)
+    tiktok_open_id: str | None = Field(default=None)
     tiktok_direct_post_approved: bool = Field(default=False)
     # Instagram Graph API (Professional account)
-    instagram_access_token: Optional[str] = Field(default=None)
-    instagram_account_id: Optional[str] = Field(default=None)
+    instagram_access_token: str | None = Field(default=None)
+    instagram_account_id: str | None = Field(default=None)
     instagram_api_version: str = Field(default="v25.0")
     instagram_content_publish_approved: bool = Field(default=False)
     # X API v2 OAuth user context
-    x_api_key: Optional[str] = Field(default=None)
-    x_api_secret: Optional[str] = Field(default=None)
-    x_access_token: Optional[str] = Field(default=None)
-    x_account_id: Optional[str] = Field(default=None)
+    x_api_key: str | None = Field(default=None)
+    x_api_secret: str | None = Field(default=None)
+    x_access_token: str | None = Field(default=None)
+    x_account_id: str | None = Field(default=None)
     x_direct_post_approved: bool = Field(default=False)
 
     def ensure_local_dirs(self) -> None:

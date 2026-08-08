@@ -76,19 +76,37 @@ def _synthetic_source(dest: Path, ffmpeg: str, seconds: float = 7.0) -> Path:
     loudness normalisation have something with gaps in it to work on — a solid tone would make
     the sidechain compressor look permanently engaged.
     """
-    gate = "+".join(
-        f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS
-    )
+    gate = "+".join(f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS)
     subprocess.run(
         [
-            ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"testsrc=s=1080x1920:d={seconds}:r=30",
-            "-f", "lavfi", "-i", f"sine=f=220:d={seconds}:sample_rate=48000",
-            "-af", f"volume='0.35*({gate})':eval=frame",
-            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-y", str(dest),
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=s=1080x1920:d={seconds}:r=30",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=220:d={seconds}:sample_rate=48000",
+            "-af",
+            f"volume='0.35*({gate})':eval=frame",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(dest),
         ],
-        check=True, capture_output=True, timeout=300,
+        check=True,
+        capture_output=True,
+        timeout=300,
     )
     return dest
 
@@ -130,30 +148,48 @@ def _face_frames(dest_dir: Path, seconds: float, fps: int) -> Path:
                 continue  # the far eye disappears as the head turns
             ex = cx + int(offset * scale * (1.0 - 0.6 * profile)) + shift
             draw.ellipse(
-                [ex - int(16 * scale), cy - int(32 * scale),
-                 ex + int(16 * scale), cy - int(10 * scale)],
+                [
+                    ex - int(16 * scale),
+                    cy - int(32 * scale),
+                    ex + int(16 * scale),
+                    cy - int(10 * scale),
+                ],
                 fill=(250, 250, 250),
             )
             draw.ellipse(
-                [ex - int(7 * scale), cy - int(27 * scale),
-                 ex + int(7 * scale), cy - int(13 * scale)],
+                [
+                    ex - int(7 * scale),
+                    cy - int(27 * scale),
+                    ex + int(7 * scale),
+                    cy - int(13 * scale),
+                ],
                 fill=(35, 28, 24),
             )
             draw.rectangle(
-                [ex - int(18 * scale), cy - int(46 * scale),
-                 ex + int(18 * scale), cy - int(40 * scale)],
+                [
+                    ex - int(18 * scale),
+                    cy - int(46 * scale),
+                    ex + int(18 * scale),
+                    cy - int(40 * scale),
+                ],
                 fill=(60, 42, 32),
             )
         nose_x = cx + shift
         draw.polygon(
-            [(nose_x, cy - int(8 * scale)),
-             (nose_x - int(11 * scale), cy + int(26 * scale)),
-             (nose_x + int(11 * scale), cy + int(26 * scale))],
+            [
+                (nose_x, cy - int(8 * scale)),
+                (nose_x - int(11 * scale), cy + int(26 * scale)),
+                (nose_x + int(11 * scale), cy + int(26 * scale)),
+            ],
             fill=(203, 165, 138),
         )
         draw.ellipse(
-            [nose_x - int(34 * scale), cy + int(45 * scale),
-             nose_x + int(34 * scale), cy + int(72 * scale)],
+            [
+                nose_x - int(34 * scale),
+                cy + int(45 * scale),
+                nose_x + int(34 * scale),
+                cy + int(72 * scale),
+            ],
             fill=(150, 70, 70),
         )
 
@@ -166,11 +202,11 @@ def _face_frames(dest_dir: Path, seconds: float, fps: int) -> Path:
         for gx in range(0, width, 160):
             draw.line([(gx, 0), (gx, height)], fill=(48, 62, 82), width=2)
 
-        if frac < 0.4:                       # act 1: frontal, drifting right
+        if frac < 0.4:  # act 1: frontal, drifting right
             draw_face(draw, int(380 + 340 * (frac / 0.4)), 360)
-        elif frac < 0.7:                     # act 2: profile turn
+        elif frac < 0.7:  # act 2: profile turn
             draw_face(draw, 760, 360, profile=(frac - 0.4) / 0.3)
-        else:                                # act 3: two-shot
+        else:  # act 3: two-shot
             draw_face(draw, 330, 380, scale=0.85)
             draw_face(draw, 950, 350, scale=0.85)
 
@@ -181,19 +217,37 @@ def _face_frames(dest_dir: Path, seconds: float, fps: int) -> Path:
 def _face_source(dest: Path, ffmpeg: str, seconds: float = 7.0, fps: int = 30) -> Path:
     """Encode the drawn frames into a source with the same speech-shaped audio track."""
     frames = _face_frames(dest.parent / "smoke_faces", seconds, fps)
-    gate = "+".join(
-        f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS
-    )
+    gate = "+".join(f"between(t,{start:.2f},{end:.2f})" for _text, start, end in SMOKE_WORDS)
     subprocess.run(
         [
-            ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-framerate", str(fps), "-i", str(frames / "f%05d.png"),
-            "-f", "lavfi", "-i", f"sine=f=220:d={seconds}:sample_rate=48000",
-            "-af", f"volume='0.35*({gate})':eval=frame",
-            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-y", str(dest),
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(frames / "f%05d.png"),
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=220:d={seconds}:sample_rate=48000",
+            "-af",
+            f"volume='0.35*({gate})':eval=frame",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(dest),
         ],
-        check=True, capture_output=True, timeout=600,
+        check=True,
+        capture_output=True,
+        timeout=600,
     )
     return dest
 
@@ -239,22 +293,27 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, help="real footage to use instead of a pattern")
     parser.add_argument(
-        "--out", type=Path,
+        "--out",
+        type=Path,
         default=Path(settings.temp_dir) / "smoke_reel.mp4",
         help="where to write the reel",
     )
     parser.add_argument(
-        "--profile", choices=sorted(BUILTIN_PROFILES),
+        "--profile",
+        choices=sorted(BUILTIN_PROFILES),
         help="render with a built-in profile instead of everything-on",
     )
     parser.add_argument(
-        "--face-detector", choices=["haar", "mediapipe"], default=None,
+        "--face-detector",
+        choices=["haar", "mediapipe"],
+        default=None,
         help="which face detector to reframe with (default: the configured backend)",
     )
     parser.add_argument(
-        "--faces", action="store_true",
+        "--faces",
+        action="store_true",
         help="synthesise a source WITH faces (a profile turn and a two-shot) instead of a "
-             "plain test pattern, so face-tracked reframing has something to follow",
+        "plain test pattern, so face-tracked reframing has something to follow",
     )
     args = parser.parse_args()
 
@@ -291,12 +350,18 @@ def main() -> int:
 
     before = audio.measure_loudness(source)
     result = compositor.render_clip(
-        source, args.out, options, words, work,
+        source,
+        args.out,
+        options,
+        words,
+        work,
         hook_text="watch what happened next",
     )
     if result is None:
-        print("the compositor reported nothing to do, which should be impossible here",
-              file=sys.stderr)
+        print(
+            "the compositor reported nothing to do, which should be impossible here",
+            file=sys.stderr,
+        )
         return 1
 
     after = audio.measure_loudness(args.out)
@@ -309,8 +374,10 @@ def main() -> int:
         flag = "  <-- degraded" if "degraded" in marker else ""
         print(f"    - {marker}{flag}")
     if before and after:
-        print(f"  loudness    : {before.input_i:.2f} -> {after.input_i:.2f} LUFS "
-              f"(target {audio.platform_loudness_target(options.platform):g})")
+        print(
+            f"  loudness    : {before.input_i:.2f} -> {after.input_i:.2f} LUFS "
+            f"(target {audio.platform_loudness_target(options.platform):g})"
+        )
         print(f"  true peak   : {after.input_tp:.2f} dBTP")
 
     print("\nWhat to look at, in the order these have actually broken before:")

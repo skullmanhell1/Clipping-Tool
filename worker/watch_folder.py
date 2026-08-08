@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Optional
 
 from config import settings
 from worker.jobs import JobManager, get_manager
@@ -35,7 +34,7 @@ class WatchFolder:
     def __init__(
         self,
         folder: str | Path | None = None,
-        manager: Optional[JobManager] = None,
+        manager: JobManager | None = None,
         poll_interval: float = 2.0,
     ) -> None:
         self.folder = Path(folder or (Path(settings.storage_root) / "watch"))
@@ -44,7 +43,7 @@ class WatchFolder:
 
         self._options = ProcessingOptions()
         self._enabled = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
 
@@ -149,7 +148,7 @@ class WatchFolder:
 
 
 # --- process-wide singleton -------------------------------------------------
-_watcher: Optional[WatchFolder] = None
+_watcher: WatchFolder | None = None
 _watcher_lock = threading.Lock()
 
 

@@ -41,9 +41,10 @@ from __future__ import annotations
 import statistics
 import wave
 from array import array
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any
 
 #: Analysis frame length in seconds. 40 ms holds at least two periods of the lowest pitch this
 #: searches for (70 Hz -> 14.3 ms), which autocorrelation needs to find a peak at all.
@@ -207,7 +208,7 @@ def _semitones(hz: float, reference_hz: float) -> float:
     return 12.0 * math.log2(hz / reference_hz)
 
 
-def source_median_f0(track: Sequence[tuple[float, float]]) -> Optional[float]:
+def source_median_f0(track: Sequence[tuple[float, float]]) -> float | None:
     """The speaker's own baseline pitch (R4.2), or ``None`` when there is too little voiced audio.
 
     Median rather than mean: a single octave-error frame at twice the true F0 would drag a mean
@@ -224,7 +225,7 @@ def pitch_in_window(
     start: float,
     end: float,
     *,
-    source_median: Optional[float],
+    source_median: float | None,
 ) -> Pitch:
     """Pitch variation for one candidate window, relative to the source median."""
     if end <= start or source_median is None or source_median <= 0:
@@ -280,7 +281,7 @@ def annotate_candidates(
     candidates: Iterable[Any],
     track: Sequence[tuple[float, float]],
     *,
-    source_median: Optional[float] = None,
+    source_median: float | None = None,
 ) -> None:
     """Attach pitch features to each candidate's ``features`` dict (R4.4). Mutates in place.
 
