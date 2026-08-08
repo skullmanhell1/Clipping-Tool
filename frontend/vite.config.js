@@ -14,6 +14,16 @@ export default defineConfig({
   // build goes through the plugin's own transform and the tests do not. Stating it explicitly
   // makes both pipelines emit `jsx-runtime` imports, and means the answer does not depend on
   // which of the two transforms happens to see a file first.
+  //
+  // `npm run build` warns "Both esbuild and oxc options were set... esbuild options will be
+  // ignored" on every run. **That warning is expected — do not act on it.** Vite 8 builds with oxc
+  // and the plugin sets `oxc.jsx` itself, which is the "both" being reported, but *vitest* still
+  // reads `esbuild`, so this key is the only thing keeping the test transform on the automatic
+  // runtime. Both tidy-ups the warning invites were measured on this revision and both take the
+  // suite from 141 passing to **100 failed / 41 passed**: deleting the key, and moving it to `oxc`.
+  // Silencing a cosmetic build warning by breaking 100 tests is the wrong trade. If you change
+  // anything here, `npm run test:run` is the check that matters — `npm run build` stays green
+  // through the failure and will not tell you.
   esbuild: { jsx: "automatic" },
   server: {
     port: 5173,
