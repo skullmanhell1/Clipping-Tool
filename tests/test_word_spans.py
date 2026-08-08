@@ -133,6 +133,39 @@ def test_the_floor_never_extends_past_the_cue_end():
     assert out[0].end <= 0.3
 
 
+def test_a_span_overrunning_its_cue_is_clamped_even_with_the_floor_off():
+    """R8.5 with nothing else wrong, which is the case the fast path used to wave through.
+
+    The compliance pre-check tested ordering, sign and the floor, but never the cue boundary. So a
+    single well-formed span that simply ran past the end of its own line was declared compliant and
+    returned untouched, and `cue_end` was inert for every sequence that had no *other* fault — which
+    is most of them. The repair below was reachable only as a side effect of some unrelated defect
+    failing the check first.
+
+    `min_seconds=0.0` is the point of the test: with the floor off, this is the only thing R8.5 has
+    left to do, so nothing else can mask it.
+    """
+    out, report = ws.apply_hygiene([_w(0.0, 0.6)], min_seconds=0.0, cue_end=0.4)
+
+    assert out[0].end == pytest.approx(0.4 - ws.SPAN_EPSILON)
+    assert report.clamped_to_cue == 1
+    assert report.markers == ["word_spans_repaired:1"]
+
+
+def test_a_cue_boundary_clamp_is_reported_separately_from_a_de_overlap():
+    """Truncating against a neighbour and truncating against the cue end are different facts.
+
+    A clip whose every repair was the latter says its cues are cut short of their own words; one
+    where they were de-overlaps says its ASR emitted overlapping spans. Collapsing both into
+    `deoverlapped` would leave the operator unable to tell which.
+    """
+    _out, overlap = ws.apply_hygiene([_w(0.0, 1.0), _w(0.5, 0.9)], cue_end=2.0)
+    _out2, boundary = ws.apply_hygiene([_w(0.0, 1.0)], cue_end=0.5)
+
+    assert (overlap.deoverlapped, overlap.clamped_to_cue) == (1, 0)
+    assert (boundary.deoverlapped, boundary.clamped_to_cue) == (0, 1)
+
+
 def test_the_last_span_may_use_the_cue_end_as_room():
     """The final span has no neighbour, so the cue boundary is its only ceiling."""
     out, report = ws.apply_hygiene([_w(0.0, 0.4), _w(0.5, 0.52)], min_seconds=0.3, cue_end=2.0)

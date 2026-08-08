@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker import script_support, text_metrics
+from worker import cue_constraints, script_support, text_metrics, word_spans
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -167,6 +167,118 @@ def words_to_cues(
     if current:
         cues.append(Cue(current[0].start, current[-1].end, current))
     return cues
+
+
+# --- Cue timing passes (C24 then C23) ---------------------------------------
+#
+# Both passes were written, tested and then never called: `cue_constraints.apply_constraints` and
+# `word_spans.apply_hygiene` had no importer outside their own test modules, so three caption
+# features shipped with no effect on a single rendered frame. Their tests passed because they
+# exercised the functions directly. Wiring them in is what this seam exists for.
+#
+# The order is C24 then C23, and it is not interchangeable. C24 changes cue *windows* -- extending
+# one into free time, or merging two -- and deliberately passes word spans through untouched. C23
+# clamps word spans to the cue window they belong to. Run C23 first and a subsequent merge would
+# discard the very boundary it clamped to.
+
+
+def _cue_windows(cues: list[Cue]) -> list[cue_constraints.Cue_Window]:
+    """Project cues onto the window type C24 operates on."""
+    return [
+        cue_constraints.Cue_Window(
+            start=cue.start,
+            end=cue.end,
+            text=" ".join(_word_text(w) for w in cue.words),
+            word_spans=tuple(_word_bounds(w) for w in cue.words),
+        )
+        for cue in cues
+    ]
+
+
+def apply_cue_constraints(
+    cues: list[Cue],
+    *,
+    clip_duration: float | None = None,
+    fit: TextFit | None = None,
+    min_seconds: float | None = None,
+    max_reading_rate: float | None = None,
+) -> tuple[list[Cue], cue_constraints.Constraint_Report]:
+    """Apply C24's legibility floors to ``cues``, returning cues rather than windows.
+
+    ``Cue_Window`` carries ``word_spans`` precisely so a caller can map the result back: spans are
+    never modified and a merge *concatenates* them, so each output window's span count says exactly
+    how many of the input words it holds, in order. That is what makes the round trip exact without
+    C24 needing to know what a ``Word`` is.
+
+    Returns the input list unchanged when both floors are off, so the default path allocates nothing
+    and is bit-identical (R4.10).
+    """
+    floor = settings.min_cue_seconds if min_seconds is None else min_seconds
+    rate = settings.max_reading_rate if max_reading_rate is None else max_reading_rate
+    report = cue_constraints.Constraint_Report()
+    if (floor or 0) <= 0 and (rate or 0) <= 0:
+        return cues, report
+
+    populated = [cue for cue in cues if cue.words]
+    if not populated:
+        return cues, report
+
+    windows, report = cue_constraints.apply_constraints(
+        _cue_windows(populated),
+        min_seconds=float(floor or 0.0),
+        max_reading_rate=float(rate or 0.0),
+        clip_end=clip_duration,
+        fit=fit,
+    )
+
+    flat = [w for cue in populated for w in cue.words]
+    out: list[Cue] = []
+    position = 0
+    for window in windows:
+        count = len(window.word_spans)
+        out.append(Cue(window.start, window.end, flat[position : position + count]))
+        position += count
+    return out, report
+
+
+def apply_span_hygiene(
+    cues: list[Cue], *, min_seconds: float | None = None
+) -> tuple[list[Cue], word_spans.Hygiene_Report]:
+    """Repair per-word spans inside each cue (C23), summing one report for the whole clip.
+
+    Unconditional, unlike C24's floors. Reordering and de-overlapping are not preferences: a
+    ``\\kf`` sweep that runs backwards, or two words lit simultaneously, is a fault. What keeps this
+    safe as a default is that :func:`word_spans.apply_hygiene` returns *the caller's own objects*
+    when the spans already comply, so a well-formed transcript produces an identical file and the
+    parity goldens do not move. Only the floor -- which alters spans that are merely short rather
+    than malformed -- is a setting, and it ships at zero.
+
+    One summed report per clip, not one per cue: `word_spans_repaired:N` is meant to say how much of
+    this clip's timing needed repair, and a marker per cue would be noise.
+    """
+    floor = settings.min_word_span_seconds if min_seconds is None else min_seconds
+    total = word_spans.Hygiene_Report()
+    out: list[Cue] = []
+    mutated = False
+    for cue in cues:
+        if not cue.words:
+            out.append(cue)
+            continue
+        repaired, report = word_spans.hygiene_for_cue(
+            cue.words, cue.start, cue.end, min_seconds=float(floor or 0.0)
+        )
+        total.reordered += report.reordered
+        total.deoverlapped += report.deoverlapped
+        total.lengthened += report.lengthened
+        total.clamped_to_cue += report.clamped_to_cue
+        if report.altered:
+            mutated = True
+            # The cue window is left alone. Widening it to cover a repaired span is C24's job and
+            # C24 has already run; doing it here would undo a decision made one pass earlier.
+            out.append(Cue(cue.start, cue.end, list(repaired)))
+        else:
+            out.append(cue)
+    return (out if mutated else cues), total
 
 
 # --- ASS rendering ----------------------------------------------------------
@@ -1334,6 +1446,7 @@ def build_ass(
     emoji_glyph_available: Any | None = None,
     emoji_downloader: Any | None = None,
     notes: list[str] | None = None,
+    language: str = "",
 ) -> Path:
     """Render ``cues`` (and an optional hook title) to an ASS file at ``dest``.
 
@@ -1358,6 +1471,27 @@ def build_ass(
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # C24 then C23, before anything reads the cues.
+    #
+    # Here rather than in the compositor because this is the one place both the preset and the
+    # legacy `template` branch pass through, so a single call covers every burned-in caption
+    # including `rerender`'s. It also already owns `notes`, which is how a caption-stage marker
+    # reaches the clip record.
+    #
+    # `fit` is built twice on the preset path -- once here for C24's merge budget, once below for
+    # C6's line breaks. Deliberate: a merge that overflows the line trades an unreadable cue for a
+    # truncated one, so the same measured budget has to gate both, and threading one object through
+    # would mean computing it on the legacy path too, where there is no preset to measure.
+    constraint_fit = TextFit.for_preset(preset, video_width=video_width) if preset else None
+    cues, constraint_report = apply_cue_constraints(
+        cues, clip_duration=clip_duration, fit=constraint_fit
+    )
+    cues, hygiene_report = apply_span_hygiene(cues)
+    if notes is not None:
+        for marker in [*constraint_report.markers, *hygiene_report.markers]:
+            if marker not in notes:
+                notes.append(marker)
 
     # C21: pick a font that can actually render what was said, and note it when nothing can.
     #
@@ -1404,6 +1538,7 @@ def build_ass(
             emoji_glyph_available=emoji_glyph_available,
             emoji_downloader=emoji_downloader,
             fit=TextFit.for_preset(preset, video_width=video_width),
+            language=language,
         )
     else:
         legacy_position = position if position is not None else "bottom"
@@ -1657,6 +1792,7 @@ def _preset_dialogue_lines(
     emoji_glyph_available: Any | None,
     emoji_downloader: Any | None,
     fit: TextFit | None = None,
+    language: str = "",
 ) -> list[str]:
     """Render preset-driven dialogue lines (one event per cue).
 
@@ -1721,15 +1857,31 @@ def _preset_dialogue_lines(
         # spans carry override tags: measuring `{\kf34\c&H0000E5FF&}money` would count the tag as
         # letters, and one tag is longer than the word it decorates.
         if fit is not None and len(parts) > 1:
-            groups = text_metrics.wrap_word_groups(
+            # C25: prefer a linguistic break, but only one the measured budget accepts.
+            #
+            # `choose_break` returns a position only when both halves fit, and `None` for a
+            # disabled setting, a non-English language or no acceptable candidate -- in every one of
+            # those cases the measured wrap below stands unchanged (R5.5). So width still decides
+            # what is possible and this only reorders the preferences among the possibilities.
+            groups: list[list[int]] | None = None
+            linguistic = cue_constraints.choose_break(
                 plain,
-                font=fit.font,
-                font_size=fit.font_size,
-                max_width_px=fit.max_width_px,
-                max_lines=fit.max_lines,
-                spacing=fit.spacing,
-                scale_x=fit.scale_x,
+                fit=fit,
+                language=language or "",
+                enabled=bool(settings.caption_linguistic_breaks),
             )
+            if linguistic is not None:
+                groups = [list(range(linguistic)), list(range(linguistic, len(plain)))]
+            if groups is None:
+                groups = text_metrics.wrap_word_groups(
+                    plain,
+                    font=fit.font,
+                    font_size=fit.font_size,
+                    max_width_px=fit.max_width_px,
+                    max_lines=fit.max_lines,
+                    spacing=fit.spacing,
+                    scale_x=fit.scale_x,
+                )
             text = "\\N".join(
                 " ".join(parts[index] for index in group) for group in groups if group
             )

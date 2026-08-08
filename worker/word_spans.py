@@ -44,7 +44,7 @@ building against it rather than after.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from typing import Any, Protocol
 
 #: Minimum rendered duration for one word span, in seconds. ``0.0`` disables the floor.
@@ -106,6 +106,21 @@ def _bounds(span: Any) -> tuple[float, float] | None:
         return None
 
 
+def _rebuildable(span: Any) -> bool:
+    """Whether ``dataclasses.replace`` can produce an adjusted copy of ``span``.
+
+    Being *readable* and being *rebuildable* are different questions, and conflating them raised
+    ``TypeError: replace() should be called on dataclass instances`` from inside the caption
+    renderer. The caption paths are duck-typed on purpose -- ``captions._word_bounds`` accepts
+    anything with ``start``/``end``, and ``captions._Uppercased`` is a ``__slots__`` wrapper rather
+    than a dataclass -- so "it has the attributes I read" does not imply "I can copy it".
+
+    ``is_dataclass`` is true for a dataclass *class* as well as an instance, hence the ``isinstance``
+    exclusion: a class object would pass the check and then fail the copy.
+    """
+    return is_dataclass(span) and not isinstance(span, type)
+
+
 def apply_hygiene(
     spans: Sequence[Any],
     *,
@@ -135,6 +150,12 @@ def apply_hygiene(
         # A span that cannot be read is left entirely alone rather than guessed at; the caller's
         # renderer already tolerates whatever shape it is.
         return list(spans), report
+    if not all(_rebuildable(span) for _bounds_, span in parsed):
+        # Readable but not copyable. Refused for the *whole* sequence rather than per span, and that
+        # is the substance rather than caution: repairing only the copyable half would emit a
+        # timeline that is neither the transcript's nor a corrected one, and would report repairs
+        # while leaving the overlaps that motivated them. An empty report is then accurate.
+        return list(spans), report
 
     floor = max(0.0, float(min_seconds))
     limit = float(cue_end) if cue_end is not None else None
@@ -148,6 +169,16 @@ def apply_hygiene(
             compliant = False
             break
         if end < start:
+            compliant = False
+            break
+        if limit is not None and end > limit + 1e-9:
+            # R8.5, and it was missing.
+            #
+            # The pre-check tested ordering, sign and the floor but never the cue boundary, so a
+            # span outliving its own cue was declared compliant and returned untouched -- the one
+            # defect `hygiene_for_cue` exists to catch. It made `cue_end` inert for any sequence
+            # that was otherwise well-formed, which is most of them: the repair below was reachable
+            # only when some *other* fault had already failed this check.
             compliant = False
             break
         if floor > 0 and (end - start) < floor - 1e-9:
@@ -179,15 +210,23 @@ def apply_hygiene(
         if end < start:
             end = start
 
-        # The latest this span may end.
+        # The latest this span may end: the next span's start, or -- for the last one -- the cue's
+        # own end. Which of the two it was decides how the repair is *reported*: truncating against
+        # a neighbour is de-overlapping (R8.2), truncating against the cue boundary is R8.5, and a
+        # clip where every repair was the latter says something different about its transcript.
         if index + 1 < len(parsed):
             ceiling = parsed[index + 1][0][0]  # type: ignore[index]
+            bounded_by_cue = False
         else:
             ceiling = limit
+            bounded_by_cue = True
 
         if ceiling is not None and end > ceiling:
             end = max(start, ceiling - SPAN_EPSILON)
-            report.deoverlapped += 1
+            if bounded_by_cue:
+                report.clamped_to_cue += 1
+            else:
+                report.deoverlapped += 1
 
         if floor > 0 and (end - start) < floor:
             wanted = start + floor

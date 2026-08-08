@@ -569,6 +569,20 @@ class Settings(BaseSettings):
         "PROVISIONAL and off (R5.9). English only -- the rules are a hand-audited function-word "
         "list, so other languages fall back to width-based breaking. The width budget always wins.",
     )
+    # C23: word-span hygiene. Only the FLOOR is a setting; the repair itself is unconditional.
+    #
+    # Reordering and de-overlapping are not preferences -- a fill that sweeps backwards, or two words
+    # lit at once, is a rendering fault with no defensible "off". They also cannot move a clean
+    # transcript: `apply_hygiene` returns the caller's own objects when the spans already comply, so
+    # a well-formed render is bit-identical and the goldens do not move. The floor is different: it
+    # deliberately shortens or lengthens what was measured, so it ships at zero.
+    min_word_span_seconds: float = Field(
+        default=0.0,
+        description="Minimum rendered duration for one caption word span; 0 disables the floor "
+        "(C23). PROVISIONAL and off -- two frames at 30fps is 67ms and below about 80ms a "
+        "highlight reads as a flicker, but only M12 preference trials could settle the value. "
+        "Reordering and de-overlapping are applied regardless: those are faults, not preferences.",
+    )
 
     # S9: snap clip starts to shot boundaries so a clip does not open mid-shot. Detection is
     # ffmpeg's luma-based scene score over a narrow window near each boundary, so it finds most

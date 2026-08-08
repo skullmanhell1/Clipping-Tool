@@ -759,6 +759,11 @@ def run_pipeline(
                 delivered_fps=delivered_fps,
                 keyframe_seconds=keyframe_seconds,
                 colour_tags=clip_colour.tags,
+                # C25's rules are English-only and have to be told which language this is rather
+                # than assume. The *detected* language, not `options.language`, which is `None` on
+                # an auto-detect run -- i.e. on most runs -- and would leave the feature
+                # permanently unreachable while looking wired.
+                language=transcript.language or "",
                 # A17: which music track this clip gets, when the mood has several. Built from
                 # facts that survive a re-run - the source's name, the clip's ordinal and its
                 # source-relative start - so the same job produces the same beds while ten clips

@@ -179,6 +179,7 @@ def render_clip(
     delivered_fps: int | None = None,
     keyframe_seconds: float | None = None,
     colour_tags: Sequence[str] = (),
+    language: str = "",
 ) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -351,6 +352,7 @@ def render_clip(
                 clip_duration=duration,
                 permissibility=options.permissibility_mode,
                 notes=notes,
+                language=language,
             )
             applied.append(f"caption_preset:{preset.name}")
             if substituted:
@@ -363,6 +365,12 @@ def render_clip(
                 if note not in applied:
                     applied.append(note)
         else:
+            # `notes` on the legacy path too. It was previously omitted, which meant the legacy
+            # template branch could not report anything build_ass discovered -- a font substitution
+            # or an unsupported script went unrecorded purely because of which caption look was
+            # chosen. C23/C24 markers arrive by the same route, so a legacy render now reports the
+            # repairs it made rather than staying silent about them.
+            legacy_notes: list[str] = []
             cap.build_ass(
                 cues,
                 ass_path,
@@ -371,7 +379,12 @@ def render_clip(
                 template=options.caption_template,
                 position=options.caption_position,
                 hook_text=hook_text if need_hook else "",
+                notes=legacy_notes,
+                language=language,
             )
+            for note in legacy_notes:
+                if note not in applied:
+                    applied.append(note)
 
         subtitles_filter = cap.subtitles_filter(ass_path)
         if need_caps:
