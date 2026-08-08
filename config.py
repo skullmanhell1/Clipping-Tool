@@ -874,8 +874,32 @@ class Settings(BaseSettings):
         description="Weight of visual cues vs transcript score in selection (0..1).",
     )
     # Cap on frames sampled per clip for face detection.
+    #
+    # Was 120, which is below the configured rate for any clip over 24 seconds: the sampling
+    # step is widened until the count fits, so a 60s clip was sampled at 2 fps and a 90s clip
+    # at 1.33 - and nothing reported that REFRAME_SAMPLE_FPS was not being honoured.
+    # Measured against a ground-truth path, that took the p95 crop-centre error from 76 px at
+    # 5 fps to 153 px at 1.33, inside a 608 px-wide crop window.
+    #
+    # 900 is the full 5 fps for a 180s clip, which is the longest the `90s-3min` clip-length
+    # preset produces - so within the range this tool actually renders, the cap no longer
+    # silently lowers the rate, and beyond it the bound still holds. Affordable because
+    # REFRAME_DETECT_WIDTH pays for it: on a 60s 1080p clip, 300 sampled frames cost 5.5s of
+    # detection at native resolution and 2.6s at 640 px, against a fixed 2.2s of decode.
     reframe_sample_cap: int = Field(
-        default=120, description="Max frames sampled per clip for face detection."
+        default=900, description="Max frames sampled per clip for face detection."
+    )
+    # Width the frame is scaled to before face detection; boxes are scaled back, so this
+    # changes cost rather than coordinates. 0 detects at native resolution.
+    #
+    # 640 rather than something smaller for a specific reason: the cascade's minimum face
+    # size is carried from native into working pixels, and at 640 on 1080p that is 20 px,
+    # comfortably above the floor below which Haar becomes unreliable. A narrower working
+    # frame would start clamping, which would quietly make detection stricter than it was.
+    reframe_detect_width: int = Field(
+        default=640,
+        description="Frame width used for face detection (boxes are scaled back to native). "
+        "0 detects at native resolution, which is ~2x slower on 1080p.",
     )
     # V4: restart the reframe smoother at every shot change. The EMA otherwise carries the
     # previous shot's framing across a cut and converges on the new one over the following
@@ -915,6 +939,17 @@ class Settings(BaseSettings):
         default=BASE_DIR / "assets" / "models",
         description="Directory holding the vendored detector models. A setting because the "
         "container and the working tree put them in different places.",
+    )
+    # The reframe smoother was causal — every output depended only on samples at or before
+    # it, so the crop necessarily trailed the subject. Measured against a ground-truth path
+    # with the subject panning 500 px/s, that lag was a mean centre error of 40 px and a p95
+    # of 159 px at the full sampling rate, in a 608 px-wide crop window. The whole face path
+    # is known before ffmpeg runs, so the filter is allowed to look ahead; forward-backward
+    # filtering cancels the phase shift exactly. Off restores the pre-0.12 causal filter.
+    reframe_zero_phase: bool = Field(
+        default=True,
+        description="Use zero-phase (lag-free) forward-backward smoothing for the reframe "
+        "crop path. Off restores the causal EMA, which trails the subject.",
     )
 
     # ------------------------------------------- output geometry (O5, O9) --

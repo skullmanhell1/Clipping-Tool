@@ -24,7 +24,13 @@ from config import settings
 from worker import ffmpeg_utils as fu
 from worker import scene_detect, subtitle_export, thumbnail
 from worker.effects import overlays
-from worker.effects.reframe import Center, cut_indices, ema_smooth, smooth_centers
+from worker.effects.reframe import (
+    Center,
+    cut_indices,
+    ema_smooth,
+    ema_smooth_zero_phase,
+    smooth_centers,
+)
 
 requires_ffmpeg = pytest.mark.skipif(
     subprocess.run(["which", settings.ffmpeg_binary], capture_output=True).returncode != 0,
@@ -91,6 +97,92 @@ def test_smooth_centers_applies_the_cuts():
     without = smooth_centers(samples, 0.35)
     assert with_cut[2].cx == 900.0
     assert without[2].cx < 900.0
+
+
+# --------------------------------------------------------------------------- #
+# Zero-phase smoothing - the crop must not trail the subject
+# --------------------------------------------------------------------------- #
+def test_zero_phase_smoothing_is_symmetric_and_the_causal_filter_is_not():
+    """The defining property, asserted directly rather than via an error metric.
+
+    A filter has zero phase exactly when a symmetric input produces a symmetric output. The
+    causal EMA cannot: it has only the past to work with, so a symmetric pulse comes out
+    lopsided, and that asymmetry *is* the lag that makes the crop trail a moving subject.
+    """
+    pulse = [0.0, 0.0, 10.0, 40.0, 100.0, 40.0, 10.0, 0.0, 0.0]
+
+    zero = ema_smooth_zero_phase(pulse, 0.4)
+    causal = ema_smooth(pulse, 0.4)
+
+    for i in range(len(pulse) // 2):
+        mirror = len(pulse) - 1 - i
+        assert zero[i] == pytest.approx(zero[mirror], rel=1e-9), "zero-phase output is symmetric"
+    assert causal[2] != pytest.approx(causal[6], rel=1e-6), "sanity: the causal filter is not"
+
+
+def test_zero_phase_smoothing_does_not_delay_the_peak():
+    """Where the subject *is* must survive smoothing; only the jitter should go.
+
+    The causal filter moves the peak of a movement later in time - the crop reaches the
+    subject's position after the subject has left it. Asserted on argmax rather than on a
+    mean, because that delay is what the benchmark measures as centre error.
+
+    A *broad* triangular pulse, not a single spike: against a one-frame spike the causal
+    filter peaks on the spike itself and looks lag-free, because the input has already
+    collapsed to zero by the next sample. The lag only becomes visible on a movement that
+    lasts longer than the filter's own time constant - which is what a subject walking
+    across frame actually is.
+    """
+    rise = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0]
+    pulse = rise + rise[-2::-1]
+    peak = pulse.index(100.0)
+
+    zero = ema_smooth_zero_phase(pulse, 0.4)
+    causal = ema_smooth(pulse, 0.4)
+
+    assert zero.index(max(zero)) == peak, "zero-phase keeps the movement where it happened"
+    assert causal.index(max(causal)) > peak, "sanity: the causal filter arrives late"
+
+
+def test_a_cut_is_a_hard_boundary_in_both_directions():
+    """V4, reflected in time.
+
+    The forward pass must not carry the old shot across the cut (which is what V4 fixed) and
+    the backward pass must not drag the *new* shot back into the end of the old one - the same
+    defect, and the one a naive forward-backward filter would introduce. So the samples before
+    a cut are bit-identical whether or not a wildly different shot follows it.
+    """
+    before = [10.0, 10.0, 10.0]
+    after = [10.0, 10.0, 10.0, 5000.0, 5000.0, 5000.0]
+
+    alone = ema_smooth_zero_phase(before, 0.35)
+    with_next_shot = ema_smooth_zero_phase(after, 0.35, reset_at=(3,))
+
+    assert with_next_shot[:3] == alone, "the following shot leaked backwards across the cut"
+    assert with_next_shot[3] == 5000.0, "and the new shot starts on its own value, not blended"
+
+
+def test_a_single_sample_segment_passes_through_untouched():
+    """A cut on the last sample leaves a one-element segment; it has nothing to average with."""
+    assert ema_smooth_zero_phase([1.0, 1.0, 900.0], 0.35, reset_at=(2,))[2] == 900.0
+    assert ema_smooth_zero_phase([7.0], 0.35) == [7.0]
+    assert ema_smooth_zero_phase([], 0.35) == []
+
+
+def test_zero_phase_is_the_default_for_the_crop_path_but_switchable():
+    """The setting exists to recover the old behaviour on one clip, not as a coin flip.
+
+    Asserts the resolved path differs, so a default flipped by accident is visible here
+    rather than only in rendered pixels.
+    """
+    samples = [Center(i * 0.2, 100.0 if i < 5 else 900.0, 0.0) for i in range(10)]
+
+    default = smooth_centers(samples, 0.35)
+    zero = smooth_centers(samples, 0.35, zero_phase=True)
+    causal = smooth_centers(samples, 0.35, zero_phase=False)
+
+    assert [c.cx for c in default] == [c.cx for c in zero]
+    assert [c.cx for c in default] != [c.cx for c in causal]
 
 
 @requires_ffmpeg
