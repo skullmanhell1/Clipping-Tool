@@ -1494,6 +1494,26 @@ def track_faces(video: str | Path, sample_fps: float = 5.0) -> list[Center]:
 _escape_filter_path = escape_filter_path
 
 
+def _intersect_margin(
+    rect: tuple[int, int, int, int], margin_x: int, margin_y: int
+) -> tuple[int, int, int, int]:
+    """Inset a ``(width, height, x, y)`` content rectangle by a stabilisation margin (V21/R10.5).
+
+    The two facts compose rather than compete: `V16` letterbox detection says which pixels are
+    *content*, and `V21` says which pixels `vidstab` may have vacated. Intersecting them is what
+    stops the crop consuming the same margin twice -- the defect R10.5 names, where a crop reaching
+    into the vacated band delivers black edges no later stage can detect.
+
+    Dimensions stay even: libx264's 4:2:0 subsampling requires it and an odd crop fails the encode.
+    """
+    width, height, x, y = rect
+    inset_x = max(0, int(margin_x))
+    inset_y = max(0, int(margin_y))
+    new_w = max(2, width - 2 * inset_x)
+    new_h = max(2, height - 2 * inset_y)
+    return (new_w - (new_w % 2), new_h - (new_h % 2), x + inset_x, y + inset_y)
+
+
 def _content_rect(video: str | Path, info) -> tuple[int, int, int, int]:
     """``(width, height, x, y)`` of the real picture inside ``video``'s frame (V16).
 
@@ -1526,6 +1546,7 @@ def apply_reframe(
     detector: Callable | None = None,
     notes: list[str] | None = None,
     colour_tags: Sequence[str] = (),
+    stabilise_margin: tuple[int, int] = (0, 0),
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1559,6 +1580,10 @@ def apply_reframe(
     # source the two differ, and every number below - crop size, clamps, the "is this even a
     # tighter crop" test - is wrong if it is taken from the frame.
     content = _content_rect(video, info)
+    # V21/R10.5: hand the stabilisation margin to the crop geometry, so reframing and vidstab do not
+    # each consume the same pixels. (0, 0) when stabilisation is off, leaving this untouched.
+    if stabilise_margin != (0, 0):
+        content = _intersect_margin(content, *stabilise_margin)
     src_w, src_h, origin_x, origin_y = content
 
     crop_w, crop_h = compute_crop_size(src_w, src_h, aw, ah)

@@ -477,6 +477,20 @@ class Settings(BaseSettings):
         "falls back to 'auto' rather than raising.",
     )
 
+    # V21: optional stabilisation. Handheld footage under a moving crop compounds -- the camera
+    # shakes and the reframe crop chases the shake, so the clip moves more than the source did.
+    #
+    # DEFAULT OFF (R10.3). It costs a genuine second pass over the video (vidstabdetect must see
+    # every frame before vidstabtransform can act), it gives up frame as correction margin, and it is
+    # wrong for plenty of footage. Never applied to screen recordings, which V24 identifies.
+    stabilise_strength: float = Field(
+        default=0.0,
+        description="Stabilisation strength, 0.0-1.0 (V21). 0 disables. Costs a second analysis "
+        "pass and reserves up to 4% of each dimension as correction margin, which reframing is "
+        "told about so the two do not consume the same pixels. Never applied to content V24 "
+        "classifies as a screen recording.",
+    )
+
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #
     # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
