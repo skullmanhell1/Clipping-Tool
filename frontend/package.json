@@ -37,5 +37,20 @@
     "tailwindcss": "^3.4.4",
     "vite": "^8.2.0",
     "vitest": "^3.2.7"
+  },
+  "//overrides": [
+    "Both are transitive, dev-only and reached through tooling we do not choose the version of:",
+    "js-yaml via eslint -> @eslint/eslintrc, nanoid via postcss. Each pin is a patched release",
+    "inside the major its dependent already asks for (eslintrc wants ^4.1.0, postcss ^3.3.11), so",
+    "this is not a version bump - `npm ci` resolves the same tree and `npm run build` emits",
+    "byte-identical output. Unlike the brace-expansion advisory this replaces, both had clean",
+    "fixes: that one had no fix that was not worse than the finding, which is why the CI gate is",
+    "--audit-level=critical. The gate is a floor, not a claim that high is acceptable - prefer",
+    "fixing an advisory over widening the gate, and drop an entry here once the dependent ships a",
+    "range that already excludes the vulnerable versions."
+  ],
+  "overrides": {
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.18"
   }
 }
