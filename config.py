@@ -1039,6 +1039,25 @@ class Settings(BaseSettings):
     # V11: what fills the frame around fitted video. Was one hard-coded look (boxblur 40 plus a
     # slight darkening), which suits talking-head footage and actively hurts other things - a
     # blurred screen recording is an unreadable smear.
+    # V23: keep the speaker a similar size across cuts.
+    #
+    # DEFAULT OFF (R2.8), and this is the least certain setting in the spec rather than merely a
+    # cautious one. A director may have *chosen* to alternate between a close-up and a wide shot, and
+    # normalising that removes an intentional edit. The feature cannot tell the two apart.
+    #
+    # It also declines rather than compounding: the mechanism is a magnification, the same as zoom and
+    # ken-burns, so with either of those enabled the pipeline records
+    # `subject_scale_skipped:zoom_active` and changes nothing (R2.10).
+    subject_scale_normalise: bool = Field(
+        default=False,
+        description="Magnify wide shots so the speaker stays a similar size across cuts (V23). "
+        "Measures face height per shot using V4's existing cut list, then steps magnification at "
+        "cut boundaries only -- never within a shot, which would be a zoom. Bounded to 1.35x, and a "
+        "shot already at or above the target is left alone because the crop cannot be widened. "
+        "Declines when zoom or ken-burns is active. PROVISIONAL and off: an alternating close/wide "
+        "edit may be deliberate, and this cannot tell.",
+    )
+
     background_style: str = Field(
         default="blur",
         description="Letterbox background: blur | mirror | black | color | gradient (V11). "

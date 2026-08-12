@@ -65,13 +65,13 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
       smoothing, exact and unattenuated; `smooth_centers` output byte-identical to v0.11.0.
     - _Requirements: 10.1, 10.2_
 
-- [ ] 2. Subject-scale normalisation (V23)
-  - [ ] 2.1 Measure Subject_Scale per shot using the existing cut list
+- [x] 2. Subject-scale normalisation (V23)
+  - [x] 2.1 Measure Subject_Scale per shot using the existing cut list
     - Reuse `scene_detect.scan_cuts` — the same cuts `V4` already maps to sample indices for the
       EMA reset. A second shot-boundary mechanism would drift from the first.
     - _Requirements: 2.1, 2.5_
 
-  - [ ] 2.2 Adjust crop size between shots only, bounded
+  - [x] 2.2 Adjust crop size between shots only, bounded
     - **Never within a shot** (R2.4): changing crop size during continuous footage *is* a zoom,
       and the project already has zoom and ken-burns with their own easing. Two scale changes on
       one shot compound into something neither intended.
@@ -79,15 +79,15 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
       beyond available pixels; leave faceless shots alone rather than guessing.
     - _Requirements: 2.2, 2.3, 2.4, 2.6, 2.7_
 
-  - [ ] 2.3 Ensure no compounding with zoom or ken-burns
+  - [x] 2.3 Ensure no compounding with zoom or ken-burns
     - _Requirements: 2.10_
 
-  - [ ] 2.4 Default off, record when a crop size was altered
+  - [x] 2.4 Default off, record when a crop size was altered
     - The least certain item in this spec: a director may have *chosen* to alternate between
       close and wide, and normalising that removes an intentional edit.
     - _Requirements: 2.8, 2.9, 8.1_
 
-  - [ ] 2.5* Test: between-shot only, bounded → `tests/test_reframe_geometry.py`
+  - [x] 2.5* Test: between-shot only, bounded → `tests/test_reframe_geometry.py`
     - _Requirements: 2.4, 2.3, 2.7, 2.10_
 
 - [ ] 3. Content classification (V24)
