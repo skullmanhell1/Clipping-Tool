@@ -32,7 +32,7 @@ from config import settings
 # association path; importing it here keeps the module self-describing without
 # creating a hard runtime dependency cycle (diarization imports nothing from
 # this module).
-from worker import headroom, scene_detect
+from worker import headroom, scene_detect, subject_scale
 from worker.diarization import Speaker_Turn
 from worker.ffmpeg_utils import (
     ASPECT_PRESETS,
@@ -1548,6 +1548,7 @@ def apply_reframe(
     colour_tags: Sequence[str] = (),
     stabilise_margin: tuple[int, int] = (0, 0),
     prefilter: str = "",
+    normalise_scale: bool = False,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1627,6 +1628,26 @@ def apply_reframe(
         if _marker and _marker not in notes:
             notes.append(_marker)
 
+    # V23: normalise subject scale between shots.
+    #
+    # Built here because this is the only scope holding all three inputs at once: the cut list (V4's,
+    # reused so the two cannot disagree about where the shots are), the detection *sizes* in
+    # `sample_report` -- `samples` has already been reduced to centres and lost them -- and the crop
+    # height the scale is measured against.
+    #
+    # `normalise_scale` is passed in rather than read from settings, unlike the headroom bias above,
+    # and the difference is R2.10: this mechanism is a magnification, the same as zoom and ken-burns,
+    # and two magnifications on one shot multiply. Only the caller knows whether a zoom is also
+    # running, so only the caller can decide -- and it records the refusal.
+    scale_plan = subject_scale.plan(
+        sample_report.samples,
+        cut_indices(samples, cuts),
+        crop_w=crop_w,
+        crop_h=crop_h,
+        fps=command_fps,
+        enabled=bool(normalise_scale),
+    )
+
     cmd_file = dest.with_suffix(".reframe.cmd")
     cmd_file.parent.mkdir(parents=True, exist_ok=True)
     cmd_file.write_text(script, encoding="utf-8")
@@ -1651,7 +1672,22 @@ def apply_reframe(
     #
     # Empty by default, which leaves the filter string character-for-character what it was.
     head = f"{prefilter}," if prefilter else ""
-    vf = f"{head}sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
+    # V23 sits between `crop` and `scale`, and that position is the whole design. After `crop`
+    # because it magnifies within the window the tracker chose; before `scale` because `scale`
+    # renormalises whatever arrives to the delivery size, which is what lets the magnification differ
+    # per shot without the output dimensions ever moving -- and moving them is exactly what makes the
+    # obvious `crop w`/`crop h` implementation crash this ffmpeg. Empty unless normalisation is on, so
+    # the default filter string is character-for-character what it was.
+    magnify = ""
+    if scale_plan.enabled:
+        magnify = subject_scale.build_filter(
+            scale_plan.expression, crop_w=crop_w, crop_h=crop_h, fps=command_fps
+        )
+        magnify = f"{magnify}," if magnify else ""
+    vf = (
+        f"{head}sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},"
+        f"{magnify}scale={tw}:{th},setsar=1"
+    )
     cmd = [
         settings.ffmpeg_binary,
         "-y",
@@ -1678,6 +1714,10 @@ def apply_reframe(
     # nothing.
     if notes is not None:
         notes.extend(detector_notes(sample_report))
+        # After the render, like the detector markers and for the same reason: a clip that fell
+        # through to the static reformat must not carry a marker claiming its shots were normalised.
+        if scale_plan.marker and scale_plan.marker not in notes:
+            notes.append(scale_plan.marker)
     return dest
 
 

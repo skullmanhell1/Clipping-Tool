@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — V23 subject-scale normalisation, and a measured reason it is not built the way the spec asked
+
+- **`V23` keeps the speaker a similar size across cuts.** A clip cut together from a close-up and a
+  wide shot delivers a speaker who changes size at every cut; reframing follows the face's *position*
+  and says nothing about its *size*, so the jump survives reframing intact. `worker/subject_scale.py`
+  measures face height per shot, plans a bounded magnification, and steps it at cut boundaries.
+
+  **The spec's own mechanism is unavailable, and that was established by measurement rather than
+  assumed.** R2.2 asks for the **crop size** to be adjusted per shot, and `crop`'s `w`/`h` are
+  advertised as commandable (`T` in `ffmpeg -h filter=crop`), so a `sendcmd` script changing them is
+  the obvious implementation. On the ffmpeg this project ships (7.0.2) it **aborts the CLI**:
+  `Assertion best_input >= 0 failed at src/fftools/ffmpeg_filter.c:1923`. Verified three ways —
+  `crop x`/`crop y` alone renders fine, a `crop w`/`crop h` command fails, and `scale=...:eval=frame`
+  does not rescue it. Changing a crop's output dimensions reconfigures the filter link and the
+  command-line tool cannot follow that mid-stream. **A test asserts the crash from both sides**, so if
+  a future ffmpeg fixes it that test fails — which is exactly the notification needed to revisit this.
+
+  **So the mechanism is a magnification step**, `zoompan` with a `z` expression constant within a shot
+  and changing only at a cut — the same shape the existing `zoom_cut` style already uses, and one that
+  never reconfigures the link. It sits between `crop` and `scale`: after the crop because it magnifies
+  within the window the tracker chose, and before the scale because `scale` renormalises whatever
+  arrives to the delivery size, which is what lets magnification differ per shot while the output
+  dimensions never move. Measured on a synthetic source, a 1.0 → 1.3 step moves mean luma 23.5 → 28.7
+  against a flat control that stays at 23.5, so the effect is real and the comparison is not vacuous.
+
+  **R2.4 is a property of the expression's shape, not a check.** Nested `if(lt(on,<frame>))` can only
+  change value at a boundary frame, so "never adjust within a shot" holds by construction. An
+  interpolated size would *be* a zoom, which is what the requirement forbids.
+
+  **It can only ever magnify, which is why the target is the median.** `compute_crop_size` already
+  returns the largest window of the target aspect that fits the source, so there is no room to widen
+  and R2.6 forbids reaching outside it. A shot whose subject is *bigger* than the target is therefore
+  left alone and recorded rather than approximated by cropping further in. Normalising to the maximum
+  would magnify almost every shot to match the tightest one, softening most of the clip to fix a
+  minority of it; with the median at most half the shots move, and the ones that do are the wide shots
+  where magnification costs least.
+
+  **Bounded to 1.35× (R2.3)**, past which softening is more visible than the mismatch it corrects, and
+  which also caps what one mis-detected shot can do. Differences under 8% are left alone. The per-shot
+  statistic is a **median**, because a detector that briefly latches onto a background face produces
+  one wildly different box that a mean would carry into the whole shot.
+
+  **Shots come from V4's existing cut list** (R2.5) via `reframe.cut_indices` — the same indices the
+  tracker already uses for its EMA reset, so the two cannot disagree about where a shot begins.
+  Detection *sizes* are read from the `Sample_Report` the reframe pass already holds, because the
+  smoothed centre series has been reduced to `(cx, cy)` and lost them.
+
+  **It declines rather than compounding (R2.10).** The mechanism is a magnification, exactly like zoom
+  and ken-burns, and two on one shot multiply into a curve neither feature intended. The pipeline —
+  not `apply_reframe`, which cannot see the option — records `subject_scale_skipped:zoom_active` and
+  changes nothing. `transitions` counts as a zoom too, since it also produces a `zoompan`; gating on
+  `zoom` alone would leave the compounding in place for half the cases.
+
+  Off by default (R2.8), and this is the least certain default in the spec rather than merely a
+  cautious one: a director may have *chosen* to alternate between close and wide, and normalising that
+  removes an intentional edit. Nine mutations confirmed the tests are load-bearing — two initially
+  survived, one because a fixture's median and maximum coincided so the choice of statistic was
+  untested at all.
+
 ### Changed — thirteen settings that did nothing: four plumbed, eight retired, one already fixed
 
 `scripts/check_wired.py` found thirteen `Settings` fields that no production code read. Setting one

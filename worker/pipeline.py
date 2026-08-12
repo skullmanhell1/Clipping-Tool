@@ -682,6 +682,24 @@ def run_pipeline(
             strength=float(getattr(settings, "stabilise_strength", 0.0) or 0.0),
             is_synthetic=clip_content.is_synthetic,
         )
+        # V23: whether subject-scale normalisation may run on this clip.
+        #
+        # Decided here rather than inside `apply_reframe` because the deciding fact lives here: V23's
+        # mechanism is a magnification, exactly like zoom and ken-burns, and two magnifications on one
+        # shot multiply into a curve neither feature intended (R2.10). `apply_reframe` cannot see
+        # `options.zoom`, and giving it the option purely to refuse would put the policy in the wrong
+        # place -- the same split V21 uses, where `stabilise.geometry_refusal` names the rule and the
+        # pipeline records it.
+        #
+        # The refusal is recorded immediately because it is already final: an operator who sets
+        # SUBJECT_SCALE_NORMALISE and sees nothing happen needs to know a zoom outranked it, not be
+        # left to infer it. The success marker is different -- it claims shots were magnified, so it
+        # waits for the render and is appended inside `apply_reframe`.
+        normalise_scale = bool(getattr(settings, "subject_scale_normalise", False))
+        if normalise_scale and (options.zoom or options.transitions):
+            applied.append("subject_scale_skipped:zoom_active")
+            normalise_scale = False
+
         stab_prefilter = ""
         stab_margin = (0, 0)
         stab_transforms: Path | None = None
@@ -777,6 +795,9 @@ def run_pipeline(
                         detector=FACE_DETECTOR,
                         notes=applied,
                         colour_tags=clip_colour.tags,
+                        # The speaker path degraded to this one, but it is still a real
+                        # `apply_reframe` render, so V23 applies here on the same terms.
+                        normalise_scale=normalise_scale,
                     )
                     applied.append("reframe")
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
@@ -801,6 +822,7 @@ def run_pipeline(
                     colour_tags=clip_colour.tags,
                     stabilise_margin=stab_margin,
                     prefilter=stab_prefilter,
+                    normalise_scale=normalise_scale,
                 )
                 applied.append("reframe")
                 # Only now, for the same reason `reframe` waits: the marker names the strength that
