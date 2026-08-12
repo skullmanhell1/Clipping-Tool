@@ -169,6 +169,20 @@ jobs:
       # at build time" while no build step existed, so the directory was empty and the
       # overlay had nothing to composite. This runs without network access on purpose --
       # it checks the working tree, it does not fetch.
+      # A module nothing imports has no effect on output, however well tested it is. Three caption
+      # features shipped that way -- `worker/word_spans.py` (C23) plus `apply_constraints` (C24) and
+      # `choose_break` (C25) -- roughly 600 lines with property-test coverage, three documented
+      # settings, and not one rendered frame affected. Every gate here was green throughout, because
+      # a unit test of a pure function cannot tell whether anything calls it and
+      # `test_config_documentation.py` proves a setting is documented rather than read.
+      #
+      # A ratchet against a recorded baseline, not a clean-tree assertion: four modules and fourteen
+      # settings are already dead and listed in the script with the reason, so this gates *new* dead
+      # code from today while the backlog is worked down. `tests/test_check_wired.py` asserts every
+      # baseline entry is still dead, so the list can only shrink.
+      - name: No new dead code (unwired modules, unread settings)
+        run: python scripts/check_wired.py --check
+
       - name: Emoji assets are vendored
         run: python scripts/fetch_emoji.py --check
 

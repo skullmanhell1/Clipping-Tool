@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from worker import word_spans
 from worker.effects import caption_presets
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -1647,8 +1648,25 @@ def plan_kinetic(
 
     snapped: list[tuple[float, float, list[_Source_Word], tuple[tuple[int, ...], ...]]] = []
     segments: list[Timeline_Segment] = []
+    span_repairs = 0
     for (cue_start, cue_end), (_s, _e, cue_words, lines) in zip(filled_bounds, drafts):
         filled = _fill_timings(cue_start, cue_end, cue_words)
+        # C23, here rather than only in `captions.py`, because this engine supersedes the
+        # compositor's caption generation entirely (Req 3.2) -- so the hygiene wired into
+        # `build_ass` never runs on a kinetic render, and the defect would survive in exactly the
+        # path whose whole purpose is per-word animation.
+        #
+        # After `_fill_timings` so synthesised words already have intervals to repair, and before
+        # `Kinetic_Word` is built, because `rel_ms` is derived from `start` there and would
+        # otherwise be computed from a span the repair then moves.
+        #
+        # `min_seconds=0.0`, not the setting: the floor is a `settings` read and `plan_kinetic` is
+        # documented pure. The structural half needs no configuration anyway -- and this engine
+        # already has its own floor in `_fill_timings`'s `MIN_WORD_S`, so a second one here would be
+        # two sources of truth for one number. Evenly-distributed synthesised words share exact
+        # boundaries, which `apply_hygiene` treats as compliant, so this is a no-op for them.
+        filled, span_report = word_spans.apply_hygiene(filled, min_seconds=0.0, cue_end=cue_end)
+        span_repairs += span_report.altered
         snapped.append((cue_start, cue_end, filled, lines))
         segments.append(Timeline_Segment(start=cue_start, end=cue_end))
 
@@ -1770,13 +1788,17 @@ def plan_kinetic(
     word_count = sum(len(cue.words) for cue in cues)
     ratio = (synthesised_count / word_count) if word_count else 0.0
     extra: tuple[str, ...] = ()
+    if span_repairs:
+        # Namespaced like every other marker this engine emits, so a kinetic render's repairs stay
+        # distinguishable from the compositor's on the same clip record.
+        extra = (marker(ENGINE_ID, f"word_spans_repaired:{span_repairs}"),)
     cue_level = False
     degraded = False
     detail = f"{len(cues)} cues, {word_count} words, style={options.style}, reveal={options.reveal}"
     if ratio > SYNTHESISED_RATIO_LIMIT:
         cue_level = True
         degraded = True
-        extra = (marker(ENGINE_ID, "degraded:word_timings"),)
+        extra = (*extra, marker(ENGINE_ID, "degraded:word_timings"))
         detail = (
             f"{synthesised_count}/{word_count} words had synthesised timings; cue-level animation"
         )

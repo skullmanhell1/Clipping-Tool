@@ -28,9 +28,46 @@ design's Testing Strategy. ffmpeg and audio integration tests reuse the existing
 (`make_video`, `requires_ffmpeg`, `probe_size`, `FakeWord`, `FakeFaceDetector`).
 
 **Before starting, run the baseline and record it:** `pytest` must report
-**2030 passed, 0 skipped, 0 warnings**; `cd frontend && npm run test:run` must report
+**2631 passed, 0 skipped, 0 warnings**; `cd frontend && npm run test:run` must report
 **141 passed**. A drop at any point means something stopped running, and a skip is not a
 pass.
+
+> The figure above was **2030** until it was corrected against `d309f36` plus the caption-timing
+> wiring change. Anyone who ran the stated baseline and saw 2596 would have concluded the instruction
+> was untrustworthy and stopped reading, which is what a stale number in a "before you start" step
+> actually costs.
+
+## Status — measured, because the checkboxes below were never maintained
+
+**Every box in this file is unticked and a lot of it is done.** The list below was derived by looking
+for each task's artefacts in the tree, not by reading the checkboxes. Where the two disagree, this
+section is right.
+
+| Group | State | Evidence |
+| --- | --- | --- |
+| 1 — the benchmark gate (S1/M4) | **not started** | `eval/labels/` holds only `.gitkeep`. Still gates groups 3.6, 4, 5.4, 8, 10.5. |
+| 2.1, 2.2 — pitch | **done** | `worker/pitch_features.py`: `f0_track`, `source_median_f0`, `pitch_in_window`, `describe`. |
+| 2.3 — reaction proxy | **not started** | No `worker/reaction_features.py`. Pure DSP and needs no checkpoint, so it is buildable now. |
+| 2.4, 2.5 — pitch tests | **done** | `tests/test_pitch_features.py`, 20 tests. |
+| 3.1, 3.2, 3.4 — pitch wiring | **done** | `selection.py` memoises one track per source and calls `pitch_features.annotate_candidates`, behind `selection_pitch_feature`. |
+| 3.3, 3.6 — reaction wiring/default | **blocked** | Follows 2.3, then group 1. |
+| 4 — blending (S18) | **not started** | No `blend_scores`, no `selection_opinion_weight`. Task 4.6 ships inert at `1.0`, so the mechanism could land before group 1; the *default* cannot. |
+| 5 — hook disqualification (S19) | **not started** | `hook_score.py` still zeroes on `promptness <= 0.0` alone. |
+| 6.1, 6.5, 6.6 — span hygiene (C23) | **done** | `worker/word_spans.py`, wired into `build_ass` and `plan_kinetic`; `MIN_WORD_SPAN_SECONDS`; `word_spans_repaired:N`. |
+| 6.2, 6.3, 6.4, 6.8 — onset snapping (T11) | **refused, measured** | The cached envelope is 1 reading/second; on a source with 20 bursts at 2.5/s `detect_onsets` found **zero**. R7.8 forbids the finer pass that would fix it, so the requirement contradicts itself. Reasoning in `word_spans.py`'s docstring. |
+| 7 — intermediate fidelity (O6) | **not started** | No `x264_crf_intermediate`. Now *measurable*: `evaluation/fidelity.py` (M9) exists, so 7.5 is answerable. |
+| 8 — detector default | **blocked** | Needs group 1's footage. Note `face_detector_backend` is currently read by nothing, so the setting does not work either — see `scripts/check_wired.py`. |
+| 9 — interior dead air (AU10) | **not started** | Buildable now; `plan_keep_intervals` already merges multiple keep sources into one re-encode. |
+| 10 — end snapping (S20) | **not started** | `snap_end` absent. Gate on `mean_best_iou` per 10.5. |
+| 11 — assets (A14/A21) | **partial** | `assets/music/` and `assets/broll/` exist; no `scripts/fetch_music.py`. Licensing is the real work. |
+| 12 — configuration contract | **ongoing** | Enforced continuously by `tests/test_config_documentation.py`. Note it proves a setting is *documented*, not *read*. |
+| 13 — make the plan true (M8) | **partial** | Appendix B now carries a measured status section; the body is still quoted against v0.10.0. |
+| 14 — close-out | **open** | Depends on group 1. |
+
+**Group 6 carries a lesson worth more than the group.** C23 landed complete and tested and was called
+by nothing for as long as it existed — as were C24 and C25 from the sibling spec. Task 6.5 says "apply
+hygiene on every caption path"; that step is what was missed, and no test could see it. There is now a
+gate: `scripts/check_wired.py`, run in CI and by `tests/test_check_wired.py`.
 
 ## Tasks
 
@@ -395,7 +432,7 @@ pass.
 
 - [ ] 14. Verification and close-out
   - [ ] 14.1 Full gate run
-    - `ruff check .` clean · `pytest` at **2030 + new tests, 0 skipped, 0 warnings** · `cd frontend && npm run lint && npm run test:run && npm run build` · `scripts/docker_smoke.sh` builds and serves.
+    - `ruff check .` clean · `ruff format --check .` clean · `mypy .` clean · `pytest` at **2619 + new tests, 0 skipped, 0 warnings** · `python scripts/check_wired.py --check` reports no new dead code · `cd frontend && npm run lint && npm run test:run && npm run build` (node 20 or 22 — vitest crashes on 18) · `scripts/docker_smoke.sh` builds and serves.
     - _Requirements: 17.7, 17.8_
 
   - [ ] 14.2 Triage any new warning at its source

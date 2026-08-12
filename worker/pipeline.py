@@ -35,6 +35,7 @@ from worker import (
     frame_rate,
     intermediate_cache,
     segmentation,
+    stabilise,
     subtitle_export,
     thumbnail,
     video_encoders,
@@ -606,6 +607,64 @@ def run_pipeline(
             if clip_content.content.value != "unknown":
                 applied.append(clip_content.marker)
 
+        # V21: stabilise before the crop, and only where a crop exists to hide the correction.
+        #
+        # `is_synthetic` is passed in rather than looked up, because `content_class` owns that
+        # determination and a second copy of the rule would be a second thing to get wrong when
+        # V24's thresholds move.
+        stab_plan = stabilise.plan(
+            src_w=info.width,
+            src_h=info.height,
+            strength=float(getattr(settings, "stabilise_strength", 0.0) or 0.0),
+            is_synthetic=clip_content.is_synthetic,
+        )
+        stab_prefilter = ""
+        stab_margin = (0, 0)
+        stab_transforms: Path | None = None
+        if not stab_plan.enabled:
+            # A disabled plan's markers are refusals -- synthetic content, or an ffmpeg without
+            # libvidstab -- and those are already final, so they are recorded now. `stabilise:<n>`
+            # is different: it claims the correction ran, so it waits for the render to succeed.
+            applied.extend(m for m in stab_plan.markers if m not in applied)
+        else:
+            # Only the `apply_reframe` branch can hide what `vidstabtransform` vacates; the rule and
+            # its reasoning live in `stabilise.geometry_refusal`.
+            refusal = stabilise.geometry_refusal(
+                reframe=bool(options.reframe),
+                speaker_reframe=bool(options.speaker_reframe),
+            )
+            if refusal:
+                applied.append(f"stabilise_skipped:{refusal}")
+            else:
+                stab_transforms = temp_dir / f"stab_{clip_id}.trf"
+
+                # R10.8: the analysis is a genuine extra decode and the only one in this spec, so
+                # it reports rather than going quiet. The label keeps the "Rendering clip" prefix
+                # because `jobs.stage_position` prefix-matches against `JOB_STAGES`; a bare
+                # "Analysing camera motion" resolves to index 0 and gives the UI a blank step and
+                # the M5 timings a one-off row per clip.
+                def _stab_progress(
+                    fraction: float, stage: str, _base: float = base, _idx: int = idx
+                ) -> None:
+                    report(
+                        _base + clip_span / n * (0.35 + 0.15 * fraction),
+                        f"Rendering clip {_idx + 1} of {n} - {stage}",
+                    )
+
+                if stabilise.run_analysis(
+                    raw, stab_transforms, stab_plan.strength, progress=_stab_progress
+                ):
+                    stab_prefilter = stabilise.transform_filter(
+                        stab_transforms,
+                        stab_plan.strength,
+                        src_w=info.width,
+                        src_h=info.height,
+                    )
+                    stab_margin = (stab_plan.margin_x, stab_plan.margin_y)
+                else:
+                    # Degrades to an unstabilised clip rather than failing the job, and says so.
+                    applied.append("stabilise_degraded:analysis_failed")
+
         if content_class.fit_instead_of_crop(clip_content):
             # R3/R4: fit the whole frame instead of cropping into it, and skip face tracking
             # entirely -- a detector run against a slide finds nothing, so this saves a decode
@@ -675,8 +734,14 @@ def run_pipeline(
                     detector=FACE_DETECTOR,
                     notes=applied,
                     colour_tags=clip_colour.tags,
+                    stabilise_margin=stab_margin,
+                    prefilter=stab_prefilter,
                 )
                 applied.append("reframe")
+                # Only now, for the same reason `reframe` waits: the marker names the strength that
+                # ran, and a clip that fell through to the static reformat below was not stabilised
+                # at all. Recording it earlier would put `stabilise:0.60` on an unstabilised clip.
+                applied.extend(m for m in stab_plan.markers if m not in applied)
             except (reframe.ReframeUnavailable, fu.FFmpegError):
                 fu.reformat_aspect(
                     raw,
@@ -759,6 +824,11 @@ def run_pipeline(
                 delivered_fps=delivered_fps,
                 keyframe_seconds=keyframe_seconds,
                 colour_tags=clip_colour.tags,
+                # C25's rules are English-only and have to be told which language this is rather
+                # than assume. The *detected* language, not `options.language`, which is `None` on
+                # an auto-detect run -- i.e. on most runs -- and would leave the feature
+                # permanently unreachable while looking wired.
+                language=transcript.language or "",
                 # A17: which music track this clip gets, when the mood has several. Built from
                 # facts that survive a re-run - the source's name, the clip's ordinal and its
                 # source-relative start - so the same job produces the same beds while ten clips
@@ -928,6 +998,11 @@ def run_pipeline(
 
         for tmp in (raw, geo):
             tmp.unlink(missing_ok=True)
+        if stab_transforms is not None:
+            # The transforms file is written per clip and is useless afterwards. Cleaned up beside
+            # `raw`/`geo` rather than in the geometry block, because the second pass reads it and
+            # the geometry block does not know whether the render succeeded.
+            stab_transforms.unlink(missing_ok=True)
 
         report(_P_SELECT_END + clip_span * ((idx + 1) / n), f"Rendered clip {idx + 1} of {n}")
 
