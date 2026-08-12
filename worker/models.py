@@ -12,7 +12,33 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+from config import settings as _settings
 from worker.effects.caption_presets import BUILTIN_PRESETS as _BUILTIN_CAPTION_PRESETS
+
+#: Job defaults that come from configuration rather than from a literal here.
+#:
+#: Both settings were declared and documented as "the value used when a job does not specify one",
+#: and both were read by nothing: the literal default lived here, a second copy lived in the API's
+#: form defaults, and a third in the `normalise` fallback below. Three copies of one fact, where
+#: changing the documented one had no effect at all.
+#:
+#: Resolved through a function rather than captured at import time so that a test (or a reload) that
+#: changes the setting is honoured, matching how every other `getattr(settings, ...)` read behaves.
+#: Each validates, because a malformed configured value must not become a filter argument or a
+#: detector name -- it falls back to the value that shipped, which is also each setting's own default,
+#: so an unconfigured install is byte-identical.
+
+
+def _default_music_volume() -> float:
+    try:
+        return max(0.0, min(1.0, float(getattr(_settings, "music_default_volume", 0.12))))
+    except (TypeError, ValueError):
+        return 0.12
+
+
+def _default_face_detector() -> str:
+    value = str(getattr(_settings, "face_detector_backend", "haar") or "haar").strip().lower()
+    return value if value in ("haar", "mediapipe") else "haar"
 
 
 def _as_bool(value: Any) -> bool:
@@ -96,7 +122,9 @@ class ProcessingOptions:
     # this on by default would add a drone to every clip. It becomes a default once real
     # licence-clean beds ship (A14).
     music: str = ""  # mood: "" (off) | upbeat | chill | dramatic | corporate | suspense
-    music_volume: float = 0.12  # background-music level (0..1)
+    # Default from `MUSIC_DEFAULT_VOLUME` (0.12 unless configured), which is what that
+    # setting has always claimed to control.
+    music_volume: float = field(default_factory=_default_music_volume)
     fades: bool = True  # fade in/out (video + audio)
     color: str = ""  # "" (off) | vivid | warm | cool | cinematic | bw
     progress_bar: bool = True  # growing progress bar along the bottom
@@ -169,7 +197,10 @@ class ProcessingOptions:
     # cascade and stays the default, so an unchanged configuration reproduces existing
     # output exactly - switching it would change the crop path, and therefore the pixels,
     # in every golden and parity render.
-    face_detector: str = "haar"  # haar | mediapipe
+    # Default from `FACE_DETECTOR_BACKEND`, documented as "the detector used when a job does
+    # not specify one" and previously consulted by nothing -- `resolve_detector` is only ever
+    # called with the per-job option, so the documented default was unreachable.
+    face_detector: str = field(default_factory=_default_face_detector)  # haar | mediapipe
 
     # --- Kinetic typography engine (default OFF) --------------------------
     # ``kinetic_typography_enabled`` is the Feature_Flag the engine's inherited
@@ -358,7 +389,7 @@ class ProcessingOptions:
             try:
                 valid["music_volume"] = max(0.0, min(1.0, float(valid["music_volume"])))
             except (TypeError, ValueError):
-                valid["music_volume"] = 0.12
+                valid["music_volume"] = _default_music_volume()
         # Validate Phase 6 / Tier 1 enum-like string fields against their known
         # value sets, falling back to the documented default on unknown or
         # malformed values (never raising).
@@ -369,7 +400,7 @@ class ProcessingOptions:
             ("asset_sourcing_mode", cls._ASSET_SOURCING_MODES, "off"),
             ("reframe_layout", cls._REFRAME_LAYOUTS, "follow_active"),
             ("reframe_intensity", cls._REFRAME_INTENSITIES, "standard"),
-            ("face_detector", cls._FACE_DETECTORS, "haar"),
+            ("face_detector", cls._FACE_DETECTORS, _default_face_detector()),
         ):
             if enum_field in valid:
                 v = valid[enum_field]

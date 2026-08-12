@@ -18,8 +18,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -84,10 +82,17 @@ def test_every_baseline_module_entry_is_still_dead():
     )
 
 
-@pytest.mark.parametrize("name", sorted(cw.KNOWN_UNREAD))
-def test_every_baseline_setting_entry_is_still_dead(name):
-    assert name in UNREAD, (
-        f"{name} is now read outside config.py, so delete its KNOWN_UNREAD entry in "
+def test_every_baseline_setting_entry_is_still_dead():
+    """The settings half of the ratchet. Not parametrised, for the reason given above.
+
+    `KNOWN_UNREAD` is also empty now: four of the thirteen were plumbed and the other eight retired.
+    Both baselines being empty is the intended end state, and neither ratchet may express that as a
+    skip.
+    """
+    revived = [name for name in sorted(cw.KNOWN_UNREAD) if name not in UNREAD]
+
+    assert revived == [], (
+        f"{revived} are now read outside config.py, so delete their KNOWN_UNREAD entries in "
         "scripts/check_wired.py -- the baseline may only shrink"
     )
 
@@ -161,12 +166,48 @@ def test_a_relative_import_counts_as_wiring(tmp_path, monkeypatch):
     assert "worker.beta" not in unwired
 
 
-def test_the_checker_does_not_count_itself_as_a_user():
+def test_the_checker_does_not_count_itself_as_a_user(tmp_path, monkeypatch):
     """It named every baseline setting as a string constant, so it read itself clean.
 
     The settings scan counts string constants as reads — `getattr(settings, "caption_safe_area", "")`
-    is idiomatic here — and `KNOWN_UNREAD` names all fourteen. Before the exclusion the check reported
+    is idiomatic here — and `KNOWN_UNREAD` named all fourteen. Before the exclusion the check reported
     a spotless tree, which is the worst way for a gate to fail.
+
+    **Rewritten to prove that on a fixture tree rather than on the real repository.** The previous
+    version asserted `UNREAD` was non-empty, using the existence of real debt as a proxy for "the scan
+    is not reading itself". That proxy was valid only while the debt existed: clearing the last entry
+    made this test fail even though the exclusion it guards was working perfectly. A test that breaks
+    when the thing it *wants* finally happens is measuring the wrong quantity — and the honest fix is
+    to construct the confusion deliberately, which also makes the test independent of the tree's
+    state forever.
+
+    The fixture is the exact shape of the original bug: `checker.py` mentions `orphan` as a string
+    constant and nothing else reads it. Excluded, `orphan` is correctly reported unread; counted as a
+    user, it vanishes and the gate goes quiet.
     """
-    assert not cw._is_user(ROOT / "scripts" / "check_wired.py")
-    assert UNREAD, "the settings scan found nothing, which means it is reading itself"
+    (tmp_path / "worker").mkdir()
+    (tmp_path / "worker" / "__init__.py").write_text("")
+    (tmp_path / "worker" / "pipeline.py").write_text("VALUE = 1\n")
+    (tmp_path / "config.py").write_text(
+        "class Settings:\n    orphan: str = ''\n    used: str = ''\n"
+    )
+    (tmp_path / "worker" / "reader.py").write_text("from config import settings\nsettings.used\n")
+    # The self-reference: a file whose only mention of `orphan` is the string constant.
+    checker = tmp_path / "checker.py"
+    checker.write_text('KNOWN_UNREAD = {"orphan": "reason"}\n')
+
+    monkeypatch.setattr(cw, "ROOT", tmp_path)
+    monkeypatch.setattr(cw, "PACKAGES", ("worker",))
+
+    monkeypatch.setattr(cw, "SELF", checker)
+    assert not cw._is_user(checker), "the checker counted itself as a user of the tree"
+    assert "orphan" in cw.unread_settings(), (
+        "an unread setting went unreported while the checker excluded itself"
+    )
+    assert "used" not in cw.unread_settings()
+
+    # And the failure the exclusion exists to prevent: counted as a user, the gate reads clean.
+    monkeypatch.setattr(cw, "SELF", tmp_path / "nonexistent.py")
+    assert "orphan" not in cw.unread_settings(), (
+        "the fixture does not reproduce the original bug, so the assertion above proves nothing"
+    )

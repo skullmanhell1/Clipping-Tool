@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — thirteen settings that did nothing: four plumbed, eight retired, one already fixed
+
+`scripts/check_wired.py` found thirteen `Settings` fields that no production code read. Setting one
+did nothing at all, silently — which is worse than an unsupported option, because it reads as
+supported. Both dead-code baselines are now **empty**.
+
+**Plumbed (4).**
+
+- **`BACKGROUND_STYLE` / `BACKGROUND_COLOR` (V11).** V11 built the whole
+  `blur | mirror | black | color | gradient` vocabulary, and all four `reformat_aspect` call sites
+  omitted both arguments — so the function's own parameter defaults won every time and
+  `'black' is the honest choice for screen recordings` was advice no operator could act on. Now passed
+  at the three `crop_blur` sites. **Deliberately not passed at the `pad` site:** that mode letterboxes
+  with black by definition and ignores `background`, so handing it a style would recreate the exact
+  defect being fixed. An unknown value falls back to `blur`, and the lookup is case- and
+  space-insensitive, because a `.env` file acquires capitals and trailing spaces and neither should
+  silently disable a feature.
+- **`MUSIC_DEFAULT_VOLUME`.** The literal `0.12` lived in four places — the dataclass default, the
+  API model, the API form default and the `from_dict` fallback — and the documented setting in none of
+  them. All four now resolve through one function. Out-of-range values are clamped: `amix` takes a
+  0..1 level, so `4.0` would be a distorted bed rather than a loud one.
+- **`FACE_DETECTOR_BACKEND`.** Documented as "the detector used when a job does not specify one" and
+  consulted by nothing: `resolve_detector` is only ever called with the per-job option, whose default
+  was the literal `"haar"`. So `FACE_DETECTOR_BACKEND=mediapipe` had no effect on any render. An
+  unknown backend name falls back to `haar` rather than reaching `resolve_detector` and disabling
+  detection outright.
+
+Every default is unchanged, because each setting's own default already equalled the literal it
+replaced — an unconfigured install renders identically.
+
+**Retired (8).** These described behaviour this project does not have.
+
+- `REDIS_URL`, `RQ_QUEUE_NAME`, `USE_INPROCESS_FALLBACK` — there is no `import redis` or `import rq`
+  anywhere in the tree, and `JobManager` is a single-worker `ThreadPoolExecutor`. "Fallback" implied a
+  primary that has never existed; the README already said Redis + RQ is planned, not implemented.
+- `API_HOST`, `API_PORT` — the bind is fixed independently by the container's `CMD`, its `EXPOSE` and
+  its healthcheck URL. Two settings that cannot override the process's actual bind are worse than
+  none. (Plumbing them instead would mean adding a `python -m api` runner and changing the
+  `Dockerfile`, `docker-compose.yml` and smoke script to use it — a deployment change that cannot be
+  verified while CI is blocked, so it is deliberately not bundled here.)
+- `PUBLIC_BASE_URL` — no reader, and no `description=` either. The one publisher that might need a
+  reachable URL uploads binary directly.
+- `X_API_KEY`, `X_API_SECRET` — OAuth1 consumer credentials, while `publishers/x.py` authenticates
+  solely with a Bearer token. Plumbing them means *implementing OAuth1 signing*, which is a feature,
+  not a wiring fix.
+
+`Settings` uses `extra="ignore"`, so a stale key left in someone's `.env` stays harmless.
+
+**Two ratchet tests were measuring the wrong thing.** Clearing the baselines exposed both:
+`pytest.mark.parametrize` over an empty sequence produces a **skip**, and this suite has no skips by
+design — a skipped ratchet at the moment the debt reaches zero is indistinguishable from one that has
+been switched off. And `test_the_checker_does_not_count_itself_as_a_user` asserted real debt existed,
+using its presence as a proxy for "the scan is not reading itself"; that proxy was valid only while
+the debt was. It now constructs the original confusion on a fixture tree and asserts **both**
+directions, so it is independent of the tree's state forever. A test that breaks when the thing it
+wants finally happens is measuring the wrong quantity.
+
 ### Fixed — A15 sound effects were never called, and the dead-code baseline is now empty
 
 - **`A15` is wired into the audio mix.** `worker/effects/sfx.py` shipped complete and tested with no

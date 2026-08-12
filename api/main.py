@@ -69,6 +69,8 @@ from worker.engines import loader  # noqa: F401
 from worker.jobs import get_manager
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import BUILTIN_PROFILES, ProcessingOptions
+from worker.models import _default_face_detector as _settings_face_detector
+from worker.models import _default_music_volume as _settings_music_volume
 from worker.watch_folder import get_watcher
 
 
@@ -257,7 +259,8 @@ class OptionsModel(BaseModel):
     transitions: bool = True
     hook_title: bool = True
     music: str = ""
-    music_volume: float = 0.12
+    # Default from MUSIC_DEFAULT_VOLUME rather than a fourth copy of the literal.
+    music_volume: float = _settings_music_volume()
     fades: bool = True
     color: str = ""
     progress_bar: bool = True
@@ -288,7 +291,8 @@ class OptionsModel(BaseModel):
     speaker_reframe: bool = False
     reframe_layout: str = "follow_active"
     reframe_intensity: str = "standard"
-    face_detector: str = "haar"
+    # Default from FACE_DETECTOR_BACKEND, which documents itself as exactly this.
+    face_detector: str = _settings_face_detector()
     # Kinetic typography engine (default OFF). Same fields and same defaults as
     # ``ProcessingOptions``; unrecognised *choice* values are not rejected here
     # but coerced by the engine's ``resolve_options`` (Reqs 17.4, 17.7).
@@ -913,7 +917,7 @@ async def upload(
     transitions: bool = Form(True),
     hook_title: bool = Form(True),
     music: str = Form(""),
-    music_volume: float = Form(0.12),
+    music_volume: float = Form(_settings_music_volume()),
     fades: bool = Form(True),
     color: str = Form(""),
     progress_bar: bool = Form(True),
@@ -947,7 +951,7 @@ async def upload(
     # A loose optional string, per the existing convention for these enum-like fields: an
     # unrecognised value falls back to the documented default in ProcessingOptions.from_dict
     # rather than 422-ing an upload that is otherwise fine.
-    face_detector: str = Form("haar"),
+    face_detector: str = Form(_settings_face_detector()),
     # Kinetic typography engine (default OFF; Reqs 17.4, 17.7).
     #
     # Declared as loose optional strings on purpose: form values arrive as text,

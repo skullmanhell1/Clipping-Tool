@@ -62,8 +62,6 @@ class Settings(BaseSettings):
     app_name: str = Field(default="AI Video Clipper", description="Display name.")
     environment: str = Field(default="development", description="dev/staging/prod.")
     debug: bool = Field(default=True, description="Enable verbose debug behaviour.")
-    api_host: str = Field(default="0.0.0.0", description="API bind host.")  # noqa: S104 - deliberate: a container must bind all interfaces to be reachable
-    api_port: int = Field(default=8000, description="API bind port.")
     # Comma-separated list of allowed CORS origins.
     cors_origins: str = Field(default="*", description="Allowed CORS origins.")
 
@@ -115,18 +113,6 @@ class Settings(BaseSettings):
         description="Trust X-Forwarded-For for client identity. Enable only when running "
         "behind a proxy that sets it.",
     )
-
-    # --------------------------------------------------------------- queue --
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        description="Redis connection URL for the RQ task queue.",
-    )
-    # When Redis is unavailable, tasks fall back to running in-process.
-    use_inprocess_fallback: bool = Field(
-        default=True,
-        description="Run jobs synchronously in-process if Redis is unavailable.",
-    )
-    rq_queue_name: str = Field(default="clips", description="RQ queue name.")
 
     # ----------------------------------------------------------------- llm --
     llm_provider: LLMProvider = Field(
@@ -1360,7 +1346,6 @@ class Settings(BaseSettings):
         "the existing copy is fitted to the platform's limits at sentence "
         "boundaries instead of being truncated mid-word.",
     )
-    public_base_url: str | None = Field(default=None)
     # Whop (@whop/sdk Node bridge)
     whop_api_key: str | None = Field(default=None)
     whop_company_id: str | None = Field(default=None)
@@ -1380,8 +1365,6 @@ class Settings(BaseSettings):
     instagram_api_version: str = Field(default="v25.0")
     instagram_content_publish_approved: bool = Field(default=False)
     # X API v2 OAuth user context
-    x_api_key: str | None = Field(default=None)
-    x_api_secret: str | None = Field(default=None)
     x_access_token: str | None = Field(default=None)
     x_account_id: str | None = Field(default=None)
     x_direct_post_approved: bool = Field(default=False)
