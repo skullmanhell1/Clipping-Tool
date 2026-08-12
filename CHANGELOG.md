@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — AU12 per-speaker level matching was never called
+
+- **`AU12` is wired into the audio graph.** `worker/turn_gain.py` merged complete and
+  property-tested, with an end-to-end test that renders the `volume` expression through real ffmpeg
+  — and **no importer outside its own test module**. So diarisation was still never used for gain,
+  which is precisely the defect AU12 was written to fix. `TURN_GAIN_ENABLED` did not exist at all;
+  there was no way to ask for the feature even in principle.
+
+  **The turn computation was trapped inside the `speaker_reframe` branch.** `slice_turns` and
+  `rebase_turns` were called only there, so on the configuration AU12 is actually for —
+  `DIARIZATION=true`, `speaker_reframe` off — the clip-relative turns were never derived. Hoisting
+  them above the geometry ladder, where `keep_plan` is already final, gives both consumers one
+  answer instead of two chances to rebase one and not the other.
+
+  **Placed on the speech branch, before `loudnorm`** (R7.11). Per-speaker gain applied to a signal
+  that already contains music would modulate the bed every time the speaker changed — audible as
+  pumping, and nobody would attribute that to a level-matching feature. It chains onto whatever
+  AU4/AU5 and AU11 produced rather than reading `[0:a]` again, so the cleanup, the presence shaping
+  and the gain compose instead of one silently discarding the others.
+
+  **R7.5 is the requirement that needed a test only the pipeline could provide.** Filler removal
+  shortens the clip, so a turn at 2.6 s in the source is elsewhere in the delivery, and applying the
+  ramp at the un-rebased time corrects the *wrong speaker* — worse than leaving the imbalance alone.
+  The new test builds a fixture where the two timelines genuinely disagree and asserts the rebase
+  moved something, so the guarantee cannot pass vacuously.
+
+  **The envelope is measured only when it can be used.** It is a pass over the audio, and both cheap
+  refusals — diarisation off, fewer than two turns — are decided from the arguments alone. Measuring
+  first and discarding the result would be a silent cost on every clip of a single-speaker source,
+  which is most of them.
+
+  **Off by default (R7.8), and it never enables diarisation (R7.12).** `diarization_available` is
+  read from the job option and deliberately not inferred from the turns being non-empty, because
+  `speaker_reframe` already switches diarisation on for its own purposes — inferring would let AU12
+  act on a job that never asked for it. With diarisation off it records
+  `turn_gain_unavailable:diarization_disabled` and changes nothing.
+
+  Five mutations confirmed the tests are load-bearing: `speaker_turns=` dropped at the call site,
+  the hoist reverted, the filter append removed, `diarization_available` forced true, and the chain
+  re-pointed at `[0:a]`. Each is caught. `scripts/check_wired.py`'s baseline shrinks by one module.
+
 ### Fixed — HDR sources were delivered grey and flat (O13, O14, O15)
 
 - **`O13` — HDR is tone-mapped to SDR Rec.709.** There was no `tonemap`, `zscale` or `colorspace`

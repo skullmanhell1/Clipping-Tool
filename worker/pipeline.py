@@ -585,6 +585,28 @@ def run_pipeline(
             raw = out.media or raw
             applied.extend(out.markers)
 
+        # Clip-relative diarised turns, on the DELIVERED timeline.
+        #
+        # Hoisted out of the `speaker_reframe` branch below, where it used to live, because AU12
+        # needs the same answer for the audio graph and two copies of this would be two chances to
+        # rebase one of them and not the other. It sits here rather than lower down for a reason
+        # that is easy to get wrong: `keep_plan` is final at this point -- filler removal has run
+        # (3a) and the AUDIO-stage engines cannot change the keep list -- and every consumer wants
+        # turns measured against the timeline that will actually be delivered, not the source.
+        #
+        # R7.5 is the requirement, and it is the highest-risk part of AU12: filler removal, the U4
+        # cut list and interior-silence removal all shorten the clip, so a turn at 12.0s in the
+        # source may be at 9.4s in the delivery. Applying a gain ramp at the un-rebased time puts
+        # the correction on the wrong speaker, which is worse than leaving the imbalance alone.
+        #
+        # Cheap when diarisation is off: `source_turns` is empty, both calls are no-ops, and
+        # nothing below behaves differently.
+        clip_turns: list[diarization.Speaker_Turn] = []
+        if source_turns:
+            clip_turns = diarization.slice_turns(source_turns, c.start, c.end)
+            if keep_plan is not None:
+                clip_turns = diarization.rebase_turns(clip_turns, keep_plan)
+
         # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
         #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.
         #    When ``speaker_reframe`` is OFF this collapses to the exact v0.7.0
@@ -677,12 +699,7 @@ def run_pipeline(
                 colour_tags=clip_colour.tags,
             )
         elif options.speaker_reframe:
-            # Derive clip-relative turns from the once-per-source diarisation,
-            # rebased onto the tightened timeline when filler removal changed the
-            # clip so turns stay aligned to the rebased words (Reqs 13.3-13.5).
-            clip_turns = diarization.slice_turns(source_turns, c.start, c.end)
-            if keep_plan is not None:
-                clip_turns = diarization.rebase_turns(clip_turns, keep_plan)
+            # `clip_turns` is computed above, once, on the delivered timeline (Reqs 13.3-13.5).
             try:
                 reframe.apply_speaker_reframe(
                     raw,
@@ -835,6 +852,10 @@ def run_pipeline(
                 # from one source get ten different ones. The clip id cannot be used: it carries
                 # a `uuid4`, so keying on it would give a fresh bed on every render.
                 music_select_key=f"{Path(source).name}:{idx}:{c.start:.3f}",
+                # AU12: the turns computed above, already rebased onto the delivered timeline.
+                # Passed unconditionally -- empty whenever diarisation did not run -- so the
+                # compositor's own default never diverges from what the pipeline knows.
+                speaker_turns=clip_turns,
             )
         except fu.FFmpegError:
             # Ship the un-composited clip rather than failing the job, per the degradation

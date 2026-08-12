@@ -507,6 +507,26 @@ class Settings(BaseSettings):
         "audible processing needs a preference trial, not an opinion.",
     )
 
+    # AU12: per-speaker level matching. `loudnorm` normalises the clip as a WHOLE, so by
+    # construction it cannot fix an imbalance *inside* it -- it moves both speakers by the same
+    # amount and preserves the difference exactly. A clip correct at -14 LUFS integrated can still
+    # have one speaker 8dB below the other, which on a phone speaker means half the conversation is
+    # inaudible.
+    #
+    # DEFAULT OFF (R7.8), and for a sharper reason than AU11's. This one depends on diarisation,
+    # which is itself a transcript proxy capped at two speakers, so a mislabelled turn applies a
+    # gain correction to the wrong voice. R7.12 additionally forbids this from enabling diarisation
+    # as a side effect: with `diarization` off, the plan records
+    # `turn_gain_unavailable:diarization_disabled` and changes nothing.
+    turn_gain_enabled: bool = Field(
+        default=False,
+        description="Match per-speaker levels within a clip (AU12). Measures each diarised turn "
+        "against the 1s energy envelope S2 already computes, then applies a bounded (+/-6dB), "
+        "ramped `volume` expression to the SPEECH branch before loudness normalisation. Adds no "
+        "encoding pass. Requires DIARIZATION=true and never enables it itself. PROVISIONAL and "
+        "off: correcting the wrong voice is worse than an imbalance.",
+    )
+
     # O13/O14/O15: colour handling for delivery. See worker/colour.py for the reasoning.
     #
     # `tone_mapping` defaults to **True**, which knowingly breaks this project's rule that every
