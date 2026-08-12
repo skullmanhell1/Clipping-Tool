@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — V15 face-aware caption placement was never called
+
+- **`V15` is wired into every caption path.** `worker/caption_placement.py` shipped complete and
+  tested with no importer outside its own test module, so `CAPTION_AVOID_FACES=true` did nothing and
+  the caption-over-the-mouth collision it exists to prevent still shipped on every clip.
+
+  **Wired at `build_ass`, which covers both caption branches at once.** Placement runs after the
+  C23/C24 cue passes — the cue shape has to be settled first — and before the style header, which is
+  what consumes `position` to emit `Alignment` and `MarginV`. Reassigning one variable there
+  therefore covers the preset path, the legacy `template` path and `rerender` together. The legacy
+  path is included deliberately: C20's auto-contrast covers only the preset branch, and a legibility
+  feature that silently depends on which caption *look* was chosen is the same defect in a different
+  place.
+
+  **The margin V15 reasons about is the margin that will be rendered.** With a C12 safe area or a C13
+  offset configured, the caption is not at its default margin, so `resolve_margins` is consulted and
+  the result passed through to `caption_band`. Reasoning at the default while the renderer draws
+  elsewhere would miss real collisions and invent absent ones.
+
+  **`None` and `""` positions survive an inert pass.** Both mean "inherit the preset's position", and
+  writing the resolved name back would produce an identical file today while making every later
+  preset change silently ineffective. Found by mutation: the unconditional write passed every other
+  test, because a refusal returns the requested position unchanged and the two are then equal — they
+  differ only when the position was inherited.
+
+  **The kinetic engine needed a second seam, and the architecture dictated its shape.** That engine
+  supersedes the compositor's captions entirely, so `build_ass` wiring alone would leave V15 silently
+  absent from a kinetic render. The first attempt read the setting and detected faces inside the
+  engine, and two existing gates rejected it: an engine may not create a subprocess, and
+  `worker/engines/kinetic.py` pins its import surface to an allowlist that excludes `config`. So the
+  impure half belongs to the Pipeline, which now detects once on the delivered frame and publishes
+  the boxes on `clip_metadata` — the channel that already carries `hook_text` and `clip_size` — and
+  the engine applies only `choose_position`, which is pure geometry. The setting is then honoured by
+  construction: no detection, no boxes, nothing to apply.
+
+  **Detected on the delivered frame, not the source.** Boxes from the reframe pass are in source
+  pixels and would need mapping through a time-varying crop, and on the `crop_blur` and `pad`
+  branches no detection ran at all — so re-detecting on the composited input is both simpler and the
+  only option that covers every geometry branch.
+
+  Off by default: this is a decode of the clip, and a render that never had a collision would be
+  paying for one to find that out. Eight mutations confirmed the tests are load-bearing, including
+  one that exposed a conditional assertion which never ran — a test that stayed green while the
+  wiring was deleted, which is the same failure this whole change is about.
+  `scripts/check_wired.py`'s baseline shrinks to a single module.
+
 ### Fixed — AU12 per-speaker level matching was never called
 
 - **`AU12` is wired into the audio graph.** `worker/turn_gain.py` merged complete and

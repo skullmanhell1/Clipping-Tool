@@ -372,6 +372,13 @@ def render_clip(
                 permissibility=options.permissibility_mode,
                 notes=notes,
                 language=language,
+                # V15: the media the captions will be drawn on, so placement can avoid the mouth.
+                # `base_clip` and not the source: this is the reframed, delivered frame, so the boxes
+                # detected on it are already in caption coordinates. Boxes from the reframe pass are
+                # in *source* pixels and would need mapping through a time-varying crop, and on the
+                # `crop_blur` and `pad` branches no detection ran at all -- so re-detecting here is
+                # both simpler and the only option that covers every geometry branch.
+                clip_path=base_clip,
             )
             applied.append(f"caption_preset:{preset.name}")
             if substituted:
@@ -400,6 +407,10 @@ def render_clip(
                 hook_text=hook_text if need_hook else "",
                 notes=legacy_notes,
                 language=language,
+                # V15 on the legacy branch too. C20's auto-contrast covers only the preset path, and
+                # a legibility feature that silently depends on which caption *look* was chosen is
+                # the same defect in a different place.
+                clip_path=base_clip,
             )
             for note in legacy_notes:
                 if note not in applied:
