@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from config import settings
 from worker import branding, caption_contrast, turn_gain
 from worker import captions as cap
-from worker.effects import audio, broll, caption_presets, emoji, overlays
+from worker.effects import audio, broll, caption_presets, emoji, overlays, sfx
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
 
@@ -162,6 +162,54 @@ def _beat_times(base_clip: str | Path, options: ProcessingOptions) -> tuple[floa
             envelope, rise_db=float(getattr(settings, "beat_sync_rise_db", 6.0))
         )
     )
+
+
+def _plan_sfx(
+    *,
+    emoji_starts: Sequence[float],
+    transition_times: Sequence[float],
+    duration: float,
+    temp_dir: Path,
+) -> tuple[list[sfx.SfxHit], list[str]]:
+    """``(hits, markers)`` for A15: the moments that get a sting, and what could not be found.
+
+    `plan_hits` decides *when*; this resolves *what*, which is a separate question because a moment
+    can survive planning and still have no sound available. That gap is the honest part of A15:
+    `assets/sfx/` ships empty, and only `pop` and `click` can be synthesised. `whoosh` and `swipe`
+    cannot, and `TRIGGER_SFX` maps the *transition* trigger to `whoosh` -- so with
+    ``SFX_MODE=transitions`` and no user file, every hit resolves to nothing.
+
+    That case therefore records `sfx_missing:whoosh` rather than passing silently. An operator who
+    sets `SFX_MODE=transitions` and hears nothing needs to be told the sound is absent, not left to
+    conclude the feature is broken. The marker is emitted **once per name**, not once per hit: twelve
+    emoji with no `pop` available is one missing sound, not twelve.
+
+    Resolution is cached per name within a clip, so a clip with twelve emoji synthesises one wav.
+    """
+    planned = sfx.plan_hits(
+        emoji_starts=tuple(emoji_starts),
+        transition_times=tuple(transition_times),
+        duration=float(duration),
+    )
+    if not planned:
+        return [], []
+
+    hits: list[sfx.SfxHit] = []
+    markers: list[str] = []
+    resolved: dict[str, sfx.Sting | None] = {}
+    for at, trigger in planned:
+        name = sfx.TRIGGER_SFX.get(trigger, "")
+        if not name:
+            continue
+        if name not in resolved:
+            sting, marker = sfx.resolve_sting(name, temp_dir)
+            resolved[name] = sting
+            if marker and marker not in markers:
+                markers.append(marker)
+        sting = resolved[name]
+        if sting is not None:
+            hits.append(sfx.SfxHit(at=at, sting=sting, trigger=trigger))
+    return hits, markers
 
 
 def _turn_gain_envelope(base_clip: str | Path) -> Sequence[tuple[float, float]]:
@@ -839,6 +887,55 @@ def render_clip(
         audio_out = "aeng"
         audio_changed = True
 
+    # --- A15: sound-effect stings -----------------------------------------
+    #
+    # Placed after everything that builds the mix and before `loudnorm`, which is the only ordering
+    # that is both honest and safe. A sting is part of what the viewer hears, so it must be inside
+    # the signal `loudnorm` corrects; and it must come after the music bed because a sting mixed into
+    # the *speech* branch would then be ducked by AU2 every time it landed under the bed, which is
+    # the opposite of an accent.
+    #
+    # The known limitation is worth stating rather than discovering: `measure_loudness` reads the
+    # source file, so these stings are not in that measurement. AU3's true-peak limiter is what keeps
+    # that safe, and the levels here are deliberately low.
+    #
+    # **Inputs are collected now and appended after the emoji block below**, because
+    # `build_mix` indexes its inputs absolutely and the argv order is fixed as
+    # base -> engines -> music -> b-roll -> emoji -> sfx (Req 10.3). Appending them here instead
+    # would silently renumber every emoji input.
+    sfx_input_args: list[str] = []
+    sfx_offset = emoji_offset + emoji_inputs.count("-i")
+    if info.has_audio:
+        # Only emoji that actually composited. A cue whose asset failed to resolve is not on screen,
+        # so a sting for it would be an accent on nothing -- the same discipline `broll_duck_windows`
+        # applies. And `options.transitions` is a single *opening* treatment rather than a per-cut
+        # list, so 0.0 is the only transition moment that exists to accent; claiming any other would
+        # be inventing structure the render does not have.
+        hits, sfx_markers = _plan_sfx(
+            emoji_starts=(
+                tuple(float(getattr(cue, "start", 0.0)) for cue in emoji_cues)
+                if emoji_graph
+                else ()
+            ),
+            transition_times=(0.0,) if options.transitions else (),
+            duration=duration,
+            temp_dir=temp_dir,
+        )
+        applied.extend(m for m in sfx_markers if m not in applied)
+        if hits:
+            sfx_input_args, sfx_graph = sfx.build_mix(
+                hits,
+                audio_out,
+                "asfx",
+                input_offset=sfx_offset,
+                volume=float(getattr(settings, "sfx_volume", 0.35) or 0.0),
+            )
+            if sfx_graph:
+                graph_parts.append(sfx_graph)
+                audio_out = "asfx"
+                audio_changed = True
+                applied.append(f"sfx:{len(hits)}")
+
     # --- loudness normalisation (AU1) -------------------------------------
     # Last in the audio chain, so it measures and corrects what will actually be delivered
     # rather than an intermediate stage of it. Only applied when something else already
@@ -882,6 +979,8 @@ def render_clip(
     # fixed and knowable before any engine ran.
     inputs += broll_input_args
     inputs += emoji_inputs
+    # A15 last, matching `sfx_offset` above. Order here *is* the index contract.
+    inputs += sfx_input_args
 
     video_changed = (
         bool(look_chain)

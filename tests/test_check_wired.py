@@ -62,16 +62,24 @@ def test_the_tree_has_no_dead_code_outside_the_baseline():
     )
 
 
-@pytest.mark.parametrize("name", sorted(cw.KNOWN_UNWIRED))
-def test_every_baseline_module_entry_is_still_dead(name):
+def test_every_baseline_module_entry_is_still_dead():
     """The ratchet. Wire a module up and its baseline entry must go with it.
 
     Without this the baseline rots into a list of things that used to be broken, and the next reader
     cannot tell which entries are still true — so they trust none of them, which is the same as not
     having the file.
+
+    **Deliberately not parametrised, unlike its settings counterpart below.** `KNOWN_UNWIRED` is now
+    empty -- A15 was the last entry -- and `pytest.mark.parametrize` over an empty sequence produces
+    a *skipped* test. This suite has no skips by design, and a skip here would be the worst possible
+    reading: the ratchet reporting "not run" at the exact moment the debt reaches zero, which looks
+    identical to the ratchet having been switched off. Asserting over the dict in one test keeps the
+    empty case a genuine pass.
     """
-    assert name in UNWIRED, (
-        f"{name} is now imported outside tests/, so delete its KNOWN_UNWIRED entry in "
+    revived = [name for name in sorted(cw.KNOWN_UNWIRED) if name not in UNWIRED]
+
+    assert revived == [], (
+        f"{revived} are now imported outside tests/, so delete their KNOWN_UNWIRED entries in "
         "scripts/check_wired.py -- the baseline may only shrink"
     )
 
