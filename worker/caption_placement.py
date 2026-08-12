@@ -233,6 +233,7 @@ def plan_for_clip(
     font_size: int,
     max_lines: int = 2,
     face_boxes: Iterable[Any] | None = None,
+    margin_px: int | None = None,
 ) -> PlacementPlan:
     """Choose a caption position for ``clip``, detecting faces if needed (V15).
 
@@ -244,6 +245,12 @@ def plan_for_clip(
 
     ``face_boxes`` lets a caller pass boxes it already has - the reframe path detects them anyway,
     so on a reframed clip this should cost nothing extra.
+
+    ``margin_px`` must be supplied whenever the caller has a C12 safe area or a C13 offset
+    configured, and is forwarded to :func:`caption_band`. Without it this reasons about a caption
+    placed at the position's *default* margin while the renderer draws it somewhere else, so a
+    collision could be missed or invented. It is optional rather than required because the
+    unconfigured case - no safe area, no offset - is the common one and the default is then correct.
     """
     from config import settings
 
@@ -273,4 +280,5 @@ def plan_for_clip(
         frame_height=frame_height,
         font_size=font_size,
         max_lines=max_lines,
+        margin_px=margin_px,
     )

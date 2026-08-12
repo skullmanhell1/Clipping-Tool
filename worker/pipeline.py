@@ -92,6 +92,30 @@ def _noop(fraction: float, stage: str) -> None:  # pragma: no cover
     pass
 
 
+def _caption_face_boxes(clip: Path, options) -> tuple:
+    """Face boxes for V15's caption placement, or ``()`` when it is off (V15).
+
+    Returns a tuple rather than a list so the value published on ``clip_metadata`` cannot be mutated
+    by an engine, matching how every other fact on that channel behaves.
+
+    ``()`` when `caption_avoid_faces` is off, which is the default: this is a decode of the clip, and
+    a render that never had a collision would be paying for it to find that out. It is also a *look*
+    change on the clips it does act on, and every other new visual behaviour here defaults to what
+    already shipped so the golden renders can still detect an accidental change.
+
+    Never raises. Every failure mode of the vision stack -- a missing `cv2`, an unopenable file, a
+    cascade that will not load -- is a reason to caption where the user asked, not to lose a clip
+    whose expensive work is already done.
+    """
+    if not bool(getattr(settings, "caption_avoid_faces", False)):
+        return ()
+    try:
+        return tuple(box for frame in reframe.detect_faces(clip) for box in frame)
+    except Exception:
+        logger.warning("V15: face detection failed for %s", clip, exc_info=True)
+        return ()
+
+
 def _filter_transcript_to_range(
     transcript: Transcript, start: float | None, end: float | None
 ) -> Transcript:
@@ -825,6 +849,20 @@ def run_pipeline(
                 clip_metadata={
                     "hook_text": md.hook_text,
                     "clip_size": fu.ASPECT_PRESETS.get(options.aspect, fu.ASPECT_PRESETS["9:16"]),
+                    # V15: the impure half of face-aware caption placement.
+                    #
+                    # Detected here rather than inside the engine for two reasons that are both hard
+                    # constraints rather than preferences: an engine may not create a subprocess, and
+                    # `worker/engines/kinetic.py` pins its import surface to an allowlist that
+                    # excludes `config`, so it can neither detect faces nor read the setting. The
+                    # Pipeline can do both, and `clip_metadata` is already the channel for per-clip
+                    # facts. The engine then applies `choose_position`, which is pure geometry.
+                    #
+                    # Detected on `geo`, the delivered frame, so the boxes are already in caption
+                    # coordinates -- boxes from the reframe pass are in source pixels and would need
+                    # mapping through a time-varying crop, and on the `crop_blur`/`pad` branches no
+                    # detection ran at all.
+                    "face_boxes": _caption_face_boxes(geo, options),
                 },
             )
         try:

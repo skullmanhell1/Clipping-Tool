@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
-from worker import word_spans
+from worker import caption_placement, word_spans
 from worker.effects import caption_presets
 from worker.engines import registry as engine_registry
 from worker.engines.base import (
@@ -2430,9 +2430,70 @@ class Kinetic_Typography_Engine(AV_Engine):
             return Kinetic_Options.parse(value)
         return Kinetic_Options.from_processing_options(value)
 
+    def _face_aware_options(self, ctx: Any, opts: Kinetic_Options) -> Kinetic_Options:
+        """``opts`` with V15's mouth-avoiding position applied, or ``opts`` unchanged.
+
+        The engine needs its own pass because it **supersedes the compositor's captions entirely**:
+        anything wired only at `build_ass` is silently absent from a kinetic render, which is exactly
+        the class of defect V15 was itself an instance of.
+
+        **The face boxes arrive on `clip_metadata`; this engine never detects them.** Detection is a
+        decode of the clip, and `run` is forbidden to create a subprocess -- and reading
+        `caption_avoid_faces` here is forbidden too, because the module's import surface is pinned to
+        an allowlist that excludes `config` (`tests/test_kinetic_determinism.py`). Both constraints
+        point the same way: the *impure* half of V15 belongs to the Pipeline, which already publishes
+        `hook_text` and `clip_size` through this channel, and the engine applies only
+        :func:`caption_placement.choose_position`, which is pure geometry over boxes it is handed.
+
+        That also means the setting is honoured by construction: the Pipeline detects nothing when
+        `caption_avoid_faces` is off, so no boxes are published and this is inert.
+
+        The marker rides `notes`, so `plan_kinetic` namespaces it as `kinetic:<marker>` the way it
+        already does for `style_substituted` and `position_substituted` (Req 4.8), rather than
+        inventing a second channel for the same kind of fact.
+        """
+        metadata = getattr(ctx, "clip_metadata", None)
+        if not isinstance(metadata, Mapping):
+            return opts
+        boxes = _get(metadata, "face_boxes", ()) or ()
+        if not boxes:
+            return opts
+
+        preset, _substituted = caption_presets.resolve_preset(opts.preset_name)
+        play_res_x, play_res_y = self._play_res(ctx)
+        requested = resolve_position(opts.position, preset.position)
+        plan = caption_placement.choose_position(
+            requested,
+            boxes,
+            frame_height=play_res_y,
+            font_size=opts.font_size,
+            max_lines=opts.max_lines,
+            # The engine derives its own margin from `safe_area_y_pct`, not from C12/C13, so the
+            # default band margin is the wrong one to reason against. `safe_area_margins` is the
+            # function that decides what will actually be emitted, so it is the one asked.
+            margin_px=safe_area_margins(
+                play_res_x,
+                play_res_y,
+                safe_area_x_pct=opts.safe_area_x_pct,
+                safe_area_y_pct=opts.safe_area_y_pct,
+                position=opts.position,
+                preset_position=preset.position,
+            )[3],
+        )
+        if not plan.marker:
+            return opts
+        notes = tuple(sorted({*opts.notes, plan.marker}))
+        # A refusal (`caption_face_overlap_unavoidable`) records the reason but must not move
+        # anything. `plan.position` cannot be written back unconditionally: on a refusal it equals
+        # the *resolved* request, so an inherited `""` would silently become a concrete name and the
+        # Base_Preset could no longer change it (Req 7.4).
+        return dataclasses.replace(
+            opts, position=plan.position if plan.moved else opts.position, notes=notes
+        )
+
     def _plan_for(self, ctx: Any, font: str) -> Kinetic_Plan:
         """Run the pure planner for ``ctx`` with an already-resolved ``font``."""
-        opts = self._resolved_options(ctx)
+        opts = self._face_aware_options(ctx, self._resolved_options(ctx))
         play_res_x, play_res_y = self._play_res(ctx)
         return plan_kinetic(
             words=getattr(ctx, "words", ()),  # rebased, clip-relative (Req 5.1)

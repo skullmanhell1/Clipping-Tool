@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker import cue_constraints, script_support, text_metrics, word_spans
+from worker import caption_placement, cue_constraints, script_support, text_metrics, word_spans
 from worker.effects.caption_presets import CaptionPreset
 from worker.ffmpeg_utils import _run, escape_filter_path, h264_args
 from worker.transcribe import Transcript, Word
@@ -1423,6 +1423,68 @@ def _preset_style_line(
     )
 
 
+def _face_aware_position(
+    position: str | None,
+    *,
+    preset: CaptionPreset | None,
+    clip_path: Any | None,
+    face_boxes: Any | None,
+    video_width: int,
+    video_height: int,
+    font_size: int,
+    notes: list[str] | None,
+) -> str | None:
+    """The caption position with V15's mouth-avoidance applied, or ``position`` untouched.
+
+    Returns the *original* argument -- ``None`` included -- whenever nothing moves, rather than
+    resolving it to a concrete name. That distinction is load-bearing: ``None`` means "use the
+    preset's own position", and substituting the resolved name would make every preset render
+    ignore a later preset change while producing an identical file today. A byte-identical default
+    path is what lets the v0.8.0 parity goldens still detect an accidental change.
+
+    Requires media to reason about, so it declines when given neither a clip nor boxes. That is not
+    a silent failure: `build_ass` is called by `caption_preview` with no media at all, and a preview
+    that moved its captions for faces the real render might place differently would be a preview of
+    something else.
+    """
+    if not getattr(settings, "caption_avoid_faces", False):
+        return position
+    if clip_path is None and face_boxes is None:
+        return position
+
+    requested = (
+        position if position is not None else (preset.position if preset is not None else "bottom")
+    )
+
+    # The margin V15 reasons about has to be the margin the style header will actually emit, or the
+    # two disagree and a collision is either missed or invented. Computed only when C12/C13 are
+    # configured, mirroring `_preset_header_styles` -- unconditionally resolving margins would also
+    # change the numbers on every existing render, which is why that function guards it too.
+    safe_area = (getattr(settings, "caption_safe_area", "") or "") or None
+    caption_offset = int(getattr(settings, "caption_offset_px", 0) or 0)
+    margin_px: int | None = None
+    if safe_area or caption_offset:
+        _margin_l, _margin_r, margin_px = resolve_margins(
+            requested,
+            video_width,
+            video_height,
+            platform=safe_area,
+            offset=caption_offset,
+        )
+
+    plan = caption_placement.plan_for_clip(
+        clip_path,
+        requested=requested,
+        frame_height=video_height,
+        font_size=font_size,
+        face_boxes=face_boxes,
+        margin_px=margin_px,
+    )
+    if plan.marker and notes is not None and plan.marker not in notes:
+        notes.append(plan.marker)
+    return plan.position if plan.moved else position
+
+
 def build_ass(
     cues: list[Cue],
     dest: str | Path,
@@ -1447,6 +1509,8 @@ def build_ass(
     emoji_downloader: Any | None = None,
     notes: list[str] | None = None,
     language: str = "",
+    clip_path: Any | None = None,
+    face_boxes: Any | None = None,
 ) -> Path:
     """Render ``cues`` (and an optional hook title) to an ASS file at ``dest``.
 
@@ -1492,6 +1556,26 @@ def build_ass(
         for marker in [*constraint_report.markers, *hygiene_report.markers]:
             if marker not in notes:
                 notes.append(marker)
+
+    # V15: move the caption off the speaker's mouth, if that is where it lands.
+    #
+    # After C24/C23 because the cue shape is settled by then, and before the style header below
+    # because that is what consumes `position` to emit Alignment and MarginV. Reassigning the one
+    # variable here therefore covers the preset branch and the legacy `template` branch together --
+    # the same argument that put the cue-timing passes in this function.
+    position = _face_aware_position(
+        position,
+        preset=preset,
+        clip_path=clip_path,
+        face_boxes=face_boxes,
+        video_width=video_width,
+        video_height=video_height,
+        # The size the text will actually be drawn at. `font_size` is the legacy path's parameter and
+        # is ignored on the preset path, where the preset carries its own -- measuring the band with
+        # the wrong one would misjudge the caption's height by whatever the two happen to differ by.
+        font_size=(preset.font_size if preset is not None else font_size),
+        notes=notes,
+    )
 
     # C21: pick a font that can actually render what was said, and note it when nothing can.
     #

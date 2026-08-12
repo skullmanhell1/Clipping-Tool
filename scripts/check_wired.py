@@ -83,10 +83,6 @@ KNOWN_UNWIRED: dict[str, str] = {
         "A15 sound effects. Nothing imports it and `sfx_volume` is read by nothing; `SFX_MODE=off` "
         "is documented as the default, but there is no path that would honour any other value"
     ),
-    "worker.caption_placement": (
-        "V15 keeping captions off the speaker's mouth. Nothing imports it, so "
-        "`caption_avoid_faces` cannot take effect -- the collision it describes still ships"
-    ),
 }
 
 #: ``Settings`` fields nothing reads, same ratchet, same enforcement.
