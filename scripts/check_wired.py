@@ -78,12 +78,7 @@ ALLOWED: dict[str, str] = {
 #: be broken, which is worse than no baseline because it reads as current.
 #:
 #: Each of these is a shipped, tested feature with no effect on output. That is the point of the file.
-KNOWN_UNWIRED: dict[str, str] = {
-    "worker.effects.sfx": (
-        "A15 sound effects. Nothing imports it and `sfx_volume` is read by nothing; `SFX_MODE=off` "
-        "is documented as the default, but there is no path that would honour any other value"
-    ),
-}
+KNOWN_UNWIRED: dict[str, str] = {}
 
 #: ``Settings`` fields nothing reads, same ratchet, same enforcement.
 #:
@@ -93,7 +88,6 @@ KNOWN_UNWIRED: dict[str, str] = {
 #: `API_PORT` or `REDIS_URL` today gets silence, which is worse than an unsupported option because it
 #: looks supported.
 KNOWN_UNREAD: dict[str, str] = {
-    "sfx_volume": "A15; inert until worker.effects.sfx is wired",
     "face_detector_backend": (
         "documented as the detector used 'when a job does not specify one', but "
         "`resolve_detector` is only ever called with the per-job option, so this default is "

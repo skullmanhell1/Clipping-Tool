@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — A15 sound effects were never called, and the dead-code baseline is now empty
+
+- **`A15` is wired into the audio mix.** `worker/effects/sfx.py` shipped complete and tested with no
+  importer outside its own test module, so `sfx_volume` was read by nothing and `SFX_MODE` had no
+  code path that would honour any value at all. This was the **last** entry in
+  `scripts/check_wired.py`'s `KNOWN_UNWIRED` baseline, which is now empty: every shipped feature
+  module in `worker/` and `publishers/` is reachable from production code.
+
+- **Mixed after the music bed and before `loudnorm`.** Both halves are requirements rather than
+  preferences. A sting mixed into the *speech* branch would be ducked by AU2 every time it landed
+  under the bed — the exact opposite of an accent. Placing it before loudness correction keeps it
+  inside the signal being corrected. The known limitation is stated rather than left to be
+  discovered: `measure_loudness` reads the source file, so the stings are not in that measurement,
+  and AU3's true-peak limiter is what keeps that safe.
+
+- **The input-index contract is the part that breaks silently.** `build_mix` addresses its inputs by
+  absolute index, so the sfx argv is collected during the audio pass and appended *after* the emoji
+  block, preserving the `base -> engines -> music -> b-roll -> emoji -> sfx` order. Appending it any
+  earlier renumbers every emoji input, and the resulting failure — a graph that will not initialise,
+  or the wrong image composited — points nowhere near sfx. The test reads the index back out of the
+  graph and checks that argv position really is a sting, rather than pinning a number that would
+  merely restate the arithmetic.
+
+- **No sting for an emoji that never reached the screen.** The trigger is keyed off the overlay
+  *graph*, not the planned cue list: a cue whose asset failed to resolve is not visible, and a pop
+  with nothing behind it is an unexplained noise the viewer cannot interpret. Same discipline AU22
+  already applies when ducking the bed only under b-roll that actually composited.
+
+- **`SFX_MODE=transitions` makes no sound on a stock install, and now says so.** `TRIGGER_SFX` maps
+  the transition trigger to `whoosh`, which is one of the two stings deliberately *not* synthesised
+  (a static band-passed noise swell is a hiss, and shipping a hiss under a name promising a sweep is
+  the mislabelling A15 exists to avoid), and `assets/sfx/` ships empty. Every such hit now records
+  `sfx_missing:whoosh` — emitted once per missing *name*, not once per hit, because twelve emoji with
+  no sound available is one missing sound. `.env.example` states the consequence up front.
+
+- **A skip that would have been the worst possible signal.** Clearing the last `KNOWN_UNWIRED` entry
+  made `pytest.mark.parametrize` receive an empty sequence, which produces a **skipped** test. This
+  suite has no skips by design, and a skipped ratchet at the exact moment the debt reaches zero is
+  indistinguishable from a ratchet that has been switched off. The module ratchet is now a single
+  assertion over the dict, so the empty case is a genuine pass.
+
 ### Fixed — V15 face-aware caption placement was never called
 
 - **`V15` is wired into every caption path.** `worker/caption_placement.py` shipped complete and
