@@ -17,10 +17,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from config import settings
-from worker import branding, caption_contrast
+from worker import branding, caption_contrast, turn_gain
 from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
@@ -164,6 +164,24 @@ def _beat_times(base_clip: str | Path, options: ProcessingOptions) -> tuple[floa
     )
 
 
+def _turn_gain_envelope(base_clip: str | Path) -> Sequence[tuple[float, float]]:
+    """The 1-second energy envelope AU12 measures turn levels from.
+
+    Deliberately `audio_features.ENVELOPE_WINDOW_S` and **not** :data:`BEAT_ENVELOPE_WINDOW_S`.
+    V19 wants 0.1 s because a zoom bump has to land on the transient; AU12 wants a speaker's
+    *average* level over a turn, and a 0.1 s window would resolve individual syllables, so the mean
+    would swing with how the turn happened to be worded rather than with how loud the speaker was.
+    One second is also the window S2 already uses for clip scoring, which is what makes R7.10's "no
+    additional audio pass" true rather than aspirational.
+
+    Returns ``()`` on any failure -- `energy_envelope` already swallows its own errors -- which
+    `plan_turn_gain` reports as `turn_gain_skipped:unmeasurable` rather than treating as silence.
+    """
+    from worker import audio_features
+
+    return audio_features.energy_envelope(base_clip, window=audio_features.ENVELOPE_WINDOW_S)
+
+
 def render_clip(
     base_clip: str | Path,
     dest: str | Path,
@@ -180,6 +198,7 @@ def render_clip(
     keyframe_seconds: float | None = None,
     colour_tags: Sequence[str] = (),
     language: str = "",
+    speaker_turns: Sequence[Any] = (),
 ) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -703,6 +722,55 @@ def render_clip(
         _presence_marker = audio.presence_marker(getattr(settings, "speech_presence", 0.0))
         if _presence_marker and _presence_marker not in applied:
             applied.append(_presence_marker)
+
+    # AU12: match the two speakers against each other, on the speech branch, before loudnorm.
+    #
+    # Every part of that sentence is a requirement rather than a preference:
+    #
+    #   * *speech branch* (R7.11) -- this is chained onto whatever AU4/AU5 and AU11 produced and
+    #     placed ahead of `speech_label` below, so the correction lands before the music bed is
+    #     mixed in. Applying a per-speaker gain to a signal that already contains music would
+    #     modulate the bed every time the speaker changed, which is audible as pumping and is a
+    #     defect nobody would attribute to a level-matching feature.
+    #   * *before loudnorm* (R7.11) -- so the integrated loudness that AU1 targets describes what is
+    #     actually delivered. The honest limitation, already documented for AU4/AU5 below, applies
+    #     here too: `measure_loudness` reads the source file, so the gains are not in that
+    #     measurement. AU3's true-peak limiter is what keeps that safe, and the bound is +/-6dB.
+    #   * *no extra pass* (R7.10) -- `plan_turn_gain` reads the 1-second envelope that S2 already
+    #     computes and emits a single per-frame `volume` expression, so this is one more entry in a
+    #     `graph_parts` list that exists regardless.
+    #
+    # `turns` arrives already sliced to the clip and rebased onto the delivered timeline; the
+    # pipeline owns that because it owns the filler-removal keep plan. Correcting against
+    # source-relative times would apply every gain at the wrong moment (R7.5), and that is the
+    # highest-risk part of this feature rather than a detail.
+    #
+    # `diarization_available` is `options.diarization` and deliberately not `bool(speaker_turns)`:
+    # R7.12 forbids enabling diarisation as a side effect, and `speaker_reframe` already turns it on
+    # for its own purposes, so inferring availability from the turns being non-empty would let this
+    # act on a job that never asked for diarisation.
+    turn_plan = turn_gain.Turn_Gain_Plan()
+    if bool(getattr(settings, "turn_gain_enabled", False)) and info.has_audio:
+        _diar_ok = bool(getattr(options, "diarization", False))
+        # The envelope costs an ffprobe-scale pass over the audio, so it is measured only when the
+        # plan could actually use it. Both cheap refusals -- diarisation off, and fewer than two
+        # turns -- are decided by `plan_turn_gain` from the arguments alone, and neither reads the
+        # envelope, so passing an empty one on those paths changes no marker. Measuring first and
+        # discarding the result would be a silent cost on every clip of a single-speaker source.
+        _envelope: Sequence[tuple[float, float]] = ()
+        if _diar_ok and len(speaker_turns) >= 2:
+            _envelope = _turn_gain_envelope(base_clip)
+        turn_plan = turn_gain.plan_turn_gain(
+            speaker_turns,
+            _envelope,
+            enabled=True,
+            diarization_available=_diar_ok,
+        )
+        if turn_plan.enabled:
+            graph_parts.append(f"[{audio_out}]{turn_plan.filter_chain}[aturn]")
+            audio_out = "aturn"
+            audio_changed = True
+        applied.extend(m for m in turn_plan.markers if m not in applied)
 
     speech_label = audio_out
     if music_path is not None:

@@ -79,10 +79,6 @@ ALLOWED: dict[str, str] = {
 #:
 #: Each of these is a shipped, tested feature with no effect on output. That is the point of the file.
 KNOWN_UNWIRED: dict[str, str] = {
-    "worker.turn_gain": (
-        "AU12 per-speaker level matching, merged in #126. Nothing imports it, so diarisation is "
-        "still never used for gain -- which is the defect AU12 was written to fix"
-    ),
     "worker.effects.sfx": (
         "A15 sound effects. Nothing imports it and `sfx_volume` is read by nothing; `SFX_MODE=off` "
         "is documented as the default, but there is no path that would honour any other value"
