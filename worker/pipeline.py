@@ -92,6 +92,24 @@ def _noop(fraction: float, stage: str) -> None:  # pragma: no cover
     pass
 
 
+def _background_style() -> str:
+    """The configured letterbox background style, validated (V11).
+
+    `background_style` and `background_color` were declared, documented and read by **nothing**: V11
+    built the whole `blur | mirror | black | color | gradient` vocabulary and every `reformat_aspect`
+    call site omitted both arguments, so the function's own defaults won every time and the settings
+    were decoration. `'black' is the honest choice for screen recordings` was advice no operator
+    could act on.
+
+    An unknown value falls back to `blur`, the previously shipped behaviour, rather than reaching
+    ffmpeg as a filter fragment that would fail the clip. `resolve_background_style` separately
+    downgrades a style this ffmpeg build cannot render, so a typo and an unavailable filter are
+    handled in different places and for different reasons.
+    """
+    style = str(getattr(settings, "background_style", "blur") or "blur").strip().lower()
+    return style if style in fu.BACKGROUND_STYLES else "blur"
+
+
 def _caption_face_boxes(clip: Path, options) -> tuple:
     """Face boxes for V15's caption placement, or ``()`` when it is off (V15).
 
@@ -715,6 +733,10 @@ def run_pipeline(
             # R3/R4: fit the whole frame instead of cropping into it, and skip face tracking
             # entirely -- a detector run against a slide finds nothing, so this saves a decode
             # rather than changing a look. `pad` reuses the existing geometry path; no third mode.
+            # No `background=` here, deliberately: `reformat_aspect` only consults it in
+            # `crop_blur` mode -- `pad` letterboxes with black by definition. Passing a style that
+            # is then ignored would read as configured behaviour that silently does nothing, which
+            # is the whole class of defect V11's settings were in until now.
             fu.reformat_aspect(
                 raw,
                 geo,
@@ -764,6 +786,8 @@ def run_pipeline(
                         aspect=options.aspect,
                         mode="crop_blur",
                         colour_tags=clip_colour.tags,
+                        background=_background_style(),
+                        background_color=str(getattr(settings, "background_color", "0x0F172A")),
                     )
         elif options.reframe:
             try:
@@ -790,6 +814,8 @@ def run_pipeline(
                     aspect=options.aspect,
                     mode="crop_blur",
                     colour_tags=clip_colour.tags,
+                    background=_background_style(),
+                    background_color=str(getattr(settings, "background_color", "0x0F172A")),
                 )
         else:
             fu.reformat_aspect(
@@ -798,6 +824,8 @@ def run_pipeline(
                 aspect=options.aspect,
                 mode="crop_blur",
                 colour_tags=clip_colour.tags,
+                background=_background_style(),
+                background_color=str(getattr(settings, "background_color", "0x0F172A")),
             )
 
         # 4b. GEOMETRY-stage engines, after the untouched ladder above. As at the

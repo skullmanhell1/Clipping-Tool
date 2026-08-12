@@ -87,24 +87,7 @@ KNOWN_UNWIRED: dict[str, str] = {}
 #: The rest are documented environment variables that were never plumbed anywhere -- a reader setting
 #: `API_PORT` or `REDIS_URL` today gets silence, which is worse than an unsupported option because it
 #: looks supported.
-KNOWN_UNREAD: dict[str, str] = {
-    "face_detector_backend": (
-        "documented as the detector used 'when a job does not specify one', but "
-        "`resolve_detector` is only ever called with the per-job option, so this default is "
-        "never consulted"
-    ),
-    "api_host": "never plumbed; the server is started by an explicit uvicorn invocation",
-    "api_port": "never plumbed; as api_host",
-    "redis_url": "never plumbed; commented out in docker-compose.yml and read by no code",
-    "rq_queue_name": "never plumbed; the in-process executor is the only live job path",
-    "use_inprocess_fallback": "never plumbed; the in-process path is unconditional",
-    "public_base_url": "never plumbed",
-    "music_default_volume": "never plumbed; the per-job option carries the value instead",
-    "background_color": "never plumbed; ffmpeg_utils takes its own default parameter",
-    "background_style": "never plumbed; as background_color",
-    "x_api_key": "never plumbed; publishers/x.py references neither this nor x_api_secret",
-    "x_api_secret": "never plumbed; as x_api_key",
-}
+KNOWN_UNREAD: dict[str, str] = {}
 
 
 #: This file, which must never count as a user of anything.
