@@ -516,22 +516,47 @@ Implemented, with where the code lives:
 branch, which is the one that can hold its crop inside the rectangle `vidstab` leaves valid; the other
 branches decline with `stabilise_skipped:<branch>`.
 
-**Implemented but unreachable — these are worse than unbuilt, because they read as done:**
+**Implemented but unreachable — CLEARED.** This section listed features that were complete, tested and
+called by nothing, which is worse than unbuilt because they read as done. All of them are now wired:
 
-| ID | Module | State |
+| ID | Module | Wired in |
 | --- | --- | --- |
-| `AU12` | `worker/turn_gain.py` | Imported by nothing outside its test. Diarisation is still never used for gain. |
+| `C23`/`C24`/`C25` | `worker/word_spans.py`, `worker/cue_constraints.py` | #127, at `build_ass` |
+| `V21` | `worker/stabilise.py` | #127, into the geometry pass |
+| `AU12` | `worker/turn_gain.py` | #128, onto the speech branch before `loudnorm` |
+| `V15` | `worker/caption_placement.py` | #129, at `build_ass` **and** in the kinetic engine |
+| `A15` | `worker/effects/sfx.py` | #130, into the audio mix |
 
-`scripts/check_wired.py` is the check, and it also lists `worker/effects/sfx.py` (`A15`) and
-`worker/caption_placement.py` (`V15`) from the body of this document, plus fourteen `Settings` fields
-that nothing reads. Wiring these up needs no labels, no weights and no credentials, which makes it the
-most available work in the backlog.
+`scripts/check_wired.py` now reports **0 unwired modules and 0 unread settings**, and both baselines in
+that file are empty dicts. Of the fourteen `Settings` fields nothing read, four were plumbed
+(`BACKGROUND_STYLE`, `BACKGROUND_COLOR`, `MUSIC_DEFAULT_VOLUME`, `FACE_DETECTOR_BACKEND`), `SFX_VOLUME`
+became live with `A15`, and eight were **retired** because they described behaviour this project does
+not have — a queue with no `import redis` anywhere, a bind the container's `CMD` fixes independently,
+and OAuth1 credentials for a publisher that authenticates with a Bearer token (#131).
+
+Both ratchet tests had to be rewritten in the process, and the reason is worth keeping: an empty
+`pytest.mark.parametrize` produces a *skipped* test, and a skipped ratchet at the exact moment the debt
+reaches zero is indistinguishable from one that has been switched off. One of them had also been
+asserting that real debt existed, using its presence as a proxy for "the checker is not reading itself"
+— a proxy that was only valid while the debt was.
 
 `T11` is **refused by measurement** rather than outstanding — the cached energy envelope has no
 word-rate information and R7.8 forbids the second audio pass that would provide it. See
 `worker/word_spans.py`.
 
-Still genuinely open below: `V23`, `S21`, `S22`, `S23`, `S24`.
+`V23` is **built** (#132), and its implementation records a finding that constrains anything similar:
+the crop-size mechanism R2.2 asks for **crashes ffmpeg 7.0.2**
+(`Assertion best_input >= 0 failed at src/fftools/ffmpeg_filter.c:1923`) because changing a crop's
+output dimensions reconfigures the filter link mid-stream. Per-frame magnification must use `zoompan`
+instead. A test asserts the crash from both sides, so a future ffmpeg that fixes it will fail that test.
+
+Still genuinely open below: `S21`, `S22`, `S23`, `S24` — the whole of `clip-editorial-structure`.
+`S21` (cold-open assembly) is the only one of the four that is *available*: `S22`–`S24` are §3
+clip-selection quality work, which the working agreement forbids starting before the labelled
+benchmark exists. The offline lexical primitives those two need are written and tested on
+`feat/s22-s23-lexical-primitives` but **deliberately unmerged**, because `check_wired` correctly
+refuses them — their only consumers are the blocked items, and landing them would re-create the dead
+code this section just recorded clearing.
 
 ### Measurement — `render-quality-measurement`
 
@@ -594,7 +619,12 @@ Unchanged from the body above, restated because these are the items most often r
 detection) remains the largest single visual gap: on two-person footage we follow the largest,
 most-diarisation-active face rather than the person speaking.
 
-*Appendix B's tables were verified against v0.11.0; its "Status" section above was verified against
-`d309f36` plus the caption-timing wiring change, by reading the tree rather than the previous
-revision. The sections above Appendix B are still quoted against v0.10.0 and are not verified — that
-is `clip-quality-uplift` task 13 and it remains open.*
+*Appendix B's tables were verified against v0.11.0; its "Status" section above was re-verified against
+`1133a55` (V23 merged) by reading the tree and by running `scripts/check_wired.py`, not by trusting the
+previous revision. The sections above Appendix B are still quoted against v0.10.0 and are not verified
+— that is `clip-quality-uplift` task 13 and it remains open.*
+
+*A note on how the "Status" section above was previously wrong, because the failure repeats: it listed
+`V21`, `V24`, `AU11` and `AU12` as unbuilt after all four had merged, and it described features as
+shipped that no code called. Both errors come from the same habit of updating the plan from the plan.
+`scripts/check_wired.py` exists so the second class is now a failing gate rather than a prose error.*

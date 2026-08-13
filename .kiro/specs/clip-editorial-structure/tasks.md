@@ -1,4 +1,26 @@
 # Implementation Plan — Clip Editorial Structure
+> **STATUS BANNER — read this before the checkboxes below.**
+>
+> **Nothing in this spec is built, and most of it is blocked rather than merely pending.**
+>
+> `.kiro/steering/working-agreement.md` forbids starting clip-selection quality work before the
+> evaluation harness exists, and `eval/labels/` holds one `.gitkeep`. That covers tasks 3 (S22),
+> 4 (S23) and 5 (S24) — all three change which clips are produced and where they start.
+>
+> Task 1's primitives are **written and tested** on the branch
+> `feat/s22-s23-lexical-primitives`, deliberately **unmerged**: `scripts/check_wired.py` correctly
+> refuses them because their only consumers are tasks 3 and 4, and landing them alone would
+> re-create the dead code the plan's Appendix B has just recorded clearing. They land with their
+> first consumer.
+>
+> **Task 2 (S21, cold-open assembly) is the one available item.** The spec distinguishes it
+> explicitly: its default is gated on a preference trial rather than the benchmark, so it is not
+> §3 selection-quality work. It is also the largest single piece here, and task 2.3
+> (non-monotonic rebasing) is described as the highest-risk item in all four specs.
+>
+> The "before starting, record the baseline" figure below (**2030**) is stale by a wide margin;
+> `main` is at **2715**.
+
 
 Incremental, test-first coding steps. Execute **one task at a time**, in order.
 

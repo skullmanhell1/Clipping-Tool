@@ -1,4 +1,18 @@
 # Implementation Plan — Render Quality Measurement
+> **STATUS BANNER — read this before the checkboxes below.**
+>
+> The tick marks in this file were **never maintained**. Every instrument in this spec is built and
+> on `main`: `evaluation/fidelity.py` (M9), `evaluation/caption_timing.py` (M10),
+> `evaluation/sync.py` (M11) and `evaluation/preference.py` (M12), landed in #111 and #112. The
+> baselines are in `eval/baselines/`.
+>
+> Trust the modules and the test suite, not the boxes. The boxes are left unticked rather than
+> bulk-ticked because ticking 49 of them without verifying each individually would be the same
+> error that made this file wrong in the first place.
+>
+> Still open: the **preference trial itself** (task 6) needs a human judge, and
+> `eval/labels/` holds one `.gitkeep`, so nothing here has a labelled benchmark to score against.
+
 
 Incremental, test-first coding steps. Execute **one task at a time**, in order.
 
