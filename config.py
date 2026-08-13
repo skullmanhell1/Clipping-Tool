@@ -1039,6 +1039,44 @@ class Settings(BaseSettings):
     # V11: what fills the frame around fitted video. Was one hard-coded look (boxblur 40 plus a
     # slight darkening), which suits talking-head footage and actively hurts other things - a
     # blurred screen recording is an unreadable smear.
+    # S21: cold-open assembly. Lift the clip's strongest sentence to the front, so the hook is the
+    # first thing heard rather than something reached at 0:18.
+    #
+    # DEFAULT OFF (R1.10), and the spec is explicit that the default must come from a preference trial
+    # (M12) rather than an assertion -- "does the clip open stronger" is a taste question, and this
+    # reorders the edit, which is the most opinionated thing in the pipeline.
+    #
+    # Rendered through the EXISTING keep-interval path, so an assembly costs no extra encode: it is the
+    # same `trim`/`atrim` + `concat` that filler removal already uses, with a different list.
+    cold_open_enabled: bool = Field(
+        default=False,
+        description="Assemble a clip as its strongest sentence followed by the body (S21). Rendered "
+        "through the existing keep-interval path, so it adds no encoding pass. Never lifts a sentence "
+        "that is itself a dangling opener, and never reorders an already-correct clip. PROVISIONAL "
+        "and off: the default needs a preference trial, not an opinion.",
+    )
+    cold_open_max_seconds: float = Field(
+        default=6.0,
+        ge=0.0,
+        le=30.0,
+        description="Longest sentence that may be lifted as a cold open (S21). Bounds how much of the "
+        "clip the opening can be; a cold open at or above half the clip is refused outright.",
+    )
+    cold_open_retain_in_body: bool = Field(
+        default=True,
+        description="Leave the lifted line in the body, so it is heard twice (S21) -- a recognised "
+        "short-form device. False removes it, so the body loses its best line. Genuinely a matter of "
+        "taste, which is why it is configuration rather than a decision.",
+    )
+    cold_open_min_repeat_gap: float = Field(
+        default=8.0,
+        ge=0.0,
+        le=120.0,
+        description="Minimum gap between the cold open and the same line heard again in the body "
+        "(S21). Below this the two occurrences read as a stutter, so the line is removed from the "
+        "body instead of being repeated.",
+    )
+
     # V23: keep the speaker a similar size across cuts.
     #
     # DEFAULT OFF (R2.8), and this is the least certain setting in the spec rather than merely a

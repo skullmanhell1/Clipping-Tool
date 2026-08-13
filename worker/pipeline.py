@@ -26,8 +26,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from config import settings
-from worker import captions as cap
 from worker import (
+    assembly,
     colour,
     content_class,
     deinterlace,
@@ -41,6 +41,7 @@ from worker import (
     video_encoders,
     visual_selection,
 )
+from worker import captions as cap
 from worker import ffmpeg_utils as fu
 from worker import metadata as meta_mod
 
@@ -578,6 +579,41 @@ def run_pipeline(
                 pending_markers.append(trim_plan.marker)
             elif trim_plan.refusal:
                 applied.append(trim_plan.marker)
+
+        # S21: cold-open assembly, folded into the SAME keep list as everything above.
+        #
+        # It goes last of the three because it is the only one that *reorders*: filler removal and the
+        # U4 cut list both subtract monotonic regions, and `assembly.compose` treats their result as an
+        # inner filter while the assembly supplies the outer ordering. Doing it the other way round
+        # would express the subtractions against the assembled timeline rather than against the source
+        # offsets everything else refers to (R2.3).
+        #
+        # `pending` becomes NON-MONOTONIC here, and may contain the same source range twice when the
+        # lifted line is retained. Both are deliberate, and `apply_keep_intervals` handles them: it
+        # iterates the list in order and never re-sorts. `filler._merge` would re-sort and must not be
+        # reached with this list.
+        assembly_plan = assembly.Assembly_Plan()
+        if bool(getattr(settings, "cold_open_enabled", False)) and words:
+            assembly_plan = assembly.plan(
+                words,
+                clip_duration=c.duration,
+                enabled=True,
+                max_seconds=float(getattr(settings, "cold_open_max_seconds", 6.0) or 0.0),
+                retain_in_body=bool(getattr(settings, "cold_open_retain_in_body", True)),
+                min_repeat_gap=float(getattr(settings, "cold_open_min_repeat_gap", 8.0) or 0.0),
+                min_clip_seconds=float(getattr(options, "min_duration", 0.0) or 0.0),
+            )
+            if assembly_plan.refusal:
+                # R2.9: refuse and record rather than deliver something half-assembled.
+                applied.append(assembly_plan.refusal)
+            elif assembly_plan.assembled:
+                composed = assembly.compose(assembly_plan.segments, pending)
+                if composed:
+                    pending = composed
+                    pending_markers.append(assembly_plan.marker)
+                else:
+                    applied.append("assembly_refused:no_renderable_keeps")
+
         if pending is not None:
             trimmed = temp_dir / f"trim_{clip_id}.mp4"
             try:
@@ -591,12 +627,18 @@ def run_pipeline(
                 )
                 raw.unlink(missing_ok=True)
                 raw = trimmed
-                words = filler.rebase_words(words, pending)
+                # An assembly needs the duplicate-aware rebase: `filler.rebase_words` stops at the
+                # first keep containing a word, so a retained cold open -- whose source range is in the
+                # list twice -- would caption the first occurrence and silently miss the second. That
+                # reads as an ASR gap rather than as an assembly bug, which is why it gets its own
+                # path rather than a flag on the existing one.
+                _rebase = assembly.rebase_words if assembly_plan.assembled else filler.rebase_words
+                words = _rebase(words, pending)
                 # T10: the translated track is timed against the same media, so it has to
                 # follow every cut made to it. Left un-rebased it would drift by the total
                 # removed duration and read as a sync bug in the player.
                 if translated_words:
-                    translated_words = filler.rebase_words(translated_words, pending)
+                    translated_words = _rebase(translated_words, pending)
                 keep_plan = pending
                 clip_duration = sum(k.duration for k in pending)
                 applied.extend(pending_markers)

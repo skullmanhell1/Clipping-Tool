@@ -1,0 +1,104 @@
+{
+  "_comment": [
+    "Mutation spec for S21 (cold-open assembly), task 6.7.",
+    "",
+    "The spec names the highest-risk item first and it is right to: 'assume monotonic keeps in",
+    "assembly rebasing'. That is monotonic_rebase below. An assembly produces [hook, body] where the",
+    "hook's source times come AFTER the body's, so a rebase that sorts the keeps places the hook's",
+    "captions at the body's timeline positions. Captions still appear, still look like captions, and",
+    "are attached to the wrong words -- it gets blamed on the ASR long before anyone suspects the edit.",
+    "",
+    "duplicate_rebase is the same defect's quieter half, and it is the one this implementation had to",
+    "introduce a new function for. `filler.rebase_words` stops at the first keep containing a word.",
+    "With the lifted line RETAINED, its source range is in the keep list twice -- so the line is",
+    "captioned on its first airing and silent on its second. Nothing errors and nothing looks broken.",
+    "",
+    "Three of these survived their first run and each exposed a real test gap rather than a",
+    "false alarm, which is recorded per mutation below because the gap is the interesting part:",
+    "  pipeline_monotonic_rebase -- every test called the module directly, so the CALL SITE was",
+    "                               untested; and the first fix was still vacuous because the fixture",
+    "                               script repeats ordinary words like 'the', so 'some word appears",
+    "                               twice' is true whichever rebase ran. Only a word that occurs",
+    "                               exactly once in the source can distinguish heard-twice from",
+    "                               written-twice.",
+    "  composition_dropped       -- counting one re-encode cannot see whether the filler keeps were",
+    "                               honoured. Needed an independent containment check against the",
+    "                               filler plan, captured separately (R9.9).",
+    "  refusal_silenced          -- no test drove the pipeline into a refusal at all."
+  ],
+
+  "command": [".venv/bin/python", "-m", "pytest", "tests/test_assembly.py", "-q", "-x"],
+
+  "mutations": [
+    {
+      "name": "monotonic_rebase",
+      "file": "worker/assembly.py",
+      "old": "    for keep in keeps:\n        offsets.append((keep.start, keep.end, offset))",
+      "new": "    for keep in sorted(keeps, key=lambda k: k.start):\n        offsets.append((keep.start, keep.end, offset))",
+      "why": "The item the spec calls the highest risk in all four specs. Sorting the keeps re-imposes source order, so the hook's words are offset as though the hook still played where it was recorded. Every caption still renders, at a plausible time, against the wrong speech."
+    },
+    {
+      "name": "duplicate_rebase",
+      "file": "worker/assembly.py",
+      "old": "                # Deliberately no `break`:",
+      "new": "                break\n                # Deliberately no `break`:",
+      "why": "Restores `filler.rebase_words`' behaviour. A retained cold open has its source range in the keep list twice; stopping at the first match captions the first airing and leaves the second silent, which reads as an ASR gap."
+    },
+    {
+      "name": "pipeline_monotonic_rebase",
+      "file": "worker/pipeline.py",
+      "old": "                _rebase = assembly.rebase_words if assembly_plan.assembled else filler.rebase_words",
+      "new": "                _rebase = filler.rebase_words",
+      "why": "The call site rather than the seam. The duplicate-aware rebase existing does not mean the pipeline chose it, and this survived until a test asserted on the words the compositor is actually handed."
+    },
+    {
+      "name": "composition_dropped",
+      "file": "worker/pipeline.py",
+      "old": "                composed = assembly.compose(assembly_plan.segments, pending)",
+      "new": "                composed = list(assembly_plan.segments)",
+      "why": "R2.3. The assembly would be rendered without the filler and U4 removals folded in, so words the user struck out come back -- while the re-encode count stays at one, which is why counting passes cannot catch it."
+    },
+    {
+      "name": "keep_list_resorted",
+      "file": "worker/effects/filler.py",
+      "old": "    for i, k in enumerate(keeps):",
+      "new": "    for i, k in enumerate(_merge(keeps)):",
+      "why": "`_merge` sorts by start and coalesces. Correct for filler removal, catastrophic for an assembly: it silently converts the edit back into the contiguous clip it was lifted from, and also merges the duplicate range into one."
+    },
+    {
+      "name": "video_reordered_alone",
+      "file": "worker/effects/filler.py",
+      "old": "            f\"[0:v]trim=start={k.start:.3f}:end={k.end:.3f},setpts=PTS-STARTPTS[v{i}];\"",
+      "new": "            f\"[0:v]trim=start={keeps[last - i].start:.3f}:end={keeps[last - i].end:.3f},setpts=PTS-STARTPTS[v{i}];\"",
+      "why": "R2.7. `trim` and `atrim` take separate arguments, so a copy-paste error produces a clip whose audio and video are each internally coherent and mutually wrong -- the picture shows one moment while the sound plays another."
+    },
+    {
+      "name": "dangling_opener_lifted",
+      "file": "worker/assembly.py",
+      "old": "    if discourse.standalone_completeness(best.text).dangling_opener:",
+      "new": "    if False and discourse.standalone_completeness(best.text).dangling_opener:",
+      "why": "R1.6. The cold open is the one position where a back-reference cannot resolve, because nothing came before it. A hook opening on 'and that's exactly why he quit' is worse than no hook at all."
+    },
+    {
+      "name": "already_first_reordered",
+      "file": "worker/assembly.py",
+      "old": "    if -negative_index == 0:\n        return None, \"already_first\"",
+      "new": "    if False:\n        return None, \"already_first\"",
+      "why": "R1.5. Lifting the first sentence to the front reorders an already-correct clip and, when retained, duplicates its opening line for no reason."
+    },
+    {
+      "name": "no_signal_precedence_inverted",
+      "file": "worker/assembly.py",
+      "old": "    if best_score <= 0.0:\n        return None, \"no_signal\"",
+      "new": "    if False:\n        return None, \"no_signal\"",
+      "why": "`text_signal` is sparse, so on a flat clip every sentence ties at zero and the earlier-index tiebreak returns sentence 0. Reported as 'already_first' that is a false claim about the material: nothing stood out, which is a different finding from correct ordering."
+    },
+    {
+      "name": "refusal_silenced",
+      "file": "worker/pipeline.py",
+      "old": "            if assembly_plan.refusal:",
+      "new": "            if False:",
+      "why": "R2.9. A refusal nobody can see is indistinguishable from the feature being off, and the operator concludes the setting does nothing."
+    }
+  ]
+}
