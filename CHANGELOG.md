@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-13
+
+### Fixed — in-caption emoji were burned into every clip as missing-glyph boxes
+
+- **The glyph-availability check existed and was never wired.** `caption_emoji_glyph` has always
+  accepted an injectable `glyph_available` callable and documented that "a glyph the active font
+  cannot render is dropped while surrounding words are retained" — but **no production caller ever
+  passed one**, so it defaulted to `lambda _g: True` and the guard asserted that every emoji renders.
+  The only caller that supplied a checker was a test.
+
+  The `Dockerfile` installs `fonts-liberation` and the bundled display faces and **no emoji font at
+  all**, and `caption_emoji` defaults to `True`. So the shipped image burned a **▯** into every clip
+  whose transcript hit a mapped keyword. Found by rendering a clip and looking at the frame — the
+  caption read `gone. the secret ▯`. No test failed, because an optional dependency whose default
+  disables the feature it guards is indistinguishable from not having written it. Same shape as the
+  five features this release found had no importer, one layer down.
+
+  **The check is per glyph, not per font, and that is not fussiness.** Measured on a host with
+  `google-noto-emoji-fonts` installed: U+1F4B0 (money bag) is present and U+1F92B (shushing face) is
+  **absent from the same font**. Installing an emoji font is therefore not a fix, and a font-level
+  check would still ship boxes. Coverage is asked of `fc-list ":charset=<hex>"`, which is the same
+  resolution libass performs — it does not restrict itself to the caption family, it falls back
+  through fontconfig for any glyph the requested face lacks.
+
+  Every codepoint in a sequence must be covered, because one uncovered member breaks the cluster;
+  variation selectors and the ZWJ are excluded, since they carry no outline and no font advertises
+  them, so requiring them would reject every emoji sequence.
+
+  **Conservative when it cannot tell.** With no fontconfig, or a failing one, the answer is "renders"
+  — dropping an emoji that would have appeared is a visible edit made on no evidence, and the failure
+  being guarded against is the opposite one.
+
+  A drop is recorded as `caption_emoji_unavailable:<n>`, counted per **distinct glyph** rather than
+  per occurrence: what an operator would go and fix is a font coverage gap, not an occurrence.
+  Silently omitting it would look identical to the keyword map simply not covering the word, and only
+  one of those is actionable.
+
+  Verified end to end on a rendered clip: `money 💰` is kept (the installed font has it), the
+  shushing face is dropped, and the delivered subtitle file contains no codepoint outside the BMP
+  that cannot be drawn. Five mutations, all caught — including reverting the default, which is the
+  original bug.
+
+  **Not bundled here, deliberately:** adding an emoji font to the image would let the *covered*
+  glyphs render rather than being dropped. That is a Docker change I cannot verify in this
+  environment (the image has never been built here, and libass colour-emoji support is uneven), so it
+  is left as a follow-up rather than shipped untested.
+
+
 ## [0.12.0] - 2026-08-13
 
 **The release that made the features it already had actually run.**

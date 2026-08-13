@@ -22,6 +22,7 @@ import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -588,6 +589,92 @@ def _bundled_font_families() -> frozenset[str]:
     resolved = frozenset(families)
     _FONT_CACHE["bundled"] = resolved
     return resolved
+
+
+#: Codepoints that never need a glyph of their own, so their absence must not veto an emoji.
+#:
+#: Variation selectors and the zero-width joiner are *instructions* to the shaper, not characters
+#: with outlines. Requiring coverage of them would report every multi-codepoint emoji as missing.
+_NON_RENDERING_CODEPOINTS = frozenset({0xFE0E, 0xFE0F, 0x200D})
+
+
+@lru_cache(maxsize=512)
+def _codepoint_covered(codepoint: int) -> bool:
+    """Whether any locally installed font can draw ``codepoint``.
+
+    `fc-list ":charset=<hex>"` is fontconfig's own coverage query, and it is the right question to
+    ask because it is the same resolution libass performs: libass does not restrict itself to the
+    caption family, it falls back through fontconfig for any glyph the requested face lacks. So
+    "some installed font has it" is exactly the condition under which the glyph will render.
+
+    Conservative on failure, matching :func:`font_available`: if fontconfig cannot be run at all we
+    answer ``True``, because dropping an emoji that would have rendered is a visible edit made on no
+    evidence. The failure being guarded against is the opposite one -- shipping a box.
+    """
+    # Resolved through `shutil.which` rather than named directly, matching
+    # `_enumerate_system_fonts` -- an absolute path is what keeps this off ruff's S607.
+    fc = shutil.which("fc-list")
+    if not fc:
+        return True
+    try:
+        result = subprocess.run(
+            [fc, f":charset={codepoint:x}", "family"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if result.returncode != 0:
+        return True
+    return bool(result.stdout.strip())
+
+
+def glyph_available(glyph: str) -> bool:
+    """Whether ``glyph`` will render rather than appearing as a missing-glyph box (Req 4.3).
+
+    **This is the check that was written and never wired.** `caption_emoji_glyph` has always taken a
+    ``glyph_available`` callable and documented that "a glyph the active font cannot render is
+    dropped while surrounding words are retained" -- but no production caller supplied one, so it
+    defaulted to ``lambda _g: True`` and the guard asserted that every emoji renders. The Dockerfile
+    installs `fonts-liberation` and the bundled display faces and **no emoji font at all**, so the
+    shipped image burned a box into every clip whose transcript hit a mapped keyword.
+
+    Per-glyph rather than per-font, and that is not fussiness: measured on a host with
+    `google-noto-emoji-fonts` installed, U+1F4B0 (money bag) is present and U+1F92B (shushing face)
+    is **absent from the same font**. Installing an emoji font is therefore not a fix and a
+    font-level check would still ship boxes.
+
+    Every codepoint must be covered, because an emoji is frequently a sequence and one uncovered
+    member is enough to break the cluster. Variation selectors and the ZWJ are excluded --
+    they carry no outline, so demanding coverage of them would reject every sequence.
+    """
+    if not isinstance(glyph, str) or not glyph:
+        return False
+    needed = [ord(ch) for ch in glyph if ord(ch) not in _NON_RENDERING_CODEPOINTS]
+    if not needed:
+        return False
+    return all(_codepoint_covered(cp) for cp in needed)
+
+
+def mapped_caption_emoji(word: Any) -> str:
+    """The emoji the keyword map holds for ``word``, whether or not it can be drawn.
+
+    Separate from :func:`caption_emoji_glyph` so a caller can tell the two silences apart: "no emoji
+    was mapped for this word" and "one was mapped and then dropped for want of a glyph" produce the
+    same empty string, and only the second is worth reporting.
+    """
+    return _CAPTION_EMOJI.get(_norm_emoji_key(_word_text(word)), "")
+
+
+def _default_glyph_probe(glyph: str) -> bool:
+    """Indirection so :func:`caption_emoji_glyph`'s parameter can shadow the module function.
+
+    Resolves :func:`glyph_available` from module globals at call time, which is what keeps the
+    existing tests' monkeypatching of it effective.
+    """
+    return glyph_available(glyph)
 
 
 def font_available(name: str) -> bool:
@@ -1316,7 +1403,14 @@ def caption_emoji_glyph(
     glyph = _CAPTION_EMOJI.get(_norm_emoji_key(_word_text(word)), "")
     if not glyph:
         return ""
-    check = glyph_available if glyph_available is not None else (lambda _g: True)
+    # The default is the REAL probe, not `lambda _g: True`.
+    #
+    # It used to be the latter, and that is the whole defect: `build_ass` accepted an injectable
+    # checker, no production caller ever passed one, and so the documented guarantee in this
+    # docstring -- "a glyph the active font cannot render is dropped" -- was never enforced outside
+    # the tests that injected their own. An optional dependency whose default disables the feature it
+    # guards is indistinguishable from not having written it.
+    check = glyph_available if glyph_available is not None else _default_glyph_probe
     # In-caption emoji are rendered as font glyphs; we never download here, so a
     # supplied ``downloader`` spy stays untouched under every mode.
     return glyph if check(glyph) else ""
@@ -1622,6 +1716,9 @@ def build_ass(
             emoji_glyph_available=emoji_glyph_available,
             emoji_downloader=emoji_downloader,
             fit=TextFit.for_preset(preset, video_width=video_width),
+            # So a dropped emoji reaches the clip record by the same route every other caption-stage
+            # marker does.
+            notes=notes,
             language=language,
         )
     else:
@@ -1877,6 +1974,7 @@ def _preset_dialogue_lines(
     emoji_downloader: Any | None,
     fit: TextFit | None = None,
     language: str = "",
+    notes: list[str] | None = None,
 ) -> list[str]:
     """Render preset-driven dialogue lines (one event per cue).
 
@@ -1885,6 +1983,7 @@ def _preset_dialogue_lines(
     clamped to ``[0, clip_duration]`` (Req 2.5); an empty timeline yields zero
     events and never raises (Req 2.4).
     """
+    dropped_glyphs: set[str] = set()
     # Determine the clamp bound: the explicit clip duration, else the last cue
     # end (so per-cue windows are always within [0, duration]).
     ends = [cue.end for cue in cues if cue.words]
@@ -1926,6 +2025,13 @@ def _preset_dialogue_lines(
                 )
                 if glyph:
                     span = f"{span} {glyph}"
+                else:
+                    # An emoji mapped for this word and then dropped for want of a glyph is recorded;
+                    # a word the map simply does not cover is not. The two produce the same empty
+                    # string and only the first is actionable -- installing a font fixes it.
+                    wanted = mapped_caption_emoji(w)
+                    if wanted:
+                        dropped_glyphs.add(wanted)
             parts.append(span)
             plain.append(_word_text(w))
             global_index += 1
@@ -1972,6 +2078,15 @@ def _preset_dialogue_lines(
         else:
             text = " ".join(parts)
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+    if notes is not None and dropped_glyphs:
+        # One marker per clip naming how many distinct emoji were dropped, not one per occurrence:
+        # `effects_applied` is read by humans, and the same fact repeated is what stops a marker being
+        # read at all. The count is of distinct glyphs because that is what an operator would go and
+        # fix -- installing a font covers a glyph, not an occurrence.
+        marker = f"caption_emoji_unavailable:{len(dropped_glyphs)}"
+        if marker not in notes:
+            notes.append(marker)
+
     return lines
 
 
