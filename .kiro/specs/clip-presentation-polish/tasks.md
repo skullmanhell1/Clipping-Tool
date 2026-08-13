@@ -1,4 +1,19 @@
 # Implementation Plan — Clip Presentation Polish
+> **STATUS BANNER — read this before the checkboxes below.**
+>
+> **This spec is complete except for its preference trial.** V22 (`worker/headroom.py`),
+> V23 (`worker/subject_scale.py`), V24 (`worker/content_class.py`), C24/C25
+> (`worker/cue_constraints.py`), AU11 and AU12 (`worker/turn_gain.py`) are all built, wired and
+> on `main`. Task 2's boxes are ticked because V23 was implemented against them directly (#132).
+>
+> Every feature ships **off by default**, which is deliberate: task 9 gates the defaults on a
+> preference trial (M12) and that needs a human judge, not a benchmark. Nothing here should have
+> its default flipped until that has been run.
+>
+> V23 also recorded a constraint worth reading before attempting anything similar: the crop-size
+> mechanism R2.2 asks for **crashes ffmpeg 7.0.2**, so magnification is done with `zoompan`. See
+> `worker/subject_scale.py`.
+
 
 Incremental, test-first coding steps. Execute **one task at a time**, in order.
 

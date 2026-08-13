@@ -1,9 +1,14 @@
 # Session Handoff
 
-Amended after the caption-timing wiring pass. The numbers in §2 and the "what is left" list in §3
-were both wrong — they described `8670063`, and six PRs had landed since. Corrected by measurement
-rather than by reading the previous revision forward, because a handoff document that is wrong is
-worse than none.
+Amended after the dead-code clearing pass (PRs #127-#132). The numbers in §2 and the "what is left"
+list in §3 were both wrong again — for the third consecutive revision — so they have been re-measured
+rather than read forward. A handoff document that is wrong is worse than none.
+
+**The headline change: §0's failure mode is cleared.** Every feature that shipped implemented, tested
+and never called is now wired, and `scripts/check_wired.py` reports **0 unwired modules and 0 unread
+settings**. Both baselines in that file are empty dicts. §0 stays because the *lesson* is permanent and
+the gate that enforces it is the most valuable thing in this repository — not because there is
+outstanding dead code.
 
 ## Start here
 
@@ -33,6 +38,14 @@ blocked on something other than effort.
 ## 0. The failure mode this project keeps producing
 
 **A module can be complete, correct, fully tested, and never called. The suite will not tell you.**
+
+> **Status: cleared, and now gated.** Everything named below is wired, and
+> `python scripts/check_wired.py --check` reports 0 unwired modules and 0 unread settings. This section
+> stays because the lesson is permanent and because the gate is the most valuable artefact in the
+> repository — not because there is outstanding dead code. Wiring the last of it also surfaced two
+> *tests* that were measuring the wrong thing, which is the second-order version of the same defect:
+> an empty `pytest.mark.parametrize` produces a **skipped** test, and a skipped ratchet at the moment
+> the debt reaches zero is indistinguishable from one that has been switched off.
 
 Found in the caption timing code: `worker/word_spans.py` (C23), `cue_constraints.apply_constraints`
 (C24) and `cue_constraints.choose_break` (C25) had **no importer outside their own test modules**,
@@ -72,20 +85,25 @@ python scripts/check_wired.py --all
 It found four more dead modules after the caption three, and **two of them had been merged that
 morning**:
 
-| Module | Item | State |
+| Module | Item | Resolution |
 | --- | --- | --- |
-| ~~`worker/stabilise.py`~~ | V21 stabilisation | **Now wired.** See §3a for what wiring it turned up. |
-| `worker/turn_gain.py` | AU12 per-speaker level | Nothing imports it, so diarisation is still never used for gain — the exact defect AU12 was written to fix. |
-| `worker/effects/sfx.py` | A15 sound effects | Nothing imports it; `sfx_volume` read by nothing. No path would honour `SFX_MODE` at all. |
-| `worker/caption_placement.py` | V15 captions off the mouth | Nothing imports it, so `caption_avoid_faces` cannot take effect. |
+| ~~`worker/stabilise.py`~~ | V21 stabilisation | Wired into the geometry pass (#127). |
+| ~~`worker/turn_gain.py`~~ | AU12 per-speaker level | Wired onto the speech branch before `loudnorm` (#128). The turn computation turned out to be trapped inside the `speaker_reframe` branch, so on the configuration AU12 is *for* the clip-relative turns were never derived at all. |
+| ~~`worker/effects/sfx.py`~~ | A15 sound effects | Wired into the audio mix (#130). `SFX_MODE=transitions` still makes no sound on a stock install — its trigger maps to `whoosh`, which is deliberately not synthesised, and `assets/sfx/` ships empty — but it now *says so* with `sfx_missing:whoosh`. |
+| ~~`worker/caption_placement.py`~~ | V15 captions off the mouth | Wired at `build_ass` **and** separately in the kinetic engine, which supersedes the compositor's captions entirely (#129). |
 
-Plus fourteen `Settings` fields read by nothing, now thirteen. One is inert because its module is
-(`sfx_volume`); the rest are documented environment variables that were never plumbed — `API_PORT`,
-`REDIS_URL`, `RQ_QUEUE_NAME`, `PUBLIC_BASE_URL`, `USE_INPROCESS_FALLBACK`, `MUSIC_DEFAULT_VOLUME`,
-`BACKGROUND_COLOR`, `BACKGROUND_STYLE`, `X_API_KEY`, `X_API_SECRET`, `API_HOST`, and
-`FACE_DETECTOR_BACKEND`. The last is worth singling out: it is documented as the detector used "when a
-job does not specify one", but `resolve_detector` is only ever called with the per-job option, so that
-default is never consulted.
+The fourteen `Settings` fields nothing read are also resolved (#131): **four plumbed**
+(`BACKGROUND_STYLE`, `BACKGROUND_COLOR`, `MUSIC_DEFAULT_VOLUME`, `FACE_DETECTOR_BACKEND`),
+`SFX_VOLUME` became live with A15, and **eight retired** — `API_HOST`, `API_PORT`, `REDIS_URL`,
+`RQ_QUEUE_NAME`, `USE_INPROCESS_FALLBACK`, `PUBLIC_BASE_URL`, `X_API_KEY`, `X_API_SECRET`.
+
+Retirement was the right answer for those eight because they described behaviour this project does not
+have: there is no `import redis` or `import rq` anywhere in the tree, the API bind is fixed
+independently by the container's `CMD`, `EXPOSE` and healthcheck URL, and `X_API_KEY`/`X_API_SECRET`
+are OAuth1 consumer credentials for a publisher that authenticates with a Bearer token — plumbing
+those means *implementing OAuth1 signing*, which is a feature, not a wiring fix. `Settings` uses
+`extra="ignore"`, so a stale key in someone's `.env` stays harmless; keeping the field would have been
+the harmful choice, because it reads as supported.
 
 The check is a **ratchet against a recorded baseline**, not a clean-tree assertion — the debt above is
 listed in the script with a reason each, so new dead code fails immediately while the backlog is
@@ -93,8 +111,9 @@ cleared. `tests/test_check_wired.py` asserts every baseline entry is *still* dea
 forces its entry to be deleted and the list can only shrink. A baseline allowed to keep fixed entries
 becomes a list of historical problems that reads as current, which is worse than no baseline.
 
-**Wiring these four up is the highest-value work available in this repository right now.** Each is a
-finished, tested feature that currently does nothing.
+**All four are now wired, and the ratchet's baselines are empty.** What remains valuable is the *gate*,
+not the backlog it cleared: it is the only thing here that can tell a finished feature from a reachable
+one, and a green suite cannot.
 
 > If you recount these by grepping the codebase for item IDs, note two traps that produced wrong
 > figures once already. `P0`–`P3` are *phase* rows, not items, and must be excluded — but excluding
@@ -182,19 +201,19 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on the caption-timing wiring branch, which is `d309f36` plus that change. The `2457` figure
-in the previous revision of this table was four PRs stale, and the `1994`/`98` pair in
-`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` is older still — take a fresh measurement rather
-than trusting any of them, including this one.
+Measured on `main` at `1133a55` (V23 merged). The `2631` figure in the previous revision was six PRs
+stale, the `2457` before it was four, and the `1994`/`98` pair in
+`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` is older still. **This table has been stale at every
+single handoff.** Take a fresh measurement rather than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2631 passed, 0 failed, 0 skipped, 0 warnings** |
+| `pytest` | **2715 passed, 0 failed, 0 skipped, 0 warnings** (about 11.5 min) |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 231 files (I9; blocking in CI) |
-| `mypy .` | clean — 116 source files |
-| `python scripts/check_wired.py --check` | `0 new` unwired modules / unread settings |
+| `ruff format --check .` | clean — 237 files (I9; blocking in CI) |
+| `mypy .` | clean — 117 source files (invoke as `mypy .`; bare `mypy` errors out) |
+| `python scripts/check_wired.py --check` | **0 unwired modules, 0 unread settings** — both baselines empty |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified: blaze_face_short_range.tflite` |
 | `scripts/smoke_reel.py` | renders; 15 effects incl. `music_degraded:synthesised` |
@@ -210,7 +229,9 @@ an error that does not name the version as the cause. Use
 README's Testing section. The full backend suite takes about **five minutes** (290 s measured).
 
 **`VMAF_FFMPEG_BINARY` must point at a libvmaf-capable ffmpeg or the M9 fidelity tests fail**, several
-steps from the cause. The distro/static ffmpeg on `PATH` does not have the filter; CI pins a separate
+steps from the cause. Note the static build `scripts/setup_dev_env.sh` fetches (johnvansickle 7.0.2)
+*does* carry `libvmaf` — verify with `ffmpeg -filters | grep libvmaf` before assuming you need a second
+binary. CI pins a separate
 BtbN build by URL *and* sha256 and asserts `-filters` lists `libvmaf` before running anything. Do the
 same locally — see the "Fetch the VMAF-capable ffmpeg" step in `.github/workflows/ci.yml`. Pinning is
 deliberate: `compare()` refuses to difference readings taken across builds, so a silently updated
@@ -228,130 +249,77 @@ tolerable.
 
 ## 3. What is actually left
 
-The previous version of this section said "12 items, only one is a matter of effort". That was wrong
-in both directions: several listed items had since been built, and it missed everything in §0 — four
-finished features that do nothing, which is the largest block of available work here and needs no
-labels, weights or credentials.
+Re-derived from the tree at `1133a55`, not read forward. The previous two revisions of this section
+were both wrong, in both directions.
 
-### Wire up what already exists (nothing blocks this)
+### Nothing is left that is merely a matter of effort and unblocked
 
-`worker/turn_gain.py` (AU12) · `worker/effects/sfx.py` (A15) · `worker/caption_placement.py` (V15).
-Each is written, tested and unreachable. See §0 for how to confirm, and take the settings with them —
-`sfx_volume` is read by nothing.
+That is a real change from every previous handoff. The large block of "written but unreachable" work
+is gone (§0), and `clip-presentation-polish` is complete. What remains is blocked on something other
+than typing, and the blockers are named below rather than implied.
 
-### 3a. What wiring V21 turned up, because the next one will be similar
+### Blocked on a human decision or an account
 
-Stabilisation is now live, and the exercise was informative beyond the one feature.
+- **CI has run zero steps since at least 8 August.** Every workflow fails in about three seconds
+  having executed no steps — verified with `gh api .../jobs`, which reports `steps=0` on every job,
+  including JS jobs on branches containing no JS. This is a **GitHub Actions billing block**, not a
+  code failure. It cannot be fixed from a pull request. Until it is cleared, every gate is local-only
+  and the no-skips / warnings-are-errors discipline is unenforced by anything but discipline.
+- **`VERSION` is still `0.11.0`** while `[Unreleased]` in the changelog now covers roughly fifteen
+  merged PRs. Naming the release is a judgement call, not a mechanical bump.
+- **Preference trials.** `clip-presentation-polish` task 9 and `clip-editorial-structure` task 2.12
+  both gate their defaults on a blind preference trial. `evaluation/preference.py` (M12) exists; the
+  *judging* needs a person. Every feature in both specs therefore ships off.
 
-**The composition seam already existed and had never been reached.** `apply_reframe` has had a
-`stabilise_margin` parameter and an `_intersect_margin` helper, complete with V16 letterbox
-composition and R10.5 reasoning in the docstring, for as long as the module has existed. Nothing
-passed it. So "unwired" here did not mean "needs designing" — it meant one keyword argument at two
-call sites. Look for the seam before building one.
+### Blocked on data that does not exist
 
-**Only one geometry branch can host it, and that is not obvious.** `vidstabtransform` fills what it
-vacates with black (`crop=black`, chosen over `optzoom` so subject scale does not vary with how shaky
-the footage was). Those pixels are hidden only when the delivered frame is a crop held inside the
-valid rectangle. `crop_blur` scales the whole frame into the blurred background, `pad` fits it entire,
-and `apply_speaker_reframe` crops but reads `info.width`/`info.height` directly with no
-content-rectangle seam — V16's letterbox rect already bypasses it for the same reason. So V21 declines
-on those and records which branch refused; the rule is in `stabilise.geometry_refusal` rather than
-inline, because a rule expressed as an `if` inside a 300-line loop is a rule nothing can test.
+**`eval/labels/` holds one `.gitkeep`.** This is the single most load-bearing gap in the project.
 
-**Measured, on a synthesised shaky fixture:** mean inter-frame luma difference **24.34 → 6.65**. And
-the margin is provably load-bearing — the darkest top strip across all frames is **16.00** with the
-inset and **0.00** without it, i.e. a fully black band delivered. `tests/test_stabilisation_wiring.py`
-asserts both directions, so the second number is what stops the first test passing vacuously.
+`.kiro/steering/working-agreement.md` forbids starting clip-selection quality work before the
+evaluation harness exists, and `clip-editorial-structure` R7.2 forbids flipping any of its defaults
+before the labelled benchmark does. Between them that blocks **S22** (topic-shift boundaries),
+**S23** (semantic diversity) and **S24** (dangling-opener repair) — the majority of the only spec
+that is still at zero.
 
-**`cropdetect` cannot see this defect.** It reports the union of non-black area over time, and the
-vacated band appears only on the frames where the correction shifted furthest — so the union is the
-whole frame and it reports clean. Use a per-frame minimum of an edge strip instead.
+There is a second-order consequence worth understanding before someone tries to get ahead of it.
+`clip-editorial-structure` task 1 (the offline lexical primitives S22 and S23 both stand on) is
+**written and tested** on the branch `feat/s22-s23-lexical-primitives`, and it is deliberately
+**unmerged**: `scripts/check_wired.py` correctly refuses it, because its only consumers are the
+blocked items. Landing it alone would re-create exactly the dead code §0 is about, and neither escape
+is legitimate — `ALLOWED` requires a reason about the module rather than "not called yet", and
+`KNOWN_UNWIRED` is a ratchet that may only shrink. **It lands with its first consumer.** Do not merge
+it to tidy up the branch list.
 
-**Test the call site, not just the seam.** The first version of these tests drove `apply_reframe`
-directly; deleting `prefilter=` from `worker/pipeline.py` broke none of them. Five pipeline-level
-tests were added that run `run_pipeline` and capture what the geometry stage was handed. This is the
-same mistake as the caption ordering test in §0 — it recurs because seam-level tests are so much
-cheaper to write.
+### Available, and the largest remaining piece
 
-### Buildable, from Appendix B and the `clip-quality-uplift` spec
+**S21 — cold-open assembly** (`clip-editorial-structure` task 2). The one item in that spec the
+working agreement does not block: the spec distinguishes it explicitly because its value is "does the
+clip open stronger" rather than "did we find a better moment", so it is gated on a preference trial
+rather than the benchmark.
 
-| Item | What | Note |
-| --- | --- | --- |
-| **AU10** | Interior dead air | `plan_keep_intervals` already resolves filler ∪ U4 cut lists into one re-encode; interior silence is a third contributor. Reuse the memoised `detect_silences`, add no pass. |
-| **O6** | Intermediate render fidelity | `intermediate=` on `h264_args` plus `x264_crf_intermediate`. Now measurable — `evaluation/fidelity.py` (M9) exists, so "prove it helps or revert it" is answerable. |
-| **S19** | Narrow the hook disqualification | `hook_score` zeroes on `promptness <= 0.0`, which also zeroes a clip opening on a laugh. Mechanism ships, default stays strict. |
-| **S20** | End-boundary scene snapping | `snap_start` exists; `snap_end` does not. Gate on `mean_best_iou`, not F1 — end snapping cannot change *which* moments are found. |
-| **V23** | Subject-scale normalisation across shots | Subject size jumps between cuts. |
-| **S21** | Cold-open / multi-segment assembly | `filler.apply_keep_intervals` already renders non-contiguous keeps in one pass, so the hard part exists. |
-| **A14/A21** | Music tracks and `scripts/fetch_music.py --check` | `assets/music/` and `assets/broll/` exist; the manifest script does not. Licensing is the real work. |
-| **U12** | Multi-user auth, per-user storage | Product decision as much as technical. |
+It is also the highest-risk work in all four specs, and the risk is concentrated in one place.
+Task 2.3: **non-monotonic rebasing.** Filler removal only ever produces keeps in increasing source
+order, so `rebase_words` may reasonably assume monotonicity. An assembly produces
+`[hook_range, body_range]` where the hook's source times come *after* the body's. A rebasing routine
+that assumes monotonic keeps will place the hook's captions at the body's timeline positions — and the
+failure is nasty because it is plausible: captions still appear, still look like captions, and are
+attached to the wrong words. It will be blamed on the ASR long before anyone suspects the assembly.
+Words, emoji placements **and** speaker turns each need their own test; one rebased consumer working
+does not imply three.
 
-### Already built, contrary to older notes
+The infrastructure is closer than it looks: `worker/effects/filler.py` already renders a
+non-contiguous keep list in **one** re-encode, and R2.1 requires reusing it rather than adding a
+second way to cut video.
 
-`M9`–`M12` (`evaluation/fidelity.py`, `caption_timing.py`, `sync.py`, `preference.py`) ·
-`O13`–`O15` colour · `O16`–`O20` (`frame_rate.py`, `output_profiles.py`, `sws_flags`) · `V20`
-(`deinterlace.py`) · `V22` (`headroom.py`) · `V24` (`content_class.py`) · `C24`/`C25`
-(`cue_constraints.py`) · `C23` (`word_spans.py`) · `S3` pitch (`pitch_features.py`, wired through
-`selection.py` behind `selection_pitch_feature`) · `U4` transcript trimming.
+### Still blocked, unchanged
 
-**`T11` is refused by measurement, not unbuilt.** Snapping word starts to audio onsets requires a
-word-scale envelope; the cached one is built at `ENVELOPE_WINDOW_S = 1.0`, and on an 8-second source
-with 20 bursts at 2.5/s it yielded 8 readings and `detect_onsets` found **zero**. R7.8 forbids the
-second audio pass that would fix that, so the requirement's constraint and its purpose are
-incompatible as written. Reasoning is in `worker/word_spans.py`'s docstring; measure the envelope
-before building against it.
-
-### Where the U4 seams ended up
-
-**`U4` (transcript-based trimming) is done** — see the CHANGELOG's Unreleased section. It is worth
-knowing where the seams ended up, because the next person to touch trimming will meet them:
-`worker/transcript_trim.py` owns the geometry (cuts in, keeps out) and does no I/O;
-`worker/clip_transcript.py` recovers a clip's words from the T8 cache and **never runs ASR**;
-`ClipCandidate.cuts` carries the list; and the render still goes through
-`filler.apply_keep_intervals`, so there is exactly one multi-range concat in the worker. Filler
-removal and a cut list compose by union into **one** keep list and **one** re-encode — do not add a
-second pass.
-
-**`I9` is done** — `UP` and `B` are enabled, `ruff format` is enforced in CI, and `black` has been
-removed rather than left listed and unrun. Two consequences outlive the sweep. First, **`RUF100` is
-now on, and it is load-bearing rather than tidiness**: `ruff format` rewraps lines, and a `# noqa`
-does not travel with the code it was written for — four in `publishers/` were carried off their
-violation by the formatter in this very change. A suppression stranded on a line with no violation
-is invisible without `RUF100`, and hides a real finding the day that code changes. Second, **prose
-mentioning `noqa` is parsed as a directive**; a comment opening `# noqa on the message...` is read
-as a *blanket* suppression of the whole line. Two were found and reworded. If you write about
-suppressions in a comment, keep the token out of a parseable position.
-
-### Blocked on model weights CI cannot have
-
-`S5` laughter/applause detection (YAMNet) · `S13` real vision signals · `T2` forced alignment
-(wav2vec2) · `T6` pyannote diarisation · `V3` active-speaker detection · `V7` subject detection ·
-`AU6` demucs source separation · `I2` GPU support.
-
-Each of these already has the *seam* built — an injectable backend and a degraded fallback that is
-labelled as degraded. What is missing is a checkpoint file and a runtime dependency, and the
-no-skips rule means a test needing either cannot be added. `requirements-ml.txt` and the
-`INSTALL_ML=true` build arg exist for whoever has the hardware.
-
-> The `INSTALL_ML=true` image has **not** been built. Only the default path is verified.
-
-### Blocked on credentials or API access
-
-- **PB9** — more publishing destinations (LinkedIn, Facebook Reels, Snapchat, Threads). P3/L. Each
-  needs an app registration and review before a single line can be tested against anything real. The
-  `publishers/base.py` interface plus `publishers/preflight.py` is the seam; adding a class is the
-  small part.
-- **PB1** is *implemented* but cannot be exercised here — it needs live publisher credentials. The
-  same applies to verifying any real upload.
-
-### Blocked on data that does not exist yet
-
-- **M4 / S1** — the labelled selection benchmark. **This is the gating item for all selection
-  quality work.** Do not tune ranking before it exists, or improvements and regressions are
-  indistinguishable.
-- **S16** — recording published-clip performance. Needs `PB8` and real posted clips.
-- **S18** — calibrating the virality score. Depends on M4; today it is an LLM's unanchored 0–100
-  opinion and is documented as a shortlist rather than a verdict.
+- **Weights CI cannot have** — `S5`, `S13`, `T2`, `T6`, `V3`, `V7`, `AU6`, `I2`. Each has its seam and
+  a labelled degraded fallback built. **`V3` (active-speaker detection) remains the largest single
+  visual gap**: on two-person footage the crop follows the largest, most-diarisation-active face
+  rather than the person actually speaking.
+- **Credentials** — `PB1` (implemented, unexercisable), `PB9`.
+- **Product decision** — `U12`, multi-user auth and per-user storage.
+- **The `INSTALL_ML=true` Docker image has still never been built.** Only the default path is verified.
 
 ## 4. Environment
 

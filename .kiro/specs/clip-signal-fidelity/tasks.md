@@ -1,4 +1,22 @@
 # Implementation Plan — Clip Signal Fidelity
+> **STATUS BANNER — read this before the checkboxes below.**
+>
+> The tick marks in this file were **never maintained**, and `CLOSE_OUT.md` is now stale too — it was
+> written when only Group A had landed and still says "Groups B and C are not started".
+>
+> Since then the rest of the spec has shipped: **O13–O15** (`worker/colour.py`, #110), **O16/O17/O20**
+> (#112), **O18/O19** (`worker/frame_rate.py`, #113), **V20** (`worker/deinterlace.py`, #119) and
+> **V21** (`worker/stabilise.py`, #124 — then actually *wired into the geometry pass* in #127, having
+> shipped inert). V22 (`worker/headroom.py`) belongs to `clip-presentation-polish` and is also built.
+>
+> Trust the modules and the suite, not the boxes and not the close-out. The boxes are left unticked
+> rather than bulk-ticked because ticking 61 of them without verifying each individually would be the
+> same error that made this file wrong in the first place.
+>
+> Worth noting against the close-out's own reasoning: it deferred O16/O17/O20 because "there is no
+> `vmaf`, `psnr` or `ssim` anywhere in this repository". There is now — `evaluation/fidelity.py`, and
+> the shipped ffmpeg does carry `libvmaf`.
+
 
 Incremental, test-first coding steps. Execute **one task at a time**, in order.
 
