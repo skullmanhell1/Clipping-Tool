@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-13
+
+**The release that made the features it already had actually run.**
+
+Five complete, tested features shipped in earlier versions and were called by nothing: the caption
+timing passes (C23/C24/C25), stabilisation (V21), per-speaker level matching (AU12), face-aware caption
+placement (V15) and sound effects (A15). Every gate was green the whole time, because a unit test of a
+pure function cannot tell whether anything calls it. All five are now wired, `scripts/check_wired.py`
+enforces that no new module or setting can go dark, and both of its baselines are empty.
+
+Alongside that: HDR sources are no longer delivered grey and flat, thirteen settings that silently did
+nothing are resolved, and two new features arrive off by default (V23 subject-scale normalisation and
+S21 cold-open assembly), each with the measurement or trial its default is waiting on named rather
+than guessed at.
+
+**Potentially breaking.** Eight documented environment variables were **retired** because they
+described behaviour this project does not have — `API_HOST`, `API_PORT`, `REDIS_URL`, `RQ_QUEUE_NAME`,
+`USE_INPROCESS_FALLBACK`, `PUBLIC_BASE_URL`, `X_API_KEY`, `X_API_SECRET`. None of them ever had an
+effect, and `Settings` uses `extra="ignore"`, so a stale key left in an existing `.env` stays harmless.
+
+
 ### Added — S21 cold-open assembly: a clip may open on its strongest line
 
 - **`S21` lifts a clip's strongest sentence to the front.** Every clip this project delivered was one
