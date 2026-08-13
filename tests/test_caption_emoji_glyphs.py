@@ -33,7 +33,11 @@ from worker.transcribe import Word
 
 #: A preset with `emoji_inline`, or none of this is reachable.
 PRESET = next(
-    (p for p in (resolve_preset(n)[0] for n in ("hormozi", "karaoke", "minimal")) if p.emoji_inline),
+    (
+        p
+        for p in (resolve_preset(n)[0] for n in ("hormozi", "karaoke", "minimal"))
+        if p.emoji_inline
+    ),
     resolve_preset("hormozi")[0],
 )
 
@@ -209,7 +213,9 @@ def test_no_undrawable_emoji_reaches_the_rendered_subtitle_file(tmp_path):
     text = _render(tmp_path, available=False)
     astral = [ch for ch in text if ord(ch) > 0xFFFF]
 
-    assert astral == [], f"undrawable emoji reached the subtitle file: {[hex(ord(c)) for c in astral]}"
+    assert astral == [], (
+        f"undrawable emoji reached the subtitle file: {[hex(ord(c)) for c in astral]}"
+    )
 
 
 def test_the_drawable_case_does_reach_the_file(tmp_path):
