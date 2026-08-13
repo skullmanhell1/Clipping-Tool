@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — S21 cold-open assembly: a clip may open on its strongest line
+
+- **`S21` lifts a clip's strongest sentence to the front.** Every clip this project delivered was one
+  contiguous range, so a hook eighteen seconds in stayed buried. `worker/assembly.py` chooses the line,
+  builds the keep list, and rebases everything timed against it.
+
+  **No new way to cut video.** `worker/effects/filler.py` already renders a non-contiguous keep list in
+  **one** re-encode, so assembly reuses it (R2.1, R2.2). Two of its properties turned out to be
+  load-bearing, and both were established by reading it rather than assumed: it iterates the keep list
+  in the order given and never re-sorts, and it builds the video and audio trims from the **same loop
+  variable** — so R2.7 ("never reorder audio and video independently") holds by construction.
+  `filler._merge` *does* sort, and must never be reached with an assembly; a mutation covers that.
+
+  **Filler removal, the U4 cut list and the assembly resolve into one keep list** (R2.3). The assembly
+  supplies the outer ordering and the earlier removals act as an inner filter, because doing it the
+  other way round would express the subtractions against the assembled timeline rather than against
+  the source offsets everything else refers to.
+
+  **The non-monotonic rebase is the whole risk, and it has two halves.** The obvious one is order: an
+  assembly is `[hook, body]` with the hook's source times *after* the body's, and a rebase that sorts
+  would caption the hook at the body's positions — plausible enough to be blamed on the ASR. The
+  quieter one is duplication: when the lifted line is *retained*, its source range is in the keep list
+  **twice**, and `filler.rebase_words` stops at the first match. It would caption the first airing and
+  leave the second silent. `assembly.rebase_onto` emits one item per occurrence, and words, emoji cues
+  and speaker turns each get their own builder and their own test — one rebased consumer working does
+  not imply three.
+
+  **Guards, each with a reason.** It never lifts a sentence that is itself a dangling opener (R1.6):
+  the cold open is the one position where a back-reference cannot resolve, because nothing came
+  before. It never reorders a clip whose strongest line is already first (R1.5). It refuses a cold open
+  that is half the clip or more, which would make the delivery a repeat rather than an edit. Where
+  retaining the line would put the two airings within the repeat gap, it removes it from the body
+  instead of refusing — an assembly that is fine in one configured form should not be abandoned for
+  failing the other — and the length floor (R1.9) outranks that, because a clip under its preset's
+  minimum is a broken deliverable while hearing a line twice is a style someone chose.
+
+  **A finding about the existing hook scorer.** `hook_score.text_signal` is sparse: it returns 0.0 for
+  any sentence without opener-ish wording, which is most of them. On a flat clip every candidate ties
+  at zero and the earliest-index tiebreak returns sentence 0 — which, reported as "the strongest line
+  is already first", would be a false claim about the material. `no_signal` and `already_first` are
+  therefore distinct findings and tested separately.
+
+  Off by default (R1.10), and the spec requires this default to come from a blind **preference trial**
+  rather than an opinion, because it reorders the edit itself. Ten mutations are specified in
+  `tests/mutations/clip-editorial-structure-assembly.json`; three initially survived and each exposed a
+  real test gap — the call site being untested while the module was covered, a vacuous duplicate check
+  (the fixture repeated ordinary words, so "some word appears twice" was true either way), and no test
+  driving the pipeline into a refusal at all.
+
+
 ### Added — V23 subject-scale normalisation, and a measured reason it is not built the way the spec asked
 
 - **`V23` keeps the speaker a similar size across cuts.** A clip cut together from a close-up and a
