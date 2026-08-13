@@ -13,10 +13,11 @@
 > re-create the dead code the plan's Appendix B has just recorded clearing. They land with their
 > first consumer.
 >
-> **Task 2 (S21, cold-open assembly) is the one available item.** The spec distinguishes it
-> explicitly: its default is gated on a preference trial rather than the benchmark, so it is not
-> §3 selection-quality work. It is also the largest single piece here, and task 2.3
-> (non-monotonic rebasing) is described as the highest-risk item in all four specs.
+> **Task 2 (S21, cold-open assembly) is BUILT** (#134) — `worker/assembly.py`, off by default, with
+> its own mutation spec at `tests/mutations/clip-editorial-structure-assembly.json`. Task 2.12 (the
+> preference trial that would decide its default) still needs a human judge.
+>
+> Its task-2 boxes are ticked below. Everything else in this file is still blocked.
 >
 > The "before starting, record the baseline" figure below (**2030**) is stale by a wide margin;
 > `main` is at **2715**.
@@ -85,8 +86,8 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
       configured-but-absent backend falls back with a marker.
     - _Requirements: 6.1, 6.3, 6.5, 6.7, 9.8_ · _Properties: P1_
 
-- [ ] 2. Cold-open assembly (S21)
-  - [ ] 2.1 Express an Assembly as Keep_Intervals through the existing path
+- [x] 2. Cold-open assembly (S21)
+  - [x] 2.1 Express an Assembly as Keep_Intervals through the existing path
     - `filler.py` already does the hard part: `plan_keep_intervals` builds a non-contiguous keep
       list, `apply_keep_intervals` renders it as `trim`/`atrim` + `concat` in **one** re-encode,
       `_seam_fades` applies a few-ms `afade` at each seam — deliberately not `acrossfade`, which
@@ -95,12 +96,12 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
       worst outcome of this spec.
     - _Requirements: 1.1, 2.1, 2.2, 2.4_
 
-  - [ ] 2.2 Resolve assembly into the one shared keep list
+  - [x] 2.2 Resolve assembly into the one shared keep list
     - Together with filler removal, the `U4` transcript cut list, and
       `clip-quality-uplift`'s interior-silence removal — one keep list, one re-encode.
     - _Requirements: 2.3_
 
-  - [ ] 2.3 Handle **non-monotonic** rebasing
+  - [x] 2.3 Handle **non-monotonic** rebasing
     - **This is the single highest-risk item in all four specs.** Filler removal only ever
       produces keeps in increasing source order, so `rebase_words` can reasonably assume
       monotonicity. An assembly produces `[hook_range, body_range]` where
@@ -112,13 +113,13 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
     - Handle words, emoji placements, **and** speaker turns.
     - _Requirements: 2.5, 2.6_
 
-  - [ ] 2.4 Never reorder audio and video independently
+  - [x] 2.4 Never reorder audio and video independently
     - `trim` and `atrim` are separate filters given separate arguments. A copy-paste error that
       reorders one and not the other produces a clip whose audio and video are each internally
       coherent and mutually wrong.
     - _Requirements: 2.7_
 
-  - [ ] 2.5 Apply the editorial guards
+  - [x] 2.5 Apply the editorial guards
     - Cold open drawn **from within the candidate's own range** (R1.2) — pulling from elsewhere
       breaks the invariant that a clip is a contiguous source region, which `U4`, `U7`, and the
       selection benchmark all lean on. Sentence-aligned, duration-bounded, at most one per clip.
@@ -130,20 +131,20 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
     - Respect the length preset's minimum.
     - _Requirements: 1.2, 1.3, 1.4, 1.5, 1.6, 1.9, 1.13_
 
-  - [ ] 2.6 Make the duplication behaviour configurable and bounded
+  - [x] 2.6 Make the duplication behaviour configurable and bounded
     - Genuinely a matter of taste: leaving the line in the Body means hearing it twice, a
       recognised short-form device; removing it means the Body loses its best line. Configuration
       decides. Bound the repeat interval so the two occurrences do not sound like a stutter.
     - _Requirements: 1.7, 1.8_
 
-  - [ ] 2.7 Refuse rather than partially assemble
+  - [x] 2.7 Refuse rather than partially assemble
     - Follow the established `transcript_trim_refused:*` pattern: decline, record, carry on.
     - _Requirements: 2.9_
 
-  - [ ] 2.8 Default off; record the assembly and its source range
+  - [x] 2.8 Default off; record the assembly and its source range
     - _Requirements: 1.10, 1.12, 7.1_
 
-  - [ ] 2.9* Test: one pass, and non-monotonic correspondence → `tests/test_assembly.py`
+  - [x] 2.9* Test: one pass, and non-monotonic correspondence → `tests/test_assembly.py`
     - Assert assembly ∪ filler ∪ cut list ∪ interior silence resolve to exactly **one**
       `apply_keep_intervals` call.
     - Construct an assembly where the second Segment's source times **precede** the first's, and
@@ -151,13 +152,13 @@ Tasks marked `*` are optional test sub-tasks. Property tests use `hypothesis` wi
       because one rebased consumer does not imply three. A monotonic fixture proves nothing here.
     - _Requirements: 9.1, 9.2, 2.6_
 
-  - [ ] 2.10* Test: seams, guards, refusal → `tests/test_assembly.py`
+  - [x] 2.10* Test: seams, guards, refusal → `tests/test_assembly.py`
     - `afade` at the Cold_Open/Body boundary and **not** `acrossfade`; no cold open when the best
       line is already first; Dangling_Opener never lifted; repeat interval honoured; length
       minimum respected; at most one cold open; unrenderable assembly refused and recorded.
     - _Requirements: 1.5, 1.6, 1.8, 1.9, 1.13, 2.4, 2.9_
 
-  - [ ] 2.11* Test: sync on an assembled clip → `tests/test_sync.py`
+  - [x] 2.11* Test: sync on an assembled clip → `tests/test_sync.py`
     - Measure Sync_Offset on the **rendered** assembled clip, using
       `render-quality-measurement`'s instrument. This is what catches audio and video being
       reordered independently.

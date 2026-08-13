@@ -201,14 +201,14 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on `main` at `1133a55` (V23 merged). The `2631` figure in the previous revision was six PRs
+Measured on `main` at `5e0b953` (v0.12.0). The `2631` figure in the previous revision was six PRs
 stale, the `2457` before it was four, and the `1994`/`98` pair in
 `.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` is older still. **This table has been stale at every
 single handoff.** Take a fresh measurement rather than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2715 passed, 0 failed, 0 skipped, 0 warnings** (about 11.5 min) |
+| `pytest` | **2747 passed, 0 failed, 0 skipped, 0 warnings** (about 8.5 min) |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
 | `ruff format --check .` | clean — 237 files (I9; blocking in CI) |
@@ -265,8 +265,9 @@ than typing, and the blockers are named below rather than implied.
   including JS jobs on branches containing no JS. This is a **GitHub Actions billing block**, not a
   code failure. It cannot be fixed from a pull request. Until it is cleared, every gate is local-only
   and the no-skips / warnings-are-errors discipline is unenforced by anything but discipline.
-- **`VERSION` is still `0.11.0`** while `[Unreleased]` in the changelog now covers roughly fifteen
-  merged PRs. Naming the release is a judgement call, not a mechanical bump.
+- ~~`VERSION` is still `0.11.0`~~ — **released as `0.12.0`** and tagged `v0.12.0` (#135). Minor rather
+  than major because the eight retired environment variables never had an effect, and `Settings` uses
+  `extra="ignore"` so a stale key in an existing `.env` stays harmless.
 - **Preference trials.** `clip-presentation-polish` task 9 and `clip-editorial-structure` task 2.12
   both gate their defaults on a blind preference trial. `evaluation/preference.py` (M12) exists; the
   *judging* needs a person. Every feature in both specs therefore ships off.
@@ -290,26 +291,28 @@ is legitimate — `ALLOWED` requires a reason about the module rather than "not 
 `KNOWN_UNWIRED` is a ratchet that may only shrink. **It lands with its first consumer.** Do not merge
 it to tidy up the branch list.
 
-### Available, and the largest remaining piece
+### Built since: S21 (cold-open assembly)
 
-**S21 — cold-open assembly** (`clip-editorial-structure` task 2). The one item in that spec the
-working agreement does not block: the spec distinguishes it explicitly because its value is "does the
-clip open stronger" rather than "did we find a better moment", so it is gated on a preference trial
-rather than the benchmark.
+`worker/assembly.py` (#134). A clip can now open on its strongest sentence, rendered through the
+existing keep-interval path so it costs no extra encode. **Off by default**, waiting on a preference
+trial like everything else in its family.
 
-It is also the highest-risk work in all four specs, and the risk is concentrated in one place.
-Task 2.3: **non-monotonic rebasing.** Filler removal only ever produces keeps in increasing source
-order, so `rebase_words` may reasonably assume monotonicity. An assembly produces
-`[hook_range, body_range]` where the hook's source times come *after* the body's. A rebasing routine
-that assumes monotonic keeps will place the hook's captions at the body's timeline positions — and the
-failure is nasty because it is plausible: captions still appear, still look like captions, and are
-attached to the wrong words. It will be blamed on the ASR long before anyone suspects the assembly.
-Words, emoji placements **and** speaker turns each need their own test; one rebased consumer working
-does not imply three.
+Three things about it are worth knowing before touching that area:
 
-The infrastructure is closer than it looks: `worker/effects/filler.py` already renders a
-non-contiguous keep list in **one** re-encode, and R2.1 requires reusing it rather than adding a
-second way to cut video.
+- **`filler._merge` sorts by start, and must never be reached with an assembly.** It is correct for
+  filler removal, where keeps are monotonic, and it silently converts an assembly back into the
+  contiguous clip it was lifted from. There is a mutation for that.
+- **`filler.rebase_words` cannot be used for an assembly**, and the reason is not the ordering — it
+  accumulates offsets in list order and is already fine there. It is the `break`: with the lifted line
+  *retained*, its source range is in the keep list **twice**, so it captions the first airing and
+  leaves the second silent. `assembly.rebase_onto` emits one item per occurrence, and words, emoji and
+  speaker turns each have their own builder.
+- **`hook_score.text_signal` is sparse** — 0.0 for most sentences. On a flat clip every candidate ties
+  at zero, so anything using it to rank sentences needs to distinguish "nothing stood out" from "the
+  best one is already first", or it will make a false claim about the material.
+
+**What remains of `clip-editorial-structure` is S22, S23 and S24, and all three are blocked** on the
+labelled benchmark (above). With S21 done, the spec's only available work is finished.
 
 ### Still blocked, unchanged
 
@@ -322,6 +325,14 @@ second way to cut video.
 - **The `INSTALL_ML=true` Docker image has still never been built.** Only the default path is verified.
 
 ## 4. Environment
+
+> **If a large block of tests suddenly fails on `cv2`/`mediapipe` `ImportError: libGL.so.1`, or the
+> frontend gates report `npm: command not found`, the sandbox has been reset — not your change.**
+> Re-run `bash scripts/setup_dev_env.sh` and put node back on `PATH`
+> (`export PATH=/root/.nvm/versions/node/v22.23.2/bin:$PATH`). Confirm with
+> `python -c "import cv2, mediapipe"` and `fc-list : family | grep -ci liberation` (expect 3). The
+> `.venv` itself survives. This cost 34 spurious failures once; the give-away is that the failures
+> cluster on vision and font paths rather than on whatever you just edited.
 
 ```bash
 python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
