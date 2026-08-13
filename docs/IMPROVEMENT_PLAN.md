@@ -550,13 +550,18 @@ the crop-size mechanism R2.2 asks for **crashes ffmpeg 7.0.2**
 output dimensions reconfigures the filter link mid-stream. Per-frame magnification must use `zoompan`
 instead. A test asserts the crash from both sides, so a future ffmpeg that fixes it will fail that test.
 
-Still genuinely open below: `S21`, `S22`, `S23`, `S24` — the whole of `clip-editorial-structure`.
-`S21` (cold-open assembly) is the only one of the four that is *available*: `S22`–`S24` are §3
-clip-selection quality work, which the working agreement forbids starting before the labelled
-benchmark exists. The offline lexical primitives those two need are written and tested on
-`feat/s22-s23-lexical-primitives` but **deliberately unmerged**, because `check_wired` correctly
-refuses them — their only consumers are the blocked items, and landing them would re-create the dead
-code this section just recorded clearing.
+`S21` (cold-open assembly) is **built** — `worker/assembly.py`, #134, off by default pending a
+preference trial. It reuses `filler.apply_keep_intervals`, so a multi-segment clip still costs one
+re-encode, and it records two constraints anyone editing that area needs: `filler._merge` sorts by
+start and must never be reached with an assembly, and `filler.rebase_words` stops at the first matching
+keep, so a *retained* cold open — whose source range appears twice — would be captioned once and heard
+twice.
+
+Still genuinely open: `S22`, `S23`, `S24`. All three are §3 clip-selection quality work, which the
+working agreement forbids starting before the labelled benchmark exists. The offline lexical primitives
+two of them need are written and tested on `feat/s22-s23-lexical-primitives` but **deliberately
+unmerged**, because `check_wired` correctly refuses them — their only consumers are the blocked items,
+and landing them would re-create the dead code this section just recorded clearing.
 
 ### Measurement — `render-quality-measurement`
 
