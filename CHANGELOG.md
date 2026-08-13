@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-13
+
 ### Fixed — in-caption emoji were burned into every clip as missing-glyph boxes
 
 - **The glyph-availability check existed and was never wired.** `caption_emoji_glyph` has always
