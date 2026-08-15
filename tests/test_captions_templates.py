@@ -139,6 +139,11 @@ def test_in_caption_emoji_independent_of_overlay_emoji(tmp_path):
         preset=preset,
         clip_duration=1.0,
         emoji_downloader=downloader,
+        # Pinned through the documented injection point, because this test is about the *code path* --
+        # that inline emoji are font glyphs rather than overlay assets -- and not about whether the
+        # host happens to have an emoji font. Left unpinned it passes on a machine with Noto Emoji and
+        # fails on one without, which says nothing about Req 4.1 or 4.2.
+        emoji_glyph_available=lambda _g: True,
     )
     text = dest.read_text()
     assert "\U0001f4b0" in text  # money glyph appears inline in the cue text

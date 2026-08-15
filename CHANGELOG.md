@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-08-15
+
+### Fixed — the Docker image could not transcribe, so it could not process a video at all
+
+**Found by building and running the image, which nobody had ever done** — CI is billing-blocked, and
+the release before this one shipped a Dockerfile that had never been executed.
+
+- **`PermissionError: '/home/clipper'` on the first video.** The image creates its user with
+  `--no-create-home`, deliberately, so `$HOME` names a directory that does not exist. `faster_whisper`
+  resolves its model through `huggingface_hub`, which writes to `$HOME/.cache/huggingface` — so the
+  **first real pipeline step died**, several layers from its cause, on a container that had booted
+  perfectly cleanly and served `/healthz` for minutes beforehand. The visible half of the same defect
+  had been in the logs all along: matplotlib complained about `$HOME/.config` on every single boot.
+
+  Fixed by pointing `HF_HOME`, `XDG_CACHE_HOME` and `MPLCONFIGDIR` at `/app/storage/.cache`.
+  `/app/storage` is the correct target for two independent reasons: it is `chown`ed to the container
+  user, and `docker-compose.yml` bind-mounts it — so the ~460 MB model is fetched **once** and
+  survives `docker compose down` rather than being re-downloaded on every start. Verified in the
+  rebuilt image with no environment overrides: the model loads and 75 MB persists to the host mount.
+
+- **A stale comment in `docker-compose.yml`, corrected by observation.** It said a non-writable
+  `storage/` "surfaces as jobs failing rather than as a permission error at boot". Running the image
+  showed the opposite: `ensure_local_dirs()` runs during startup, so the container exits immediately
+  with `PermissionError: '/app/storage/uploads'` and never serves at all. Failing fast is the better
+  behaviour — the note simply described an older one. Also records that the `chown` is unnecessary on
+  Docker Desktop for Windows and macOS.
+
+- **Two parity goldens were made host-dependent by 0.12.1 and are now pinned.** Dropping undrawable
+  emoji means rendered output depends on the installed fonts, so the v0.8.0 goldens passed on a machine
+  with Noto Emoji and failed on one without — a difference that is not a code change. `glyph_available`
+  is now pinned alongside `font_available`, which this test file already does for exactly this reason
+  and says so: *"font substitution is a property of the host."* **No golden bytes were re-frozen**; the
+  documents still expect the emoji, and the fix is to control the input rather than to accept the
+  output.
+
+
 ## [0.12.1] - 2026-08-13
 
 ### Fixed — in-caption emoji were burned into every clip as missing-glyph boxes

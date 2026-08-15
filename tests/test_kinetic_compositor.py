@@ -1567,7 +1567,14 @@ def test_flag_off_graph_matches_the_frozen_v080_goldens(tmp_path, monkeypatch):
         options = _matrix_options(**golden["options"])
         for available, key in ((True, "effects_applied"), (False, "font_substituted_effects")):
             work = tmp_path / f"{name}-font{int(available)}"
-            with mock.patch.object(cap_module, "font_available", lambda _n, _a=available: _a):
+            # `glyph_available` is pinned for the same reason `font_available` is, and stated in this
+            # file's own words: a host-dependent answer must not decide a golden. Inline emoji are
+            # dropped when no installed font can draw them, so without this pin these goldens pass on
+            # a machine with Noto Emoji and fail on one without — which is not a code change.
+            with (
+                mock.patch.object(cap_module, "font_available", lambda _n, _a=available: _a),
+                mock.patch.object(cap_module, "glyph_available", lambda _g: True),
+            ):
                 record = _parity_render(
                     compositor,
                     work,
@@ -2192,7 +2199,11 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     # Preset path, font present: the document is exactly the v0.8.0 one and no note.
     notes: list = []
     dest = tmp_path / "hormozi.ass"
-    with mock.patch.object(cap_module, "font_available", lambda _n: True):
+    with (
+        mock.patch.object(cap_module, "font_available", lambda _n: True),
+        # Pinned so the document is decided by the code, not by whether this host has an emoji font.
+        mock.patch.object(cap_module, "glyph_available", lambda _g: True),
+    ):
         cap_module.build_ass(
             cues,
             dest,
@@ -2214,7 +2225,11 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     # The Default *and* Hook styles now name the terminal rung of the ladder.
     notes = []
     substituted = tmp_path / "hormozi-substituted.ass"
-    with mock.patch.object(cap_module, "font_available", lambda _n: False):
+    with (
+        mock.patch.object(cap_module, "font_available", lambda _n: False),
+        # Pinned so the document is decided by the code, not by whether this host has an emoji font.
+        mock.patch.object(cap_module, "glyph_available", lambda _g: True),
+    ):
         cap_module.build_ass(
             cues,
             substituted,
@@ -2235,7 +2250,11 @@ def test_build_ass_documents_are_unchanged(tmp_path):
     # An explicit position still overrides the preset default (Alignment 2, MarginV 220),
     # and an empty cue list with no hook yields a header-only document with no events.
     overridden = tmp_path / "hormozi-bottom.ass"
-    with mock.patch.object(cap_module, "font_available", lambda _n: True):
+    with (
+        mock.patch.object(cap_module, "font_available", lambda _n: True),
+        # Pinned so the document is decided by the code, not by whether this host has an emoji font.
+        mock.patch.object(cap_module, "glyph_available", lambda _g: True),
+    ):
         cap_module.build_ass(
             cues,
             overridden,
