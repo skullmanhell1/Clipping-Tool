@@ -23,12 +23,21 @@ services:
       # Persist generated clips, uploads, temp and the watch folder on the host.
       #
       # The image runs as UID 10001 (see the Dockerfile), and a bind mount keeps the *host*
-      # directory's ownership rather than the image's — so grant it once before the first run:
+      # directory's ownership rather than the image's — so on Linux grant it once before the first run:
       #
       #     mkdir -p storage && sudo chown -R 10001:10001 storage
       #
-      # Without that the container starts and then cannot write, which surfaces as jobs failing
-      # rather than as a permission error at boot.
+      # Not needed on Docker Desktop for Windows or macOS, whose filesystem shim presents the mount as
+      # writable regardless of the container's UID.
+      #
+      # CORRECTED: an earlier version of this comment said the consequence "surfaces as jobs failing
+      # rather than as a permission error at boot". That is no longer true and was verified by running
+      # the built image — `ensure_local_dirs()` runs during startup, so the container exits
+      # immediately with `PermissionError: '/app/storage/uploads'` and never serves. Failing at boot is
+      # the better behaviour; the note simply described the older one.
+      #
+      # This mount also carries the model cache (`HF_HOME`, see the Dockerfile), so the ~460 MB Whisper
+      # model is downloaded once rather than on every start.
       - ./storage:/app/storage
       - ./assets:/app/assets
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000

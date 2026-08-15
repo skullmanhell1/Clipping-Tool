@@ -90,9 +90,29 @@ RUN fc-cache -f \
     && fc-match "Archivo Black" | grep -q ArchivoBlack \
     && fc-match "Poppins ExtraBold" | grep -q Poppins-ExtraBold
 
+# Every library that wants a cache is pointed at the one writable, persistent directory in this
+# image. Without this the container **cannot transcribe at all**, and it is a first-video failure that
+# boots perfectly cleanly beforehand:
+#
+#   PermissionError: [Errno 13] Permission denied: '/home/clipper'
+#
+# The user below is created with `--no-create-home`, deliberately, so `$HOME` names a directory that
+# does not exist. `faster_whisper` resolves its model through `huggingface_hub`, which writes to
+# `$HOME/.cache/huggingface`, fails, and raises — so the first real pipeline step dies several layers
+# from the cause. Measured in the built image before these lines existed; matplotlib emitted the same
+# complaint about `$HOME/.config` on every single boot, which was the visible half of the same defect.
+#
+# `/app/storage` is the target for two independent reasons: it is `chown`ed to this user below, and
+# `docker-compose.yml` bind-mounts it — so the ~460 MB `small` model is fetched once and survives
+# `docker compose down` rather than being re-downloaded on every container start.
+#
+# Comments cannot appear inside a line-continued `ENV`, which is why this block sits above it.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/storage/.cache/huggingface \
+    XDG_CACHE_HOME=/app/storage/.cache \
+    MPLCONFIGDIR=/app/storage/.cache/matplotlib
 
 WORKDIR /app
 
