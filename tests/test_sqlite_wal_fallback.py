@@ -7,9 +7,21 @@ served the dashboard, and then a request to the publish-history endpoint returne
         db.executescript(\"\"\"
     sqlite3.OperationalError: attempt to write a readonly database
 
-The message names the wrong cause, which is what made it interesting. `storage/` was writable —
-`ensure_local_dirs()` had already created `uploads/`, `clips/` and `temp/` inside it during startup,
-and the app would not have booted otherwise. Nothing was read-only.
+The message names the wrong cause, which is what made it interesting.
+
+**The paragraph that stood here was wrong, and the correction is worth keeping.** It argued that
+`storage/` was writable, on the grounds that "`ensure_local_dirs()` had already created `uploads/`,
+`clips/` and `temp/` inside it during startup, and the app would not have booted otherwise". That
+inference does not hold: `ensure_local_dirs()` called `mkdir(parents=True, exist_ok=True)`, which is
+a no-op on a directory that already exists, and those directories are committed to the repository as
+`.gitkeep` files. Booting therefore proved nothing about whether anything could be written.
+
+Both faults were real and independent. WAL inside `executescript` is a genuine bug and this module
+still covers it. But the reported crash *also* had an unwritable bind mount underneath it, and
+making WAL optional only moved the identical error message one line down — to the `executescript`
+that creates the schema. `ensure_local_dirs()` now proves writability with a real write, and both
+stores translate a filesystem failure into a message that names the path, so neither fault can hide
+behind the other's symptom again.
 
 `PRAGMA journal_mode=WAL` is the one pragma in either store that depends on the **filesystem** rather
 than on SQLite. WAL needs a shared-memory `-shm` sidecar and mmap, which SMB, CIFS, virtiofs and 9p

@@ -17,6 +17,8 @@ consume in later phases.
 
 from __future__ import annotations
 
+import logging
+import os
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -24,8 +26,37 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 # Repository root -- used to resolve default local storage locations.
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def _assert_writable(directory: Path) -> None:
+    """Raise ``OSError`` unless a file can actually be created inside ``directory``.
+
+    A real write, because the failure this exists to catch is precisely the one that mode bits
+    describe incorrectly -- a read-only bind mount, or a container UID no ACL entry covers, both of
+    which can present a directory that ``os.access(..., os.W_OK)`` calls writable. It is also why
+    this does not simply trust ``mkdir(exist_ok=True)`` having returned: that call does nothing at
+    all when the directory is already there.
+
+    The probe name carries the PID so two processes starting at once cannot collide on it, and the
+    file is removed in a ``finally`` so a crash between create and unlink does not leave litter in
+    the uploads directory.
+    """
+    probe = directory / f".write-probe-{os.getpid()}"
+    try:
+        # "xb" so an unexpected leftover is an error rather than something we silently overwrite.
+        with probe.open("xb") as handle:
+            handle.write(b"")
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            # Nothing to clean up (the create is what failed), or the directory will not let us.
+            # Either way the create above is the answer we came for.
+            pass
 
 
 class LLMProvider(str, Enum):
@@ -1426,23 +1457,91 @@ class Settings(BaseSettings):
     x_account_id: str | None = Field(default=None)
     x_direct_post_approved: bool = Field(default=False)
 
-    def ensure_local_dirs(self) -> None:
-        """Create local storage/asset directories if they do not yet exist.
+    #: Directories the application cannot run without. A failure to write here is fatal at boot.
+    #:
+    #: Everything in this tuple lives under ``storage_root``, which is the bind mount in
+    #: ``docker-compose.yml``. Uploads, renders, temp files and both SQLite databases go here, so
+    #: an unwritable ``storage/`` is not a degraded mode -- it is an application that cannot accept
+    #: a single job.
+    _REQUIRED_DIR_FIELDS = (
+        "storage_root",
+        "uploads_dir",
+        "temp_dir",
+        "clips_dir",
+        "transcript_cache_dir",
+    )
 
-        Safe to call on startup; a no-op when directories already exist.
+    #: Directories only optional features write to. A failure here is warned about, not fatal.
+    #:
+    #: These live under ``assets/``, which is the *other* bind mount and is legitimately read-only
+    #: on a hardened deployment: the vendored emoji, fonts and models are committed and only ever
+    #: read. Writes happen when someone selects a non-default emoji style (``assets/emoji-<style>``)
+    #: or caches a b-roll clip. Refusing to boot over a feature nobody may use would be the same
+    #: over-reach in the opposite direction.
+    _OPTIONAL_DIR_FIELDS = (
+        "emoji_assets_dir",
+        "music_dir",
+        "broll_dir",
+        "broll_cache_dir",
+    )
+
+    def ensure_local_dirs(self) -> None:
+        """Create the local storage/asset directories, and prove the required ones are writable.
+
+        **Existence is not the property this needs to establish.** It used to check only that,
+        via ``mkdir(parents=True, exist_ok=True)``, which is a no-op on a directory that is already
+        there -- and ``storage/uploads``, ``storage/clips``, ``storage/temp`` and
+        ``storage/transcripts`` are all committed to the repository as ``.gitkeep`` files, so they
+        are present in every clone. The consequence is that this method wrote nothing at all on a
+        normal checkout and therefore could not discover an unwritable mount.
+
+        That mattered, because the failure it did not catch was reported from a real run: with
+        ``storage/`` bind-mounted from a host directory the container's UID cannot write, the app
+        booted, served ``/healthz`` and served the dashboard, and then ``GET /api/history`` returned
+        a 500 ending in ``sqlite3.OperationalError: attempt to write a readonly database`` -- from
+        inside SQLite, several hundred lines from the mount that was actually wrong. The comment in
+        ``docker-compose.yml`` claimed the container would instead exit at boot with
+        ``PermissionError: '/app/storage/uploads'``; that is only true for a checkout in which those
+        directories are absent, which a real clone never is.
+
+        So the probe is a **real write** -- create a file, then remove it -- not an
+        ``os.access`` permission-bit query. ``os.access`` answers a question about mode bits, and
+        the cases that actually bite are the ones where the bits look fine: a read-only bind mount,
+        an NFS share, a container UID the ACL does not cover. Writing is the only way to find out
+        whether writing works, which is the same reason the capability probes in this project shell
+        out to a real ffmpeg.
+
+        Raises:
+            RuntimeError: if a required storage directory cannot be created or written to. Naming
+                the path and the remedy, because SQLite's own message for this names neither.
         """
-        for path in (
-            self.storage_root,
-            self.uploads_dir,
-            self.temp_dir,
-            self.clips_dir,
-            self.transcript_cache_dir,
-            self.emoji_assets_dir,
-            self.music_dir,
-            self.broll_dir,
-            self.broll_cache_dir,
-        ):
-            Path(path).mkdir(parents=True, exist_ok=True)
+        for field_name in (*self._REQUIRED_DIR_FIELDS, *self._OPTIONAL_DIR_FIELDS):
+            path = Path(getattr(self, field_name))
+            required = field_name in self._REQUIRED_DIR_FIELDS
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                _assert_writable(path)
+            except OSError as exc:
+                if not required:
+                    # Logged rather than raised: the feature that writes here may never be used,
+                    # and the code paths that do write already handle their own failures.
+                    logger.warning(
+                        "%s (%s) is not writable (%s); features that write there will fail. "
+                        "This is expected if assets/ is mounted read-only.",
+                        field_name,
+                        path,
+                        exc,
+                    )
+                    continue
+                raise RuntimeError(
+                    f"{field_name} ({path}) is not writable: {exc}. "
+                    "The application stores uploads, rendered clips and its SQLite databases "
+                    "there, so it cannot run. In Docker this is the storage bind mount: the "
+                    "image runs as UID 10001 and a bind mount keeps the host directory's "
+                    "ownership, so either grant it once with "
+                    "`sudo chown -R 10001:10001 storage`, or switch the mount to a named volume "
+                    "(see docker-compose.yml), which Docker creates with the image's ownership."
+                ) from exc
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker.job_persistence import _try_wal
+from worker.job_persistence import _try_wal, describe_store_failure
 
 
 @dataclass
@@ -53,6 +53,22 @@ class HistoryStore:
             conn.close()
 
     def _init(self) -> None:
+        """Create the schema, translating a filesystem failure into a message that names it.
+
+        This is the frame the reported crash came from, twice. SQLite's ``attempt to write a
+        readonly database`` names neither the file nor the directory, and the directory is the usual
+        culprit -- so the same sentence has now stood for two different causes (a WAL sidecar it
+        could not create, and a mount the container's UID cannot write). Re-raised as the same type
+        so existing callers and tests are unaffected; only the wording changes.
+        """
+        try:
+            self._create_schema()
+        except sqlite3.OperationalError as exc:
+            raise sqlite3.OperationalError(
+                describe_store_failure(self.path, "publish history", exc)
+            ) from exc
+
+    def _create_schema(self) -> None:
         with self._connect() as db:
             _try_wal(db, "publish history")
             db.executescript("""
