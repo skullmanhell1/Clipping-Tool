@@ -248,7 +248,17 @@ jobs:
               sys.exit("::error::pytest produced no report; the suite did not run.")
 
           root = ET.parse(report).getroot()
-          suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
+          # `list(...)`, not the bare iterator this used to be. `Element.iter()` is a lazy
+          # generator, the skip scan below consumed it, and the `sum` that followed then iterated
+          # an exhausted generator - so the closing line reported "0 tests ran, none skipped" on
+          # every green run, including a local 2775-test one. Measured, not deduced.
+          #
+          # The wrong number was the visible half. The real problem is that it made the count
+          # unfalsifiable: this step exists to notice that the suite has quietly stopped running
+          # tests, and a total hard-wired to 0 cannot tell 2775 tests from none. That is the same
+          # shape as the `ruff check . || true` this file replaced - a check that reports
+          # something it is not actually measuring.
+          suites = list(root.iter("testsuite")) if root.tag == "testsuites" else [root]
           bad = []
           for suite in suites:
               for case in suite.iter("testcase"):
@@ -263,6 +273,12 @@ jobs:
                   print(f"  {line}")
               sys.exit(1)
           total = sum(int(s.get("tests", 0)) for s in suites)
+          # A report carrying zero tests is a collection failure, not a clean run, and with the
+          # bug above it was indistinguishable from one. pytest exiting 5 ("no tests collected")
+          # already fails the Tests step, but this runs under `always()` precisely so it speaks
+          # when that step did not - so it has to be able to say "nothing ran" out loud.
+          if total == 0:
+              sys.exit("::error::the report contains zero tests; the suite collected nothing.")
           print(f"{total} tests ran, none skipped.")
           PY
 
