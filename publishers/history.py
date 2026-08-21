@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
+from worker.job_persistence import _try_wal
 
 
 @dataclass
@@ -53,8 +54,8 @@ class HistoryStore:
 
     def _init(self) -> None:
         with self._connect() as db:
+            _try_wal(db, "publish history")
             db.executescript("""
-            PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS clips (
               id TEXT PRIMARY KEY, job_id TEXT NOT NULL, clip_id TEXT NOT NULL,
               filename TEXT NOT NULL, path TEXT NOT NULL, title TEXT,

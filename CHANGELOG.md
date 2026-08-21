@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-08-21
+
+### Fixed — SQLite could not start on a Docker Desktop bind mount, so the dashboard 500'd
+
+**Reported from a real run** in Docker Desktop on Windows. The container booted, served `/healthz`,
+served the dashboard — then `GET /api/history` returned a 500 ending in:
+
+    File "/app/publishers/history.py", line 56, in _init
+        db.executescript("""
+    sqlite3.OperationalError: attempt to write a readonly database
+
+**The message names the wrong cause, which is what made this worth chasing.** `storage/` was
+perfectly writable — `ensure_local_dirs()` had already created `uploads/`, `clips/` and `temp/` inside
+it during startup, and the app could not have booted otherwise. Nothing was read-only.
+
+`PRAGMA journal_mode=WAL` is the one pragma in either store that depends on the **filesystem** rather
+than on SQLite. WAL needs a shared-memory `-shm` sidecar and mmap, which SMB, CIFS, virtiofs and 9p do
+not provide — which is to say, Docker Desktop bind mounts on Windows and macOS. SQLite reports its
+inability to create those sidecars as the database being read-only, so the error points at permissions
+and the real problem is the journal mode.
+
+Two changes follow:
+
+- **WAL is now requested separately from the schema.** Inside one `executescript`, a WAL failure takes
+  the `CREATE TABLE` statements down with it — so the store was left unusable on a filesystem where
+  nothing was actually wrong. That is the reported crash, and it is why the fix is structural rather
+  than a wider `except`.
+- **WAL is treated as an optimisation, not a requirement.** It is attempted, and its refusal is logged
+  **once** with the situation named, so the next person does not diagnose a permissions problem that
+  does not exist. The default rollback journal is slower under concurrent writes and completely
+  correct.
+
+**Both SQLite stores had the identical pattern, and only one was reported.**
+`worker/job_persistence.py` carried the same pragma inside its own schema script. It went unreported
+purely because the jobs database is created lazily on the first job while the history store is touched
+by the dashboard — so history was reached first. The jobs database would have failed on the next
+click, and job tracking would have gone with it. Fixed in both; the helper lives in `worker/` because
+`publishers/` already imports from there and not the reverse.
+
+Verified in a rebuilt image on a bind mount: `/api/history` — the exact endpoint from the report —
+returns **200**, `/api/campaigns`, `/api/jobs` and the dashboard all serve, `history.db` is created,
+and the log contains **zero** `readonly database` or `OperationalError` entries. Four mutations, all
+caught; one initially escaped because the test proxy only refused WAL via `execute`, so moving the
+pragma back inside `executescript` — the actual bug — slipped through.
+
+
 ## [0.12.2] - 2026-08-15
 
 ### Fixed — the Docker image could not transcribe, so it could not process a video at all
