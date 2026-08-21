@@ -29,11 +29,51 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from config import settings
 from worker.models import Job, JobStatus
 
 logger = logging.getLogger(__name__)
+
+#: Whether WAL could be enabled, cached so the warning is logged once rather than per connection.
+_WAL_STATE: dict[str, bool] = {}
+
+
+def _try_wal(db: Any, label: str) -> bool:
+    """Ask for WAL, and carry on without it when the filesystem cannot provide it.
+
+    **WAL is an optimisation, not a correctness requirement**, and it is the one pragma here that
+    depends on the *filesystem* rather than on SQLite. It needs a shared-memory `-shm` file and
+    mmap, which SMB, CIFS, virtiofs and 9p do not provide -- which is to say, Docker Desktop bind
+    mounts on Windows and macOS. On those, `PRAGMA journal_mode=WAL` raises
+
+        sqlite3.OperationalError: attempt to write a readonly database
+
+    on a directory that is perfectly writable, because SQLite reports the failure to create its
+    sidecar files as the database being read-only. The message names the wrong cause, which is why
+    this was originally diagnosed as a permissions problem.
+
+    Executed separately from the schema script for exactly that reason: inside one `executescript`
+    a WAL failure takes the `CREATE TABLE` statements down with it, so the store is unusable on a
+    filesystem where nothing was actually wrong. The default rollback journal is slower under
+    concurrent writes and completely correct.
+    """
+    try:
+        db.execute("PRAGMA journal_mode=WAL")
+        return True
+    except sqlite3.OperationalError as exc:
+        if not _WAL_STATE.get(label):
+            logger.warning(
+                "%s: WAL journalling unavailable (%s); using the default rollback journal. "
+                "Expected on a network or virtualised bind mount such as Docker Desktop on "
+                "Windows or macOS.",
+                label,
+                exc,
+            )
+            _WAL_STATE[label] = True
+        return False
+
 
 #: Statuses that cannot survive a process restart: no worker thread exists any more, so
 #: nothing will ever advance them. Recorded as failures on load.
@@ -95,9 +135,9 @@ class Job_Persistence:
 
     def _init(self) -> None:
         with self._lock, self._connect() as db:
+            _try_wal(db, "job persistence")
             db.executescript(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS jobs (
                   id TEXT PRIMARY KEY,
                   batch_id TEXT,
