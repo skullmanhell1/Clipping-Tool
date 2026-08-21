@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-08-21
+
+### Fixed — the same 500, from a second cause: storage writability was never checked
+
+**Reported from a real run** in Docker Desktop on Windows, and it is the *same endpoint and the same
+sentence* as 0.12.3 — the container booted, served `/healthz` and the dashboard, then `GET /api/history`
+returned a 500 ending in `sqlite3.OperationalError: attempt to write a readonly database`. The traceback
+had moved one line down, from the WAL pragma to the `executescript` beneath it.
+
+**The 0.12.3 entry above contains a claim that is wrong, and it is the reason this took two attempts.**
+It argued that `storage/` was "perfectly writable", on the grounds that `ensure_local_dirs()` "had
+already created `uploads/`, `clips/` and `temp/` inside it during startup, and the app could not have
+booted otherwise". That inference does not hold. `ensure_local_dirs()` called
+`mkdir(parents=True, exist_ok=True)`, which does **nothing at all** when the directory is already
+there — and `storage/uploads`, `storage/clips`, `storage/temp` and `storage/transcripts` are committed
+to this repository as `.gitkeep` files, so they are present in every clone. Startup wrote nothing, so
+booting proved nothing.
+
+Both faults were real and independent. The WAL fix in 0.12.3 is correct and stands. Underneath it was a
+genuinely unwritable bind mount, which nothing looked for.
+
+- **`ensure_local_dirs()` now proves writability with a real write** — create a file, remove it — rather
+  than inferring it from existence. Not `os.access`: that reports mode bits, and every case that bites
+  here (a read-only bind mount, a container UID no ACL entry covers) can present bits that look fine.
+  Writing is the only way to find out whether writing works, which is why the ffmpeg capability probes
+  in this project shell out to a real binary.
+- **Required and optional directories are now distinguished.** The five under `storage/` are fatal at
+  boot: uploads, renders and both SQLite databases live there, so an unwritable `storage/` is not a
+  degraded mode. The four under `assets/` only warn — the vendored fonts, emoji and models are committed
+  and read-only, writes happen only for optional extras (a non-default emoji style, the b-roll cache),
+  and `assets/` mounted `:ro` is a supported way to run.
+- **Both stores now translate a filesystem failure into a message that names it.** SQLite's own wording
+  identifies neither the file nor the directory, and blames the database for what is usually a directory
+  it cannot create a journal in. The new message resolves the actual state — missing directory,
+  unwritable directory, unwritable file — and carries SQLite's original text plus the remedy. Applied to
+  `publishers/history.py` and `worker/job_persistence.py` both, because that pattern has already been
+  duplicated once and only one copy was reported.
+
+The boot failure now reads:
+
+    RuntimeError: storage_root (/app/storage) is not writable: [Errno 13] Permission denied:
+    '/app/storage/.write-probe-2'. The application stores uploads, rendered clips and its SQLite
+    databases there, so it cannot run. In Docker this is the storage bind mount: the image runs as
+    UID 10001 and a bind mount keeps the host directory's ownership, so either grant it once with
+    `sudo chown -R 10001:10001 storage`, or switch the mount to a named volume (see
+    docker-compose.yml), which Docker creates with the image's ownership.
+
+`docker-compose.yml` gains a named-volume alternative, commented and ready to swap in: Docker creates a
+named volume with the *image's* ownership, so host ownership stops being something anyone has to think
+about. The stale comment claiming the container would "exit immediately with `PermissionError`" is
+corrected — it was verified against a checkout in which those directories did not exist, which a real
+clone is not.
+
+Verified in a rebuilt image as UID 10001, reproducing the report exactly before fixing it: an
+unwritable mount with a pre-existing `history.db` produces the reported traceback byte-for-byte on the
+old image, and a named boot failure on the new one. With the mount made writable, `/api/history` returns
+**200**, `history.db` is created owned by 10001, and the log has zero `readonly`/`OperationalError`
+entries. A read-only `assets/` mount boots and warns four times.
+
+Ten mutations, all caught (`tests/mutations/storage_writability.json`). One escaped initially and the
+mutation itself was wrong rather than the tests: it *added* an `os.access` check while leaving the real
+write in place, which is stricter rather than weaker and reintroduces nothing. Replacing the write is
+the defect; preceding it is not.
+
+Gates: pytest 2799 passed, 0 skipped, 0 warnings; ruff, ruff format (242 files), mypy (118) clean;
+frontend eslint/vitest/build clean; `scripts/docker_smoke.sh` green.
+
 ## [0.12.3] - 2026-08-21
 
 ### Fixed — SQLite could not start on a Docker Desktop bind mount, so the dashboard 500'd

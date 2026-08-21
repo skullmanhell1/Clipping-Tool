@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "Mutations for the storage-writability fix.",
+    "",
+    "The defect being guarded against was itself a check that covered nothing: ensure_local_dirs()",
+    "called mkdir(parents=True, exist_ok=True) and nothing else, which is a no-op on a directory",
+    "that already exists -- and storage/uploads, storage/clips, storage/temp and",
+    "storage/transcripts are committed as .gitkeep files, so they exist in every clone. The app",
+    "therefore booted onto a bind mount it could not write to, and the failure surfaced hundreds of",
+    "lines away as sqlite3.OperationalError: attempt to write a readonly database.",
+    "",
+    "So a mutation run matters more here than usual: the thing that broke was a guard, and a guard",
+    "that cannot fail is exactly what the first mutation below restores. If it escapes, this fix has",
+    "the same shape as the bug it replaces.",
+    "",
+    "The command runs the two modules that own this behaviour together, because the fix spans",
+    "config.py and both SQLite stores and a mutation in one can be caught by the other's tests."
+  ],
+
+  "command": [
+    ".venv/bin/python", "-m", "pytest",
+    "tests/test_storage_writability.py", "tests/test_sqlite_wal_fallback.py", "-q", "-x"
+  ],
+
+  "mutations": [
+    {
+      "name": "no_write_probe_at_all",
+      "file": "config.py",
+      "old": "                path.mkdir(parents=True, exist_ok=True)\n                _assert_writable(path)",
+      "new": "                path.mkdir(parents=True, exist_ok=True)",
+      "why": "restores the original defect exactly: existence accepted as writability, so the app boots onto an unwritable mount"
+    },
+    {
+      "name": "probe_asks_about_mode_bits_instead_of_writing",
+      "file": "config.py",
+      "old": "    probe = directory / f\".write-probe-{os.getpid()}\"\n    try:\n        # \"xb\" so an unexpected leftover is an error rather than something we silently overwrite.\n        with probe.open(\"xb\") as handle:\n            handle.write(b\"\")",
+      "new": "    if not os.access(directory, os.W_OK):\n        raise PermissionError(13, \"Permission denied\")\n    probe = directory / f\".write-probe-{os.getpid()}\"\n    try:\n        if False:\n            pass",
+      "why": "swaps the real write for a mode-bit query, which is the wrong instrument: os.access reports what the bits say, and every case that bites (read-only bind mount, container UID no ACL covers) can present bits that look fine. Note an earlier version of this mutation ADDED the os.access check while leaving the write in place, and escaped -- correctly, since that is stricter rather than weaker and reintroduces nothing. The defect is replacing the write, not preceding it."
+    },
+    {
+      "name": "required_directory_failure_is_only_a_warning",
+      "file": "config.py",
+      "old": "                if not required:",
+      "new": "                if True:",
+      "why": "an unwritable storage/ must be fatal at boot; downgrading it to a warning reproduces the reported crash, just with a log line nobody reads"
+    },
+    {
+      "name": "optional_directory_failure_becomes_fatal",
+      "file": "config.py",
+      "old": "                if not required:",
+      "new": "                if False:",
+      "why": "the opposite over-reach: assets/ is legitimately read-only, and refusing to boot over an unused emoji style would break a supported deployment"
+    },
+    {
+      "name": "probe_leaves_its_file_behind",
+      "file": "config.py",
+      "old": "    finally:\n        try:\n            probe.unlink()",
+      "new": "    finally:\n        try:\n            pass",
+      "why": "litter in uploads/ is not cosmetic -- that directory is enumerated by the API and the watch folder"
+    },
+    {
+      "name": "history_store_stops_explaining_the_failure",
+      "file": "publishers/history.py",
+      "old": "        try:\n            self._create_schema()\n        except sqlite3.OperationalError as exc:\n            raise sqlite3.OperationalError(\n                describe_store_failure(self.path, \"publish history\", exc)\n            ) from exc",
+      "new": "        self._create_schema()",
+      "why": "this is the frame the report came from; without the translation the user gets SQLite's wording, which names neither the file nor the directory"
+    },
+    {
+      "name": "job_store_stops_explaining_the_failure",
+      "file": "worker/job_persistence.py",
+      "old": "        try:\n            self._create_schema()\n        except sqlite3.OperationalError as exc:\n            raise sqlite3.OperationalError(\n                describe_store_failure(self.path, \"job persistence\", exc)\n            ) from exc",
+      "new": "        self._create_schema()",
+      "why": "both stores carry the pattern and only one was reported last time; the jobs database is simply reached later"
+    },
+    {
+      "name": "unwritable_file_and_unwritable_directory_are_conflated",
+      "file": "worker/job_persistence.py",
+      "old": "    elif path.exists() and not os.access(path, os.W_OK):\n        cause = f\"the file exists but is not writable by this user (uid {os.getuid()})\"",
+      "new": "    elif False:\n        cause = f\"the file exists but is not writable by this user (uid {os.getuid()})\"",
+      "why": "the two states call for different remedies, so collapsing them sends the reader to the wrong one"
+    },
+    {
+      "name": "the_message_drops_sqlite_s_own_words",
+      "file": "worker/job_persistence.py",
+      "old": "        f\"(SQLite said: {exc}). In Docker this is the storage bind mount: the image runs as \"",
+      "new": "        f\". In Docker this is the storage bind mount: the image runs as \"",
+      "why": "rewording must not discard the original text, which is what anyone will paste into a search engine"
+    },
+    {
+      "name": "the_remedy_is_dropped_from_the_boot_failure",
+      "file": "config.py",
+      "old": "                    \"`sudo chown -R 10001:10001 storage`, or switch the mount to a named volume \"",
+      "new": "                    \"nothing you can do, or switch the mount to a named volume \"",
+      "why": "the reason the original was misdiagnosed is that the error said what failed and not what to do; the remedy is load-bearing"
+    }
+  ]
+}

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -73,6 +74,44 @@ def _try_wal(db: Any, label: str) -> bool:
             )
             _WAL_STATE[label] = True
         return False
+
+
+def describe_store_failure(path: Path, label: str, exc: Exception) -> str:
+    """Explain why a SQLite store could not be initialised, in terms of the filesystem.
+
+    Written because SQLite's own wording sends people to the wrong place, twice over. Both of these
+    surface as ``sqlite3.OperationalError`` from the schema script:
+
+        attempt to write a readonly database      # the file opened, the write could not proceed
+        unable to open database file              # the file could not be created at all
+
+    Neither names the database, the directory, or the mount -- and the first one actively misleads,
+    because it says "readonly database" when the usual cause is a *directory* the process cannot
+    create a journal file in. That is not a hypothetical: it was diagnosed as a WAL problem once
+    already, and the WAL fix (correct in itself) then left a genuine permissions failure reporting
+    the identical sentence one line further down.
+
+    So this resolves the actual state of the filesystem -- does the file exist, does the directory,
+    can we write to it -- and says which of them is wrong.
+    """
+    parent = path.parent
+    if not parent.is_dir():
+        cause = f"its directory {parent} does not exist"
+    elif not os.access(parent, os.W_OK):
+        # `os.access` is a weak probe in general, but here it is only used to *phrase* a failure
+        # that has already happened, never to decide whether to attempt one.
+        cause = f"its directory {parent} is not writable by this user (uid {os.getuid()})"
+    elif path.exists() and not os.access(path, os.W_OK):
+        cause = f"the file exists but is not writable by this user (uid {os.getuid()})"
+    else:
+        cause = "the filesystem rejected the write"
+    return (
+        f"{label}: cannot initialise the SQLite database at {path} -- {cause} "
+        f"(SQLite said: {exc}). In Docker this is the storage bind mount: the image runs as "
+        f"UID 10001 and a bind mount keeps the host directory's ownership, so either grant it "
+        f"once with `sudo chown -R 10001:10001 storage`, or switch the mount to a named volume "
+        f"(see docker-compose.yml), which Docker creates with the image's ownership."
+    )
 
 
 #: Statuses that cannot survive a process restart: no worker thread exists any more, so
@@ -134,6 +173,21 @@ class Job_Persistence:
             conn.close()
 
     def _init(self) -> None:
+        """Create the schema, translating a filesystem failure into a message that names it.
+
+        Re-raised as the same type, so callers and tests that expect ``sqlite3.OperationalError``
+        are unaffected -- only the wording changes. Still fatal: a store that cannot create its
+        schema has no working degraded mode, and ``save()`` deliberately swallows errors later on,
+        so letting this pass would leave job tracking permanently and silently broken.
+        """
+        try:
+            self._create_schema()
+        except sqlite3.OperationalError as exc:
+            raise sqlite3.OperationalError(
+                describe_store_failure(self.path, "job persistence", exc)
+            ) from exc
+
+    def _create_schema(self) -> None:
         with self._lock, self._connect() as db:
             _try_wal(db, "job persistence")
             db.executescript(

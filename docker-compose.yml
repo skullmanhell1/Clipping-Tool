@@ -23,22 +23,47 @@ services:
       # Persist generated clips, uploads, temp and the watch folder on the host.
       #
       # The image runs as UID 10001 (see the Dockerfile), and a bind mount keeps the *host*
-      # directory's ownership rather than the image's — so on Linux grant it once before the first run:
+      # directory's ownership rather than the image's — so grant it once before the first run:
       #
       #     mkdir -p storage && sudo chown -R 10001:10001 storage
       #
-      # Not needed on Docker Desktop for Windows or macOS, whose filesystem shim presents the mount as
-      # writable regardless of the container's UID.
+      # If you would rather not think about host ownership at all, use a named volume instead.
+      # Docker creates it with the *image's* ownership, so the problem cannot arise; the trade is
+      # that the clips are then inside the volume rather than in ./storage where you can open them.
+      # Swap the line below for:
       #
-      # CORRECTED: an earlier version of this comment said the consequence "surfaces as jobs failing
-      # rather than as a permission error at boot". That is no longer true and was verified by running
-      # the built image — `ensure_local_dirs()` runs during startup, so the container exits
-      # immediately with `PermissionError: '/app/storage/uploads'` and never serves. Failing at boot is
-      # the better behaviour; the note simply described the older one.
+      #     - clipper-storage:/app/storage
+      #
+      # and uncomment the top-level `volumes:` block at the foot of this file.
+      #
+      # CORRECTED, TWICE, AND THE SECOND CORRECTION IS THE INTERESTING ONE.
+      #
+      # This comment used to claim that an unwritable mount makes the container "exit immediately
+      # with `PermissionError: '/app/storage/uploads'` and never serve", and said it had been
+      # verified against the built image. It was, but against a checkout in which those directories
+      # did not exist — which a real clone never is, because `storage/uploads`, `storage/clips`,
+      # `storage/temp` and `storage/transcripts` are all committed as `.gitkeep` files.
+      # `ensure_local_dirs()` then called `mkdir(parents=True, exist_ok=True)` on directories that
+      # were already present, which writes nothing and cannot fail, so the app booted and served
+      # happily on a mount it could not write a single byte to.
+      #
+      # What actually happened, reported from a real run on Docker Desktop for Windows: `/healthz`
+      # and the dashboard served fine, and then `GET /api/history` returned a 500 ending in
+      # `sqlite3.OperationalError: attempt to write a readonly database` — from inside SQLite,
+      # naming neither the file nor the mount. `ensure_local_dirs()` now proves writability with a
+      # real write instead of inferring it from existence, so the claim above is true again.
+      #
+      # Also note: Docker Desktop for Windows/macOS is usually said to present bind mounts as
+      # writable regardless of container UID. Do not rely on it — the report above is from exactly
+      # that setup.
       #
       # This mount also carries the model cache (`HF_HOME`, see the Dockerfile), so the ~460 MB Whisper
       # model is downloaded once rather than on every start.
       - ./storage:/app/storage
+      # `assets/` is read-mostly: the vendored fonts, emoji and detector models are committed and
+      # only ever read. Writes happen only for optional extras (a non-default emoji style, the
+      # b-roll cache), so an unwritable assets mount is warned about at startup rather than fatal,
+      # and `:ro` is a supported way to run.
       - ./assets:/app/assets
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
@@ -59,3 +84,11 @@ services:
   #     - ./assets:/app/assets
   #   depends_on: [redis]
   #   command: rq worker --url redis://redis:6379/0 clips
+
+# --- Named volume, as an alternative to the ./storage bind mount -------------
+# Uncomment together with the `clipper-storage:/app/storage` line in the `app` service above.
+# Docker creates a named volume with the image's ownership (UID 10001), which sidesteps host
+# ownership entirely — the failure mode the long comment above describes cannot happen.
+#
+# volumes:
+#   clipper-storage:
