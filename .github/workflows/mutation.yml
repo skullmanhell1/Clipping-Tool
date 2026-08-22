@@ -38,12 +38,12 @@ jobs:
       # Full history for the same reason the main workflow needs it: two parity guards in
       # tests/test_stems_parity.py diff against `origin/main`, and a shallow checkout makes them
       # skip rather than run.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload the mutation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mutation-report
           path: mutation-report.txt

@@ -1,4 +1,34 @@
 name: CI
+#
+# Action majors are pinned to the first release that runs natively on **Node 24**, not to the
+# newest available. Every failing job in this repository's history carried the annotation
+#
+#   Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to
+#   run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/setup-python@v5
+#
+# "being forced to run" is the operative phrase: GitHub is already substituting the runtime, so
+# these work today and stop working when the substitution is withdrawn. That is a scheduled
+# breakage rather than a live one, which is the right kind to fix in advance.
+#
+# First node24 major, verified against each action's own `runs.using` rather than assumed —
+# the mapping is not uniform and one entry is a trap:
+#
+#   actions/checkout          v4 node20 -> v5 node24
+#   actions/setup-node        v4 node20 -> v5 node24
+#   actions/setup-python      v5 node20 -> v6 node24
+#   actions/cache             v4 node20 -> v5 node24
+#   actions/upload-artifact   v4 node20 -> v5 **still node20** -> v6 node24
+#   github/codeql-action      v3 node20 -> v4 node24
+#
+# So upload-artifact is the one where the obvious +1 bump does not fix the deprecation. Bumping to
+# the first node24 major rather than the latest keeps the behavioural delta as small as the problem
+# allows, which matters here because CI cannot currently be exercised to check (see below).
+#
+# CAVEAT, stated because it is load-bearing: GitHub Actions on this repository has been blocked for
+# billing since before these changes, and every job completes in about three seconds having run
+# zero steps. These bumps are therefore verified by reading each action's manifest and by running
+# every equivalent step locally — not by a green run. The first real run after billing is restored
+# is the one that confirms them.
 
 on:
   # `push` is restricted to main rather than "**". With every branch included, a push
@@ -35,12 +65,12 @@ jobs:
       # *skip* -- which the no-skip gate below then reports as a failure, correctly: a
       # guard that silently stops running is worse than no guard. Full history makes them
       # execute rather than making the gate lenient.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -104,7 +134,7 @@ jobs:
       # and pick a tag whose date is the last day of a month.
       - name: Cache the VMAF-capable ffmpeg
         id: cache-vmaf-ffmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ffmpeg-vmaf
           # The URL is in the key, so changing the pin below busts the cache by construction and
@@ -184,10 +214,22 @@ jobs:
       - name: Type check (mypy)
         run: mypy .
 
-      - name: Import & boot smoke test
-        run: |
-          python -c "import config; print('config OK', config.settings.app_name)"
-          python -c "from api.main import app; print('FastAPI app OK', app.title)"
+      # This step was called "Import & boot smoke test" and performed an import:
+      #
+      #   python -c "from api.main import app; print('FastAPI app OK', app.title)"
+      #
+      # FastAPI does not run the lifespan on import, so `_run_startup` — storage directory
+      # creation, the writability proof, the job-scoped log filter, `_check_deployment_security()`
+      # and the retention sweeper — executed **nowhere in CI**. The step's name described a boot
+      # and its content was an import, and that gap is why a `render.yaml` which could not boot at
+      # all shipped and stayed shipped: every gate was green because none of them started the app.
+      #
+      # `scripts/boot_smoke.py` enters the lifespan, serves /healthz and /api/info, and asserts in
+      # a subprocess that a misconfigured production environment is *refused* at startup rather
+      # than merely raising when the gate function is called directly. Runnable locally with the
+      # same command, which the inline form was not.
+      - name: Boot smoke test (runs the lifespan, not just the import)
+        run: python scripts/boot_smoke.py
 
       # A7: the emoji the built-in keyword map can produce must be committed, not fetched
       # at render time. `.gitignore` previously excluded them with the comment "downloaded
@@ -327,7 +369,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: backend-coverage
           path: coverage.xml
@@ -342,7 +384,7 @@ jobs:
 
       - name: Upload smoke reel
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: smoke-reel
           path: smoke_reel.mp4
@@ -388,10 +430,28 @@ jobs:
         node-version: ["20.19", "22"]
     name: Frontend (node ${{ matrix.node-version }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Checked before `setup-node`, because `cache: npm` turns a missing lockfile into a
+      # *caching* failure. This is not hypothetical: it is what failed CI on the very first PR in
+      # this repository, where the frontend was scaffolded with the lockfile left to be "generated
+      # on first npm install". The whole job died on the Set up Node step with
+      #
+      #   Some specified paths were not resolved, unable to cache dependencies.
+      #
+      # which names neither `package-lock.json` nor the fact that `npm ci` cannot run without one.
+      # Three lines here mean the failure says what is actually wrong.
+      - name: The lockfile exists (npm ci and the cache both require it)
+        run: |
+          test -f package-lock.json || {
+            echo "::error file=frontend/package.json::frontend/package-lock.json is missing." \
+                 "npm ci installs strictly from the lockfile and setup-node caches on it," \
+                 "so both fail without it. Run 'npm install' in frontend/ and commit the result."
+            exit 1
+          }
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -421,7 +481,7 @@ jobs:
 
       - name: Upload frontend coverage
         if: always() && matrix.node-version == '22'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-coverage
           path: frontend/coverage/
@@ -444,7 +504,7 @@ jobs:
     name: Docker (build + boot)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # I12: the plan recorded the Dockerfile as never having been built. Three things can be
       # wrong here that nothing else catches, because each is invisible from a working checkout:
@@ -471,7 +531,7 @@ jobs:
       RENDER_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       RAILWAY_HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Auto-deploy from main by pinging a provider deploy hook. Configure ONE of
       # these repository secrets to enable it (the step is skipped when unset):

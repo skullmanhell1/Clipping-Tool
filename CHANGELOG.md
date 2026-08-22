@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the three red CI crosses on PRs #1-#3, and the reason the boot gate could not catch anything
+
+The failing checks on the first three pull requests were **not** the Actions billing block that has
+since stopped CI entirely. They were two distinct, real failures, and both causes are now closed.
+
+**PR #1 — `Frontend (build)` died on "Set up Node":**
+
+```
+Some specified paths were not resolved, unable to cache dependencies.
+```
+
+`actions/setup-node` was configured with `cache: npm` and
+`cache-dependency-path: frontend/package-lock.json`, and that file did not exist — the PR shipped
+the frontend with the lockfile left to be "generated on first npm install". An unresolved
+cache-dependency path is a **hard failure, not a cache miss**, so the job died four steps before
+anything was built, with a message naming caching rather than the missing lockfile or the fact that
+`npm ci` cannot run without one. The lockfile has since been committed; a three-line precondition
+step now runs *in front of* `setup-node` so a recurrence says what is actually wrong.
+
+**PRs #2 and #3 — `Backend (lint + smoke)` died on "Import & boot smoke test".** That step never
+booted anything:
+
+```
+python -c "from api.main import app; print('FastAPI app OK', app.title)"
+```
+
+**FastAPI does not run the lifespan on import.** So `_run_startup` — storage directory creation, the
+writability proof, the job-scoped log filter, `_check_deployment_security()` and the retention
+sweeper — executed *nowhere in CI*. The step's name described a boot and its content was an import,
+and that gap is the direct reason the un-bootable `render.yaml` above shipped and stayed shipped:
+every gate was green because none of them started the app.
+
+Replaced by `scripts/boot_smoke.py`, which enters the real lifespan, serves `/healthz` and
+`/api/info`, and asserts in a subprocess that a production environment with no token and wildcard
+CORS is **refused at startup** — the difference between "the gate function raises when called",
+which was already covered, and "the application will not start", which is what protects a
+deployment. It is runnable locally with the same one command, which the inline form was not.
+
+**To be unambiguous about what could not be fixed:** the ❌ marks on merged PRs #1-#3 are immutable
+records of check runs against those commits. GitHub does not permit rewriting the conclusion of a
+completed check run, so those three crosses stay in the pull request list permanently. What has been
+fixed is the cause of each, verified by running the equivalent gate locally on current `main`.
+
+### Changed — every GitHub Action bumped off the deprecated Node 20 runtime
+
+Every failing job above also carried this annotation, and so does every *passing* one, which is how
+it went unnoticed:
+
+> Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on
+> Node.js 24: `actions/checkout@v4`, `actions/setup-node@v4`, `actions/setup-python@v5`
+
+"Being forced to run" is the operative phrase: GitHub is already substituting the runtime, so these
+work today and break when the substitution is withdrawn — a breakage with a date on it rather than a
+live one. Each action is pinned to the **first major that runs natively on Node 24**, verified
+against each action's own `runs.using` rather than inferred from the version number:
+
+| Action | Was | Now | Note |
+| --- | --- | --- | --- |
+| `actions/checkout` | v4 (node20) | **v5** | |
+| `actions/setup-node` | v4 (node20) | **v5** | |
+| `actions/setup-python` | v5 (node20) | **v6** | |
+| `actions/cache` | v4 (node20) | **v5** | |
+| `actions/upload-artifact` | v4 (node20) | **v6** | **v5 is still node20** — the obvious +1 does not fix it |
+| `github/codeql-action` | v3 (node20) | **v4** | |
+
+`upload-artifact` is the trap, and the reason the floor is now recorded per action in
+`tests/test_ci_workflow_hygiene.py` rather than left to a version bump done by pattern-matching.
+The first node24 major is chosen over the newest available to keep the behavioural delta as small
+as the problem allows, which matters because **CI cannot currently be exercised to confirm it** —
+the billing block means every job runs zero steps. These are verified by reading each action's
+manifest and running every equivalent step locally; the first real run after billing is restored is
+what confirms them.
+
+`tests/test_ci_workflow_hygiene.py` pins all of the above: no action may target Node 20, the
+lockfile guard must run *before* `setup-node` (after it, the damage is done), the backend job must
+invoke the boot smoke, and the boot smoke is **executed** rather than string-matched — following
+`tests/test_ci_skip_gate.py`, which opens by noting that asserting strings appear in the workflow
+would not have caught its own defect, because every string was already correct.
+
 ### Fixed — the documented one-click deploy could not start, and nothing tested the manifest
 
 `render.yaml` sets `ENVIRONMENT: production`. `_check_deployment_security()` refuses to boot in

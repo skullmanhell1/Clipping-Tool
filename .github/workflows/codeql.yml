@@ -43,7 +43,7 @@ jobs:
         language: ["python", "javascript-typescript"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Publishing findings to the Security tab needs the code scanning API, and on a *private*
       # repository that API only exists with GitHub Advanced Security enabled. This repo is private
@@ -84,7 +84,7 @@ jobs:
           fi
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           # `security-and-quality` rather than the default `security-extended`/`default` set. The
@@ -99,7 +99,7 @@ jobs:
       # skipped, because `pip install` here would mean running arbitrary setup code from the index
       # inside a job holding `security-events: write`.
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
           # Written into the workspace rather than the default `../results` so the SARIF is
@@ -117,7 +117,7 @@ jobs:
         # that is exactly the case where someone needs to read it. A bare condition would inherit an
         # implicit success() and skip.
         if: always() && steps.code-scanning.outputs.available != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: codeql-sarif-${{ matrix.language }}
           path: sarif-results/*.sarif
