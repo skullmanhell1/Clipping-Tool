@@ -1696,7 +1696,16 @@ def publish_attempt(attempt_id: str) -> dict:
 #: already progressing (``queued``/``scheduled``/``uploading``) or finished
 #: (``published``/``private``/``draft``), and re-queueing those risks a double post.
 RESUMABLE_PUBLISH_STATES = frozenset(
-    {PublishState.REVIEW_REQUIRED.value, PublishState.FAILED.value}
+    {
+        PublishState.REVIEW_REQUIRED.value,
+        PublishState.FAILED.value,
+        # `unknown` is an attempt abandoned mid-upload, whose outcome nobody knows. It has to be
+        # resumable or the state is just a differently-named zombie: every endpoint refusing it is
+        # exactly the condition that made a stale `uploading` row unrecoverable. Resuming is a
+        # deliberate human decision made after checking the platform, which is the only way this
+        # can be settled correctly — so a person may act on it, and the scheduler still may not.
+        PublishState.UNKNOWN.value,
+    }
 )
 
 
@@ -1882,7 +1891,10 @@ def cancel_publish_attempt(attempt_id: str) -> dict:
     if not item:
         raise HTTPException(status_code=404, detail="Publish attempt not found")
     state = str(item.get("state") or "")
-    if state not in RESCHEDULABLE_PUBLISH_STATES:
+    # `unknown` is cancellable as well as resumable: an operator who has checked the platform and
+    # found the post already there needs a way to close the attempt without publishing it again.
+    # Refusing both actions is what left a stale `uploading` row with no way out.
+    if state not in RESCHEDULABLE_PUBLISH_STATES and state != PublishState.UNKNOWN.value:
         raise HTTPException(
             status_code=409,
             detail=f"Attempt is {state!r} and can no longer be cancelled",

@@ -234,6 +234,45 @@ class HistoryStore:
             ).fetchall()
         return [self._row(r) for r in rows]
 
+    #: Attempt states that mean "this post is still in play", for the submit-level dedupe.
+    #:
+    #: Deliberately *excludes* ``failed`` and ``cancelled``: re-submitting after fixing a
+    #: credential is the normal recovery path and must not be blocked. ``review_required`` is
+    #: included because the post is waiting on a person, not on nothing.
+    LIVE_STATES = ("queued", "scheduled", "uploading", "review_required")
+
+    def live_attempt_id(self, job_id: str, clip_id: str, platform: str) -> str | None:
+        """The id of an in-play attempt for this clip and platform, or ``None``.
+
+        Exists because ``publish_attempts`` has no uniqueness constraint — unlike ``clips``, which
+        carries ``UNIQUE(job_id, clip_id)`` — so nothing stopped two submissions for one clip
+        becoming two posts.
+        """
+        placeholders = ",".join("?" for _ in self.LIVE_STATES)
+        with self._connect() as db:
+            row = db.execute(
+                f"SELECT id FROM publish_attempts WHERE job_id=? AND clip_id=? AND platform=? "  # noqa: S608 - placeholders are generated from a fixed tuple, not input
+                f"AND state IN ({placeholders}) ORDER BY created_at DESC LIMIT 1",
+                (job_id, clip_id, platform, *self.LIVE_STATES),
+            ).fetchone()
+        return str(row["id"]) if row else None
+
+    def stale_uploading(self, older_than: float) -> list[dict[str, Any]]:
+        """Attempts stuck in ``uploading`` since before ``older_than`` (a unix timestamp).
+
+        A row reaches this state when the process died between the platform call and the write-back
+        that records its outcome. Nothing could then move it: ``due_attempts`` selects only
+        queued/scheduled, and ``/retry``, ``/approve``, ``/reschedule`` and ``/cancel`` all refuse
+        ``uploading``. So the attempt was silently lost *and* left the audit trail wrong.
+        """
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM publish_attempts WHERE state='uploading' "
+                "AND COALESCE(started_at, created_at) < ?",
+                (older_than,),
+            ).fetchall()
+        return [self._row(r) for r in rows]
+
     def history(self, limit: int = 200, platform: str = "") -> dict[str, Any]:
         with self._connect() as db:
             clips = db.execute(

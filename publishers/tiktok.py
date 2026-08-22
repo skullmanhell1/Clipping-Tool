@@ -10,6 +10,7 @@ from publishers.base import (
     PublisherStatus,
     PublishResult,
     PublishState,
+    status_of,
 )
 
 
@@ -50,6 +51,8 @@ class TikTokPublisher(BasePublisher):
         st = self.status(request.account_id)
         if not st.configured:
             return PublishResult(False, PublishState.FAILED, self.name, error=st.message)
+        # Whether the file bytes have started going to TikTok. See side_effect_possible.
+        uploading = False
         try:
             direct = st.direct_publish and request.mode == "auto"
             endpoint = (
@@ -89,6 +92,7 @@ class TikTokPublisher(BasePublisher):
                 raise RuntimeError(err.get("message") or err.get("code"))
             target = data["data"]["upload_url"]
             pub_id = data["data"]["publish_id"]
+            uploading = True
             with request.video_path.open("rb") as f:
                 up = self.client.put(
                     target,
@@ -108,4 +112,13 @@ class TikTokPublisher(BasePublisher):
             )
             return PublishResult(True, state, self.name, external_id=pub_id, message=msg, raw=data)
         except Exception as exc:
-            return PublishResult(False, PublishState.FAILED, self.name, error=str(exc))
+            return PublishResult(
+                False,
+                PublishState.FAILED,
+                self.name,
+                error=str(exc),
+                status_code=status_of(exc),
+                # TikTok mints a fresh `publish_id` per initialisation, so a retry after the file
+                # bytes were accepted creates a second submission rather than resuming the first.
+                side_effect_possible=uploading,
+            )

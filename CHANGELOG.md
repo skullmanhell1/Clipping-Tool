@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a publish could report success when nothing was posted, or post the same clip twice
+
+Publishing is where this project's failures become **irreversible**. A wrong caption can be
+re-rendered; a duplicate tweet cannot be un-tweeted, and a post recorded as sent but never made is
+discovered weeks later by someone wondering why a clip got no views. Ten defects, in four families.
+
+**1. False success.**
+
+- **A failed Whop publish was recorded as a successful one.** `publisher_bridge/whop.mjs`'s
+  `fail()` writes `{"success": false, "error": …}` and calls `process.exit(0)`, so `check=True`
+  cannot fire — and `publishers/whop.py` **never read `data["success"]`**. It read only
+  `data["attached"]`, which is absent on failure, so an upload that never happened (no API key
+  inside the bridge, an SDK throw, an unreadable file, a network failure mid-upload) was stored as
+  a *successful* attempt in `review_required` with an empty external id, the real error buried in
+  `result_json.raw.error`. Because the result was not `FAILED`, the retry policy was never
+  consulted either, so even a transient bridge failure was terminal *and* labelled fine — and the
+  operator was invited to "approve" a file that does not exist on Whop.
+- **Success was claimed on unvalidated ids.** `str(post.json().get("data", {}).get("id", ""))`
+  produced a recorded URL of `https://x.com/i/web/status/` with nothing after it; YouTube produced
+  `https://youtube.com/shorts/`. X's `str(a or b)` for the media id yielded the literal string
+  `"None"`, which was then APPENDed and FINALIZEd against a media id that does not exist — the
+  whole file uploaded before X says anything useful. This is not cosmetic: `_maybe_delete_local`
+  deletes the operator's local clip on the strength of that success.
+- **The YouTube URL was hard-coded to `/shorts/`** for every upload, while
+  `preflight.PLATFORM_LIMITS["youtube"]` deliberately permits 900 s and 16:9 landscape — so a
+  five-minute landscape upload got a Shorts link that does not resolve to what was posted. Only the
+  known-long case changed; short clips keep the Shorts link, because that is what this tool makes.
+- **Instagram published whether or not the container was ready.** The readiness loop was five
+  iterations with a one-second sleep — a five-second budget for Reel transcoding — and on
+  exhaustion it simply *fell through to `media_publish` anyway*. Reels routinely take longer, so
+  the common outcome was a Graph 4xx **after the entire file had been uploaded**; "not ready"
+  matches no transient pattern, so it was classified permanent and a perfectly good container was
+  abandoned. It now polls longer and, if still not ready, returns a resumable `DRAFT` carrying the
+  container id — valid for 24 hours, so approving costs no re-upload.
+- **X never waited for media processing**, and the injected `sleep` on that class was **never
+  called** — direct evidence the wait was designed and not written. Posting before
+  `processing_info.state` is `succeeded` produces a routine "media not ready" 4xx after the whole
+  file went up in 4 MB chunks.
+
+**2. Double posting.**
+
+Every platform here is a multi-request flow — X initialize/append/finalize/tweet, Instagram
+create-container/upload/publish, YouTube initiate/PUT, TikTok init/PUT — and an automatic retry
+re-ran it **from step one**. So a read timeout on the *last* call of an upload the platform had
+actually accepted produced a **second post**, and there was no idempotency key anywhere in the
+module to prevent it.
+
+`PublishResult.side_effect_possible` now marks a failure that occurred after the irreversible step,
+and `_schedule_retry` refuses to auto-retry those, routing them to a human with the uncertainty
+named. The asymmetry is deliberate: a duplicate post cannot be undone by this tool, whereas a post
+it declines to retry is one click away from being published.
+
+Submission was equally unguarded — `publish_attempts` has no uniqueness constraint (unlike `clips`,
+which carries `UNIQUE(job_id, clip_id)`) and `submit` never looked for an existing row, so two
+clicks of Publish meant two posts. A repeat submission now returns the live attempt's id. Failed
+and cancelled attempts deliberately still allow re-submission, since that is the recovery path
+after fixing a credential.
+
+**3. Credential leakage.**
+
+Every publisher records `str(exc)`, and an `httpx.HTTPStatusError` message **embeds the full request
+URL** — and Instagram passed its access token as a *query parameter*. One 4xx on the container poll
+therefore produced an error string containing a long-lived credential, which `_execute` wrote into
+both the `error` column and `result_json`, and which `GET /api/history` serves. The token ended up
+in `history.db`, in every backup of it, and rendered in the dashboard.
+
+Two fixes, because either alone is insufficient: the Instagram poll now uses the `Authorization`
+header the upload call already used, and `PublishResult.__post_init__` redacts `error`/`message`
+centrally so no publisher can leak by forgetting. The other four keep their secrets in headers
+already, and Whop passes its key via `env=` rather than argv — so nothing is visible in `ps`.
+
+**4. Unreachable states, and a classifier that was never consulted.**
+
+- **An attempt abandoned mid-upload was invisible to everything.** `state='uploading'` is written
+  immediately before the platform call and the only write-back is immediately after, so a process
+  that died in between left the row stuck for ever: `due_attempts` selects only queued/scheduled,
+  and `/retry`, `/approve`, `/reschedule` and `/cancel` **all refused `uploading`**. The post may or
+  may not exist, there was no record either way, and nothing the operator could click would move
+  it. `PublishManager.reclaim_stale_uploads` now runs at start-up and moves them to a new
+  `unknown` state — distinct from `failed` precisely because `failed` is safe to auto-retry and
+  this is not — and `unknown` is both resumable and cancellable by a person, since a state every
+  endpoint refuses is what created the problem in the first place.
+- **`retry.classify`'s status-code path was dead code in production.** It has always accepted a
+  status code and decided purely from it when given one — but no publisher populated one and
+  `_schedule_retry` called `should_retry(count, error)` with two arguments. So **every** production
+  retry decision was made by substring-matching an exception message, which is the fallback that
+  module's own docstring apologises for, and whose tables list bare `"dns"` and `"ssl"` as transient
+  (any URL or filename containing those letters) and take the first three-digit number anywhere in
+  the text as a status (`"clip is 503 MB"` → transient). Its unit tests passed throughout because
+  they call `classify` directly. `PublishResult.status_code` is now populated from
+  `httpx.HTTPStatusError` and passed through.
+
+**Also fixed**
+
+- **`best_times` claimed a timezone it did not have.** Its premise is that "post at 7pm" means 7pm
+  where the audience is; the implementation built a **naive** datetime, so `timestamp()` interpreted
+  it in the server's zone — UTC in the container. "19:00 TikTok prime time" scheduled 2 p.m. in New
+  York and 4 a.m. in Sydney, and DST transition days were silently shifted by an hour. New
+  `SCHEDULE_TIMEZONE` (IANA name; empty keeps the server's zone, so no existing schedule moves on
+  upgrade). The `BASIS` disclaimer about the *provenance* of the numbers was already honest — only
+  the timezone sentence was not.
+- **The Whop bridge's stderr was discarded.** `str(CalledProcessError)` is only "returned non-zero
+  exit status 1", so the most common real cause — `ERR_MODULE_NOT_FOUND: Cannot find package
+  '@whop/sdk'`, i.e. nobody ran `npm install` in `publisher_bridge/` — was invisible. Non-JSON
+  output (a Node deprecation warning on stdout) produced "Expecting value: line 1 column 1"; both
+  streams are now in the recorded error, and the timeout says how long it waited.
+
 ### Fixed — the LLM layer failed silently, and its fallback was indistinguishable from success
 
 Eleven defects across `worker/llm_client.py`, `worker/metadata.py`, `worker/selection.py` and

@@ -76,7 +76,54 @@ class WhopPublisher(BasePublisher):
                 env={**os.environ, "WHOP_API_KEY": settings.whop_api_key or ""},
                 timeout=300,
             )
-            data = json.loads(p.stdout)
+            try:
+                data = json.loads(p.stdout)
+            except json.JSONDecodeError as exc:
+                # The bridge is expected to print exactly one JSON object. Anything else - a Node
+                # deprecation warning on stdout, a stack trace, an empty stream - produced
+                # "Expecting value: line 1 column 1", which names neither the bridge nor what it
+                # actually said. Both streams go into the error so the cause is in the record.
+                return PublishResult(
+                    False,
+                    PublishState.FAILED,
+                    self.name,
+                    error=(
+                        f"the Whop bridge did not return JSON ({exc}). "
+                        f"stdout={p.stdout[:400]!r} stderr={p.stderr[:400]!r}"
+                    ),
+                )
+
+            # The bridge reports failure **in its payload and exits 0** (see
+            # `publisher_bridge/whop.mjs`'s `fail()`), so `check=True` cannot catch it and
+            # `data["success"]` is the only signal there is. It was never read: a Whop upload that
+            # never happened - no API key inside the bridge, an SDK throw, an unreadable file, a
+            # network failure mid-upload - was stored as a *successful* attempt in
+            # `review_required` with an empty external_id, the real error buried in
+            # `result_json.raw.error`. Because the result was not FAILED, the retry policy was
+            # never consulted either, so even a transient bridge failure was terminal and labelled
+            # fine. The operator was then invited to "approve" a file that does not exist on Whop.
+            if not data.get("success", False):
+                detail = str(data.get("error") or "the Whop bridge reported failure")
+                return PublishResult(
+                    False,
+                    PublishState.FAILED,
+                    self.name,
+                    error=detail,
+                    raw=data,
+                )
+
+            file_id = str(data.get("file_id") or "")
+            if not file_id:
+                # A success with nothing identifying the upload cannot be verified, resumed or
+                # attached later, so it is not a success this code is willing to claim.
+                return PublishResult(
+                    False,
+                    PublishState.FAILED,
+                    self.name,
+                    error="the Whop bridge reported success but returned no file id",
+                    raw=data,
+                )
+
             state = PublishState.PUBLISHED if data.get("attached") else PublishState.REVIEW_REQUIRED
             msg = (
                 "Uploaded and attached"
@@ -88,9 +135,29 @@ class WhopPublisher(BasePublisher):
                 state,
                 self.name,
                 data.get("url", ""),
-                data.get("file_id", ""),
+                file_id,
                 message=msg,
                 raw=data,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return PublishResult(
+                False,
+                PublishState.FAILED,
+                self.name,
+                error=f"the Whop bridge timed out after {exc.timeout:g}s",
+            )
+        except subprocess.CalledProcessError as exc:
+            # `str(exc)` is only "Command '[...]' returned non-zero exit status 1." - the Node
+            # stack trace lives in `exc.stderr` and was discarded. The most common cause is
+            # `ERR_MODULE_NOT_FOUND: Cannot find package '@whop/sdk'`, i.e. nobody ran
+            # `npm install` in publisher_bridge/, and a bare exit status says nothing about that.
+            stderr = (exc.stderr or "").strip()
+            detail = f": {stderr[-500:]}" if stderr else ""
+            return PublishResult(
+                False,
+                PublishState.FAILED,
+                self.name,
+                error=f"the Whop bridge exited {exc.returncode}{detail}",
             )
         except Exception as exc:
             return PublishResult(False, PublishState.FAILED, self.name, error=str(exc))
