@@ -396,3 +396,87 @@ def best_fit_lag_ms(
         if score > best_score:
             best_score, best_shift = score, shift
     return best_shift * hop * 1000.0, at_zero, best_score
+
+
+# --- Word timing, measured only where the audio can prove it ------------------------------
+#
+# `coverage_overlap` answers "are the captions on the sound", which is the viewer's question. It
+# cannot answer "is *this word* on time", and the obvious extension — nearest rising edge to each
+# word start — is a trap that produced two wrong answers before this comment existed.
+#
+# Inside continuous speech there is no rising edge belonging to a word. Consonants begin below the
+# threshold, vowels carry the energy, and adjacent words share one unbroken envelope. Anchoring to
+# the *nearest* edge within a search radius therefore reports a number for every word while only
+# some of those numbers mean anything, and the meaningless ones dominate: measured at 130 ms median
+# on speech whose word timings were later shown accurate to within 20 ms.
+#
+# Worse, the noise floor is invisible in a synthetic check. On gated tones this same code reads 0 ms
+# on known-true times even at 3.3 bursts per second, so the metric looks validated and is not.
+#
+# So this function measures **only words preceded by a real pause**. For those, and only those, the
+# rising edge is ground truth rather than a guess, because silence establishes where the sound began.
+# It returns fewer numbers — roughly one word in ten — and they are worth having.
+#
+# THE OTHER TRAP, recorded because it is more seductive than the first. CTC forced alignment
+# (torchaudio MMS_FA) looks like the right reference and produced a *beautifully* consistent result:
+# whisper's word starts measured 94, 104 and 105 ms early across three recordings including two
+# different voices, a 12 ms spread. Consistent sign, tight spread, three sources — every heuristic
+# for "this is a real systematic bias" was satisfied, and the obvious fix was a calibrated +100 ms
+# shift. It would have been wrong. Checked against pause-preceded words, where the audio settles it
+# without any model, whisper reads -10, -20 and +50 ms — accurate. The 100 ms belonged to MMS_FA,
+# which starts a span at the first strongly-voiced frame and so skips fricative and plosive onsets.
+# A shift would have injected 100 ms of error into a component that was correct.
+#
+# The lesson generalises past captions: a reference is a hypothesis. Two references disagreeing is
+# information, and the one that can be checked against physics wins.
+
+
+#: Silence before a word, in seconds, for its onset to count as independently verifiable.
+#:
+#: 300 ms is comfortably longer than a plosive closure (~50-100 ms) so the gap is a real pause and
+#: not an artefact of articulation, and short enough to leave a usable sample on ordinary speech.
+VERIFIABLE_PAUSE_S = 0.30
+
+
+def rising_edges(mask: Sequence[bool], *, hop: float = ENVELOPE_HOP_S) -> list[float]:
+    """Times, in seconds, where the speech mask goes from silent to sounding."""
+    return [index * hop for index in range(1, len(mask)) if mask[index] and not mask[index - 1]]
+
+
+def verifiable_word_errors(
+    words: Sequence[object],
+    media: str | Path,
+    *,
+    min_pause: float = VERIFIABLE_PAUSE_S,
+    search: float = 0.5,
+    hop: float = ENVELOPE_HOP_S,
+) -> tuple[list[float], int]:
+    """``(signed_errors_s, considered)`` for words whose onset the audio can settle.
+
+    A positive error means the sound starts *after* the word claims to, i.e. the timestamp is early.
+
+    Only words preceded by at least ``min_pause`` of silence are measured; the rest are skipped
+    rather than estimated, because for them there is no edge that belongs to the word. ``considered``
+    is how many qualified, so a caller can tell "accurate" from "almost nothing to go on".
+    """
+    mask = speech_mask(media, hop=hop)
+    edges = rising_edges(mask, hop=hop)
+    if not edges:
+        return [], 0
+
+    errors: list[float] = []
+    considered = 0
+    previous_end: float | None = None
+    for word in words:
+        try:
+            start = float(word.start)  # type: ignore[attr-defined]
+            end = float(word.end)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if previous_end is not None and (start - previous_end) > min_pause:
+            considered += 1
+            nearby = [edge - start for edge in edges if abs(edge - start) <= search]
+            if nearby:
+                errors.append(min(nearby, key=abs))
+        previous_end = end
+    return errors, considered

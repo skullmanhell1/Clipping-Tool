@@ -62,10 +62,41 @@ came out against building T11:
   **80.7%**, ``medium``/``int8`` **79.6%**, ``medium``/``float32`` **81.1%**. The cheapest
   configuration is the most accurate of the four, and the two slower ones are worse.
 
-So the residual is per-word ASR jitter of a few tens of milliseconds, distributed both ways. Forced
-alignment would address that; onset snapping against an envelope would not, because it has no way
-to tell which of the many onsets under a word is the one that word began at. Reproduce any of the
-above with ``scripts/measure_caption_sync.py``.
+So the residual is per-word ASR jitter of a few tens of milliseconds, distributed both ways. Onset
+snapping against an envelope would not address it, because it has no way to tell which of the many
+onsets under a word is the one that word began at. Reproduce any of the above with
+``scripts/measure_caption_sync.py``.
+
+**Forced alignment was then built as a prototype and also rejected — and the way it failed is worth
+more than the result.**
+
+The paragraph above suggested forced alignment as the fix for the residual. It was tried:
+torchaudio's ``MMS_FA`` CTC aligner, on the same source. Two findings, in the order they arrived.
+
+*First, it barely moved the number it was meant to fix.* Median edge-anchored error went 130 ms to
+110 ms, a 15% improvement, for a **1.18 GB** model download and a ``torch`` dependency. Below the
+20% threshold set before running it, so: rejected on cost.
+
+*Second, and this is the part that matters, it produced a wrong answer that looked completely
+right.* Comparing whisper's word starts against the aligner's gave a median difference of **-94 ms,
+-104 ms and -105 ms** across three recordings — two different windows of one voice, plus a second,
+synthesised voice. Consistent sign, 12 ms spread, three sources. Every test for "this is a real
+systematic bias" passed, and the indicated fix was a calibrated +100 ms shift of every word start.
+
+That fix would have injected 100 ms of error into a component that was already correct. Checked
+against **pause-preceded words**, where 300 ms of silence means the audio's rising edge settles the
+onset with no model involved, whisper reads **-10 ms, -20 ms and +50 ms**. It is accurate. The
+100 ms belonged to ``MMS_FA``: a CTC span opens at the first strongly-voiced frame, so it starts
+*after* fricatives and plosive releases that are genuinely part of the word.
+
+Both traps are now instrumented rather than only described. ``evaluation.caption_timing.
+verifiable_word_errors`` measures word onsets **only** where a real pause makes them verifiable, and
+skips the rest instead of estimating them — which is what the 130 ms figure was: a number reported
+for every word when only about one in ten carried information. Its tests include the continuous-speech
+case, asserting that nothing is reported there.
+
+The transferable lesson, since this cost two rounds: a reference is a hypothesis, not a truth. Two
+references disagreeing is information, and the one that can be checked against physics wins.
 """
 
 from __future__ import annotations

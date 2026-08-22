@@ -52,6 +52,25 @@ person should not have to re-derive that.
   current default) **81.4%** overlap, `small`/`float32` **80.7%** at 3.4× the time, `medium`/`int8`
   **79.6%**, `medium`/`float32` **81.1%** at 9× the time. The cheapest configuration is the most
   accurate of the four, so `WHISPER_COMPUTE_TYPE` is left alone.
+- **Forced alignment was prototyped and rejected, and it nearly caused a regression.** `torchaudio`'s
+  `MMS_FA` CTC aligner improved the edge-anchored median from 130 ms to 110 ms — 15%, below the 20%
+  threshold fixed before running it — for a **1.18 GB** model and a `torch` dependency. Then the
+  interesting part: comparing whisper against it gave **−94, −104 and −105 ms** across three
+  recordings (two windows of one voice, plus a synthesised second voice). Consistent sign, 12 ms
+  spread, three sources; every heuristic for a real systematic bias satisfied, and the indicated fix
+  was a calibrated +100 ms shift. **That would have injected 100 ms of error into a component that
+  was correct.** Measured against pause-preceded words — where 300 ms of silence lets the audio
+  settle the onset with no model involved — whisper reads **−10, −20 and +50 ms**. It is accurate.
+  The 100 ms belonged to `MMS_FA`, whose CTC spans open at the first strongly-voiced frame and so
+  start after fricatives and plosive releases that belong to the word.
+- **`verifiable_word_errors` makes both traps unrepeatable.** It measures word onsets only where a
+  real pause makes them verifiable and **skips the rest rather than estimating them** — which is
+  precisely what the 130 ms figure was: a confident number reported for every word when only about
+  one in ten carried information. Its tests cover the continuous-speech case explicitly, asserting
+  that nothing is reported there, and the sign convention, which is what decided whether a
+  "correction" would have gone the right way. Note the noise floor is invisible synthetically: on
+  gated tones the same code reads 0 ms on known-true times even at 3.3 bursts per second, so a
+  synthetic check makes the broken metric look validated.
 - **T11 onset snapping is still not the answer**, and `worker/word_spans.py` now carries the second
   measurement. Its original note said a ~20 ms envelope would be needed and that R7.8 forbids the
   second audio pass. One now exists in `evaluation/` — where an instrument may spend a pass the

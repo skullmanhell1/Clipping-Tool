@@ -39,6 +39,19 @@ WINDOW_START = 4.0
 WINDOW_END = 12.0
 
 
+class _Timed:
+    """The minimum a word needs to be measurable: a start and an end.
+
+    Deliberately not `worker.transcribe.Word`. These tests measure the instrument, and building the
+    fixtures from the production type would let a change in that type quietly change what is being
+    tested.
+    """
+
+    def __init__(self, start: float, end: float) -> None:
+        self.start = start
+        self.end = end
+
+
 def _burst_source(dest, seconds=SOURCE_SECONDS):
     """A video whose audio is a 1-s tone every 2 s, silent in between."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -202,3 +215,98 @@ def test_speech_mask_reads_the_bursts_out_of_the_source(tmp_path):
 
     assert loud(0.5) and loud(2.5) and loud(4.5), "the tone bursts were not detected"
     assert not loud(1.5) and not loud(3.5), "the silent halves were detected as speech"
+
+
+# --- Word timing measured only where the audio can prove it ---------------------------------
+
+
+@requires_ffmpeg
+def test_verifiable_errors_read_zero_on_known_true_times(tmp_path):
+    """Words placed exactly on the bursts measure ~zero, and every burst qualifies.
+
+    The bursts are separated by a full second of silence, so every word here is pause-preceded and
+    the rising edge is truth rather than a guess.
+    """
+    from evaluation.caption_timing import verifiable_word_errors
+
+    source = _burst_source(tmp_path / "truth.mp4", seconds=20.0)
+    words = [_Timed(start=float(t), end=float(t) + 0.8) for t in range(0, 20, int(BURST_PERIOD_S))]
+
+    errors, considered = verifiable_word_errors(words, source)
+
+    assert considered >= 8, f"only {considered} words qualified; the fixture is too dense"
+    assert errors, "nothing anchored despite a full second of silence before every word"
+    assert max(abs(e) for e in errors) < 0.06, (
+        f"known-true times measured up to {max(abs(e) for e in errors) * 1000:.0f} ms off"
+    )
+
+
+@requires_ffmpeg
+def test_a_deliberate_lead_is_measured_with_the_right_sign(tmp_path):
+    """Claiming a word starts 200 ms before the sound must read as +200 ms, not -200 ms.
+
+    The sign convention is the whole point of the function: it decided whether a 100 ms
+    "correction" would have been applied in the right direction or the wrong one.
+    """
+    from evaluation.caption_timing import verifiable_word_errors
+
+    source = _burst_source(tmp_path / "early.mp4", seconds=20.0)
+    early = [
+        _Timed(start=float(t) - 0.2, end=float(t) + 0.6)
+        for t in range(int(BURST_PERIOD_S), 20, int(BURST_PERIOD_S))
+    ]
+
+    errors, _considered = verifiable_word_errors(early, source)
+
+    assert errors, "nothing anchored"
+    median = sorted(errors)[len(errors) // 2]
+    assert median > 0.12, (
+        f"a 200 ms lead measured {median * 1000:+.0f} ms; a positive error must mean "
+        "the sound starts after the word claims to"
+    )
+
+
+@requires_ffmpeg
+def test_words_inside_continuous_speech_are_skipped_not_guessed(tmp_path):
+    """The whole reason this function exists: no pause, no measurement.
+
+    Continuous sound offers a rising edge only at the very start, so a metric that anchored every
+    word to its nearest edge would return a number per word. This must return almost none, because
+    inside unbroken speech there is no edge that belongs to a word. Reporting a confident number
+    there is how 130 ms of pure noise was once mistaken for a defect.
+    """
+    from evaluation.caption_timing import verifiable_word_errors
+
+    dest = tmp_path / "continuous.mp4"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=30:duration=12",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=sin(2*PI*330*t):d=12:s=48000",
+            "-shortest",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Densely packed words with no gaps: nothing qualifies as pause-preceded.
+    packed = [_Timed(start=i * 0.4, end=i * 0.4 + 0.39) for i in range(1, 28)]
+    errors, considered = verifiable_word_errors(packed, dest)
+
+    assert considered == 0, f"{considered} words claimed a verifiable onset inside unbroken sound"
+    assert errors == [], "an error was reported for a word whose onset the audio cannot settle"
