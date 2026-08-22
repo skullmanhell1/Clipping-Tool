@@ -87,6 +87,21 @@ jobs:
       # measurement readings, `evaluation/fidelity.py` records the VMAF build in provenance, and
       # `compare()` refuses to difference readings taken across builds. A silently-updated
       # libvmaf would invalidate every stored baseline with nothing to point at as the cause.
+      #
+      # The tag must be a **month-end** autobuild, and that is the whole point of this paragraph.
+      # BtbN/FFmpeg-Builds prunes its releases: it keeps roughly the last fourteen daily
+      # autobuilds, plus the last-of-month build for each month going back about two years. The
+      # previous pin here was `autobuild-2026-08-07-13-13` — a mid-month daily — so it was
+      # deleted upstream fourteen days later and the URL below started returning 404. Immutable
+      # was true; durable was not, and the two are not the same property. A month-end tag has a
+      # ~2 year life instead of a ~2 week one, and carries the identical asset: this pin is the
+      # same ffmpeg revision (`n7.1.5-12-g1fdbca85aa`) the pruned daily served, republished under
+      # a tag that survives.
+      #
+      # Verify a candidate before bumping:
+      #   curl -sSL https://api.github.com/repos/BtbN/FFmpeg-Builds/releases | \
+      #     python3 -c 'import json,sys; [print(r["tag_name"]) for r in json.load(sys.stdin)]'
+      # and pick a tag whose date is the last day of a month.
       - name: Cache the VMAF-capable ffmpeg
         id: cache-vmaf-ffmpeg
         uses: actions/cache@v4
@@ -94,15 +109,25 @@ jobs:
           path: .ffmpeg-vmaf
           # The URL is in the key, so changing the pin below busts the cache by construction and
           # cannot serve a stale binary under a new pin.
-          key: vmaf-ffmpeg-autobuild-2026-08-07-13-13-n7.1.5-12-g1fdbca85aa
+          key: vmaf-ffmpeg-autobuild-2026-07-31-14-10-n7.1.5-12-g1fdbca85aa
 
       - name: Fetch the VMAF-capable ffmpeg
         if: steps.cache-vmaf-ffmpeg.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-07-13-13/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
-          sha="4b773a5d930e44d0d187ed543f6c4cb16adc91d3abc1ac27af735486ecbfc7c9"
-          curl -sSL --retry 3 -o ffmpeg-vmaf.tar.xz "$url"
+          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
+          sha="c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79"
+          # `--fail` is load-bearing, not tidiness. Without it curl writes GitHub's 9-byte
+          # "Not Found" body to the output path and exits 0, so a *pruned release* arrived here
+          # disguised as `sha256sum: WARNING: 1 computed checksum did NOT match` — which reads as
+          # the binary having been tampered with, and sends you looking for a supply-chain
+          # problem that does not exist. The two causes need different fixes (bump the pin versus
+          # stop trusting the source), so they must not share a symptom.
+          curl -sSL --fail --retry 3 -o ffmpeg-vmaf.tar.xz "$url" || {
+            echo "::error::${url} could not be fetched. If this is a 404 the release was pruned"
+            echo "::error::upstream — re-pin to a month-end autobuild tag (see the comment above)."
+            exit 1
+          }
           echo "${sha}  ffmpeg-vmaf.tar.xz" | sha256sum --check --strict
           mkdir -p .ffmpeg-vmaf
           # Only the binary; the archive also carries ffprobe, docs and shared libs we do not use.
