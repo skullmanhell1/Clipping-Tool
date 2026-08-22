@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the core engine could produce a clip that was silently wrong
+
+Eleven defects in the clip-generating engine. None of them crash, and that is the point: this
+project's stated worst failure mode is a clip that renders, encodes, uploads and looks finished
+while being wrong, because nothing in a green suite can tell the difference. They fall into three
+families.
+
+**1. ffmpeg reported success and wrote nothing.**
+
+Every encode helper was `_run(cmd)` followed by `return dest`, which makes the **exit code the only
+evidence** that anything was produced. ffmpeg exits 0 while writing a 0-byte or header-only file in
+several reachable cases: `-ss` at or past the source duration, a `-t` shorter than one frame, a
+filter graph that yields no frames, and a `concat` whose `trim` ranges all collapse — and `probe()`
+accepts a duration of `0.0` without complaint, so a window derived from a malformed probe reaches
+exactly that state. No test anywhere asserted that an ffmpeg output existed or was non-empty; the
+only such check in the whole engine was in `rerender.py`, which is the pattern the helpers were
+missing.
+
+The worst instance compounded: `run_pipeline` applied the keep-interval pass, then
+**unconditionally deleted the untrimmed original** and continued with the result. A 0-byte
+"success" therefore destroyed the only good media for the clip, and every later stage — geometry,
+compositor, thumbnail — ran against an empty file while the clip record claimed the edit had
+succeeded. New `ffmpeg_utils._require_output` validates at the seam all six helpers already pass
+through (and removes the empty file, since a zero-byte artefact passes every later `exists()` guard
+and moves the failure several stages away from its cause). Before the irreversible deletion the
+pipeline now additionally **probes** the trimmed file, because a header-only MP4 is non-empty and
+still undecodable.
+
+**2. An edit failed and was reported as applied — or applied and never reported.**
+
+- `except fu.FFmpegError: pass` covered the keep-interval pass, and `pending` there is the single
+  resolved keep list for **three** features: filler removal, the U4 cut list and cold-open
+  assembly. Their markers are appended only on the success path, so a failure shipped a clip with
+  every requested edit missing and a record byte-identical to one nobody asked to edit. The
+  compositor stage a few lines below already honours exactly this contract with
+  `compositor_degraded`, and its comment explains why the silent version was a defect — this was
+  the same defect one stage earlier. Now `keep_intervals_degraded`, logged, with the partial
+  intermediate removed instead of orphaned in `storage/temp/<job_id>/`.
+- **`transcript_filter.MARKER` was defined, documented as mirroring the `*_degraded` convention,
+  and applied to nothing** — a repo-wide grep found exactly one occurrence, its own definition. T3
+  could delete ASR segments from a clip's captions, sidecars, soft subtitle tracks and the LLM's
+  selection input with only a log line. Per that module's own reasoning, "a wrongly-dropped
+  sentence just looks like the speaker never said it", which makes it the highest-consequence
+  silent edit in the pipeline and the one with no marker. `transcribe()` gained an `on_filtered`
+  callback — matching its existing `on_hit`/`on_miss` shape rather than adding a field to
+  `Transcript`, which the cache serialises — and the pipeline records `transcript_filtered:<n>`.
+- `detect_letterbox` bypassed `_run`, hard-coded a 120 s timeout that ignored
+  `settings.ffmpeg_timeout_seconds`, never inspected `returncode`, and caught bare `Exception`. So a
+  broken build, a missing `cropdetect` and an unreadable file were all indistinguishable from "no
+  bars found" — and "no bars found" is the answer that makes the reframe path centre its crop on
+  the letterbox, the exact failure V16 exists to prevent. Now routed through `_run`, with the
+  refusal logged.
+- A failed thumbnail was swallowed entirely; now logged.
+
+**3. A value meaning "no information" was read as its opposite.**
+
+- `float(getattr(w, "probability", 1.0) or 1.0)` — **`0.0` is falsy**, so the one value meaning
+  "the model had no confidence in this word" was rewritten as *maximum* confidence. The consumer is
+  `transcript_filter._mean_word_probability`, whose low-confidence-plus-repetitive rule is the ASR
+  hallucination signature — and hallucinated words are precisely the ones with near-zero
+  probabilities. The filter was systematically biased away from firing on its own target case. The
+  same `or` idiom is correct on `avg_logprob`/`no_speech_prob`, where 0.0 is the intended neutral,
+  which is presumably why it was copied.
+- `max(0.0, min(100.0, float("nan")))` returns **100.0**: `nan < 100.0` is False so `min` never
+  replaces its running value. A malformed LLM score was therefore not clamped to neutral — it was
+  promoted to the maximum and sorted ahead of every genuinely scored moment, where
+  `deduplicate(limit=max_clips)` let it evict real candidates. `json.loads` accepts a bare `NaN`
+  literal, so this needed nothing unusual to happen. `candidate_ranking` guards this everywhere;
+  only the LLM path did not. NaN/Infinity are now also rejected in the *range*, where every
+  comparison against NaN being False meant an unguarded value slipped through the very clamps meant
+  to catch it.
+
+**Also fixed**
+
+- **The transcript cache key omitted the decoder's device and compute type.** `_get_model` keys its
+  in-process model cache on `(model, device, compute_type)` — it knows all three shape the model —
+  while the disk key carried only the model name, and the module docstring claimed "every parameter
+  that changes the answer is in the key". This repository measured the difference itself in
+  `worker/word_spans.py`: small/int8 81.4% mask overlap, small/float32 80.7%, medium/int8 79.6%.
+  Entries are content-addressed and never expire, so a host that acquired a GPU would have gone on
+  serving CPU int8 word timings forever with nothing able to correct it.
+- **The LLM reply was never held to the requested clip length.** `min_len`/`max_len` built the
+  prompt and were never checked against what came back, so a model that ignored the instruction
+  shipped a clip of any length with no marker. The fallback path has always enforced this via
+  `candidate_ranking.length_fit`, so the two selection paths disagreed about whether `clip_length`
+  was a constraint or a suggestion. Over-long is now trimmed to the cap at a sentence boundary
+  where one fits; under-long is dropped.
+- **The thumbnail was seeked using the pre-trim window duration.** `c.duration` is the *source*
+  window; the delivered file is `clip_duration` long whenever anything was removed.
+  `choose_thumbnail_time` scores candidates at 0.3/0.5/0.7 of what it is given, so with 30% removed
+  the 0.7 candidate landed past the end of the file — at best clamping to the last frame (the
+  trailing pause on every heavily trimmed clip), at worst producing nothing and silently dropping
+  the thumbnail. Every other consumer in that block already used `clip_duration`.
+- **`hygiene_for_cue` accepted `cue_start` and silently discarded it.** `apply_hygiene` had no
+  lower bound at all — its pre-check tested ordering, sign, `cue_end` and the floor, and the repair
+  loop's cursor started at `None`, so the first span was never bounded below by anything. R8.5's
+  reasoning (a highlight on text that is not on screen) applies to the leading edge exactly as to
+  the trailing one, and it is reachable after C24 merges two cues, which takes the earlier `start`
+  and concatenates both span lists.
+- **The span-hygiene repair was stricter than the compliance test it enforces**, by `SPAN_EPSILON`.
+  Once any span in a cue failed for an unrelated reason, every perfectly adjacent boundary in that
+  cue was nudged a millisecond and counted, inflating `word_spans_repaired:<n>` with repairs nobody
+  needed. A marker that overstates is a marker nobody trusts.
+- **Every re-render leaked its full scratch set, permanently.** `rerender` uses
+  `storage/temp/<job_id>_rerender`, and `JobManager._cleanup_temp` removes
+  `storage/temp/<job_id>` — a name it can never match — and is additionally gated on
+  `auto_delete_temp`. So the one operation the review UI encourages repeating accumulated a
+  complete set of per-clip intermediates on every run. Now removed in the `finally`, and only when
+  the call derived the path itself (a caller who names the directory owns its lifetime).
+- **The pitch WAV leaked a directory per cache-miss run**, holding a 16 kHz WAV of the *entire*
+  source, under the system temp root rather than `settings.temp_dir` so `_cleanup_temp` could never
+  find it either. Now a scoped `TemporaryDirectory`. Its `except Exception` is also logged: the
+  feature is off by default, so someone enabling it had no way to tell "measured, made no
+  difference" from "never measured".
+- `intermediate_cache.prune` called `item.stat()` guarded by `item.exists()` — two syscalls and a
+  TOCTOU race, so a concurrent sweep made `stat()` raise `OSError` out of `sort`, outside the
+  enclosing `try`, and into whichever selection pass triggered the prune.
+
+**One reported defect was investigated and is not one.** The keyframe *file* cache was flagged as
+able to serve a truncated frame set forever. It cannot: `sample_keyframes` iterates every planned
+timestamp on every run and its sampler treats a zero-byte file as absent, so an interrupted
+extraction re-extracts exactly the missing frames. Recorded here because "verified not to be a
+problem" is worth as much as a fix and stops it being re-investigated.
+
 ### Fixed — the three red CI crosses on PRs #1-#3, and the reason the boot gate could not catch anything
 
 The failing checks on the first three pull requests were **not** the Actions billing block that has

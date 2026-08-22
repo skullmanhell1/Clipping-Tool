@@ -11,6 +11,7 @@ callers can surface actionable errors.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from collections.abc import Sequence
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Type-checking only. `h264_args` imports `worker.video_encoders` lazily *inside* the
@@ -326,7 +329,7 @@ def mux_subtitle_tracks(
         args += [f"-metadata:s:s:{index}", f"language={lang or 'und'}"]
     args += ["-movflags", "+faststart", str(dest)]
     _run(args)
-    return dest
+    return _require_output(dest, args, what="muxed output")
 
 
 def mux_soft_subtitles(
@@ -557,6 +560,46 @@ def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.Complete
     return proc
 
 
+def _require_output(dest: str | Path, cmd: list[str], *, what: str = "output") -> Path:
+    """Fail when ffmpeg reported success but produced nothing usable.
+
+    Every encode helper here used to be ``_run(cmd)`` followed by ``return dest``, which makes the
+    **exit code the only evidence** that anything was written. ffmpeg exits 0 while producing a
+    0-byte or header-only file in several reachable cases: ``-ss`` at or past the source duration,
+    a ``-t`` shorter than one frame, a filter graph that yields no frames, and a ``concat`` whose
+    ``trim`` ranges are all empty. `probe()` accepts a duration of ``0.0`` without complaint, so a
+    window derived from a malformed probe can produce exactly that.
+
+    The consequence is not a failed clip, it is a *silently wrong* one -- which this project treats
+    as the worse outcome. So the check is here, at the seam every helper already passes through,
+    rather than repeated at six call sites where the seventh would be forgotten.
+
+    The empty file is **removed** rather than left in place. A zero-byte artefact is worse than no
+    artefact: every later stage's `exists()` guard passes, so the failure surfaces several stages
+    downstream as a confusing decode error instead of here, where the command that failed is known.
+
+    Size alone, deliberately -- no probe. This runs after every encode, and the failure it exists to
+    catch is "nothing was written", which a stat answers for free. Callers that must be certain the
+    media is *decodable* (before deleting the only other copy, say) should probe explicitly; see
+    ``run_pipeline``'s keep-interval block, which does exactly that for that reason.
+    """
+    path = Path(dest)
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise FFmpegError(
+            f"{' '.join(cmd[:2])} ... reported success but wrote no {what} at {path}"
+        ) from exc
+    if size == 0:
+        path.unlink(missing_ok=True)
+        raise FFmpegError(
+            f"{' '.join(cmd[:2])} ... reported success but the {what} at {path} is empty. "
+            "This usually means the requested range lies at or past the end of the source, "
+            "or a filter graph produced no frames."
+        )
+    return path
+
+
 def _fraction(value: object) -> float:
     """Parse ffprobe's ``"30000/1001"`` rate notation. Returns 0.0 when unreadable.
 
@@ -708,7 +751,7 @@ def cut_segment(
     cmd += ["-movflags", "+faststart", str(dest)]
 
     _run(cmd)
-    return dest
+    return _require_output(dest, cmd, what="clip")
 
 
 #: How the area around a fitted frame is filled (V11).
@@ -862,7 +905,7 @@ def reformat_aspect(
         str(dest),
     ]
     _run(cmd)
-    return dest
+    return _require_output(dest, cmd, what="reformatted video")
 
 
 #: Minimum fraction of a dimension that must be bar for a letterbox to be acted on.
@@ -919,9 +962,26 @@ def detect_letterbox(
         "null",
         "-",
     ]
+    # Routed through `_run` like every other invocation in this module, rather than a bare
+    # `subprocess.run(..., timeout=120)`. Three things were wrong with going direct: the hard-coded
+    # ceiling ignored `settings.ffmpeg_timeout_seconds`, `proc.returncode` was never inspected, and
+    # `except Exception` flattened every outcome to None. So a broken ffmpeg build, a missing
+    # `cropdetect` filter and an unreadable file were all indistinguishable from "no bars found" —
+    # and "no bars found" is the answer that makes the reframe path centre its crop on the
+    # letterbox, which is the exact failure V16 exists to prevent.
+    #
+    # `_run` raises on a non-zero exit and surfaces the stderr tail, so the distinction survives.
+    # The refusal is still None-on-failure, because every caller treats that as "use the frame
+    # as-is" — but it is now a *logged* refusal rather than an invisible one.
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
-    except Exception:
+        proc = _run(command)
+    except FFmpegError:
+        logger.warning(
+            "letterbox detection failed for %s; reframing will treat the whole frame as content, "
+            "which centres the crop on any bars that are present",
+            source,
+            exc_info=True,
+        )
         return None
 
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
@@ -977,7 +1037,7 @@ def extract_audio(source: str | Path, dest: str | Path, sample_rate: int = 16000
         str(dest),
     ]
     _run(cmd)
-    return dest
+    return _require_output(dest, cmd, what="audio")
 
 
 def generate_thumbnail(
@@ -1000,4 +1060,4 @@ def generate_thumbnail(
         str(dest),
     ]
     _run(cmd)
-    return dest
+    return _require_output(dest, cmd, what="thumbnail")

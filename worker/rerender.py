@@ -133,6 +133,9 @@ def rerender_clip(
     options = merge_options(job.options, option_overrides)
 
     clips_dir = Path(clips_dir or (Path(settings.clips_dir) / job.id))
+    # Recorded so the `finally` below knows whether this call owns the scratch directory and may
+    # therefore delete it. See the note there.
+    temp_dir_was_derived = temp_dir is None
     temp_dir = Path(temp_dir or (Path(settings.temp_dir) / f"{job.id}_rerender"))
 
     # Rendered into a scratch directory first, so a failure cannot leave a half-written file
@@ -194,3 +197,16 @@ def rerender_clip(
         return updated
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        # The scratch directory too, and only when this call created it.
+        #
+        # It was leaked on every re-render, permanently. `JobManager._cleanup_temp` is the usual
+        # backstop, but it removes `storage/temp/<job_id>` and this path is
+        # `storage/temp/<job_id>_rerender` — a name it can never match — and it is additionally
+        # gated on the `auto_delete_temp` toggle. So the one operation the review UI actively
+        # encourages repeating accumulated a full set of per-clip intermediates every time, in a
+        # directory reused by name on the next re-render of the same job.
+        #
+        # Skipped when the caller supplied `temp_dir`: a caller that named the directory owns its
+        # lifetime, and the evaluation harness passes one it inspects afterwards.
+        if temp_dir_was_derived:
+            shutil.rmtree(temp_dir, ignore_errors=True)

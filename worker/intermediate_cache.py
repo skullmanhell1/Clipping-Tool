@@ -190,7 +190,21 @@ def prune(max_entries: int | None = None) -> int:
     if len(entries) <= limit:
         return 0
 
-    entries.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0.0)
+    def _mtime(item: Path) -> float:
+        """Modification time, or 0.0 (prune first) when it cannot be read.
+
+        `item.stat()` guarded by `item.exists()` was a TOCTOU race: the check and the read are two
+        syscalls, and a concurrent prune or sweep between them makes `stat()` raise `OSError` out of
+        `sort` — outside the `try` above, so it propagated into whichever selection pass happened to
+        trigger the prune. Catching it here is also more correct: an entry that has just vanished
+        sorts oldest, which is exactly where a deleted entry belongs.
+        """
+        try:
+            return item.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    entries.sort(key=_mtime)
     removed = 0
     for item in entries[: len(entries) - limit]:
         try:

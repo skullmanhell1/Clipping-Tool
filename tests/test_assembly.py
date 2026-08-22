@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 from hypothesis import given, settings
@@ -554,9 +555,20 @@ def test_the_seam_between_cold_open_and_body_gets_afade_and_not_acrossfade(
 
     src = make_video("seam.mp4", duration=12.0, w=320, h=240)
     seen: dict = {}
-    monkeypatch.setattr(
-        fl, "_run", lambda cmd, *a, **k: seen.update(graph=cmd[cmd.index("-filter_complex") + 1])
-    )
+
+    def _capture_graph(cmd, *a, **k):
+        """Record the filter graph, and produce the file a real ffmpeg would.
+
+        The output is written because `apply_keep_intervals` now validates that its destination
+        is non-empty before returning -- `run_pipeline` deletes the untrimmed original the moment
+        it does, and a `concat` whose trim ranges all collapse exits 0 having written nothing. A
+        stub that captures the argv and produces no file is not a faithful ffmpeg, and the point
+        of that validation is to notice exactly this.
+        """
+        seen.update(graph=cmd[cmd.index("-filter_complex") + 1])
+        Path(cmd[-1]).write_bytes(b"\0" * 1024)
+
+    monkeypatch.setattr(fl, "_run", _capture_graph)
 
     plan = _plan(retain_in_body=False, min_repeat_gap=0.0)
     fl.apply_keep_intervals(src, assembly.compose(plan.segments, None), tmp_path / "out.mp4")
@@ -578,9 +590,20 @@ def test_audio_and_video_are_never_reordered_independently(tmp_path, monkeypatch
 
     src = make_video("av.mp4", duration=12.0, w=320, h=240)
     seen: dict = {}
-    monkeypatch.setattr(
-        fl, "_run", lambda cmd, *a, **k: seen.update(graph=cmd[cmd.index("-filter_complex") + 1])
-    )
+
+    def _capture_graph(cmd, *a, **k):
+        """Record the filter graph, and produce the file a real ffmpeg would.
+
+        The output is written because `apply_keep_intervals` now validates that its destination
+        is non-empty before returning -- `run_pipeline` deletes the untrimmed original the moment
+        it does, and a `concat` whose trim ranges all collapse exits 0 having written nothing. A
+        stub that captures the argv and produces no file is not a faithful ffmpeg, and the point
+        of that validation is to notice exactly this.
+        """
+        seen.update(graph=cmd[cmd.index("-filter_complex") + 1])
+        Path(cmd[-1]).write_bytes(b"\0" * 1024)
+
+    monkeypatch.setattr(fl, "_run", _capture_graph)
 
     plan = _plan(retain_in_body=False, min_repeat_gap=0.0)
     keeps = assembly.compose(plan.segments, None)

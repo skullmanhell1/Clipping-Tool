@@ -184,6 +184,7 @@ def apply_hygiene(
     *,
     min_seconds: float = DEFAULT_MIN_SPAN_SECONDS,
     cue_end: float | None = None,
+    cue_start: float | None = None,
 ) -> tuple[list[Any], Hygiene_Report]:
     """Return spans that are ordered, non-overlapping and long enough to see (C23).
 
@@ -198,6 +199,14 @@ def apply_hygiene(
        once is a rendering fault.
     3. **Minimum duration** (R8.3), applied last and yielding to the two above (R8.4) — and never
        past the cue's own end (R8.5), since a highlight outliving its line has nothing to highlight.
+
+    ``cue_start`` is R8.5's other edge, and it was missing. The window is bounded at both ends for
+    the same reason: a span beginning *before* its cue appears is highlighting text that is not on
+    screen **yet**, which looks identical to one outliving its line and was not clamped at all.
+    ``hygiene_for_cue`` has always accepted a ``cue_start`` argument and silently discarded it, so
+    nothing enforced the leading edge. Reachable in practice after C24 merges two cues (the merged
+    cue takes the earlier ``start`` and concatenates both span lists) and after ``rebase_words``
+    rounding, either of which can leave a span a few milliseconds ahead of its line.
     """
     report = Hygiene_Report()
     if not spans:
@@ -217,12 +226,18 @@ def apply_hygiene(
 
     floor = max(0.0, float(min_seconds))
     limit = float(cue_end) if cue_end is not None else None
+    origin = float(cue_start) if cue_start is not None else None
 
     # A cheap pre-check so the common case allocates nothing and returns the inputs themselves.
     compliant = True
     previous_end = None
     for bounds, _span in parsed:
         start, end = bounds  # type: ignore[misc]
+        if origin is not None and start < origin - 1e-9:
+            # R8.5's leading edge. See the docstring: a span starting before its own cue highlights
+            # a line that has not appeared yet.
+            compliant = False
+            break
         if previous_end is not None and start < previous_end - 1e-9:
             compliant = False
             break
@@ -257,12 +272,15 @@ def apply_hygiene(
         return list(spans), report
 
     out: list[Any] = []
-    cursor = None
+    # Seeded with the cue's own start rather than None, which is what pulls a span beginning before
+    # its line forward. With `cursor = None` the *first* span was never bounded below by anything,
+    # so the leading edge went unrepaired even once some other fault had triggered the repair pass.
+    cursor = origin
     for index, (bounds, span) in enumerate(parsed):
         start, end = bounds  # type: ignore[misc]
         original = (start, end)
 
-        if cursor is not None and start < cursor:
+        if cursor is not None and start < cursor - 1e-9:
             start = cursor
             report.reordered += 1
         if end < start:
@@ -302,7 +320,14 @@ def apply_hygiene(
                         # one where the floor was simply met.
                         report.clamped_to_cue += 1
 
-        cursor = end + SPAN_EPSILON
+        # `end`, not `end + SPAN_EPSILON`. The pre-check above accepts `start >= previous_end` as
+        # compliant, so advancing the cursor past `end` made the repair loop stricter than the
+        # compliance test it is supposed to enforce: once *any* span in a cue failed for an
+        # unrelated reason, every perfectly adjacent boundary in that cue was nudged by a
+        # millisecond and counted as `reordered`, inflating the `word_spans_repaired:<n>` marker
+        # with repairs nobody needed. The gap that SPAN_EPSILON protects is still opened where it
+        # matters, by the `ceiling - SPAN_EPSILON` truncation above.
+        cursor = end
         out.append(span if (start, end) == original else replace(span, start=start, end=end))
 
     return out, report
@@ -317,5 +342,7 @@ def hygiene_for_cue(
     R8.5 exists: a word span extending past the line it belongs to is highlighting text that is no
     longer on screen.
     """
-    repaired, report = apply_hygiene(spans, min_seconds=min_seconds, cue_end=cue_end)
+    repaired, report = apply_hygiene(
+        spans, min_seconds=min_seconds, cue_end=cue_end, cue_start=cue_start
+    )
     return repaired, report

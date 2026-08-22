@@ -91,6 +91,8 @@ def cache_key(
     translate: bool,
     beam_size: int,
     asr_config: str | None = None,
+    device: str | None = None,
+    compute_type: str | None = None,
 ) -> str:
     """The cache key for a transcript: the content plus everything that shaped it.
 
@@ -99,6 +101,24 @@ def cache_key(
     computes the same key as a production job on the same file with no vocabulary set. That
     agreement is asserted by a test; without the default the harness and the pipeline would
     quietly maintain two separate caches of the same thing.
+
+    ``device`` and ``compute_type`` are in the key because **they change the answer**, and this
+    module's own docstring promised that every such parameter was already covered. It was not.
+    ``transcribe._get_model`` keys its in-process model cache on ``(model, device, compute_type)``
+    -- it knows all three shape the model -- while the *disk* key carried only the model name.
+
+    This repository measured the difference itself, in ``worker/word_spans.py``: ``small/int8``
+    scored 81.4% mask overlap, ``small/float32`` 80.7%, ``medium/int8`` 79.6%. Different
+    quantisation, different word timings. And ``WHISPER_DEVICE=auto`` on a CUDA host silently
+    selects ``float16``, so a box that acquires a GPU would go on serving word timings decoded on
+    CPU in int8 forever -- entries are content-addressed and never expire, so nothing would ever
+    correct it.
+
+    Defaulted to ``None`` rather than made required so existing callers keep working, and ``None``
+    means "not stated" rather than a particular device: an omitted value contributes an empty
+    segment, which is exactly the pre-change key. That keeps the harness and the pipeline in
+    agreement for callers that do not know about these, the same reason ``asr_config`` has a
+    default.
     """
     parts = (
         f"v{SCHEMA_VERSION}",
@@ -108,6 +128,8 @@ def cache_key(
         "translate" if translate else "transcribe",
         str(int(beam_size)),
         asr_config if asr_config is not None else asr_fingerprint(),
+        device or "",
+        compute_type or "",
     )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
