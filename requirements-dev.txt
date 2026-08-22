@@ -19,6 +19,12 @@ mypy>=1.10,<2.0       # static typing
 # the tiebreakers — ruff is already a hard dependency, already blocking in CI, and already
 # carries `line-length = 100` in `[tool.ruff]`, so the formatter and the linter cannot drift
 # apart on line length the way a separate `[tool.black]` section could.
+# Declared explicitly, though it is already in `requirements.lock.txt` as a transitive dependency.
+# `tests/test_deployment_manifest.py` parses `render.yaml` and so imports it directly, and a direct
+# import satisfied only by somebody else's dependency is the kind of coupling that breaks on an
+# unrelated upgrade — with a failure that names this test rather than the removal that caused it.
+pyyaml>=6.0,<7.0      # parses render.yaml in the deployment-manifest test
+
 pytest>=8.2,<9.0      # test runner
 pytest-cov>=5.0,<8.0  # coverage measurement (reported in CI, not gated)
 hypothesis>=6.100,<7.0 # property-based testing

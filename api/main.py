@@ -28,7 +28,6 @@ Run: ``uvicorn api.main:app --reload``
 
 from __future__ import annotations
 
-import io
 import logging
 import time
 import uuid
@@ -51,7 +50,7 @@ from publishers.base import PublishState
 from publishers.history import get_history
 from publishers.manager import get_publish_manager
 from runtime_config import RETENTION_CHOICES, get_runtime_store
-from storage_backends.retention import cleanup_expired, cleanup_temp, disk_usage
+from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker import captions as cap
 from worker.download import (
@@ -176,7 +175,10 @@ def _run_startup() -> None:
 
         get_sweeper().start()
     except Exception:
-        pass
+        # Retention disabled for the life of the process is a disk that fills up silently, so
+        # this is logged rather than passed over. Still not fatal: serving clips with an
+        # unswept disk beats refusing to boot.
+        logger.exception("could not start the retention sweeper; expired clips will not be swept")
 
 
 @asynccontextmanager
@@ -852,8 +854,7 @@ def submit_batch(req: BatchRequest) -> dict:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     items = [{"input_type": "url", "source": u} for u in urls]
     batch_id = get_manager().submit_batch(items, req.options.to_options())
-    jobs = get_manager().store.by_batch(batch_id)
-    return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
+    return {"batch_id": batch_id, "jobs": get_manager().store.snapshot_batch(batch_id)}
 
 
 async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
@@ -1140,14 +1141,31 @@ async def upload(
     uploads_dir = Path(settings.uploads_dir)
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
+    file_limit = int(settings.max_upload_files)
+    if file_limit > 0 and len(files) > file_limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{len(files)} files in one request exceeds the maximum of {file_limit}. "
+                "Split the batch, or raise MAX_UPLOAD_FILES."
+            ),
+        )
+
     saved: list[dict] = []
     try:
         for f in files:
             saved.append(await _save_upload(f, uploads_dir))
-    except HTTPException:
+    except BaseException:
         # A rejected file in the middle of a batch would otherwise leave the earlier
         # ones on disk with no job referencing them — invisible litter that the
         # retention sweeper does not own. Roll the whole request back.
+        #
+        # `BaseException`, not `HTTPException`. `_save_upload` cleans up its *own* partial
+        # destination on any failure, but the files that already succeeded were only rolled back
+        # for the validation rejections — so a disk filling up on file 5 of 10, or the client
+        # disconnecting, left files 1-4 orphaned. That litter is permanent: `retention.py`
+        # deliberately excludes `uploads` from the sweep, and the only removal endpoint needs a
+        # job record that was never created.
         for item in saved:
             Path(item["source"]).unlink(missing_ok=True)
         raise
@@ -1155,11 +1173,12 @@ async def upload(
     manager = get_manager()
     if len(saved) == 1:
         job = manager.submit("file", saved[0]["source"], options, title=saved[0]["title"])
-        return {"jobs": [job.to_dict()]}
+        # Snapshot rather than `job.to_dict()`: the worker may already be updating this job by
+        # the time the response is built, since `submit` schedules it before returning.
+        return {"jobs": [manager.store.snapshot(job.id) or job.to_dict()]}
 
     batch_id = manager.submit_batch(saved, options)
-    jobs = manager.store.by_batch(batch_id)
-    return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
+    return {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -1167,15 +1186,18 @@ async def upload(
 # ---------------------------------------------------------------------------
 @app.get("/api/jobs", tags=["jobs"])
 def list_jobs() -> dict:
-    return {"jobs": [j.to_dict() for j in get_manager().store.all()]}
+    # `snapshot_all`, not `all()` + `to_dict()`: the latter serialises live Job objects outside
+    # the store lock while the render thread mutates them, which is an intermittent 500 on the
+    # route the UI polls every 1200 ms. See JobStore's "serialised reads" section.
+    return {"jobs": get_manager().store.snapshot_all()}
 
 
 @app.get("/api/jobs/{job_id}", tags=["jobs"])
 def get_job(job_id: str) -> dict:
-    job = get_manager().store.get(job_id)
-    if job is None:
+    snapshot = get_manager().store.snapshot(job_id)
+    if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job.to_dict()
+    return snapshot
 
 
 @app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])
@@ -1232,10 +1254,10 @@ def get_job_timings(job_id: str) -> dict:
 
 @app.get("/api/batches/{batch_id}", tags=["jobs"])
 def get_batch(batch_id: str) -> dict:
-    jobs = get_manager().store.by_batch(batch_id)
+    jobs = get_manager().store.snapshot_batch(batch_id)
     if not jobs:
         raise HTTPException(status_code=404, detail="Batch not found")
-    return {"batch_id": batch_id, "jobs": [j.to_dict() for j in jobs]}
+    return {"batch_id": batch_id, "jobs": jobs}
 
 
 # ---------------------------------------------------------------------------
@@ -1932,12 +1954,20 @@ def update_storage_settings(req: StorageSettingsModel) -> dict:
 
 @app.post("/api/storage/cleanup", tags=["storage"])
 def storage_cleanup(temp: bool = True, expired: bool = True) -> dict:
-    """Run cleanup now: expired clips (per retention) and/or all temp files."""
+    """Run cleanup now: expired clips (per retention) and/or all temp files.
+
+    Both branches skip anything belonging to a QUEUED or PROCESSING job. This endpoint runs in
+    the same process as the render, so "clean up temp files" with ``temp=true`` (the default)
+    used to delete the scratch directory a live ffmpeg pass was reading from and fail the job
+    with a message that named a missing temp file rather than this request. The number kept is
+    returned so the caller can see the difference between "nothing to remove" and "it is in use".
+    """
     result: dict = {}
     if expired:
         result["expired"] = cleanup_expired()
     if temp:
         result["temp_removed"] = cleanup_temp()
+        result["active_jobs_protected"] = sorted(active_job_ids())
     # refresh=True: this endpoint has just deleted files, so the cached area sizes are
     # stale by construction and would report the pre-cleanup totals.
     result["usage"] = disk_usage(refresh=True)
@@ -2081,21 +2111,94 @@ def _clip_metadata_text(clip) -> str:
     )
 
 
-@app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
+class _ZipSink:
+    """A write-only sink that hands each chunk zipfile produces straight to the caller.
+
+    ``zipfile`` needs somewhere to write. Given a ``BytesIO`` it writes the whole archive into
+    memory before a single byte reaches the client, which is what this replaces. This exposes
+    ``write`` and ``tell`` but deliberately **no** ``seek``: ``ZipFile`` probes for seekability and
+    falls back to data descriptors when it is absent, which is exactly the streaming-friendly
+    layout wanted here, and is a valid archive every unzip implementation reads.
+    """
+
+    def __init__(self) -> None:
+        self._chunks: list[bytes] = []
+        self._pos = 0
+
+    def write(self, b: bytes, /) -> int:
+        self._chunks.append(bytes(b))
+        self._pos += len(b)
+        return len(b)
+
+    def tell(self) -> int:
+        return self._pos
+
+    def flush(self) -> None:  # pragma: no cover - zipfile calls this on close
+        pass
+
+    def close(self) -> None:
+        """Part of the ``_ZipWritable`` protocol; there is nothing to release.
+
+        ``ZipFile`` does not call this for a caller-supplied object — it only closes files it
+        opened itself — but the method has to exist for the type to match.
+        """
+
+    def drain(self) -> bytes:
+        """Take everything written since the last drain."""
+        data = b"".join(self._chunks)
+        self._chunks.clear()
+        return data
+
+
+def _iter_clip_package(path: Path, safe_name: str, metadata: str, chunk_size: int):
+    """Yield a zip of ``path`` plus its metadata sidecar, a chunk at a time.
+
+    The media member is **stored, not deflated**. H.264 in an MP4 container is already
+    compressed, so deflating it spent CPU on the API process — competing with the single render
+    worker — to save approximately nothing. The metadata text is tiny and still deflated.
+    """
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w") as archive:
+        archive.writestr(f"{Path(safe_name).stem}_metadata.txt", metadata, zipfile.ZIP_DEFLATED)
+        if chunk := sink.drain():
+            yield chunk
+        info = zipfile.ZipInfo.from_file(path, arcname=safe_name)
+        info.compress_type = zipfile.ZIP_STORED
+        with archive.open(info, "w") as entry, path.open("rb") as source:
+            while block := source.read(chunk_size):
+                entry.write(block)
+                if chunk := sink.drain():
+                    yield chunk
+    # The central directory is written by ZipFile.close, i.e. on leaving the `with`.
+    if chunk := sink.drain():
+        yield chunk
+
+
+@app.get(
+    "/api/clips/{job_id}/{filename}/download", tags=["clips"], dependencies=[Depends(rate_limit)]
+)
 def download_clip(job_id: str, filename: str) -> StreamingResponse:
+    """Download one clip packaged with its metadata as a zip.
+
+    Streamed rather than buffered. This built the entire archive in a ``BytesIO`` first, so peak
+    memory was one clip — routinely 100-400 MB — per concurrent request, in a container the
+    blueprint provisions at 2 GB that also hosts whisper and ffmpeg. Being both unbounded and
+    reachable from a plain ``<a href>`` (the token is allowed in the query string for this path,
+    see ``api.security._QUERY_TOKEN_PATHS``) made an OOM-kill of the API a matter of holding down
+    refresh — and that kill also takes every in-flight render with it, which then reappears as
+    "Interrupted by restart" and looks like a worker crash rather than a download.
+
+    Rate-limited for the same reason: it is the one expensive route that had no throttle.
+    """
     safe_name = Path(filename).name
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
     job = get_manager().store.get(job_id)
     clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(path, arcname=safe_name)
-        archive.writestr(f"{Path(safe_name).stem}_metadata.txt", _clip_metadata_text(clip))
-    buf.seek(0)
+    chunk_size = max(1, int(settings.upload_chunk_bytes))
     return StreamingResponse(
-        buf,
+        _iter_clip_package(path, safe_name, _clip_metadata_text(clip), chunk_size),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{Path(safe_name).stem}_package.zip"'
@@ -2105,9 +2208,18 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
 def download_video_only(job_id: str, filename: str) -> FileResponse:
+    """Download one clip's video file.
+
+    The clip cross-check matches ``download_clip``. Without it this route served any existing
+    file in the job's clips directory — sidecar JSON, thumbnails, intermediates — while its
+    sibling in the same URL family served only files listed on the job record. Two routes over
+    one directory with different rules is how the looser one gets forgotten.
+    """
     safe_name = Path(filename).name
     path = Path(settings.clips_dir) / Path(job_id).name / safe_name
-    if not path.exists() or not path.is_file():
+    job = get_manager().store.get(job_id)
+    known = any(c.filename == safe_name for c in job.clips) if job else False
+    if not path.exists() or not path.is_file() or not known:
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, filename=safe_name, media_type="video/mp4")
 

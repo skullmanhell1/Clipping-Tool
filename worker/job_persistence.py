@@ -95,14 +95,25 @@ def describe_store_failure(path: Path, label: str, exc: Exception) -> str:
     can we write to it -- and says which of them is wrong.
     """
     parent = path.parent
+
+    # `os.getuid` does not exist on Windows, and Windows is one of the platforms this function was
+    # written for -- the docstring and the closing advice are both about Docker Desktop bind
+    # mounts. Calling it unguarded meant that on native Windows with an unwritable `storage/`, the
+    # *error formatter* raised `AttributeError` and replaced this carefully worded diagnostic with
+    # exactly the opaque failure it exists to prevent. The uid is a detail of the message; its
+    # absence must not cost the message.
+    def _whoami() -> str:
+        getuid = getattr(os, "getuid", None)
+        return f" (uid {getuid()})" if getuid is not None else ""
+
     if not parent.is_dir():
         cause = f"its directory {parent} does not exist"
     elif not os.access(parent, os.W_OK):
         # `os.access` is a weak probe in general, but here it is only used to *phrase* a failure
         # that has already happened, never to decide whether to attempt one.
-        cause = f"its directory {parent} is not writable by this user (uid {os.getuid()})"
+        cause = f"its directory {parent} is not writable by this user{_whoami()}"
     elif path.exists() and not os.access(path, os.W_OK):
-        cause = f"the file exists but is not writable by this user (uid {os.getuid()})"
+        cause = f"the file exists but is not writable by this user{_whoami()}"
     else:
         cause = "the filesystem rejected the write"
     return (
@@ -207,27 +218,41 @@ class Job_Persistence:
 
     # -- writes ------------------------------------------------------------
 
-    def save(self, job: Job) -> None:
+    def save(self, job: Job, payload: dict | None = None) -> None:
         """Insert or replace one job record.
 
         Never raises: see the module docstring on why a persistence failure must not
         propagate into the pipeline.
+
+        Args:
+            job: the job being recorded. Its ``id`` and ``created_at`` are used as written.
+            payload: the job already serialised, captured under the caller's lock. When omitted
+                the live object is serialised here, which is correct for a single-threaded caller
+                and racy for :class:`worker.jobs.JobStore` — see ``JobStore._persist``.
+
+        The upsert is guarded by ``updated_at``. Two threads can serialise in one order and reach
+        SQLite in the other, which made the stored row last-writer-by-scheduling: a progress tick
+        that lost the race overwrote a later stage, and the job came back from a restart reporting
+        less progress than it had made. ``WHERE excluded.updated_at >= jobs.updated_at`` makes the
+        newest state win regardless of arrival order, which is what "write-through" was always
+        meant to mean.
         """
         try:
-            payload = job.to_dict()
+            payload = job.to_dict() if payload is None else payload
             with self._lock, self._connect() as db:
                 db.execute(
                     "INSERT INTO jobs (id,batch_id,created_at,updated_at,status,data) "
                     "VALUES(?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET batch_id=excluded.batch_id,"
                     "updated_at=excluded.updated_at,status=excluded.status,"
-                    "data=excluded.data",
+                    "data=excluded.data "
+                    "WHERE excluded.updated_at >= jobs.updated_at",
                     (
                         job.id,
                         job.batch_id,
                         float(job.created_at),
-                        float(job.updated_at),
-                        job.status.value,
+                        float(payload.get("updated_at", job.updated_at)),
+                        str(payload.get("status", job.status.value)),
                         json.dumps(payload),
                     ),
                 )

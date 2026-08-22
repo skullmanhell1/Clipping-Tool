@@ -7,6 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the documented one-click deploy could not start, and nothing tested the manifest
+
+`render.yaml` sets `ENVIRONMENT: production`. `_check_deployment_security()` refuses to boot in
+production without `API_AUTH_TOKEN` and refuses again on wildcard CORS. The manifest **declared
+neither**: the token key was absent entirely and `CORS_ORIGINS` was `sync: false`, so an operator
+who skipped the prompt kept the application default of `*`. Both refusal conditions fired, the
+`InsecureDeploymentError` was raised from inside the ASGI lifespan, uvicorn never bound,
+`healthCheckPath: /healthz` never answered, and with `autoDeploy: true` every push produced a
+failed deploy. The blueprint's own comment claimed the wildcard merely "logs a warning on every
+start", which had been false since the gate was tightened.
+
+`API_AUTH_TOKEN` is now declared with `generateValue: true` (Render mints it, it stays out of
+version control) and `CORS_ORIGINS` carries an explicit empty value — correct here because one
+container serves the API and the built UI from the same origin, so the right origin list is the
+empty one.
+
+**Why the suite could not see it.** `tests/test_api_security.py` covers the gate thoroughly with
+*monkeypatched* settings: six tests assert what the function does with a given configuration, and
+none asked whether the configuration this repository ships is one of the good ones. CI could not
+see it either — the "Import & boot smoke test" step only does `from api.main import app`, and
+FastAPI does not run the lifespan on import, so the startup gate executes nowhere in CI. The new
+`tests/test_deployment_manifest.py` parses the manifest the way an operator's dashboard would and
+drives the real gate against it, including a reconstruction of the broken manifest asserted to be
+rejected — so the test's own failure mode is proven rather than assumed. It also pins the
+`WHISPER_MODEL`-style drift that a comment previously only asked for, checks every declared key is
+a real `Settings` field (`extra="ignore"` silently discards the rest), and checks the persistent
+disk is mounted where `storage_root` actually writes.
+
+### Fixed — cleanup destroyed the workspace of running jobs
+
+`POST /api/storage/cleanup` defaults `temp` to true and called `cleanup_temp()` with no job id,
+which `rmtree`'d every child of `storage/temp/`. A live render works in `storage/temp/<job_id>/`,
+so clicking "clean up temp files" mid-render deleted the extracted audio, transcripts and
+intermediate segments ffmpeg was reading from. The job then failed in the generic handler with a
+message naming a missing temp file — pointing at neither the cause nor the click that caused it.
+
+The file branch of `cleanup_expired` had the same gap. Its sibling directory branch was hardened
+against exactly this race with `_EMPTY_DIR_GRACE_SECONDS` and documents it at length; the file
+branch never got the equivalent guard, so the background sweeper could unlink an older cached
+intermediate from under a resumed job. Age is not evidence that a file is finished with — only the
+job's status is.
+
+Both branches now consult `retention.active_job_ids()` and skip anything belonging to a QUEUED or
+PROCESSING job. The count kept is returned from the endpoint and the sweep result, so an operator
+can tell "nothing was old enough" from "it was all in use". The scoped `cleanup_temp(job_id)` form
+deliberately still deletes: `JobManager._cleanup_temp` calls it in a `finally` for the job that has
+just stopped, and refusing there would leak every job's scratch space forever.
+
+The sweep also stopped following symlinks. `rglob` does not filter them, so a link under
+`storage/clips` was followed and unlinked on mtime alone — deleting outside the storage root.
+`_dir_size` already refused to follow links and explained why; the destructive path had no such
+guard, which is the wrong way round.
+
+### Fixed — a cancelled job un-cancelled itself, and could still report success
+
+Two halves of one defect: the terminal status had two writers and no handshake.
+
+- **During download**, `dl_progress` updated the job without calling `cancellation.checkpoint`,
+  unlike the pipeline's `progress` callback whose first statement is that checkpoint. `cancel()`
+  wrote CANCELLED and the next yt-dlp tick — sub-second — wrote `status=PROCESSING` back over it.
+  The UI showed "Cancelled", then flipped to "Processing 6%" and kept climbing, and the download
+  ran to completion: a multi-gigabyte fetch the user had explicitly stopped still spent the
+  bandwidth and still landed in `uploads/`.
+- **At completion**, `_execute`'s success path wrote COMPLETED without re-checking the flag, so a
+  cancel arriving after the last `progress()` call produced a job the user stopped and the API
+  reported as completed.
+
+The worker now gets the last word in both places. Clips that finished before the stop are kept and
+reported (`Cancelled - N clip(s) finished`) rather than dropped, because the files are on disk and
+mirrored either way — omitting them would only hide them.
+
+### Fixed — `/api/jobs` could 500 intermittently, and persistence could go backwards
+
+`JobStore`'s lock guarded the dict lookup, not the `Job` objects it handed out. API readers then
+serialised live objects with no lock while the render thread was inside `update()`: `to_dict`
+iterates `self.clips` as `_store_clip` mutates `video_url`/`thumbnail_url` in place, and it hands
+out the same `planned_clips`/`stage_timings` list objects that `update()` rebinds. JSON-encoding a
+list another thread is replacing raises `RuntimeError: list changed size during iteration` — on the
+route the shipped UI polls every 1200 ms. Added `snapshot`/`snapshot_all`/`snapshot_batch`, which
+serialise inside the lock, and pointed the read routes at them; `get()` still returns the live
+object for the worker, which legitimately wants it.
+
+`_persist` had the matching write-side bug: it re-read the live job outside the lock, so a row could
+be written from a state that never existed as a whole, and two overlapping updates committed in
+scheduling order rather than in the order they happened — a job coming back from a restart
+reporting an earlier stage than it had reached. The payload is now captured under the lock, and the
+upsert is guarded by `WHERE excluded.updated_at >= jobs.updated_at` so the newest state wins
+regardless of arrival order.
+
+### Fixed — downloading a clip could OOM-kill the API and take every render with it
+
+`download_clip` built the whole archive in a `BytesIO` before sending a byte, so peak memory was
+one clip — routinely 100-400 MB — per concurrent request, in a container `render.yaml` provisions
+at 2 GB that also hosts whisper and ffmpeg. It had no rate limit, and the token is allowed in the
+query string for that path, so it was repeatable from a plain `<a href>`. The kill also takes
+in-flight renders, which reappear as "Interrupted by restart" and look like a worker crash rather
+than a download. It now streams the zip incrementally, stores the media member instead of
+deflating already-compressed H.264, and carries `rate_limit`.
+
+`download_video_only` gained the clip cross-check its sibling already had. Without it, that route
+served any existing file in the job's clips directory — sidecar JSON, thumbnails, intermediates —
+while the other served only files listed on the job record.
+
+### Fixed — smaller foundation defects
+
+- **Batch upload rollback covered only `HTTPException`.** An `OSError` (disk full) or a client
+  disconnect on file 5 of 10 left files 1-4 orphaned in `uploads/`, permanently: retention
+  deliberately excludes `uploads`, and the only removal endpoint needs a job record that was never
+  created. Now `BaseException`.
+- **The batch file count was unbounded.** `max_upload_bytes` is enforced per file, so the real
+  ceiling was N x that with nothing bounding N. New `MAX_UPLOAD_FILES` (default 25).
+- **`describe_store_failure` called `os.getuid()`**, which does not exist on Windows — the platform
+  the function was written for. On native Windows with an unwritable `storage/`, the error
+  *formatter* raised `AttributeError` and replaced the diagnostic with exactly the opaque failure
+  it exists to prevent.
+- **The retention sweeper swallowed every failure with `except Exception: pass`**, so a sweep that
+  raised each cycle meant retention never ran and never said so: the disk filled, `last_result`
+  stayed `{}`, and `/api/storage` reported healthy usage with no error field. Now logged, with the
+  failure recorded in `last_result`. Failing to *start* the sweeper at boot was silent too.
+
 ### Fixed — BlazeFace never once ran in the shipped image, and the smoke test certified it
 
 **Found by running the tool on footage with faces in it for the first time.** Every previous

@@ -17,6 +17,7 @@ Everything is best-effort and never raises into the request/worker path.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import threading
@@ -26,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 # Directories the sweeper is allowed to clean. The uploads/source directory is
 # deliberately excluded — sources are only ever removed on explicit request.
@@ -47,6 +50,50 @@ _CLEANABLE = ("clips", "temp")
 #: would then be 30 days from eligible again. An hour is far longer than any single clip encode and
 #: far shorter than the default six-hour sweep interval, so tidying still happens on the next sweep.
 _EMPTY_DIR_GRACE_SECONDS = 3600.0
+
+
+def active_job_ids() -> frozenset[str]:
+    """Ids of jobs a worker may still be writing files for.
+
+    Every path this module deletes is named after a job id -- ``storage/clips/<job_id>/`` and
+    ``storage/temp/<job_id>/`` -- so knowing which ids are live is what separates tidying from
+    sabotage. The empty-directory branch of :func:`cleanup_expired` was hardened against this
+    race with a grace period (see :data:`_EMPTY_DIR_GRACE_SECONDS`), but the *file* branch beside
+    it and :func:`cleanup_temp` were not, and both can be reached while a render is mid-write:
+    the API process runs the render, so the sweeper thread and the endpoint share a filesystem
+    with an active job by construction.
+
+    Imported lazily. This module is imported *by* ``worker.jobs``, so a module-level import would
+    be circular, and it must also keep working in a process with no job store at all.
+
+    Returns an empty set when the store cannot be reached, which deliberately means "delete
+    nothing on liveness grounds". The callers treat an empty set as "no protection available"
+    rather than "nothing is running" -- see how each uses it.
+    """
+    try:
+        from worker.jobs import get_manager
+        from worker.models import JobStatus
+
+        live = {JobStatus.QUEUED, JobStatus.PROCESSING}
+        return frozenset(job.id for job in get_manager().store.all() if job.status in live)
+    except Exception:  # pragma: no cover - defensive
+        # A store that cannot be read must not stop the sweep entirely, but it also must not
+        # licence deleting a live job's workspace. Callers err towards keeping files.
+        logger.warning("could not determine which jobs are live; skipping liveness pruning")
+        return frozenset()
+
+
+def _owning_job_id(path: Path, base: Path) -> str:
+    """The job id a path under ``base`` belongs to, or ``""``.
+
+    Both cleanable areas are laid out one directory per job, so the first path component below
+    the area root is the job id. A file sitting directly in the area root belongs to no job.
+    """
+    try:
+        parts = path.relative_to(base).parts
+    except ValueError:
+        return ""
+    return parts[0] if len(parts) > 1 else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -227,7 +274,12 @@ def cleanup_expired(retention_days: int | None = None, now: float | None = None)
     cutoff = now - retention_days * 86400
     removed = 0
     freed = 0
+    skipped_live = 0
     root = Path(settings.storage_root)
+    # Resolved once: every candidate is checked against this to refuse deletions that leave the
+    # storage root via a symlink (see the `is_symlink` guard below).
+    root_resolved = root.resolve()
+    live = active_job_ids()
 
     for area in _CLEANABLE:
         base = root / area
@@ -235,7 +287,27 @@ def cleanup_expired(retention_days: int | None = None, now: float | None = None)
             continue
         for path in sorted(base.rglob("*"), key=lambda p: len(p.parts), reverse=True):
             try:
+                # A job still being written to is off limits regardless of mtime. Resuming a job
+                # re-reads cached intermediates that can legitimately be older than the retention
+                # window (worker/intermediate_cache.py), so age is not evidence that a file is
+                # finished with - only the job's status is.
+                owner = _owning_job_id(path, base)
+                if owner and owner in live:
+                    skipped_live += 1
+                    continue
+                # `rglob` does not filter symlinks, so a link under storage/clips pointed
+                # anywhere on the host was followed and `unlink`ed on mtime alone - deleting
+                # outside the storage root, which nothing here is allowed to do. `_dir_size`
+                # already refuses to follow links and documents why; this is the same rule on
+                # the destructive path, where it matters more. The link itself is left alone
+                # rather than removed: it is not ours to reason about.
+                if path.is_symlink():
+                    continue
                 if path.is_file() and path.stat().st_mtime < cutoff:
+                    # Belt and braces for a link *inside* a resolved parent chain: confirm the
+                    # real file is still under the storage root before unlinking it.
+                    if root_resolved not in path.resolve().parents:
+                        continue
                     size = path.stat().st_size
                     path.unlink()
                     removed += 1
@@ -249,20 +321,41 @@ def cleanup_expired(retention_days: int | None = None, now: float | None = None)
             except OSError:
                 continue
 
+    if skipped_live:
+        logger.info(
+            "retention sweep kept %d path(s) belonging to %d running job(s)",
+            skipped_live,
+            len(live),
+        )
     return {
         "removed": removed,
         "freed_bytes": freed,
         "retention_days": retention_days,
         "kept_forever": False,
+        # Reported rather than merely logged: an operator who expected a sweep to free space
+        # needs to be able to tell "nothing was old enough" from "it was all in use".
+        "skipped_active": skipped_live,
     }
 
 
-def cleanup_temp(job_id: str | None = None) -> int:
+def cleanup_temp(job_id: str | None = None, *, skip_active: bool = True) -> int:
     """Remove scratch files. With ``job_id`` remove only that job's temp dir.
 
     Returns the number of top-level entries removed. Honours the
     ``auto_delete_temp`` runtime toggle when called without a specific job is
     left to the caller; this helper always performs the deletion it is asked to.
+
+    ``skip_active`` protects the unscoped form from deleting a running job's workspace.
+    ``POST /api/storage/cleanup`` defaults ``temp`` to true, so an operator clicking "clean up
+    temp files" while a render was in flight used to ``rmtree`` the scratch directory ffmpeg was
+    reading from - extracted audio, transcripts, intermediate segments. The render then failed in
+    the generic handler with a message naming a missing temp file, which points at neither the
+    cause nor the click that caused it.
+
+    The scoped form deliberately ignores ``skip_active``: ``JobManager._cleanup_temp`` calls it in
+    a ``finally`` for the job that has just stopped, and that job is still briefly PROCESSING in
+    the store. Refusing there would leave every job's scratch space behind forever, which is the
+    opposite of the intent - an explicit id is a caller who knows which job they mean.
     """
     temp_root = Path(settings.temp_dir)
     target = temp_root / job_id if job_id else temp_root
@@ -271,9 +364,13 @@ def cleanup_temp(job_id: str | None = None) -> int:
     if job_id:
         shutil.rmtree(target, ignore_errors=True)
         return 1
+    live = active_job_ids() if skip_active else frozenset()
     count = 0
     for child in target.iterdir():
         try:
+            if child.name in live:
+                logger.info("keeping temp workspace %s: job %s is still running", child, child.name)
+                continue
             if child.is_dir():
                 shutil.rmtree(child, ignore_errors=True)
             else:
@@ -313,7 +410,16 @@ class RetentionSweeper:
             try:
                 self.last_result = cleanup_expired()
             except Exception:
-                pass
+                # Logged, not swallowed. A sweep that raises every cycle - an unmounted storage
+                # root, a permission change - meant retention silently never ran: the disk filled
+                # up, `last_result` stayed `{}`, and `GET /api/storage` went on reporting healthy
+                # usage numbers with no error field anywhere. Every other best-effort site in this
+                # codebase uses `logger.exception`; this one was the outlier.
+                #
+                # `last_result` records the failure too, so the state is visible through the API
+                # and not only to whoever reads the log.
+                logger.exception("retention sweep failed; disk usage will keep growing")
+                self.last_result = {"error": "the last retention sweep failed - see the log"}
             if self._stop.wait(max(60.0, self.interval)):
                 break
 
