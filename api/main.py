@@ -2081,10 +2081,46 @@ def _clip_metadata_text(clip) -> str:
     )
 
 
+def _clip_path(job_id: str, filename: str) -> tuple[Path, str]:
+    """Resolve ``clips_dir/job_id/filename``, refusing anything that escapes ``clips_dir``.
+
+    ``Path(x).name`` was the whole defence here and it is not sufficient. It strips separators, so
+    ``../../etc/passwd`` does become ``passwd`` -- but **``Path("..").name`` is ``".."``**, because
+    pathlib treats it as an ordinary final component. So ``job_id=".."`` built
+    ``storage/clips/../<file>``, i.e. ``storage/<file>``, and ``/api/clips/{id}/{name}/video``
+    checked only ``exists()`` and ``is_file()`` before streaming it.
+
+    Confirmed reachable and unauthenticated on the default configuration (``API_AUTH_TOKEN``
+    unset): ``GET /api/clips/%2E%2E/jobs.db/video`` returned 200 with the job database, and the
+    same request for ``cookies.txt`` returned the YouTube cookie jar that ``.env.example`` suggests
+    keeping at ``storage/cookies.txt``. ``storage/`` also holds ``history.db``, every uploaded
+    source video and the cached transcripts. Found by CodeQL (``py/path-injection``, 7.5) on the
+    first analysis run after the workflow was unblocked.
+
+    ``download_clip`` was accidentally safe because it additionally looks the job up and
+    ``store.get("..")`` returns ``None``. Relying on that is exactly the kind of second-order
+    reasoning that stops being true when someone reorders the checks, so both endpoints now share
+    this function.
+
+    Containment is asserted on the **resolved** path rather than by pattern-matching the input:
+    ``resolve()`` collapses ``..`` and follows symlinks, so it answers the question that matters --
+    where does this actually point -- instead of enumerating the encodings that do not.
+    """
+    root = Path(settings.clips_dir).resolve()
+    safe_name = Path(filename).name
+    candidate = (root / Path(job_id).name / safe_name).resolve()
+    # `is_relative_to` alone would accept `root` itself, which is a directory, not a clip.
+    if not safe_name or candidate == root or not candidate.is_relative_to(root):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    # A clip lives one directory below the root; anything deeper or shallower is not one.
+    if candidate.parent.parent != root:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return candidate, safe_name
+
+
 @app.get("/api/clips/{job_id}/{filename}/download", tags=["clips"])
 def download_clip(job_id: str, filename: str) -> StreamingResponse:
-    safe_name = Path(filename).name
-    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    path, safe_name = _clip_path(job_id, filename)
     job = get_manager().store.get(job_id)
     clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
     if not path.exists() or not path.is_file() or clip is None:
@@ -2105,8 +2141,7 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
 
 @app.get("/api/clips/{job_id}/{filename}/video", tags=["clips"])
 def download_video_only(job_id: str, filename: str) -> FileResponse:
-    safe_name = Path(filename).name
-    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    path, safe_name = _clip_path(job_id, filename)
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, filename=safe_name, media_type="video/mp4")

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — unauthenticated arbitrary file read via the clip download endpoints
+
+**Found by CodeQL on the first analysis run after Actions was unblocked**, and confirmed exploitable
+against the default configuration. `py/path-injection`, security-severity 7.5, five locations in
+`api/main.py`.
+
+`Path(x).name` was the whole defence, and it is not sufficient. It strips separators, so
+`../../etc/passwd` really does become `passwd` — but **`Path("..").name` is `".."`**, because
+pathlib treats it as an ordinary final component. So `job_id=".."` built `clips_dir/../<file>`, and
+`GET /api/clips/{job_id}/{filename}/video` checked only `exists()` and `is_file()` before streaming
+the result:
+
+```
+200  GET /api/clips/%2E%2E/jobs.db/video       → the job database
+200  GET /api/clips/%2E%2E/cookies.txt/video   → the YouTube cookie jar
+```
+
+No authentication required: `API_AUTH_TOKEN` is unset by default. One directory above `clips_dir` is
+`storage/`, which holds `jobs.db`, `history.db`, every uploaded source video, the cached
+transcripts — and, if the operator followed the `.env.example` guidance added in the previous
+entry, `storage/cookies.txt`, which is a live credential for their Google account. That advice made
+this worse, and is corrected below.
+
+- **Both endpoints now resolve through one `_clip_path` helper** which asserts containment on the
+  **resolved** path. `resolve()` collapses `..` and follows symlinks, so it answers "where does this
+  actually point" rather than enumerating the spellings that do not work — `%2E%2E`, `..%2F`,
+  `....//` and friends are all covered by construction rather than by a denylist. The shape is
+  pinned too: a clip is exactly `root/<job>/<file>`, so the root itself and anything deeper are
+  refused.
+- **`download_clip` was only accidentally safe**, because it also looks the job up and
+  `store.get("..")` returns `None`. That is second-order protection which stops holding the moment
+  someone reorders the checks, so it goes through the same helper and is tested directly.
+
+24 tests in `tests/test_clip_download_path_traversal.py`, including the exact exploit across six
+encodings and both endpoints, a symlink escape (which a containment check on the *unresolved* path
+would miss), and the parity cases — a real clip is still served, and a genuine miss still 404s — so
+the guard cannot degrade into "404 everything".
+
+Verified before and after against a planted file: 200 with contents leaked before, 404 with nothing
+leaked after. Suite: 2896 passed, no skips.
+
+
 ### Fixed — BlazeFace never once ran in the shipped image, and the smoke test certified it
 
 **Found by running the tool on footage with faces in it for the first time.** Every previous
