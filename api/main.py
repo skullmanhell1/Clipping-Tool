@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 import uuid
 import zipfile
@@ -2081,6 +2082,10 @@ def _clip_metadata_text(clip) -> str:
     )
 
 
+#: One path component of a clip URL. No separators, no dotfiles, so `.` and `..` cannot match.
+_SAFE_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
 def _clip_path(job_id: str, filename: str) -> tuple[Path, str]:
     """Resolve ``clips_dir/job_id/filename``, refusing anything that escapes ``clips_dir``.
 
@@ -2106,11 +2111,32 @@ def _clip_path(job_id: str, filename: str) -> tuple[Path, str]:
     ``resolve()`` collapses ``..`` and follows symlinks, so it answers the question that matters --
     where does this actually point -- instead of enumerating the encodings that do not.
     """
+    # Layer one: validate the untrusted components *before* they reach a path expression.
+    #
+    # Ordered this way deliberately. The containment check below is the stronger guarantee, but it
+    # runs on an already-constructed path, and "construct from user input, then check" is both
+    # harder to reason about and unprovable to a static analyser -- CodeQL kept reporting
+    # `py/path-injection` at the construction line because it does not model `is_relative_to` as a
+    # sanitiser, and it was right to be unconvinced. Screening the values first means nothing
+    # untrusted ever reaches `/` in an unvalidated form.
+    #
+    # An allowlist, not a denylist of traversal spellings: `..`, `.`, empty and anything containing
+    # a separator all fail to match, so the encodings do not have to be enumerated. The leading
+    # character excludes dotfiles, which also excludes `.` and `..` by construction. This admits
+    # everything the pipeline actually writes -- `clip_01_be5173.mp4`, its `.jpg`, `.json`, `.srt`,
+    # `.vtt` sidecars, and hex job ids.
+    if not (_SAFE_COMPONENT.fullmatch(job_id) and _SAFE_COMPONENT.fullmatch(filename)):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Layer two: containment on the resolved path, which is what actually makes this safe.
+    # `resolve()` collapses `..` and follows symlinks, so it answers where the path points rather
+    # than what it looks like -- catching an operator's symlink out of the tree, which no amount of
+    # input validation would.
     root = Path(settings.clips_dir).resolve()
     safe_name = Path(filename).name
     candidate = (root / Path(job_id).name / safe_name).resolve()
     # `is_relative_to` alone would accept `root` itself, which is a directory, not a clip.
-    if not safe_name or candidate == root or not candidate.is_relative_to(root):
+    if candidate == root or not candidate.is_relative_to(root):
         raise HTTPException(status_code=404, detail="Clip not found")
     # A clip lives one directory below the root; anything deeper or shallower is not one.
     if candidate.parent.parent != root:
