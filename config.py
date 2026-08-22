@@ -22,8 +22,9 @@ import os
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, get_args
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,45 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_string_means_unset(cls, data: Any) -> Any:
+        """Treat ``FOO=`` as "not set" for any optional field, which is what it looks like.
+
+        ``.env.example`` ships 25 optional keys with an empty value and a comment saying the
+        default applies -- ``INTERMEDIATE_CACHE_DIR=`` is annotated "empty = <TEMP_DIR>/
+        intermediates". That was not true. An environment variable present-but-empty is the
+        string ``""``, not absent, so pydantic *validated* it: the 24 ``str | None`` keys became
+        ``""`` instead of ``None``, and ``intermediate_cache_dir``, being ``Path | None``, became
+        ``Path(".")``.
+
+        For the string keys ``""`` and ``None`` are both falsy and every call site tests
+        truthiness, so nothing observable changed. The path was different and did real damage:
+        ``worker.intermediate_cache.cache_dir()`` reads
+        ``settings.intermediate_cache_dir or temp_dir / "intermediates"``, and ``Path(".")`` is
+        truthy -- so the I3 cache (enabled by default) wrote to the process working directory
+        instead. In the container that is ``/app``, which is root-owned while the app runs as UID
+        10001, so following the documented ``cp .env.example .env`` pointed a write-heavy cache at
+        a directory the app cannot write. It also escaped the boot-time writability probe, because
+        ``intermediate_cache_dir`` is in neither ``_REQUIRED_DIR_FIELDS`` nor
+        ``_OPTIONAL_DIR_FIELDS`` -- ``tests/test_storage_writability.py`` catches exactly that, and
+        did, as soon as a ``.env`` existed.
+
+        Normalising here rather than deleting the keys from ``.env.example`` keeps them documented
+        and discoverable, and makes the sentence they carry true. Only *optional* fields are
+        touched: emptying a required one should still fail, loudly, rather than silently becoming
+        a default.
+        """
+        if not isinstance(data, dict):
+            return data
+        for name, field in cls.model_fields.items():
+            if type(None) not in get_args(field.annotation):
+                continue
+            for key in (name, name.upper()):
+                if isinstance(data.get(key), str) and data[key].strip() == "":
+                    data[key] = None
+        return data
 
     # ----------------------------------------------------------------- app --
     app_name: str = Field(default="AI Video Clipper", description="Display name.")

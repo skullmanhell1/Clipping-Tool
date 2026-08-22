@@ -42,6 +42,11 @@ storage/transcripts/*
 storage/*.db
 storage/*.db-wal
 storage/*.db-shm
+# The Dockerfile points HF_HOME and XDG_CACHE_HOME at /app/storage/.cache so the ~460 MB whisper
+# model survives a container restart (see the "cache dirs" fix). With `./storage` bind-mounted,
+# that lands here in the working tree, so the very first `docker compose up` that transcribes
+# anything leaves ~460 MB of untracked model weights in `git status`.
+storage/.cache/
 # Runtime state written by the app (user-tunable config + saved profiles)
 storage/runtime_config.json
 storage/profiles.json
