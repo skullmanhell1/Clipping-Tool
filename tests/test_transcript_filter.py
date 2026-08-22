@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from config import settings
+from worker import transcribe as transcribe_module
 from worker import transcript_filter
 from worker.transcribe import Transcript, TranscriptSegment, Word
 
@@ -287,13 +288,14 @@ def test_transcribe_filters_after_the_cache(tmp_path, monkeypatch):
     assert [s.text for s in first.segments] == ["real speech", "more real speech"]
 
     # What landed in the cache is unfiltered.
-    key = transcript_cache.cache_key(
-        transcript_cache.hash_source(media),
-        model=settings.whisper_model,
-        language=None,
-        translate=False,
-        beam_size=5,
-    )
+    #
+    # The key comes from `transcribe.cache_key_for` rather than being rebuilt here. Rebuilding it
+    # duplicated the key's composition in a test, so adding a component to the real key -- the
+    # decoder's device and compute_type, which change word timings -- made this test look up an
+    # entry that was never written and fail with `NoneType has no attribute 'segments'`, several
+    # inferences away from the cause. Asking the code for its own key is also the stronger
+    # assertion: it tests the cache, not this test's copy of the key format.
+    key = transcribe_module.cache_key_for(media)
     cached = transcript_cache.load(key)
     assert [s.text for s in cached.segments] == [
         "real speech",

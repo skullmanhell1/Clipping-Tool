@@ -93,6 +93,27 @@ def _resolve_device() -> tuple[str, str]:
     return device, compute_type
 
 
+def _probability_of(word: object) -> float:
+    """One word's ASR confidence, preserving a genuine ``0.0``.
+
+    Separated out so the distinction is stated once: a *missing* attribute means the backend does
+    not report confidence, and 1.0 is the right neutral for that; a *present* ``0.0`` is a real
+    measurement and must survive. ``float(getattr(w, "probability", 1.0) or 1.0)`` conflated the
+    two, and the collapse went the wrong way for the only consumer that matters.
+    """
+    value = getattr(word, "probability", None)
+    if value is None:
+        return 1.0
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    # NaN would poison every mean computed downstream, and it is not a measurement.
+    if probability != probability:
+        return 1.0
+    return probability
+
+
 def _get_model():
     """Load (and cache) the configured faster-whisper model."""
     from faster_whisper import WhisperModel
@@ -192,7 +213,16 @@ def transcribe_uncached(
                 start=float(w.start),
                 end=float(w.end),
                 text=w.word,
-                probability=float(getattr(w, "probability", 1.0) or 1.0),
+                # NOT `or 1.0`. `0.0` is falsy, so the one value that means "the model had no
+                # confidence in this word" was being rewritten as *maximum* confidence. The
+                # consumer is `transcript_filter._mean_word_probability`, whose
+                # low-confidence-plus-repetitive rule is the ASR hallucination signature -- and
+                # hallucinated words are exactly the ones with near-zero probabilities. So the
+                # filter was systematically biased away from firing on its own target case.
+                #
+                # The `or` idiom is correct on `avg_logprob`/`no_speech_prob` below, where 0.0 is
+                # the intended neutral, which is presumably why it was copied up here.
+                probability=_probability_of(w),
             )
             for w in (seg.words or [])
             if w.start is not None and w.end is not None
@@ -230,6 +260,7 @@ def cache_key_for(
     """
     from worker import transcript_cache
 
+    _device, _compute_type = _resolve_device()
     try:
         return transcript_cache.cache_key(
             transcript_cache.hash_source(audio_or_video),
@@ -239,6 +270,13 @@ def cache_key_for(
             beam_size=beam_size,
             # T4/T5: the vocabulary prompt and VAD settings shape the output, so they key it.
             asr_config=transcript_cache.asr_fingerprint(vocabulary),
+            # The decoder's device and quantisation change the word timings, and `_get_model`
+            # already keys its in-process cache on both. Resolved through `_resolve_device`, the
+            # same helper the model load uses, so the key cannot disagree with the model it names:
+            # keying on `settings.whisper_device` raw would record "auto" while the model was
+            # actually built as cuda/float16.
+            device=_device,
+            compute_type=_compute_type,
         )
     except OSError:
         # Unreadable or vanished source: let the ASR call produce the real error, rather than
@@ -255,6 +293,7 @@ def transcribe(
     vocabulary: str = "",
     on_hit=None,
     on_miss=None,
+    on_filtered=None,
 ) -> Transcript:
     """Transcribe ``audio_or_video``, reusing a cached result when one matches (T8).
 
@@ -275,6 +314,18 @@ def transcribe(
 
     ``on_hit``/``on_miss`` are optional callbacks taking the cache key, for progress reporting
     and for tests that need to prove which path ran.
+
+    ``on_filtered`` is called with ``(removed_count, reasons)`` whenever T3 drops segments, so the
+    caller can record it on the clip. It exists because ``transcript_filter.MARKER`` was defined,
+    documented as mirroring the ``*_degraded`` convention, and **applied to nothing** — a repo-wide
+    grep found exactly one occurrence, its own definition. ASR segments were being deleted from
+    captions, sidecars, soft subtitle tracks and the LLM's selection input with only a log line, and
+    ``transcript_filter``'s own reasoning says why that is the worst place for silence: "a wrongly
+    dropped sentence just looks like the speaker never said it".
+
+    A callback rather than a field on ``Transcript``: the filter runs *after* the cache, so the
+    count is a property of this call and not of the cached artefact, and adding it to the dataclass
+    would put a value in the cache payload that is always zero there.
     """
     from worker import transcript_cache
 
@@ -286,7 +337,8 @@ def transcribe(
                 translate=translate,
                 beam_size=beam_size,
                 vocabulary=vocabulary,
-            )
+            ),
+            on_filtered,
         )
 
     key = cache_key_for(
@@ -302,7 +354,7 @@ def transcribe(
         if cached is not None:
             if on_hit is not None:
                 on_hit(key)
-            return _filtered(cached)
+            return _filtered(cached, on_filtered)
 
     if key is not None and on_miss is not None:
         on_miss(key)
@@ -316,10 +368,10 @@ def transcribe(
     )
     if key is not None:
         transcript_cache.store(key, transcript)
-    return _filtered(transcript)
+    return _filtered(transcript, on_filtered)
 
 
-def _filtered(transcript: Transcript) -> Transcript:
+def _filtered(transcript: Transcript, on_filtered=None) -> Transcript:
     """Apply T3's hallucination/repetition filter to ``transcript``.
 
     Applied *after* the cache, never before it: the cache holds raw ASR output, so tuning a
@@ -337,4 +389,6 @@ def _filtered(transcript: Transcript) -> Transcript:
             result.removed_count,
             "; ".join(result.reasons[:5]),
         )
+        if on_filtered is not None:
+            on_filtered(result.removed_count, list(result.reasons))
     return result.transcript

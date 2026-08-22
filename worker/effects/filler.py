@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import settings
-from worker.ffmpeg_utils import _run, aac_args, h264_args
+from worker.ffmpeg_utils import _require_output, _run, aac_args, h264_args
 
 # Disfluencies removed by default. Kept deliberately conservative so real words
 # (e.g. "like" as a verb) are never cut.
@@ -293,4 +293,7 @@ def apply_keep_intervals(
         str(dest),
     ]
     _run(cmd)
-    return dest
+    # Validated, because `run_pipeline` deletes the untrimmed original as soon as this returns.
+    # A `concat` whose `trim` ranges are all empty exits 0 having written nothing, and without
+    # this the only good copy of the clip was unlinked in favour of a 0-byte file.
+    return _require_output(dest, cmd, what="trimmed clip")

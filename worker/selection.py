@@ -14,6 +14,7 @@ segmentation so the pipeline always produces clips.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,8 @@ from worker import segmentation as seg
 from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
 from worker.models import ProcessingOptions
 from worker.transcribe import Transcript, TranscriptSegment
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -376,23 +379,36 @@ def select_moments(
     #
     # Absent `audio_wav` this is empty and no pitch feature is attached, which is the same
     # "no information" contract the envelope already has. Nothing here can fail a selection.
-    def _pitch_wav() -> Path:
-        """The 16 kHz mono WAV pitch analysis needs, extracting it if the caller gave none.
+    def _pitch_readings() -> list[list[float]]:
+        """f0 readings for the whole source, cleaning up any WAV it had to extract itself.
 
         R4.7 allows one additional pass over the source audio, and this is it. `extract_audio`
         already produces exactly the format `read_mono_wav` requires -- and this is its first
         production caller: nothing in `worker/` used it before, because faster-whisper decodes the
-        media itself. Inside the memoisation, so the pass is paid once per source rather than once
-        per run.
+        media itself. Called inside the memoisation, so the pass is paid once per source rather
+        than once per run.
+
+        The scratch directory is now scoped to this call. It used to be a bare
+        ``tempfile.mkdtemp(prefix="pitch-")`` that nothing ever removed, leaking one directory
+        holding a 16 kHz WAV **of the entire source** on every cache-miss run -- and under the
+        system temp root rather than ``settings.temp_dir``, so ``JobManager._cleanup_temp`` could
+        not find it either. On a long podcast that is tens of megabytes per run, accumulating for
+        the life of the host.
         """
         if audio_wav:
-            return Path(audio_wav)
+            readings = pitch_features.f0_track(*pitch_features.read_mono_wav(Path(audio_wav)))
+            return [list(reading) for reading in readings]
+
         import tempfile
 
         from worker import ffmpeg_utils as _fu
 
-        target = Path(tempfile.mkdtemp(prefix="pitch-")) / "audio.wav"
-        return _fu.extract_audio(source_path, target, sample_rate=16000)
+        with tempfile.TemporaryDirectory(prefix="pitch-") as scratch:
+            wav = _fu.extract_audio(source_path, Path(scratch) / "audio.wav", sample_rate=16000)
+            # Read fully inside the context: `f0_track` is materialised into a list before the
+            # directory goes away, so nothing later reaches for a file that has been removed.
+            readings = pitch_features.f0_track(*pitch_features.read_mono_wav(wav))
+            return [list(reading) for reading in readings]
 
     pitch_track: list[tuple[float, float]] = []
     if bool(getattr(settings, "selection_pitch_feature", False)):
@@ -402,18 +418,22 @@ def select_moments(
                 for t, hz in intermediate_cache.memoise(
                     "pitch",
                     source_path,
-                    lambda: [
-                        list(reading)
-                        for reading in pitch_features.f0_track(
-                            *pitch_features.read_mono_wav(_pitch_wav())
-                        )
-                    ],
+                    _pitch_readings,
                     {"hop": pitch_features.HOP_S, "frame": pitch_features.FRAME_S},
                 )
             ]
         except Exception:
             # A missing or unexpected WAV must never cost a selection. S3 is an extra signal, and
             # the ranking blend treats an absent feature as neutral.
+            #
+            # Logged rather than passed over in silence: the feature is off by default, so someone
+            # seeing no effect after enabling it has no other way to tell "measured and made no
+            # difference" from "never measured at all".
+            logger.warning(
+                "pitch feature enabled but unavailable for %s; selection proceeds without it",
+                source_path,
+                exc_info=True,
+            )
             pitch_track = []
     pitch_median = pitch_features.source_median_f0(pitch_track) if pitch_track else None
 
@@ -487,6 +507,14 @@ def select_moments(
             end = float(raw_end)
         except (TypeError, ValueError):
             continue
+        # `json.loads` accepts bare NaN and Infinity, so both reach here as real floats. Every
+        # comparison against NaN is False, which means an unguarded NaN slips through `end <= start`
+        # *and* through the clamps below rather than being rejected by them. The `!=` self-test is
+        # the idiom `candidate_ranking` already uses throughout for the same reason.
+        if start != start or end != end or start in (float("inf"), float("-inf")):
+            continue
+        if end in (float("inf"), float("-inf")):
+            continue
         if end <= start:
             continue
         # Reject hallucinated ranges that start beyond the video (a 1s
@@ -504,11 +532,46 @@ def select_moments(
         if end - start < 1.0:
             continue
 
+        # S: the requested length window is enforced on the reply, not merely requested in the
+        # prompt. `min_len`/`max_len` were used to *build* the prompt and then never checked
+        # against what came back, so a model that ignored the instruction shipped a clip of any
+        # length with no marker -- a four-minute "short" from a 15-45s request. The fallback path
+        # has always enforced this, via `candidate_ranking.length_fit`, so the two paths disagreed
+        # about whether `clip_length` was a constraint or a suggestion.
+        #
+        # Over-long is *trimmed* rather than dropped: the model identified a real moment and its
+        # start is the part it was confident about, so keeping `max_len` from the start preserves
+        # the pick while honouring the constraint. Under-long is dropped, because there is nothing
+        # to extend it with that the model did not already decline to include.
+        if max_len > 0 and end - start > max_len:
+            hard_cap = min(total_duration, start + max_len)
+            # Prefer a sentence boundary inside the cap, so the trim does not land mid-word; fall
+            # back to the cap itself when snapping would take it below the requested minimum.
+            _, snapped = snap_to_sentences(start, hard_cap, transcript.segments)
+            snapped = min(snapped, hard_cap)
+            end = snapped if snapped - start >= max(min_len, 1.0) else hard_cap
+        if end - start < 1.0:
+            continue
+        if min_len > 0 and end - start < min_len:
+            continue
+
+        # S-scoring: a malformed score must land at the *bottom*, not the top.
+        #
+        # `max(0.0, min(100.0, float("nan")))` returns **100.0**, not NaN and not 0.0: `nan < 100.0`
+        # is False so `min` never replaces its running value, and `max(0.0, 100.0)` is 100.0. So a
+        # NaN score -- which `json.loads` will hand over from a bare `NaN` literal, and which
+        # `float("nan")` also produces from the string - was promoted to the maximum and sorted
+        # first, ahead of every genuinely scored moment, where `deduplicate(limit=max_clips)` then
+        # let it evict real candidates. `candidate_ranking` guards this everywhere; only the LLM
+        # path did not.
         score = item.get("score", 0)
         try:
-            score = max(0.0, min(100.0, float(score)))
+            score = float(score)
         except (TypeError, ValueError):
             score = 0.0
+        if score != score or score in (float("inf"), float("-inf")):
+            score = 0.0
+        score = max(0.0, min(100.0, score))
 
         candidates.append(
             ClipCandidate(

@@ -293,6 +293,16 @@ def run_pipeline(
 
     # --- transcribe -------------------------------------------------------
     report(0.05, "Transcribing audio")
+    # T3: how many segments the hallucination/repetition filter removed, so every clip can say so.
+    # The filter runs once for the whole source, and its markers are the same for every clip cut
+    # from it — recorded here and appended per clip below.
+    transcript_filter_markers: list[str] = []
+
+    def _note_filtered(removed: int, reasons: list[str]) -> None:
+        from worker import transcript_filter as _tf
+
+        transcript_filter_markers.append(f"{_tf.MARKER}:{int(removed)}")
+
     if info.has_audio:
         # T8: reuses a cached transcript when the source content and ASR settings match, so
         # re-running a source to try different effects does not re-transcribe it.
@@ -302,6 +312,7 @@ def run_pipeline(
             translate=options.translate,
             # T4: names, jargon and brands for this video specifically.
             vocabulary=getattr(options, "vocabulary", "") or "",
+            on_filtered=_note_filtered,
         )
     else:
         transcript = Transcript(language="none", segments=[])
@@ -476,6 +487,11 @@ def run_pipeline(
         # a broken one.
         if translation_marker:
             applied.append(translation_marker)
+        # T3: that ASR segments were dropped before any of this ran. Recorded per clip for the same
+        # reason as the translation marker above — the clip record is the only thing a caller sees,
+        # and a missing sentence in the captions otherwise just looks like the speaker never said
+        # it. `transcript_filter.MARKER` existed for this and had never been attached to anything.
+        applied.extend(transcript_filter_markers)
         # O8: which encoder actually ran, when it is not the one configured. A property of the
         # machine rather than of this clip, but the clip record is the only thing a caller sees,
         # and "my GPU is not being used" is exactly the question this answers.
@@ -625,6 +641,18 @@ def run_pipeline(
                     keyframe_seconds=keyframe_seconds,
                     colour_tags=clip_colour.tags,
                 )
+                # Probed before the original is destroyed, which is the only point in the pipeline
+                # where a bad output cannot be recovered from. `apply_keep_intervals` already
+                # rejects an empty file, but a *header-only* MP4 -- ffmpeg exits 0 for one when
+                # every `trim` range collapses -- is non-empty and still undecodable, and the next
+                # line deletes the only good copy. One ffprobe against a clip-length file is
+                # immaterial next to the encode that just ran.
+                trimmed_info = fu.probe(trimmed)
+                if trimmed_info.duration <= 0.0:
+                    raise fu.FFmpegError(
+                        f"the trimmed clip at {trimmed} probes as {trimmed_info.duration}s, "
+                        "so the keep intervals produced no playable media"
+                    )
                 raw.unlink(missing_ok=True)
                 raw = trimmed
                 # An assembly needs the duplicate-aware rebase: `filler.rebase_words` stops at the
@@ -642,8 +670,28 @@ def run_pipeline(
                 keep_plan = pending
                 clip_duration = sum(k.duration for k in pending)
                 applied.extend(pending_markers)
-            except fu.FFmpegError:
-                pass  # keep the untrimmed clip on failure
+            except fu.FFmpegError as exc:
+                # Keep the untrimmed clip -- but *say so*. This was a bare `pass`, and `pending`
+                # here is the single resolved keep list for three separate features: filler
+                # removal, the U4 cut list and cold-open assembly. Their markers are only
+                # appended on the success path above, so a failure shipped a clip with every
+                # requested edit missing and a record byte-identical to one nobody asked to edit.
+                #
+                # That is the exact contract the compositor stage below honours with
+                # `compositor_degraded`, and the reasoning there explains why the silent version
+                # was a defect. This is the same defect, one stage earlier.
+                applied.append("keep_intervals_degraded")
+                # The partial output is removed rather than orphaned. `raw = trimmed` never ran,
+                # so the loop's cleanup at the bottom unlinks the *old* `raw` and would leave this
+                # truncated file behind in storage/temp/<job_id>/ forever.
+                trimmed.unlink(missing_ok=True)
+                logger.warning(
+                    "clip %s: could not apply %d keep interval(s), delivering the untrimmed "
+                    "clip instead (%s)",
+                    clip_id,
+                    len(pending),
+                    exc,
+                )
 
         # 3b. AUDIO-stage engines. They see the REBASED clip-relative words and
         #     the post-filler duration (Reqs 15.1, 15.2) and may hand back
@@ -1027,10 +1075,22 @@ def run_pipeline(
         try:
             # V17: score a few candidate frames rather than taking a fixed position, which on a
             # clip opening on a cut or a blink chose exactly the wrong still.
+            # `clip_duration`, not `c.duration`. `c.duration` is the *source window*
+            # (`c.end - c.start`); `clip_duration` is the length of the file that actually
+            # exists, which differs whenever filler removal, the U4 cut list or cold-open
+            # assembly removed anything. `choose_thumbnail_time` scores candidates at 0.3/0.5/0.7
+            # of the duration it is handed, so on a clip with 30% removed the 0.7 candidate landed
+            # *past the end of the file*: at best `-ss` clamped to the last frame, which is the
+            # trailing pause on every heavily trimmed clip, and at worst the encode produced
+            # nothing and the `except` below silently dropped the thumbnail. Every other consumer
+            # in this block already uses `clip_duration`.
             fu.generate_thumbnail(
-                final, thumb_path, at=thumbnail.choose_thumbnail_time(final, c.duration)
+                final, thumb_path, at=thumbnail.choose_thumbnail_time(final, clip_duration)
             )
-        except fu.FFmpegError:
+        except fu.FFmpegError as exc:
+            # Logged rather than swallowed: a clip with no thumbnail shows as a blank card in the
+            # review UI, and with no line anywhere that was indistinguishable from a UI bug.
+            logger.warning("clip %s: could not generate a thumbnail (%s)", clip_id, exc)
             thumb = None
 
         # 6a. O11: sidecar caption files alongside the clip, for platforms that accept uploaded
