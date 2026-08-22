@@ -30,6 +30,68 @@ ProgressCallback = Callable[[float, str], None]
 """A callback ``fn(fraction, message)`` where fraction is in ``[0, 1]``."""
 
 
+#: Fragments of yt-dlp's bot-check message. Matched to translate it into something actionable.
+#:
+#: Matched on substrings rather than the whole sentence because yt-dlp rewords it between releases
+#: and the wording carries a Unicode right single quote in "you're" that is easy to get wrong when
+#: comparing. Both fragments are the stable part.
+_BOT_CHECK_MARKERS = ("confirm you", "not a bot")
+
+#: What to tell the user instead. yt-dlp's own text points at two wiki pages and a pair of CLI flags
+#: that this application does not expose, so relaying it verbatim describes a fix the reader cannot
+#: apply. This names the settings that exist.
+COOKIES_HINT = (
+    "the host is being asked to sign in to prove it is not a bot. This is triggered by the "
+    "requesting IP address, not by the video, so it is expected on a server or in a container. "
+    "Export cookies from a browser that is signed in and set YTDLP_COOKIES_FILE to the "
+    "cookies.txt path, or on a desktop set YTDLP_COOKIES_FROM_BROWSER (e.g. chrome)."
+)
+
+
+def _is_bot_check(message: str) -> bool:
+    """Whether a yt-dlp failure is the sign-in gate rather than a genuine download problem."""
+    lowered = message.lower()
+    return all(marker in lowered for marker in _BOT_CHECK_MARKERS)
+
+
+def auth_opts() -> dict:
+    """yt-dlp options carrying whatever credentials are configured, or ``{}`` for none.
+
+    Applied to **both** yt-dlp entry points. ``fetch_metadata`` hits the same gate as
+    ``download_video`` -- it is a real request -- so authenticating only the download would leave
+    the cheaper probe failing and make the feature look broken from the UI, which calls the probe
+    first.
+
+    The file is checked here rather than left to yt-dlp. yt-dlp treats an absent cookie file as a
+    fatal error whose text names neither the setting nor the fact that it came from configuration,
+    so a typo in the path reads as an unrelated failure.
+    """
+    from config import settings
+
+    opts: dict = {}
+
+    cookies_file = getattr(settings, "ytdlp_cookies_file", None)
+    if cookies_file:
+        path = Path(cookies_file).expanduser()
+        if not path.is_file():
+            raise DownloadError(
+                f"YTDLP_COOKIES_FILE points at {path}, which is not a file. Export cookies in "
+                "Netscape format from a signed-in browser, or unset the setting to ingest "
+                "anonymously."
+            )
+        opts["cookiefile"] = str(path)
+
+    browser = (getattr(settings, "ytdlp_cookies_from_browser", None) or "").strip()
+    if browser:
+        # yt-dlp wants a tuple: (browser, profile, keyring, container). Only the first two are
+        # worth exposing, split on ":" so "chrome:Profile 1" works, and the rest left as None so
+        # yt-dlp applies its own defaults.
+        name, _, profile = browser.partition(":")
+        opts["cookiesfrombrowser"] = (name.strip().lower(), profile.strip() or None, None, None)
+
+    return opts
+
+
 class DownloadError(RuntimeError):
     """Raised when a URL cannot be fetched."""
 
@@ -184,11 +246,13 @@ def fetch_metadata(url: str) -> VideoMeta:
     # path that never passes through `api.main`.
     validate_public_url(url)
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, **auth_opts()}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as exc:  # yt-dlp raises many subclasses
+        if _is_bot_check(str(exc)):
+            raise DownloadError(f"Could not read video info: {COOKIES_HINT}") from exc
         raise DownloadError(f"Could not read video info: {exc}") from exc
 
     return VideoMeta(
@@ -270,13 +334,20 @@ def download_video(
         "format": f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best",
         "merge_output_format": "mp4",
         "progress_hooks": [_hook],
+        **auth_opts(),
     }
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             path = resolve_downloaded_path(Path(ydl.prepare_filename(info)))
+    except DownloadError:
+        # Already ours, and already says something useful - `auth_opts` raises this for a bad
+        # cookie path. Re-wrapping it would bury that behind "Download failed:".
+        raise
     except Exception as exc:
+        if _is_bot_check(str(exc)):
+            raise DownloadError(f"Download failed: {COOKIES_HINT}") from exc
         raise DownloadError(f"Download failed: {exc}") from exc
 
     if not path.exists():
