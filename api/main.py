@@ -752,9 +752,34 @@ def _face_detector_domains() -> list[dict]:
                 if model is None:
                     detail = "vendored model missing or wrong size"
                 else:
-                    import mediapipe  # noqa: F401
+                    # Constructed, not merely imported, and that distinction is the whole point.
+                    #
+                    # This used to be `import mediapipe` and a model-size check, both of which
+                    # passed in an image that could not build a graph: `libmediapipe.so` dlopen's
+                    # libEGL/libGLESv2 only when a detector is created, so the import succeeds and
+                    # `create_from_options` raises `OSError: libGLESv2.so.2`. The endpoint
+                    # therefore advertised BlazeFace while every render silently fell back to
+                    # Haar -- measured at 10 of 10 clips carrying
+                    # `face_detector_substituted:mediapipe:haar`. `scripts/docker_smoke.sh`
+                    # asserts on this field, so the smoke test certified the broken image.
+                    #
+                    # Reusing the reframer's own builder rather than repeating the construction
+                    # keeps the probe answering the question the render path will ask. It returns
+                    # None on any failure and never raises.
+                    from worker.effects.reframe import _mediapipe_detector
 
-                    available = True
+                    built = _mediapipe_detector(
+                        float(settings.face_detector_min_score), Path(model)
+                    )
+                    if built is None:
+                        detail = "present but a detector could not be constructed"
+                    else:
+                        available = True
+                        _detect, close = built
+                        try:
+                            close()
+                        except Exception:  # a probe must not leak a graph, nor fail on cleanup
+                            pass
         except Exception as exc:  # report per backend, never fail the endpoint
             detail = f"{type(exc).__name__}"
         entry: dict = {"name": name, "available": available}

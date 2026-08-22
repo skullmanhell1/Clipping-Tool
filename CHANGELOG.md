@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — BlazeFace never once ran in the shipped image, and the smoke test certified it
+
+**Found by running the tool on footage with faces in it for the first time.** Every previous
+exercise used a synthetic `testsrc2` pattern, which is why this survived: the only thing that
+reveals it is a face.
+
+`/api/info` reported `mediapipe: available: true`. `scripts/docker_smoke.sh` asserts on that field
+and passed. And every render logged:
+
+```
+face detector: mediapipe requested but could not be imported or constructed; falling back to haar
+```
+
+**10 of 10 clips** carried `face_detector_substituted:mediapipe:haar`. The container advertised
+BlazeFace and had never used it.
+
+Two independent faults, and each hid the other:
+
+- **The Dockerfile was missing `libegl1` and `libgles2`.** `mediapipe/tasks/c/libmediapipe.so`
+  declares `NEEDED libGLESv2.so.2` and `NEEDED libEGL.so.1`, and that library is dlopen'd **only
+  when a task graph is constructed** — so `import mediapipe` succeeds and
+  `vision.FaceDetector.create_from_options` raises `OSError: libGLESv2.so.2: cannot open shared
+  object file`. Confirmed inside the image, then fixed and confirmed again. `.github/workflows/
+  ci.yml` installs all four libraries and explains why at length; the image only ever received the
+  first two, so **CI exercised the real detector and the shipped container never did**.
+- **The capability probe asked the wrong question.** It did `import mediapipe` plus a model-size
+  check, both of which pass in an image that cannot build a graph. It now *constructs* a detector
+  via the reframer's own `_mediapipe_detector`, so the probe answers the question the render path
+  will ask, and closes it again rather than leaking a graph per call. A missing model is still
+  reported distinctly from a broken one, and a probe failure still cannot take `/api/info` down.
+
+This is the same shape as the `ruff check . || true` and the coverage-gate bugs this project keeps
+finding: a check that could not fail, reporting something it was not measuring. The smoke test was
+not merely silent here — it actively certified the defect.
+
+Verified end to end on public-domain NASA interview footage (faces detected in 15 of 15 sampled
+frames): before, 10 of 10 clips substituted Haar; after, all 10 record `face_detector:mediapipe`
+with zero substitution warnings, and the XNNPACK delegate initialises. `docker_smoke.sh` still
+passes — but now its assertion means something. Six tests pin the probe to construction so it
+cannot drift back to import-only.
+
 ### Added — URL ingest can authenticate, so YouTube's bot gate is no longer a dead end
 
 Pasting a YouTube link failed, and there was nothing the user could do about it:
