@@ -742,7 +742,8 @@ def build_broll_overlay(
           trimmed to the window (``-i``).
         * Each overlay is scaled to ~0.5 * frame width (aspect preserved),
           placed in the upper/centre area, and gated with
-          ``enable='between(t,start,end)'`` (Req 10.4).
+          ``enable='gte(t,start)*lt(t,end)'`` (Req 10.4) — half-open, so abutting windows
+          do not both light up on the shared boundary frame.
         * Zero-length windows get a one-frame minimum on screen (Req 10.5).
         * ``applied_notes`` holds one ``"broll:<keyword>"`` per composited cue
           (Req 9.4).
@@ -787,7 +788,7 @@ def build_broll_overlay(
             prep = (
                 f"[{idx}:v]trim=start=0:end={disp_dur:.3f},"
                 f"setpts=PTS-STARTPTS+{start:.3f}/TB,"
-                f"scale={overlay_w}:-1,format=rgba[bpre{i}]"
+                f"scale={overlay_w}:-2,format=rgba[bpre{i}]"
             )
         elif ken_burns and zoom > 0.0:
             # A22: a still that sits motionless for three seconds over moving footage is the
@@ -818,7 +819,7 @@ def build_broll_overlay(
             # the looped frames line up with [start, disp_end].
             input_args += ["-loop", "1", "-t", f"{disp_dur:.3f}", "-i", asset.path]
             prep = (
-                f"[{idx}:v]scale={overlay_w}:-1,format=rgba,"
+                f"[{idx}:v]scale={overlay_w}:-2,format=rgba,"
                 f"setpts=PTS-STARTPTS+{start:.3f}/TB[bpre{i}]"
             )
         steps.append(prep)
@@ -827,7 +828,13 @@ def build_broll_overlay(
         nxt = out_label if i == n - 1 else f"bro{i}"
         steps.append(
             f"[{current}][bpre{i}]overlay=x='(W-w)/2':y='H*{y_frac:g}':"
-            f"enable='between(t,{start:.3f},{disp_end:.3f})'[{nxt}]"
+            # `gte`/`lt`, not `between`, which is inclusive at both ends. That matters more here
+            # than anywhere: zero-length windows are deliberately widened to exactly one frame
+            # (`min_dur` above), so windows that abut exactly are a normal outcome rather than a
+            # coincidence -- and both were enabled on the shared boundary frame, stacking two
+            # b-roll layers for one frame as a visible flash. `overlays._beat_bump_expr` documents
+            # this hazard and avoids it the same way.
+            f"enable='gte(t,{start:.3f})*lt(t,{disp_end:.3f})'[{nxt}]"
         )
         current = nxt
         notes.append(f"broll:{cue.keyword}")

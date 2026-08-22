@@ -14,6 +14,7 @@ simply keep the input clip. This keeps frame-by-frame work strictly optional.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -25,6 +26,8 @@ from worker import captions as cap
 from worker.effects import audio, broll, caption_presets, emoji, overlays, sfx
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import added
     from worker.engines.base import Compose_Contribution
@@ -247,6 +250,7 @@ def render_clip(
     colour_tags: Sequence[str] = (),
     language: str = "",
     speaker_turns: Sequence[Any] = (),
+    notes: list[str] | None = None,
 ) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -300,6 +304,18 @@ def render_clip(
     # planner can read them. `None` means "no highlighting ran", which is distinct from an empty
     # set ("highlighting ran and chose nothing") - the planner treats only the latter as a decision.
     keyword_indices: set[int] | None = None
+    # The word list ``keyword_indices`` indexes into.
+    #
+    # C19's whole point is that the emoji lands on the word the caption highlights, and the two
+    # consumers were reading the indices in **different index spaces**: `plan_keywords` was given
+    # the words flattened out of the caption *cues*, while `plan_emoji` was given the raw clip word
+    # list. `cap.words_to_cues` skips every word whose text is empty, so the flattened list is a
+    # subset — and the two spaces diverge by the number of skipped words at every position after
+    # the first one. The caption highlighted one word and the emoji illustrated another, silently.
+    #
+    # Defaults to the raw list so a run with captions off is unchanged; rebound to the cue-flattened
+    # list below, where that is the space the indices are actually computed in.
+    keyword_words: list = list(words)
     # O12: in `soft` mode the captions are delivered as a selectable track by the pipeline
     # instead of being burned in here. The hook title is unaffected - it is a title card, not a
     # caption, and there is no soft equivalent of one.
@@ -399,14 +415,16 @@ def render_clip(
             # Keyword highlighting: compute indices only when enabled. When
             # disabled we pass ``None`` and make NO llm call (Req 3.6).
             if options.caption_keyword_highlight:
-                flat_words = [w for cue in cues for w in cue.words]
+                # Recorded on `keyword_words` so `plan_emoji` reads the indices in the same space
+                # they were computed in. See the declaration above for what went wrong otherwise.
+                keyword_words = [w for cue in cues for w in cue.words]
                 keyword_indices = caption_presets.plan_keywords(
-                    flat_words,
+                    keyword_words,
                     use_ai=options.caption_keyword_ai,
                     client=llm_client,
                 )
 
-            notes: list[str] = []
+            caption_notes: list[str] = []
             cap.build_ass(
                 cues,
                 ass_path,
@@ -418,7 +436,7 @@ def render_clip(
                 hook_text=hook_text if need_hook else "",
                 clip_duration=duration,
                 permissibility=options.permissibility_mode,
-                notes=notes,
+                notes=caption_notes,
                 language=language,
                 # V15: the media the captions will be drawn on, so placement can avoid the mouth.
                 # `base_clip` and not the source: this is the reframed, delivered frame, so the boxes
@@ -435,7 +453,7 @@ def render_clip(
                 applied.append("keyword_highlight")
             if options.caption_emoji:
                 applied.append("caption_emoji")
-            for note in notes:  # e.g. font_substituted:<name>
+            for note in caption_notes:  # e.g. font_substituted:<name>
                 if note not in applied:
                     applied.append(note)
         else:
@@ -554,7 +572,9 @@ def render_clip(
     emoji_cues = []
     if options.emoji and options.emoji != "off":
         emoji_cues = emoji.plan_emoji(
-            words,
+            # `keyword_words`, not `words`: the same list `keyword_indices` indexes into, so the
+            # emoji and the caption agree about which word index 7 is. They did not.
+            keyword_words,
             duration,
             intensity=options.emoji,
             mode=options.emoji_mode,
@@ -685,23 +705,34 @@ def render_clip(
     # Emoji overlays sit on top of the caption layer.
     emoji_inputs: list[str] = []
     emoji_graph = ""
+    emoji_composited: list = []
     if emoji_cues:
-        emoji_inputs, emoji_graph = emoji.build_overlay(
-            emoji_cues,
-            base_label=video_label,
-            out_label="vout",
-            duration=duration,
-            animate=options.emoji_animate,
-            # A8: the real target width. build_overlay assumed 1080, so the emoji was
-            # sized for a frame the output might not have.
-            frame_width=width,
-            resolver=emoji_resolver,
-            input_offset=emoji_offset,
-            # C19: `caption` sits the glyph just clear of the caption block, which only makes
-            # sense now that the emoji lands on the word the caption highlights.
-            placement=str(getattr(settings, "emoji_placement", "spread") or "spread"),
-            caption_position=options.caption_position or "bottom",
-        )
+        # Guarded, like the b-roll block above. `resolve_asset` touches the filesystem — it
+        # `mkdir`s the assets directory on every call, including a cache hit — so a read-only or
+        # full assets volume raised straight out of `render_clip` and **failed the whole clip** for
+        # what is a cosmetic feature. B-roll degrades to a marker in exactly this situation; emoji
+        # had no guard at all.
+        try:
+            emoji_inputs, emoji_graph, emoji_composited = emoji.build_overlay(
+                emoji_cues,
+                base_label=video_label,
+                out_label="vout",
+                duration=duration,
+                animate=options.emoji_animate,
+                # A8: the real target width. build_overlay assumed 1080, so the emoji was
+                # sized for a frame the output might not have.
+                frame_width=width,
+                resolver=emoji_resolver,
+                input_offset=emoji_offset,
+                # C19: `caption` sits the glyph just clear of the caption block, which only makes
+                # sense now that the emoji lands on the word the caption highlights.
+                placement=str(getattr(settings, "emoji_placement", "spread") or "spread"),
+                caption_position=options.caption_position or "bottom",
+            )
+        except Exception:
+            logger.warning("emoji overlay unavailable; rendering without it", exc_info=True)
+            emoji_inputs, emoji_graph, emoji_composited = [], "", []
+            applied.append("emoji_degraded")
     if emoji_graph:
         graph_parts.append(emoji_graph)
         video_out = "vout"
@@ -719,6 +750,17 @@ def render_clip(
                 applied.append(f"emoji_style_degraded:{emoji_style.name}")
     else:
         video_out = video_label
+    # How many planned glyphs did not make it onto the frame.
+    #
+    # `build_overlay` drops a cue whose asset cannot be resolved, and the only signal was whether
+    # *any* resolved — so a partial failure rendered some emoji and reported `emoji:standard` as
+    # though all of them had, and a total failure on the default style produced **no emoji marker at
+    # all**, indistinguishable from the feature being switched off. The in-caption glyph path
+    # already emits `caption_emoji_unavailable:<n>` for precisely this; this is the same
+    # convention for the overlay path.
+    missing_emoji = len(emoji_cues) - len(emoji_composited)
+    if emoji_cues and missing_emoji > 0:
+        applied.append(f"emoji_unavailable:{missing_emoji}")
 
     # U6: the brand logo, on top of everything - captions and emoji included. A watermark that
     # an emoji overlay could cover is not a watermark.
@@ -912,11 +954,13 @@ def render_clip(
         # list, so 0.0 is the only transition moment that exists to accent; claiming any other would
         # be inventing structure the render does not have.
         hits, sfx_markers = _plan_sfx(
-            emoji_starts=(
-                tuple(float(getattr(cue, "start", 0.0)) for cue in emoji_cues)
-                if emoji_graph
-                else ()
-            ),
+            # `emoji_composited`, not `emoji_cues`. The comment above stated this contract and the
+            # code did not honour it: the gate was `if emoji_graph`, which only asks "did at least
+            # one glyph resolve", and then handed over *every planned* cue's start. Five planned
+            # emoji with two resolvable PNGs produced five stings — three audible accents on
+            # nothing, and an `sfx:N` marker overstating what happened. `build_overlay` now returns
+            # the cues that survived, so this can be what it claims to be.
+            emoji_starts=tuple(float(getattr(cue, "start", 0.0)) for cue in emoji_composited),
             transition_times=(0.0,) if options.transitions else (),
             duration=duration,
             temp_dir=temp_dir,
@@ -990,6 +1034,20 @@ def render_clip(
         or bool(logo_graph)
     )
     if not video_changed and not audio_changed:
+        # Markers survive the `None`.
+        #
+        # `applied` is otherwise reachable only through the returned `RenderResult`, and the caller
+        # extends its own list only `if rendered is not None` — so a degradation recorded here was
+        # **discarded** whenever nothing ended up changing. That is not a corner case: it is exactly
+        # what happens when the failed effect was the only one requested. A clip whose emoji overlay
+        # was unavailable came back with no render *and* no explanation, which is the same silence
+        # `emoji_degraded` was added to break.
+        #
+        # An out-parameter rather than a changed return type, matching `cap.build_ass(notes=...)`
+        # and `reframe.apply_reframe(notes=...)` — the established shape here for "tell me what
+        # happened even if you produced nothing".
+        if notes is not None:
+            notes.extend(applied)
         return None  # nothing to do
 
     # ---------------------------------------------------------------------

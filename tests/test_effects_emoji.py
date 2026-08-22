@@ -112,7 +112,9 @@ def test_resolve_asset_returns_none_when_download_fails(tmp_path, monkeypatch):
 
 def test_build_overlay_skips_unresolved():
     cues = [em.EmojiCue("🔥", 0.0, 1.0, 0)]
-    inputs, graph = em.build_overlay(cues, "0:v", "vout", duration=2.0, resolver=lambda c: None)
+    inputs, graph, _composited = em.build_overlay(
+        cues, "0:v", "vout", duration=2.0, resolver=lambda c: None
+    )
     assert inputs == [] and graph == ""
 
 
@@ -124,7 +126,7 @@ def test_emoji_overlay_renders(make_video, png_asset, tmp_path):
     src = make_video("base.mp4", duration=2.0, w=1080, h=1920)
     asset = png_asset("e.png")
     cues = [em.EmojiCue("💰", 0.2, 1.2, 0), em.EmojiCue("🔥", 1.0, 1.8, 1)]
-    inputs, graph = em.build_overlay(
+    inputs, graph, _composited = em.build_overlay(
         cues,
         base_label="0:v",
         out_label="vout",
@@ -255,8 +257,13 @@ def test_emoji_assets_are_tracked_by_git():
 # A8 — the emoji is sized against the real frame, not a hard-coded 1080
 # ===========================================================================
 def _scale_width(graph: str) -> int:
-    """The pixel width from the first ``scale=<w>:-1`` in a filtergraph."""
-    match = re.search(r"scale=(\d+):-1", graph)
+    """The pixel width from the first ``scale=<w>:-2`` in a filtergraph.
+
+    ``-2``, not ``-1``: ``-1`` preserves the aspect ratio exactly and does **not** round the derived
+    height to an even number, which is what `_emoji_px`'s docstring wrongly claimed it did. An odd
+    height in a 4:2:0 pipeline lands the RGBA layer on a half-pixel chroma boundary.
+    """
+    match = re.search(r"scale=(\d+):-2", graph)
     assert match, graph
     return int(match.group(1))
 
@@ -273,10 +280,10 @@ def test_emoji_scale_follows_the_frame_width():
     def resolver(_char):
         return Path("/tmp/x.png")
 
-    _inputs, narrow = em.build_overlay(
+    _inputs, narrow, _c1 = em.build_overlay(
         cues, "0:v", "vout", duration=2.0, frame_width=1080, resolver=resolver
     )
-    _inputs, wide = em.build_overlay(
+    _inputs, wide, _c2 = em.build_overlay(
         cues, "0:v", "vout", duration=2.0, frame_width=1920, resolver=resolver
     )
 

@@ -654,10 +654,10 @@ def test_c19_spread_and_caption_placement_produce_different_overlay_geometry(tmp
     def resolver(_char):
         return png
 
-    _in_a, graph_spread = emoji.build_overlay(
+    _in_a, graph_spread, _c_a = emoji.build_overlay(
         cues, "v0", "vout", duration=8.0, resolver=resolver, placement="spread"
     )
-    _in_b, graph_caption = emoji.build_overlay(
+    _in_b, graph_caption, _c_b = emoji.build_overlay(
         cues,
         "v0",
         "vout",

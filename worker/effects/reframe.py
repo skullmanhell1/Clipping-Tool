@@ -513,6 +513,16 @@ def resample_centers(samples: list[Center], fps: float, duration: float) -> list
     return out
 
 
+def _even_floor(value: int) -> int:
+    """``value`` rounded down to an even number, floored at 2.
+
+    Split-screen tiles are scaled and stacked on a yuv420p chain, and 4:2:0 chroma subsampling
+    cannot represent an odd dimension. Floored at 2 rather than 0 because a zero-sized tile is not a
+    smaller problem than an odd one.
+    """
+    return max(2, int(value) - (int(value) % 2))
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
@@ -2039,7 +2049,20 @@ def _grid_regions(
     missing participant.
     """
     rows = (len(shown) + 1) // 2
-    base_h = target_h // rows
+    # Even tile dimensions, and this is the one compositing site in the module that did not force
+    # them. Every other one does, each with a comment saying why: `compute_crop_size`, `_emoji_px`,
+    # broll's `overlay_h`, `aspect_size`. Tiles go straight into `scale=<w>:<h>` on a yuv420p chain
+    # before `hstack`/`vstack`, and libx264's 4:2:0 chroma subsampling cannot represent an odd
+    # dimension -- it is chroma-misaligned at best and rejected by swscale at worst.
+    #
+    # It only bit on a preset whose height does not divide evenly by the row count. `4:5` is
+    # (1080, 1350), so three or more speakers give `rows = 2` and `1350 // 2 = 675` -- odd, both
+    # rows. Which is exactly why it had not been seen: 9:16 and 1:1 divide cleanly.
+    #
+    # The last row and last column absorb the remainder so the tiles still tile exactly, with no
+    # seam and no overlap; rounding the *base* down by one keeps that true while making both even.
+    base_h = _even_floor(target_h // rows)
+    base_w = _even_floor(target_w // 2)
     regions: list[Region] = []
     y = 0
     for row in range(rows):
@@ -2047,11 +2070,7 @@ def _grid_regions(
         in_row = shown[row * 2 : row * 2 + 2]
         x = 0
         for col, tid in enumerate(in_row):
-            w = (
-                target_w
-                if len(in_row) == 1
-                else (target_w // 2 if col == 0 else target_w - target_w // 2)
-            )
+            w = target_w if len(in_row) == 1 else (base_w if col == 0 else target_w - base_w)
             src_cx, src_cy = _region_source_center(track_by_id.get(tid), src_w, src_h, w, h)
             regions.append(Region(x, y, w, h, src_cx, src_cy, tid))
             x += w
@@ -2270,21 +2289,56 @@ def build_reframe_filter(
         return ([], graph, ["speaker_reframe:split_screen"])
 
     # follow_active (default) — mirror apply_reframe's single -vf pass.
+    #
+    # "Mirror" is what this comment claimed and what the code did not do. `origin_x`/`origin_y`
+    # were accepted by this function, forwarded correctly on the split_screen branch above, and
+    # **silently dropped here** — so the crop was computed in full-frame coordinates. On a
+    # letterboxed source that is the defect V16 exists to prevent: the pan includes the black bars,
+    # and the clamp uses the padded frame's dimensions rather than the picture's.
+    #
+    # The V22 headroom bias was missing for the same reason, which is worse than a missing feature:
+    # `apply_reframe` applies it, so identical footage framed through the single-speaker path and
+    # the speaker-aware path came out with different vertical framing and **no marker said which**.
     centers = centers or []
     tw, th = target_w, target_h
-    script = build_sendcmd(centers, crop_w, crop_h, src_w, src_h)
+    headroom_bias_value = headroom.clamp_bias(getattr(settings, "reframe_headroom_bias", 0.0))
+    script = build_sendcmd(
+        centers,
+        crop_w,
+        crop_h,
+        src_w,
+        src_h,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        headroom_bias=headroom_bias_value,
+    )
     if sendcmd_path is not None:
         p = Path(sendcmd_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(script, encoding="utf-8")
 
+    # Frame 0 must agree with the first sendcmd line, so it is derived by the *same* arithmetic:
+    # the same `biased_center_y`, the same origin offsets, the same clamp. `apply_reframe` spells
+    # out why it bothers — if the two disagree, frame 0 is framed differently from frame 1 and the
+    # clip opens on a visible jump.
     first = centers[0] if centers else Center(0.0, src_w / 2.0, src_h / 2.0)
-    x0 = int(round(_clamp(first.cx - crop_w / 2.0, 0, max(0, src_w - crop_w))))
-    y0 = int(round(_clamp(first.cy - crop_h / 2.0, 0, max(0, src_h - crop_h))))
+    first_cy = headroom.biased_center_y(
+        first.cy, crop_h, src_h, bias=headroom_bias_value, origin_y=origin_y
+    )
+    x0 = origin_x + int(
+        round(_clamp(first.cx - origin_x - crop_w / 2.0, 0, max(0, src_w - crop_w)))
+    )
+    y0 = origin_y + int(
+        round(_clamp(first_cy - origin_y - crop_h / 2.0, 0, max(0, src_h - crop_h)))
+    )
 
     escaped = _escape_filter_path(sendcmd_path) if sendcmd_path is not None else ""
     vf = f"sendcmd=f='{escaped}',crop={crop_w}:{crop_h}:{x0}:{y0},scale={tw}:{th},setsar=1"
-    return ([], vf, ["speaker_reframe:follow_active"])
+    notes = ["speaker_reframe:follow_active"]
+    bias_marker = headroom.marker(headroom_bias_value)
+    if bias_marker:
+        notes.append(bias_marker)
+    return ([], vf, notes)
 
 
 def apply_speaker_reframe(

@@ -1045,6 +1045,11 @@ def run_pipeline(
                 # Passed unconditionally -- empty whenever diarisation did not run -- so the
                 # compositor's own default never diverges from what the pipeline knows.
                 speaker_turns=clip_turns,
+                # Markers reach `applied` even when the compositor decides nothing needs rendering.
+                # Without this, a degradation recorded inside `render_clip` was discarded along with
+                # the `None` it returns when no effect ended up changing the frame — which is
+                # precisely what happens when the effect that failed was the only one requested.
+                notes=applied,
             )
         except fu.FFmpegError:
             # Ship the un-composited clip rather than failing the job, per the degradation
