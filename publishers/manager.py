@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
@@ -11,6 +12,15 @@ from config import settings
 from publishers import build_publishers, preflight, retry, tailoring
 from publishers.base import PublishRequest, PublishState
 from publishers.history import HistoryStore, get_history
+
+logger = logging.getLogger(__name__)
+
+#: How long an attempt may sit in ``uploading`` before it is treated as abandoned, in seconds.
+#:
+#: Comfortably longer than any single upload this tool performs — the publishers use a 300 s HTTP
+#: timeout — so a live upload is never reclassified, and short enough that an operator is not left
+#: staring at a zombie row for a day.
+STALE_UPLOAD_SECONDS = 3600.0
 
 
 class PublishManager:
@@ -33,9 +43,56 @@ class PublishManager:
     def start(self):
         if self._thread and self._thread.is_alive():
             return
+        # Reclaim abandoned uploads before the scheduler starts, so a restart resolves them rather
+        # than leaving them invisible. Done here rather than in `__init__` so a test constructing a
+        # manager with `autostart=False` does not have its fixtures rewritten underneath it.
+        self.reclaim_stale_uploads()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="publish-scheduler")
         self._thread.start()
+
+    def reclaim_stale_uploads(self, older_than_seconds: float = STALE_UPLOAD_SECONDS) -> int:
+        """Move abandoned ``uploading`` attempts to ``unknown``. Returns how many.
+
+        An attempt reaches ``uploading`` immediately before the platform call and is written back
+        immediately after. If the process dies in between — a restart, a deploy, an OOM kill, and
+        the scheduler runs in the API process — the row stays ``uploading`` for ever: the scheduler
+        only selects queued/scheduled, and every human endpoint refuses ``uploading``. The post may
+        or may not exist, there is no record either way, and nothing the operator can click will
+        move it.
+
+        They become ``unknown`` rather than ``failed``, and the distinction is the point: a failed
+        attempt is safe to retry automatically, and this one is **not** — the post may be live.
+        ``unknown`` is resumable by a person, who can check the platform and then approve or cancel.
+
+        Never raises: this runs on the start-up path and a bookkeeping problem must not stop the
+        publisher from working.
+        """
+        try:
+            stale = self.history.stale_uploading(time.time() - float(older_than_seconds))
+        except Exception:
+            logger.exception("could not scan for abandoned uploads")
+            return 0
+        for item in stale:
+            try:
+                self.history.update_attempt(
+                    item["id"],
+                    state=PublishState.UNKNOWN.value,
+                    error=(
+                        "The process stopped while this upload was in flight, so whether it was "
+                        "posted is unknown. Check the platform, then approve to post or cancel to "
+                        "discard. Not retried automatically, because retrying could post twice."
+                    ),
+                    completed_at=time.time(),
+                )
+            except Exception:
+                logger.exception("could not reclaim abandoned upload %s", item.get("id"))
+        if stale:
+            logger.warning(
+                "reclaimed %d publish attempt(s) abandoned mid-upload; they need a human decision",
+                len(stale),
+            )
+        return len(stale)
 
     def stop(self):
         self._stop.set()
@@ -67,6 +124,26 @@ class PublishManager:
         ids = []
         for platform in selected:
             if platform not in self.publishers:
+                continue
+            # S2: one live attempt per (job, clip, platform).
+            #
+            # `publish_attempts` has no uniqueness constraint - unlike `clips`, which carries
+            # `UNIQUE(job_id, clip_id)` - and nothing here looked for an existing row. So two
+            # clicks of Publish, or an auto-publish racing a manual one, created two attempts and
+            # therefore two posts. Returning the existing id makes a repeat submission idempotent
+            # rather than additive, which is what a caller pressing a button twice means.
+            #
+            # Only *live* attempts block: a previously failed or cancelled attempt should be
+            # re-submittable, which is how someone recovers after fixing their credentials.
+            existing = self.history.live_attempt_id(job_id, clip.id, platform)
+            if existing is not None:
+                ids.append(existing)
+                logger.info(
+                    "publish already queued for clip %s on %s (attempt %s); not duplicating",
+                    clip.id,
+                    platform,
+                    existing,
+                )
                 continue
             route = routes.get(platform, {})
             req = {
@@ -216,7 +293,35 @@ class PublishManager:
         """
         retry_count = int(item.get("retry_count") or 0)
         error = result.error or "publish failed"
-        if not retry.should_retry(retry_count, error):
+
+        # S2: never auto-retry a failure that may already have posted.
+        #
+        # Every platform here is a multi-request flow - X initialize/append/finalize/tweet,
+        # Instagram create-container/upload/publish, YouTube initiate/PUT, TikTok init/PUT - and a
+        # retry re-runs it **from step one**. So a read timeout on the last call of an upload that
+        # the platform actually accepted produces a *second post*, and no idempotency key exists
+        # anywhere to prevent it. The publishers now say when they have reached the irreversible
+        # step, and this is where that is honoured.
+        #
+        # The asymmetry is deliberate: a duplicate post cannot be undone by this tool, while a post
+        # this refuses to retry can be re-published by one click on `/approve`. So the uncertain
+        # case goes to a person, with the uncertainty named.
+        if getattr(result, "side_effect_possible", False):
+            self.history.update_attempt(
+                item["id"],
+                state=PublishState.REVIEW_REQUIRED.value,
+                error=error,
+                message=(
+                    "The upload failed after the post may already have been created. Not retried "
+                    "automatically, because retrying would re-run the whole upload and could post "
+                    "twice. Check the platform, then approve to post or cancel to discard."
+                ),
+                result_json=result.to_dict(),
+                completed_at=time.time(),
+            )
+            return True
+
+        if not retry.should_retry(retry_count, error, result.status_code):
             if retry_count:
                 # Say how hard we tried: "failed after 4 attempts over two hours" and "failed
                 # immediately" call for different responses, and the platform error alone cannot

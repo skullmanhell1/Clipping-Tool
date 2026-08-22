@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -19,6 +20,79 @@ class PublishState(str, Enum):
     PRIVATE = "private"
     REVIEW_REQUIRED = "review_required"
     FAILED = "failed"
+    #: The process died between the platform call and the record of it, so what happened is
+    #: genuinely unknown (S4).
+    #:
+    #: Distinct from FAILED, and the distinction is the whole point: a FAILED attempt is safe to
+    #: retry, and this one is **not** — the post may well exist. A stale ``uploading`` row used to
+    #: be unreachable by every path (``due_attempts`` selects only queued/scheduled, and
+    #: ``/retry``, ``/approve``, ``/reschedule`` and ``/cancel`` all refused it), so the attempt
+    #: was silently lost *and* the audit trail was wrong. Naming the uncertainty lets a person
+    #: check the platform and decide, which is the only correct resolution available.
+    UNKNOWN = "unknown"
+
+
+#: Query/body parameter names whose values must never reach a log, a database or an API response.
+_SECRET_PARAM_NAMES = (
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "api_key",
+    "apikey",
+    "token",
+    "key",
+    "password",
+    "secret",
+)
+
+#: `name=value` in a query string or form body, for the parameters above.
+_SECRET_IN_URL = re.compile(
+    r"(?i)\b(" + "|".join(_SECRET_PARAM_NAMES) + r")=([^&\s\"'<>]+)",
+)
+
+#: A bearer/OAuth credential in a header echoed into an error message.
+_SECRET_IN_HEADER = re.compile(r"(?i)\b(bearer|oauth|basic)\s+([A-Za-z0-9._~+/=-]{8,})")
+
+
+def status_of(exc: BaseException) -> int | None:
+    """The HTTP status behind ``exc``, or ``None`` when it was not an HTTP failure.
+
+    Every publisher catches bare ``Exception`` and records ``str(exc)``, which is why
+    ``retry.classify``'s precise status-code path was never reached in production — the code was
+    right there on the exception object and nobody read it. Kept here so all five publishers use
+    one implementation, and written defensively because it runs inside an ``except``.
+    """
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None)
+    try:
+        return int(code) if code is not None else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+def redact(text: str) -> str:
+    """Remove credentials from text before it is stored or returned.
+
+    Every publisher's ``except`` block records ``str(exc)``, and an ``httpx.HTTPStatusError``
+    message **embeds the full request URL**. Instagram passed its access token as a query
+    parameter, so a single 4xx on the container-status poll produced
+
+        Client error '400 Bad Request' for url 'https://graph.facebook.com/v25.0/17…?
+        fields=status_code&access_token=EAAG…'
+
+    which `manager._execute` then wrote into both the ``error`` column and ``result_json``, and
+    which ``GET /api/history`` serves. A long-lived credential that only ever needed to be in a
+    header ended up persisted in ``history.db``, in every backup of it, and rendered in the
+    dashboard.
+
+    Applied at the ``PublishResult`` boundary rather than at each call site, because there are five
+    publishers and the sixth would forget. It is a net, not a substitute for keeping secrets out of
+    URLs — Instagram's poll now uses a header too.
+    """
+    if not text:
+        return text
+    cleaned = _SECRET_IN_URL.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
+    return _SECRET_IN_HEADER.sub(lambda m: f"{m.group(1)} [REDACTED]", cleaned)
 
 
 @dataclass
@@ -86,6 +160,30 @@ class PublishResult:
     error: str = ""
     message: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    #: The platform's HTTP status, when the failure was an HTTP one (PB5).
+    #:
+    #: ``retry.classify`` has always accepted a status code and decided purely from it when given
+    #: one — but no publisher populated one and ``manager._schedule_retry`` called
+    #: ``should_retry(count, error)`` with two arguments, so **every production retry decision was
+    #: made by substring-matching an exception message**, which is the fallback that module's own
+    #: docstring apologises for. The precise path was dead code, and its unit tests passed because
+    #: they call ``classify`` directly.
+    status_code: int | None = None
+    #: Whether the platform may already have accepted the post despite this attempt failing (S2).
+    #:
+    #: Set when a failure occurs *after* an irreversible step in a multi-request flow — X's
+    #: FINALIZE, Instagram's ``media_publish``, YouTube's PUT of the file bytes. Retrying such an
+    #: attempt re-runs the flow from step one, and a timeout on the last call of a successful
+    #: upload therefore produces a **second post**. ``_schedule_retry`` refuses to auto-retry these
+    #: and routes them to a human instead, because a duplicate post cannot be undone by this tool
+    #: and a missed post can be re-published by one click.
+    side_effect_possible: bool = False
+
+    def __post_init__(self) -> None:
+        # Redacted here so no publisher can leak a credential into the record by forgetting to.
+        # `error` is stored in a column and served by /api/history; `raw` is stored as JSON.
+        self.error = redact(self.error)
+        self.message = redact(self.message)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

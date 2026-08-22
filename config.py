@@ -240,6 +240,15 @@ class Settings(BaseSettings):
         default=120_000,
         description="Largest transcript block placed in a selection prompt; 0 = unbounded.",
     )
+    # `publishers/best_times.py` suggests clock times ("post at 19:00"), and it built them from a
+    # *naive* datetime — so `timestamp()` interpreted them in the server's zone, which in the
+    # container is UTC. Its docstring said the times were the audience's local ones. An IANA name
+    # here makes that true; empty keeps the server's zone, which is the previous behaviour.
+    schedule_timezone: str = Field(
+        default="",
+        description="IANA timezone for suggested posting times (e.g. America/New_York); "
+        "empty = the server's own timezone.",
+    )
 
     # ------------------------------------------------------- transcription --
     # faster-whisper model size, e.g. tiny/base/small/medium/large-v3.

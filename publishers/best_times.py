@@ -24,14 +24,54 @@ Two design notes:
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _zone():
+    """The timezone the suggested clock times are expressed in.
+
+    This module's premise is that "post at 7pm" means 7pm *where the audience is*, and the
+    implementation did not support it: ``datetime.combine(day, ...).replace(hour=…).timestamp()``
+    builds a **naive** datetime, so ``timestamp()`` interprets it in the server's zone. The
+    container sets no ``TZ``, so every suggestion was UTC — "19:00 TikTok prime time" scheduled a
+    post for 2 p.m. in New York and 4 a.m. in Sydney. The docstring described a feature the code
+    did not have, which is worse than not having it.
+
+    ``SCHEDULE_TIMEZONE`` is an IANA name (``America/New_York``). Empty keeps the previous
+    behaviour — the server's own zone — so an existing installation's schedule does not shift
+    underneath it on upgrade.
+    """
+    name = str(getattr(settings, "schedule_timezone", "") or "").strip()
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        # A bad zone name must not break scheduling; falling back to server-local is the previous
+        # behaviour, and it is logged so the misconfiguration is visible.
+        logger.warning(
+            "SCHEDULE_TIMEZONE=%r is not a known IANA timezone; using the server's zone", name
+        )
+        return None
+
 
 #: Suggested local posting times per platform, as ``(hour, minute)`` pairs.
 #:
 #: Ordered best-first within a day, so a caller taking the first entry gets the strongest slot.
+#:
+#: ``youtube_shorts`` is a **legacy alias** and no other layer knows it: ``PUBLISHER_TYPES``,
+#: ``preflight.PLATFORM_LIMITS`` and ``PublishManager.submit`` all use ``youtube``. It is kept so a
+#: stored preference does not break, but a request for it cannot be published — see
+#: ``windows_for``.
 PLATFORM_WINDOWS: dict[str, tuple[tuple[int, int], ...]] = {
     # Short-form vertical feeds: evening-heavy, with a lunchtime secondary peak.
     "tiktok": ((19, 0), (12, 0), (21, 0), (9, 0)),
@@ -64,7 +104,11 @@ BASIS = (
 
 
 def windows_for(platform: str) -> tuple[tuple[int, int], ...]:
-    """The suggested local time-of-day windows for ``platform``, best first."""
+    """The suggested time-of-day windows for ``platform``, best first.
+
+    Times are in ``SCHEDULE_TIMEZONE`` (or the server's zone when that is unset) — see
+    :func:`_zone`. They are *not* the audience's local time unless that setting names it.
+    """
     return PLATFORM_WINDOWS.get((platform or "").strip().lower(), DEFAULT_WINDOWS)
 
 
@@ -115,7 +159,8 @@ def suggest(
     busy = sorted(float(t) for t in (taken or []))
 
     windows = windows_for(platform)
-    start = datetime.fromtimestamp(reference)
+    zone = _zone()
+    start = datetime.fromtimestamp(reference, tz=zone)
     found: list[Suggestion] = []
 
     for offset in range(horizon):
@@ -124,7 +169,14 @@ def suggest(
         for index, (hour, minute) in enumerate(windows):
             if chosen_today >= wanted_per_day:
                 break
-            slot = datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute)
+            # `tzinfo=zone` on the constructed slot, not on the `.replace` of a naive value. A
+            # naive datetime's `.timestamp()` silently means "in the server's zone", which is how
+            # the clock times came to be UTC. Building the slot *in* the target zone also handles
+            # DST correctly for the date in question, which `.replace(hour=…)` on a naive value
+            # cannot: on a transition day it produced a slot an hour away from the one requested.
+            slot = datetime.combine(day, datetime.min.time(), tzinfo=zone).replace(
+                hour=hour, minute=minute
+            )
             at = slot.timestamp()
             if at <= reference:
                 continue
