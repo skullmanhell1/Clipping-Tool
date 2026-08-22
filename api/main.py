@@ -29,6 +29,7 @@ Run: ``uvicorn api.main:app --reload``
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 import zipfile
@@ -2162,6 +2163,45 @@ class _ZipSink:
         return data
 
 
+def _resolve_clip_file(job_id: str, filename: str) -> tuple[Path, str]:
+    """Resolve a clip file inside ``clips_dir``, or 404. Returns ``(path, safe_name)``.
+
+    Both routes below take ``job_id`` and ``filename`` straight from the URL, and both used to
+    build their path inline:
+
+        path = Path(settings.clips_dir) / Path(job_id).name / Path(filename).name
+
+    ``Path(...).name`` does strip directory components, so traversal was *in practice* prevented —
+    ``Path("../../etc/passwd").name`` is ``"passwd"``. But there was no **containment check**, only
+    a sanitiser applied component-wise and then trusted, and CodeQL's ``py/path-injection`` flagged
+    six paths through those two routes at security-severity 7.5 because nothing downstream proves
+    the result is under the clips directory.
+
+    Being un-exploitable-today and being safe are different claims, and the difference here is one
+    refactor away from mattering: any future caller that passes a value it has not run through
+    ``.name`` inherits a filesystem read with no guard. So this resolves the candidate and then
+    *proves* containment rather than inferring it.
+
+    ``os.path.realpath`` + an explicit prefix check rather than ``Path.is_relative_to``: realpath
+    collapses ``..`` **and** follows symlinks, so a link planted inside ``clips_dir`` pointing
+    outside it is caught too — which ``is_relative_to`` on an unresolved path would miss. It is also
+    the form CodeQL recognises as a path-injection sanitiser, so the gate and the code agree about
+    what makes this safe instead of a human having to argue it in a comment.
+    """
+    safe_name = Path(filename).name
+    safe_job = Path(job_id).name
+    root = os.path.realpath(str(settings.clips_dir))
+    candidate = os.path.realpath(os.path.join(root, safe_job, safe_name))
+    if not candidate.startswith(root + os.sep):
+        # Outside the clips directory. 404 rather than 400: an attacker learns nothing about
+        # whether the traversal target exists, and a legitimate caller cannot reach this.
+        raise HTTPException(status_code=404, detail="Clip not found")
+    path = Path(candidate)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return path, safe_name
+
+
 def _iter_clip_package(path: Path, safe_name: str, metadata: str, chunk_size: int):
     """Yield a zip of ``path`` plus its metadata sidecar, a chunk at a time.
 
@@ -2202,11 +2242,10 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
 
     Rate-limited for the same reason: it is the one expensive route that had no throttle.
     """
-    safe_name = Path(filename).name
-    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    path, safe_name = _resolve_clip_file(job_id, filename)
     job = get_manager().store.get(job_id)
     clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
-    if not path.exists() or not path.is_file() or clip is None:
+    if clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
     chunk_size = max(1, int(settings.upload_chunk_bytes))
     return StreamingResponse(
@@ -2227,11 +2266,10 @@ def download_video_only(job_id: str, filename: str) -> FileResponse:
     sibling in the same URL family served only files listed on the job record. Two routes over
     one directory with different rules is how the looser one gets forgotten.
     """
-    safe_name = Path(filename).name
-    path = Path(settings.clips_dir) / Path(job_id).name / safe_name
+    path, safe_name = _resolve_clip_file(job_id, filename)
     job = get_manager().store.get(job_id)
     known = any(c.filename == safe_name for c in job.clips) if job else False
-    if not path.exists() or not path.is_file() or not known:
+    if not known:
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, filename=safe_name, media_type="video/mp4")
 
