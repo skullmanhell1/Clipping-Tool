@@ -174,6 +174,24 @@ class Settings(BaseSettings):
         description="Allow URL ingest from loopback/link-local/private address ranges. "
         "Leave false unless you are deliberately ingesting from a LAN host.",
     )
+    # YouTube gates a growing share of videos behind "Sign in to confirm you're not a bot", and
+    # yt-dlp's own error text names the fix: pass cookies. There was no way to do that, so URL
+    # ingest failed with a wall of yt-dlp prose about wiki pages and no setting to act on. The
+    # trigger is the requesting IP, not the video, so this is not an edge case for a container or a
+    # VPS -- a datacentre address is gated near-universally, and residential ones increasingly.
+    ytdlp_cookies_file: Path | None = Field(
+        default=None,
+        description="Netscape-format cookies.txt handed to yt-dlp for URL ingest. The only "
+        "option that works in a container, where there is no browser to read from.",
+    )
+    # Separate from the file because it is the convenient path on a desktop and the impossible one
+    # in Docker: yt-dlp reads the browser's own cookie store, which the image does not have. Both
+    # exist so neither host has to use the other's workaround.
+    ytdlp_cookies_from_browser: str | None = Field(
+        default=None,
+        description="Browser whose cookie store yt-dlp should read, e.g. chrome, firefox, edge. "
+        "Optionally BROWSER:PROFILE. Host installs only; a container has no browser.",
+    )
     # Whether to believe X-Forwarded-For when identifying a client for rate limiting. False by
     # default because a client can forge the header when the app is directly exposed, and
     # trusting it then lets one caller present as unlimited distinct clients. Behind a proxy

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — URL ingest can authenticate, so YouTube's bot gate is no longer a dead end
+
+Pasting a YouTube link failed, and there was nothing the user could do about it:
+
+```
+Download failed: ERROR: [youtube] <id>: Sign in to confirm you're not a bot.
+Use --cookies-from-browser or --cookies for the authentication. See <two wiki links>
+```
+
+yt-dlp names the fix, and **the application exposed no way to apply it** — a grep of the tree found
+no `cookiefile`, no `cookiesfrombrowser`, no setting. So the error relayed two CLI flags this app
+does not have and two wiki pages, describing a remedy the reader could not act on.
+
+This is not an edge case. The gate keys on the **requesting IP**, not the video, so a server or a
+container is gated near-universally and home connections increasingly. It was invisible in the suite
+because the URL-ingest tests mock yt-dlp, so that path had never met the real gate.
+
+- **`YTDLP_COOKIES_FILE`** — a Netscape `cookies.txt`. The only option that works in Docker, where
+  `--cookies-from-browser` cannot work at all because there is no browser. `~` is expanded, since
+  that is what a person types and yt-dlp does not expand it.
+- **`YTDLP_COOKIES_FROM_BROWSER`** — the desktop convenience, `chrome` or `chrome:Profile 1`,
+  converted to the `(browser, profile, keyring, container)` tuple yt-dlp expects. Both settings may
+  be set together; yt-dlp merges the jars.
+- **Applied to both yt-dlp entry points.** `fetch_metadata` makes a real request and hits the same
+  gate, and the UI calls it *first*, so authenticating only `download_video` would have left the
+  feature looking broken.
+- **The gate is translated into an actionable message** naming the settings that exist instead of
+  flags that do not. Matched on the stable fragments of yt-dlp's wording rather than the full
+  sentence, which has been reworded before and carries a Unicode right single quote in "you're".
+  An age gate (`Sign in to confirm your age`) is deliberately *not* matched — different problem,
+  different fix, and mislabelling it would send the reader after cookies they do not need.
+- **A misconfigured path names itself.** yt-dlp treats an absent cookie file as fatal with text that
+  mentions neither the path nor that it came from configuration, so a typo read as an unrelated
+  failure. Now: `YTDLP_COOKIES_FILE points at /app/storage/typo-cookies.txt, which is not a file.`
+
+Verified in a container against a genuinely gated video: the job now fails with the hint rather than
+the yt-dlp dump, and with a deliberately wrong path it reports the path. 18 tests in
+`tests/test_url_ingest_cookies.py`, none touching the network — they assert the options handed to
+yt-dlp and the message handed to the user, which is where both defects were.
+
+Anonymous ingest is unchanged: with neither setting configured the options dict is empty, asserted
+directly, so no existing deployment changes behaviour.
+
 ### Added — caption sync is now a number, not an argument (M10, label-free)
 
 A desync was reported against rendered clips, and there was no way to settle it. `evaluation/
