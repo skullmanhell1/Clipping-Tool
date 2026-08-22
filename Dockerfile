@@ -28,7 +28,24 @@ FROM python:3.11-slim
 
 # System dependencies:
 # - ffmpeg: video/audio processing (probe, cut, reframe, captions burn)
-# - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe
+# - libgl1 / libglib2.0-0: runtime libs required by opencv / mediapipe to *import*
+# - libegl1 / libgles2: a second, separate pair that mediapipe needs to *construct a task
+#   graph*, which is not the same requirement and failed for exactly that reason.
+#
+#   `mediapipe/tasks/c/libmediapipe.so` declares `NEEDED libGLESv2.so.2` and `NEEDED
+#   libEGL.so.1`, and that library is dlopen'd only when a graph is built. So `import mediapipe`
+#   succeeded, `/api/info` reported the backend available, `scripts/docker_smoke.sh` asserted
+#   that and passed -- and then every render raised
+#   `OSError: libGLESv2.so.2: cannot open shared object file` inside
+#   `vision.FaceDetector.create_from_options` and silently substituted Haar. Measured on real
+#   footage: 10 of 10 clips carried `face_detector_substituted:mediapipe:haar` while the API
+#   advertised BlazeFace as working.
+#
+#   `.github/workflows/ci.yml` installs all four and explains why at length. This image never
+#   received that half of the fix, so CI exercised the real detector and the shipped container
+#   never did -- and no test could see the difference, because the only thing that reveals it is
+#   footage with a face in it. Verify with:
+#     objdump -p .../mediapipe/tasks/c/libmediapipe.so | grep NEEDED
 #
 # ffmpeg is deliberately NOT pinned to an apt version, and that is a considered choice
 # rather than an oversight. Debian removes superseded versions from the archive, so
@@ -51,6 +68,8 @@ RUN apt-get update \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
+        libegl1 \
+        libgles2 \
         fonts-liberation \
         fontconfig \
     && rm -rf /var/lib/apt/lists/* \
