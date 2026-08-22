@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the pinned VMAF ffmpeg was immutable but not durable, and CI cannot fetch it
+
+The backend job's "Fetch the VMAF-capable ffmpeg" step pinned
+`BtbN/FFmpeg-Builds@autobuild-2026-08-07-13-13`. That URL now returns **404**: BtbN prunes its
+releases, keeping roughly the last fourteen daily autobuilds plus the last-of-month build for each
+month going back about two years. The pin was a *mid-month daily*, so it was deleted upstream
+fourteen days after it was chosen.
+
+The reasoning recorded alongside the pin — immutable tag, version-stamped asset, checksummed, no
+floating `latest` — is right and stands. It just secured the wrong property. Immutable means the
+bytes behind the URL cannot change; durable means the URL still resolves. Only the first was
+checked, and the failure mode of the second is a hard CI failure rather than a wrong reading.
+
+This was invisible because the step is `if: cache-hit != 'true'` and the cache was warm when the
+pin was made. The repository now holds **zero** Actions caches (GitHub evicts entries unused for
+seven days), so the step will run — and fail — on the next build.
+
+- **Re-pinned to `autobuild-2026-07-31-14-10`**, a month-end tag, which carries the *identical*
+  asset: same ffmpeg revision `n7.1.5-12-g1fdbca85aa`, same filename, `libvmaf` verified present.
+  So this is a hosting change, not a measurement change — nothing about `compare()` refusing to
+  difference readings across builds is affected. Life expectancy goes from ~2 weeks to ~2 years,
+  and the comment in `ci.yml` now states the retention rule so the next bump picks a month-end tag
+  on purpose rather than by luck.
+- **`curl` now runs with `--fail`.** Without it curl wrote GitHub's 9-byte `Not Found` body to the
+  output path and exited 0, so a pruned release surfaced as
+  `sha256sum: WARNING: 1 computed checksum did NOT match` — which reads as a tampered binary and
+  sends you hunting a supply-chain compromise that is not there. A missing release and a changed
+  release need opposite responses, so they no longer share a symptom; the 404 path now says which
+  it is and names the remedy.
+
+Verified by running the whole backend job locally against the new pin: `ruff check`,
+`ruff format --check`, `mypy` (118 files), the four vendored-asset gates, `check_wired.py`, and
+**2805 tests passing with no skips** with `VMAF_FFMPEG_BINARY` pointed at the newly fetched binary,
+plus both frontend legs (node 20.20.2 and 22.23.2: `npm ci`, eslint, 141 vitest tests, build,
+`npm audit`) and `scripts/docker_smoke.sh` end to end.
+
 ## [0.12.4] - 2026-08-21
 
 ### Fixed — the same 500, from a second cause: storage writability was never checked

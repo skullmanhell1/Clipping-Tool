@@ -235,7 +235,10 @@ binary. CI pins a separate
 BtbN build by URL *and* sha256 and asserts `-filters` lists `libvmaf` before running anything. Do the
 same locally — see the "Fetch the VMAF-capable ffmpeg" step in `.github/workflows/ci.yml`. Pinning is
 deliberate: `compare()` refuses to difference readings taken across builds, so a silently updated
-libvmaf would invalidate every stored baseline with nothing to point at.
+libvmaf would invalidate every stored baseline with nothing to point at. **When bumping that pin, pick a
+month-end `autobuild-` tag**: BtbN prunes daily builds after about a fortnight and keeps only the
+last-of-month ones, so a mid-month pin is immutable but not durable — it 404s two weeks later. The
+reasoning is spelled out in full at the step itself.
 
 `npm audit` reports **0 vulnerabilities**. An earlier note here recorded 9 high advisories via a
 `brace-expansion` DoS in eslint's `minimatch` chain as accepted, because neither available fix was
