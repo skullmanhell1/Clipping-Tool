@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — caption sync is now a number, not an argument (M10, label-free)
+
+A desync was reported against rendered clips, and there was no way to settle it. `evaluation/
+caption_timing.py` was library-only — `scripts/check_wired.py` records it as a hand-run instrument —
+and **every one of its twenty tests fed it synthetic labels and synthetic events**. So the instrument
+was proven and the pipeline was not: nothing in the suite measured a real render.
+`tests/test_transcript_trim.py::test_captions_follow_the_cut` came closest, but it spies on
+`rebase_words` and asserts a rebased word *number*, so it would still pass if the number were right
+and the rendered media were shifted underneath it.
+
+- **`speech_mask` / `coverage_overlap` / `best_fit_lag_ms` in `evaluation/caption_timing.py`.**
+  Measures "a caption is on screen" against "sound is happening", both read from finished artefacts,
+  **with no labels at all**. Labels would mean hand-transcribing or re-running ASR, and re-running
+  ASR makes the measurement circular — ASR is where the caption times came from. That is not
+  hypothetical: whisper-derived labels put the mean error at **−944 ms** on clips whose captions were
+  in fact aligned, because only 5 of 47 words matched and the mean was taken over the survivors.
+  IoU rather than plain overlap, so a cue list that simply covers the whole clip cannot score well.
+- **`scripts/measure_caption_sync.py`** — the entry point that was missing. Reports lag, overlap at
+  zero, and overlap at the best-fit lag together, because the three columns distinguish cases the
+  lag alone cannot: a *consistent* lag is an arithmetic bug, lags disagreeing in sign are per-word
+  ASR jitter that no constant compensation fixes, and a large lag whose overlap barely improves is
+  the search finding a spurious alignment in continuous speech — noise, not a finding.
+- **`tests/test_caption_sync_rendered.py`** renders a clip with real ffmpeg and measures the cues
+  the ASS emitter actually received against the finished file's own audio. No ASR: the source is a
+  1-second tone every 2 seconds, so the truth is constructed. The window starts at **4 s, not 0** —
+  a missing or doubled clip-start subtraction is invisible at zero, and that is the defect this
+  exists to catch. Verified by injecting it: deleting the `- start` in `slice_words` makes the test
+  fail with `captions best fit the audio -2000 ms off zero` and `the first cue starts at 4.00s in a
+  clip cut from 4.0s`. A fourth test shifts every cue by a whole burst period and asserts the metric
+  notices, so the guard cannot silently become decoration.
+
+### Investigated — the reported desync is per-word ASR jitter, and three plausible fixes were rejected on measurement
+
+Recorded because each would have been a defensible-sounding change with no benefit, and the next
+person should not have to re-derive that.
+
+- **No constant offset exists.** Across ten rendered clips the median best-fit lag is **−0.04 s**,
+  two envelope frames, well inside the 100 ms this module records as perceptible. The first cue
+  fires at audio onset on nine of ten. The clip-start arithmetic is correct.
+- **The four worst clips measured +1.52, −1.52, −1.16 and +1.58 s** — and gained only 3–10 points of
+  overlap at those lags. Disagreeing signs plus a marginal gain is per-word jitter, not a shift.
+- **Raising ASR precision does not help.** Measured on the same 120 s source: `small`/`int8` (the
+  current default) **81.4%** overlap, `small`/`float32` **80.7%** at 3.4× the time, `medium`/`int8`
+  **79.6%**, `medium`/`float32` **81.1%** at 9× the time. The cheapest configuration is the most
+  accurate of the four, so `WHISPER_COMPUTE_TYPE` is left alone.
+- **Forced alignment was prototyped and rejected, and it nearly caused a regression.** `torchaudio`'s
+  `MMS_FA` CTC aligner improved the edge-anchored median from 130 ms to 110 ms — 15%, below the 20%
+  threshold fixed before running it — for a **1.18 GB** model and a `torch` dependency. Then the
+  interesting part: comparing whisper against it gave **−94, −104 and −105 ms** across three
+  recordings (two windows of one voice, plus a synthesised second voice). Consistent sign, 12 ms
+  spread, three sources; every heuristic for a real systematic bias satisfied, and the indicated fix
+  was a calibrated +100 ms shift. **That would have injected 100 ms of error into a component that
+  was correct.** Measured against pause-preceded words — where 300 ms of silence lets the audio
+  settle the onset with no model involved — whisper reads **−10, −20 and +50 ms**. It is accurate.
+  The 100 ms belonged to `MMS_FA`, whose CTC spans open at the first strongly-voiced frame and so
+  start after fricatives and plosive releases that belong to the word.
+- **`verifiable_word_errors` makes both traps unrepeatable.** It measures word onsets only where a
+  real pause makes them verifiable and **skips the rest rather than estimating them** — which is
+  precisely what the 130 ms figure was: a confident number reported for every word when only about
+  one in ten carried information. Its tests cover the continuous-speech case explicitly, asserting
+  that nothing is reported there, and the sign convention, which is what decided whether a
+  "correction" would have gone the right way. Note the noise floor is invisible synthetically: on
+  gated tones the same code reads 0 ms on known-true times even at 3.3 bursts per second, so a
+  synthetic check makes the broken metric look validated.
+- **T11 onset snapping is still not the answer**, and `worker/word_spans.py` now carries the second
+  measurement. Its original note said a ~20 ms envelope would be needed and that R7.8 forbids the
+  second audio pass. One now exists in `evaluation/` — where an instrument may spend a pass the
+  render path may not, so R7.8 stands — and it shows whisper's spans already track speech at 81.4%.
+  There is no gross mis-timing to recover, and snapping in near-continuous speech has onsets
+  everywhere to choose from. Forced alignment would address the residual; onset snapping would not.
+- **The sidecar/burn-in grouping difference is deliberate and was left alone.** It looks like a bug
+  from the outside — `words_to_cues` groups 3 words to 3.0 s, `cues_from_words` 8 words to 5.0 s, so
+  the `.srt` genuinely does not match what is burned in — but `worker/subtitle_export.py` documents
+  the reason: three-word cues in a player's own small subtitle type flicker once a second. Two jobs,
+  two groupings. `scripts/measure_caption_sync.py` therefore prefers the `.ass` and treats the
+  `.srt` as a fallback, noting which it used, rather than pretending they are interchangeable.
+
 ### Fixed — `cp .env.example .env && docker compose up` could not boot the app
 
 **Found by actually running it.** The README's quickstart is `cp .env.example .env`, then

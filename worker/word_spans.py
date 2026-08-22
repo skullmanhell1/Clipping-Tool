@@ -39,6 +39,64 @@ Implementing it needs a word-scale envelope, on the order of 20 ms readings, and
 the second audio pass R7.8 rules out. So the requirement is self-limiting as written: its constraint
 and its purpose are incompatible. Recorded here so the next person measures the envelope before
 building against it rather than after.
+
+**Measured again, from the other end, after a desync was reported. T11 still is not the answer.**
+
+The note above says a 20 ms envelope would be needed. That is correct, and one now exists —
+``evaluation.caption_timing.speech_mask``, at ``ENVELOPE_HOP_S = 0.02``. It is in `evaluation/`
+rather than here on purpose: an instrument may spend a second audio pass, the render path may not,
+so its existence does not lift R7.8. What it did do is make the premise testable, and the numbers
+came out against building T11:
+
+* On a 120 s source, whisper's own word spans already overlap the 20 ms speech mask **81.4%**
+  (IoU), best-fit lag **+0.10 s**. There is no gross mis-timing for snapping to recover.
+* Across ten rendered clips the median best-fit lag was **-0.04 s** — two envelope frames, below
+  the 100 ms the M10 instrument records as perceptible.
+* The four clips that looked worst had best-fit lags of **+1.52, -1.52, -1.16 and +1.58 s** and
+  gained only 3-10 points of overlap at that lag. Disagreeing signs plus a marginal gain is the
+  signature of a spurious alignment in continuous speech, not a shift. A constant compensation
+  cannot fix errors that point both ways, and snapping to onsets in near-continuous speech has
+  onsets everywhere to choose from.
+* Raising ASR precision does not help either, which bounds how much of the residual is ASR
+  quantisation at all: ``small``/``int8`` (the default) scored **81.4%**, ``small``/``float32``
+  **80.7%**, ``medium``/``int8`` **79.6%**, ``medium``/``float32`` **81.1%**. The cheapest
+  configuration is the most accurate of the four, and the two slower ones are worse.
+
+So the residual is per-word ASR jitter of a few tens of milliseconds, distributed both ways. Onset
+snapping against an envelope would not address it, because it has no way to tell which of the many
+onsets under a word is the one that word began at. Reproduce any of the above with
+``scripts/measure_caption_sync.py``.
+
+**Forced alignment was then built as a prototype and also rejected — and the way it failed is worth
+more than the result.**
+
+The paragraph above suggested forced alignment as the fix for the residual. It was tried:
+torchaudio's ``MMS_FA`` CTC aligner, on the same source. Two findings, in the order they arrived.
+
+*First, it barely moved the number it was meant to fix.* Median edge-anchored error went 130 ms to
+110 ms, a 15% improvement, for a **1.18 GB** model download and a ``torch`` dependency. Below the
+20% threshold set before running it, so: rejected on cost.
+
+*Second, and this is the part that matters, it produced a wrong answer that looked completely
+right.* Comparing whisper's word starts against the aligner's gave a median difference of **-94 ms,
+-104 ms and -105 ms** across three recordings — two different windows of one voice, plus a second,
+synthesised voice. Consistent sign, 12 ms spread, three sources. Every test for "this is a real
+systematic bias" passed, and the indicated fix was a calibrated +100 ms shift of every word start.
+
+That fix would have injected 100 ms of error into a component that was already correct. Checked
+against **pause-preceded words**, where 300 ms of silence means the audio's rising edge settles the
+onset with no model involved, whisper reads **-10 ms, -20 ms and +50 ms**. It is accurate. The
+100 ms belonged to ``MMS_FA``: a CTC span opens at the first strongly-voiced frame, so it starts
+*after* fricatives and plosive releases that are genuinely part of the word.
+
+Both traps are now instrumented rather than only described. ``evaluation.caption_timing.
+verifiable_word_errors`` measures word onsets **only** where a real pause makes them verifiable, and
+skips the rest instead of estimating them — which is what the 130 ms figure was: a number reported
+for every word when only about one in ten carried information. Its tests include the continuous-speech
+case, asserting that nothing is reported there.
+
+The transferable lesson, since this cost two rounds: a reference is a hypothesis, not a truth. Two
+references disagreeing is information, and the one that can be checked against physics wins.
 """
 
 from __future__ import annotations
