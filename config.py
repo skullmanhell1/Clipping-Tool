@@ -305,6 +305,13 @@ class Settings(BaseSettings):
         default=1024 * 1024,
         description="Chunk size used to stream uploads to disk.",
     )
+    # `max_upload_bytes` is enforced per file, so a batch's real ceiling was N x that value with
+    # nothing bounding N - a 10 000-part multipart body was accepted and each part validated in
+    # turn. Bounding the count is the missing half of the size guard, not a separate feature.
+    max_upload_files: int = Field(
+        default=25,
+        description="Most files accepted in one /api/upload request (default 25); 0 = unlimited.",
+    )
     allowed_upload_extensions: str = Field(
         default=".mp4,.mov,.mkv,.webm,.avi,.m4v,.mpg,.mpeg,.wmv,.flv,.ts,.m2ts,.3gp,.mp3,.wav,.m4a,.aac,.flac,.ogg",
         description="Comma-separated list of accepted upload file extensions.",

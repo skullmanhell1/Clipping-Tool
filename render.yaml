@@ -22,19 +22,38 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
-      # Set this to your site's origin, e.g. https://ai-video-clipper.onrender.com
-      # (or your custom domain). It is deliberately left blank rather than defaulted:
+      # The shared secret for /api/* and /clips/*. `generateValue: true` makes Render
+      # mint a random value at sync time and keep it out of this file.
       #
-      #   * The application default is "*", which is fine for local development but
-      #     lets any site call this API once it is public.
-      #   * A wildcard also disables credentialed cross-origin requests, because the
-      #     CORS specification forbids combining "*" with
-      #     Access-Control-Allow-Credentials and browsers reject such a response.
+      # This is NOT optional, and that is the whole point of declaring it here. With
+      # ENVIRONMENT=production, `_check_deployment_security()` in api/main.py *refuses to
+      # boot* without a token — it raises InsecureDeploymentError from inside the ASGI
+      # lifespan, so uvicorn never binds, `healthCheckPath` never answers, and with
+      # `autoDeploy: true` every push produces a failed deploy. Omitting this key did not
+      # mean "deploy without auth", it meant "do not deploy". Read it out of the service
+      # dashboard (Environment tab) to make requests: `Authorization: Bearer <value>`.
+      - key: API_AUTH_TOKEN
+        generateValue: true
+      # Empty on purpose, and it must be *present* rather than absent.
       #
-      # Leaving it unset boots with the wildcard and logs a warning on every start,
-      # since ENVIRONMENT is production here. Comma-separate multiple origins.
+      # This blueprint runs one container that serves the API and the built React UI from
+      # the same origin (see the StaticFiles mount at the end of api/main.py), so the
+      # browser never makes a cross-origin call and the correct origin list is the empty
+      # one. An empty value parses to `[]` via Settings.cors_origins_list, which makes
+      # `cors_allow_wildcard` false and satisfies the production gate.
+      #
+      # Leaving the key out entirely does not do this. The application default is "*", and
+      # under ENVIRONMENT=production the wildcard is the *second* refuse-to-boot condition
+      # in `_check_deployment_security()` — so an absent key fails the deploy exactly as a
+      # missing token does. An earlier version of this comment claimed the wildcard merely
+      # "logs a warning on every start"; that was true before the gate was tightened and
+      # has been wrong ever since.
+      #
+      # Only set a value if you serve the UI from somewhere else — then list that origin,
+      # with its scheme, comma-separated: https://clips.example.com,https://www.example.com
+      # A scheme-less host will not match the browser's Origin header and silently blocks.
       - key: CORS_ORIGINS
-        sync: false
+        value: ""
       - key: STORAGE_BACKEND
         value: local        # set to "s3" and fill the S3_* vars for durable storage
       - key: WHISPER_MODEL

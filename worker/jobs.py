@@ -124,27 +124,35 @@ class JobStore:
         except Exception:  # pragma: no cover - defensive
             logger.exception("failed to restore persisted jobs")
 
-    def _persist(self, job: Job | None) -> None:
+    def _persist(self, job: Job | None, payload: dict | None = None) -> None:
         """Mirror ``job`` into the durable store, if one is configured.
 
         Swallows every failure. This runs on the hot path of a live render — a progress
         update mid-encode reaches it — so a full disk or a locked database must cost the
         durability of one record, not the job itself. ``Job_Persistence`` is already
         defensive internally; this guard also covers an injected or third-party backend.
+
+        ``payload`` is the job serialised *inside* the store lock. Without it ``save()`` re-read
+        the live object here, outside the lock, so the row could be written from a state that
+        never existed as a whole — and two overlapping updates committed in scheduling order
+        rather than in the order they happened, which shows up after a restart as a job reporting
+        an earlier stage than it had reached.
         """
         if self._persistence is None or job is None:
             return
         try:
-            self._persistence.save(job)
+            self._persistence.save(job, payload=payload)
         except Exception:
             logger.exception("failed to persist job %s", getattr(job, "id", "?"))
 
     def add(self, job: Job) -> None:
         with self._lock:
             self._jobs[job.id] = job
+            payload = job.to_dict()
         # Written outside the lock: SQLite has its own locking and holding both would
-        # serialise every API poll behind a disk write.
-        self._persist(job)
+        # serialise every API poll behind a disk write. The *payload* is captured inside it,
+        # so what gets written is a state that actually existed.
+        self._persist(job, payload)
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -159,6 +167,45 @@ class JobStore:
             jobs = [j for j in self._jobs.values() if j.batch_id == batch_id]
         return sorted(jobs, key=lambda j: j.created_at)
 
+    # -- serialised reads --------------------------------------------------
+    #
+    # `get`/`all`/`by_batch` hand out **live** Job objects, and the lock above only guards the
+    # dict lookup. Serialising one of those outside the lock races the render thread, which is
+    # inside `update()` several times a second on a busy job:
+    #
+    #   * `Job.to_dict` iterates `self.clips` while `_store_clip` mutates `clip.video_url` and
+    #     `clip.thumbnail_url` in place, so a poll landing mid-loop can emit a clip whose video
+    #     URL points at S3 and whose thumbnail still points at the local path.
+    #   * It hands out the same `planned_clips` / `stage_timings` list objects that `update()`
+    #     rebinds, and JSON-encoding a list another thread is replacing is where
+    #     `RuntimeError: list changed size during iteration` comes from - an intermittent 500 on
+    #     `/api/jobs`, which the shipped UI polls every 1200 ms.
+    #
+    # Serialising *inside* the lock is the fix, and it is cheap: `to_dict` is a dict build over
+    # data already in memory, with no I/O. These are what the API read routes use; `get` stays as
+    # it is for the worker, which legitimately wants the live object.
+
+    def snapshot(self, job_id: str) -> dict | None:
+        """One job serialised under the lock, or ``None`` if unknown."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return job.to_dict() if job is not None else None
+
+    def snapshot_all(self) -> list[dict]:
+        """Every job serialised under the lock, newest first."""
+        with self._lock:
+            jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+            return [j.to_dict() for j in jobs]
+
+    def snapshot_batch(self, batch_id: str) -> list[dict]:
+        """Every job in one batch, serialised under the lock, oldest first."""
+        with self._lock:
+            jobs = sorted(
+                (j for j in self._jobs.values() if j.batch_id == batch_id),
+                key=lambda j: j.created_at,
+            )
+            return [j.to_dict() for j in jobs]
+
     def update(self, job_id: str, **fields) -> None:
         """Atomically update fields on a stored job."""
         import time
@@ -170,7 +217,8 @@ class JobStore:
             for key, value in fields.items():
                 setattr(job, key, value)
             job.updated_at = time.time()
-        self._persist(job)
+            payload = job.to_dict()
+        self._persist(job, payload)
 
     def update_clip(self, job_id: str, clip_id: str, fields: dict) -> ClipResult | None:
         """Atomically update editable fields on one clip within a job.
@@ -197,9 +245,10 @@ class JobStore:
                 if hasattr(clip, key):
                     setattr(clip, key, value)
             job.updated_at = time.time()
+            payload = job.to_dict()
         # Clip metadata edits are user-visible and must survive a restart just as job
         # state does, so this mirrors too.
-        self._persist(job)
+        self._persist(job, payload)
         return clip
 
     def get_clip(self, job_id: str, clip_id: str) -> ClipResult | None:
@@ -426,6 +475,10 @@ class JobManager:
 
     def _execute(self, job, job_id, progress, close_stage, metrics, resume: bool = False) -> None:
         """The job body. Split out so ``_run`` is only the context and callback wiring."""
+        # Clips finished before a cancellation landed. Held outside the `try` so the
+        # Job_Cancelled handler can record them: they are already encoded, mirrored and on
+        # disk, and dropping them from the record would leave files no API response mentions.
+        rendered_clips: list[ClipResult] = []
         try:
             # I4: a queued job stops here, before any work begins - no worker has claimed it, so
             # there is nothing to wait for.
@@ -446,6 +499,15 @@ class JobManager:
             if job.input_type == "url":
 
                 def dl_progress(frac: float, msg: str) -> None:
+                    # I4: the download callback is a cancellation checkpoint for the same reason
+                    # the pipeline's `progress` is, and leaving it out did more than delay the
+                    # stop - it *undid* it. `cancel()` writes CANCELLED, then the next yt-dlp
+                    # progress tick (sub-second) wrote `status=PROCESSING` straight back over it,
+                    # so the UI showed "Cancelled" and then flipped to "Processing 6%" and kept
+                    # climbing. The download itself ran to completion, so a multi-gigabyte fetch
+                    # the user had explicitly stopped still spent the bandwidth and still landed
+                    # in uploads/. Checking here stops it at the next tick instead.
+                    cancellation.checkpoint(job_id)
                     self.store.update(
                         job_id,
                         progress=frac * _DOWNLOAD_BUDGET,
@@ -542,7 +604,21 @@ class JobManager:
                 history.record_clip(job_id, clip, path, job.options.campaign_id)
                 self._store_clip(storage, write_sidecar, job_id, clip, clips_dir)
 
+            rendered_clips = list(clips)
             close_stage()
+            # I4: a cancel that arrives during the final pass must not be overwritten by the
+            # success write below. `cancel()` had already stored CANCELLED, and there was no
+            # re-check here, so the terminal state was decided by whichever thread wrote last:
+            # a job the user stopped could be reported as COMPLETED, and the UI flipped from
+            # "Cancelled" back to "Completed". Two writers for one terminal field is the defect;
+            # this makes the worker the only one that gets the last word.
+            cancellation.checkpoint(job_id)
+            # I4: a cancel that arrives during the final pass must not be overwritten by the
+            # success write below. `cancel()` had already stored CANCELLED, and there was no
+            # re-check here, so the terminal state was decided by whichever thread wrote last:
+            # a job the user stopped could be reported as COMPLETED, and the UI flipped from
+            # "Cancelled" back to "Completed". Two writers for one terminal field is the defect;
+            # this makes the worker the only one that gets the last word.
             self.store.update(
                 job_id,
                 clips=clips,
@@ -577,13 +653,24 @@ class JobManager:
             # failure. A job the user stopped did not go wrong, and reporting it as failed would
             # both mislead the operator and inflate any failure rate computed from these records.
             close_stage()
-            self.store.update(
-                job_id,
-                status=JobStatus.CANCELLED,
-                stage="Cancelled",
-                error=None,
-                stage_timings=metrics.to_list(),
-            )
+            # Any clip that finished before the stop is kept and reported. The files are on
+            # disk and mirrored to storage either way, so omitting them from the record would
+            # not save the work - it would only hide it, leaving clips the retention sweeper
+            # owns and no API response names. A partial result is also the honest answer to
+            # "what did I get?" after stopping a ten-clip job at clip seven.
+            cancelled_fields: dict[str, Any] = {
+                "status": JobStatus.CANCELLED,
+                "stage": (
+                    f"Cancelled - {len(rendered_clips)} clip(s) finished"
+                    if rendered_clips
+                    else "Cancelled"
+                ),
+                "error": None,
+                "stage_timings": metrics.to_list(),
+            }
+            if rendered_clips:
+                cancelled_fields["clips"] = rendered_clips
+            self.store.update(job_id, **cancelled_fields)
             logger.info("job stopped at a checkpoint after %s", metrics.summary())
         except Exception as exc:  # capture any failure and surface it
             close_stage()
