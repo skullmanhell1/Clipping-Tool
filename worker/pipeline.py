@@ -559,8 +559,19 @@ def run_pipeline(
         if options.metadata:
             report(base + clip_span / n * 0.3, f"Writing copy for clip {idx + 1}")
             md = meta_mod.generate_metadata(clip_text, options, client=llm_client)
+            # The template fallback is byte-identical in shape to a real generation, so without
+            # this a clip whose "AI title" is the transcript's first ten words looked exactly like
+            # one the model wrote. Every other degradation here carries a marker; this one did not.
+            if md.fallback_reason:
+                applied.append(f"metadata_degraded:{md.fallback_reason}")
         else:
             md = meta_mod.ClipMetadata(platform=options.platform)
+
+        # Selection fell back to deterministic segmentation rather than the model. A property of
+        # the job rather than of this clip, but the clip record is the only thing a caller sees -
+        # and "is the AI actually running?" is exactly the question it answers.
+        if getattr(c, "fallback_reason", ""):
+            applied.append(f"selection_degraded:{c.fallback_reason}")
 
         # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
         words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []
