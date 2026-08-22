@@ -283,3 +283,116 @@ def measure_alignment(
 def within_floor(value_ms: float) -> bool:
     """Whether an error is indistinguishable from the ASS format's own rounding."""
     return abs(value_ms) <= ROUNDING_FLOOR_MS
+
+
+# --- Label-free measurement, against the audio itself -------------------------------------
+#
+# Everything above needs a labelled set. That is the right instrument for accuracy, and the wrong
+# one for answering "are the captions on this clip in sync?", because producing labels means either
+# hand-transcribing or re-running ASR — and re-running ASR makes the measurement circular, since ASR
+# is where the caption times came from in the first place. Measured, when a desync was reported:
+# whisper-derived labels put the mean error at -944 ms on clips whose captions were in fact aligned,
+# because only 5 of 47 words matched and the mean was taken over the survivors.
+#
+# So this half needs no labels at all. It compares *when a caption is on screen* against *when
+# sound is happening*, both read from the finished artefacts. It cannot tell you whether the words
+# are correct — `measure_alignment` and `evaluation/wer.py` do that — but it answers the question a
+# viewer is actually asking, and it cannot be fooled by agreeing with the pipeline.
+#
+# The envelope is deliberately built at 20 ms rather than reusing the 1 s envelope `S2` shares (see
+# the T11 note in `worker/word_spans.py`): one reading per second cannot resolve a word, and this
+# module is an instrument, so a second audio pass is a cost it is allowed to pay where the render
+# path is not.
+
+#: RMS window for the speech envelope, in seconds. Word-scale on purpose.
+ENVELOPE_HOP_S = 0.02
+
+#: How far below the loudest frame still counts as speech, in dB. Generous, because the question is
+#: "is anything being said here", not "how loud is it".
+SPEECH_FLOOR_DB = 30.0
+
+
+def speech_mask(media: str | Path, *, hop: float = ENVELOPE_HOP_S) -> list[bool]:
+    """One flag per ``hop`` seconds: was sound happening in that frame?
+
+    Read from the media's own audio, so it is independent of the transcript, the cue list and the
+    ASR. Requires ffmpeg on PATH; raises if it is missing rather than returning a mask of ``False``
+    that would read as "silent clip" and score a desynced caption as perfect.
+    """
+    import shutil
+    import subprocess
+
+    import numpy as np
+
+    from config import settings
+
+    # Resolved the same way the sibling instruments do it (`evaluation/fidelity.py::_ffmpeg`),
+    # rather than trusting PATH: the configured binary is the one the render used, and this
+    # measurement is only meaningful against the same decoder.
+    ffmpeg = shutil.which(str(settings.ffmpeg_binary)) or "ffmpeg"
+    result = subprocess.run(
+        [ffmpeg, "-v", "quiet", "-i", str(media), "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+        capture_output=True,
+    )
+    if not result.stdout:
+        raise RuntimeError(f"no audio decoded from {media}; is ffmpeg present and the file valid?")
+    samples = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    per_frame = max(1, int(hop * 16000))
+    frames = len(samples) // per_frame
+    if frames == 0:
+        return []
+    blocks = samples[: frames * per_frame].reshape(frames, per_frame)
+    rms = np.sqrt(np.maximum((blocks**2).mean(axis=1), 1e-12))
+    db = 20 * np.log10(rms)
+    return [bool(v) for v in (db > (db.max() - SPEECH_FLOOR_DB))]
+
+
+def coverage_overlap(
+    events: Sequence[Rendered_Event],
+    mask: Sequence[bool],
+    *,
+    hop: float = ENVELOPE_HOP_S,
+    shift_frames: int = 0,
+) -> float:
+    """Intersection-over-union of "caption on screen" and "sound happening".
+
+    IoU rather than plain overlap, so a cue list that simply covers the whole clip cannot score
+    well: padding inflates the union as fast as it does the intersection.
+    """
+    if not mask:
+        return 0.0
+    on = [False] * len(mask)
+    for event in events:
+        first = int(round(event.start / hop)) + shift_frames
+        last = int(round(event.end / hop)) + shift_frames
+        for index in range(max(0, first), min(len(on), last + 1)):
+            on[index] = True
+    intersection = sum(1 for a, b in zip(mask, on) if a and b)
+    union = sum(1 for a, b in zip(mask, on) if a or b)
+    return intersection / union if union else 0.0
+
+
+def best_fit_lag_ms(
+    events: Sequence[Rendered_Event],
+    mask: Sequence[bool],
+    *,
+    hop: float = ENVELOPE_HOP_S,
+    search_s: float = 2.0,
+) -> tuple[float, float, float]:
+    """``(lag_ms, overlap_at_zero, overlap_at_lag)`` — the shift that best fits the audio.
+
+    A lag near zero with high overlap is a synced clip. A *consistent* non-zero lag across clips is
+    a constant offset, which is an arithmetic bug. A large lag whose overlap barely improves on the
+    zero-shift score is the search finding a spurious alignment in continuous speech, and should be
+    read as noise — which is why all three numbers are returned together and not just the lag.
+    """
+    if not mask:
+        return 0.0, 0.0, 0.0
+    span = int(round(search_s / hop))
+    at_zero = coverage_overlap(events, mask, hop=hop)
+    best_score, best_shift = at_zero, 0
+    for shift in range(-span, span + 1):
+        score = coverage_overlap(events, mask, hop=hop, shift_frames=shift)
+        if score > best_score:
+            best_score, best_shift = score, shift
+    return best_shift * hop * 1000.0, at_zero, best_score

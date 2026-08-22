@@ -39,6 +39,33 @@ Implementing it needs a word-scale envelope, on the order of 20 ms readings, and
 the second audio pass R7.8 rules out. So the requirement is self-limiting as written: its constraint
 and its purpose are incompatible. Recorded here so the next person measures the envelope before
 building against it rather than after.
+
+**Measured again, from the other end, after a desync was reported. T11 still is not the answer.**
+
+The note above says a 20 ms envelope would be needed. That is correct, and one now exists —
+``evaluation.caption_timing.speech_mask``, at ``ENVELOPE_HOP_S = 0.02``. It is in `evaluation/`
+rather than here on purpose: an instrument may spend a second audio pass, the render path may not,
+so its existence does not lift R7.8. What it did do is make the premise testable, and the numbers
+came out against building T11:
+
+* On a 120 s source, whisper's own word spans already overlap the 20 ms speech mask **81.4%**
+  (IoU), best-fit lag **+0.10 s**. There is no gross mis-timing for snapping to recover.
+* Across ten rendered clips the median best-fit lag was **-0.04 s** — two envelope frames, below
+  the 100 ms the M10 instrument records as perceptible.
+* The four clips that looked worst had best-fit lags of **+1.52, -1.52, -1.16 and +1.58 s** and
+  gained only 3-10 points of overlap at that lag. Disagreeing signs plus a marginal gain is the
+  signature of a spurious alignment in continuous speech, not a shift. A constant compensation
+  cannot fix errors that point both ways, and snapping to onsets in near-continuous speech has
+  onsets everywhere to choose from.
+* Raising ASR precision does not help either, which bounds how much of the residual is ASR
+  quantisation at all: ``small``/``int8`` (the default) scored **81.4%**, ``small``/``float32``
+  **80.7%**, ``medium``/``int8`` **79.6%**, ``medium``/``float32`` **81.1%**. The cheapest
+  configuration is the most accurate of the four, and the two slower ones are worse.
+
+So the residual is per-word ASR jitter of a few tens of milliseconds, distributed both ways. Forced
+alignment would address that; onset snapping against an envelope would not, because it has no way
+to tell which of the many onsets under a word is the one that word began at. Reproduce any of the
+above with ``scripts/measure_caption_sync.py``.
 """
 
 from __future__ import annotations
