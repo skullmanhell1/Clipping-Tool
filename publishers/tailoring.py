@@ -30,7 +30,7 @@ import re
 from typing import Any
 
 from config import settings
-from worker.metadata import PlatformProfile, get_profile
+from worker.metadata import PlatformProfile, get_profile, safe_truncate
 
 #: Sentence-ending punctuation, for finding a graceful cut.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
@@ -66,8 +66,11 @@ def _fit_sentences(text: str, limit: int) -> str:
             if kept:
                 return " ".join(kept).strip()
 
-    cut = text[:limit].rsplit(" ", 1)[0].strip()
-    return cut
+    # Grapheme-safe, not `text[:limit]`. These strings are posted to the user's accounts, and a
+    # cut inside a ZWJ emoji or a flag's regional-indicator pair publishes a fragment or a
+    # different character entirely. See `worker.metadata.safe_truncate`.
+    safe = safe_truncate(text, limit)
+    return safe.rsplit(" ", 1)[0].strip() or safe.strip()
 
 
 def fit_hashtags(tags: Any, profile: PlatformProfile) -> list[str]:
@@ -90,8 +93,9 @@ def fit_caption(
     hashtags: list[str],
     mentions: list[str],
     profile: PlatformProfile,
+    title: str = "",
 ) -> tuple[str, str, list[str]]:
-    """Fit description/CTA/hashtags into ``profile.desc_max`` as a whole (PB6).
+    """Fit description/CTA/hashtags into the platform's caption budget as a whole (PB6).
 
     The platform limit applies to the *rendered caption*, not to the description alone, so the
     budget is shared: the hashtags and the call to action are reserved first because they are the
@@ -100,11 +104,26 @@ def fit_caption(
     caption that overflows the moment the tags are appended, and the publisher then cuts the tags
     back off.
 
+    ``title`` matters on platforms where the title and the caption are **one field**
+    (``profile.combined_max``, which today is X). ``publishers/x.py`` posts
+    ``f"{title}\\n\\n{caption}"[:280]``, and this function used to budget against ``desc_max``
+    alone -- so X's 70-character title plus its 260-character description summed to 332, and a
+    request this function had just declared "fitted" was still chopped mid-word by the publisher.
+    That is precisely the failure this module exists to prevent, occurring one layer beneath it,
+    which is why the title is now reserved rather than assumed to live somewhere else.
+
     Returns ``(description, cta, hashtags)``.
     """
-    limit = max(0, int(profile.desc_max))
+    combined = max(0, int(getattr(profile, "combined_max", 0) or 0))
     tags = fit_hashtags(hashtags, profile)
     cta = (cta or "").strip()
+    if combined:
+        # One field: take the title out of the shared budget before anything else, because it is
+        # the part the publisher puts first and therefore the part that cannot be sacrificed.
+        title_cost = len(str(title or "").strip())
+        limit = max(0, combined - (title_cost + 2 if title_cost else 0))
+    else:
+        limit = max(0, int(profile.desc_max))
 
     # Reserve the tail: mentions + hashtags, plus the blank line separating it.
     tail = " ".join([*(mentions or []), *tags]).strip()
@@ -178,6 +197,9 @@ def tailor_request(request: dict[str, Any], platform: str) -> dict[str, Any]:
         list(tailored.get("hashtags") or []),
         list(tailored.get("mentions") or []),
         profile,
+        # Passed so the shared-field platforms can reserve it. Ignored where the title has a
+        # field of its own, which is every platform except X.
+        title=str(tailored.get("title") or ""),
     )
     tailored["description"] = fitted
     tailored["cta"] = cta

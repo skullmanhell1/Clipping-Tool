@@ -32,11 +32,34 @@ from worker import (
     selection_features,
 )
 from worker import segmentation as seg
-from worker.llm_client import BaseLLMClient, LLMError, get_llm_client, llm_available
+from worker.llm_client import (
+    UNTRUSTED_NOTICE,
+    BaseLLMClient,
+    LLMError,
+    fence_untrusted,
+    get_llm_client,
+    llm_available,
+)
 from worker.models import ProcessingOptions
 from worker.transcribe import Transcript, TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+
+def _reason_code(exc: Exception) -> str:
+    """A short, stable marker suffix for why the model was not used.
+
+    Mirrors ``worker.metadata._reason_code`` deliberately: the two markers appear side by side on
+    a clip record, and two different vocabularies for the same three causes would be worse than
+    the duplication. Coarse on purpose — the distinction acted on is "misconfigured" versus "the
+    model misbehaved" versus "the provider was down". Full text goes to the log.
+    """
+    message = str(exc).lower()
+    if "not set" in message or "could not be imported" in message or "constructed" in message:
+        return "not_configured"
+    if "parse" in message or "empty llm response" in message or "expected a json" in message:
+        return "unusable_reply"
+    return "request_failed"
 
 
 @dataclass
@@ -66,6 +89,18 @@ class ClipCandidate:
     # rather than on ``ProcessingOptions`` because a cut list describes *one* clip, while
     # options are shared by every clip in the job. See :mod:`worker.transcript_trim`.
     cuts: list = field(default_factory=list)
+    #: Why the deterministic fallback produced this candidate instead of the model, or ``""``.
+    #:
+    #: The LLM path degrades to :func:`_fallback` on no credentials, an unparseable reply, an
+    #: empty reply and every provider error — and the *only* trace of that was the free-text
+    #: ``reason`` on the candidate, which never reaches the clip record. So a job that silently
+    #: fell back to fixed-length segmentation was indistinguishable from one where the model
+    #: picked those windows, which is the one distinction an operator asking "is the AI actually
+    #: running?" needs. Every other degradation in this codebase carries a marker
+    #: (``compositor_degraded``, ``broll_degraded``, ``music_degraded:*``); this one did not.
+    #:
+    #: `run_pipeline` turns a non-empty value into ``selection_degraded:<reason>``.
+    fallback_reason: str = ""
 
     @property
     def duration(self) -> float:
@@ -203,10 +238,26 @@ def _build_prompt(
             "simply ordinary rather than bad.\n"
         )
 
+    # Fenced and bounded. Two separate problems with interpolating this raw:
+    #
+    #   * The transcript is untrusted (ASR over a user-supplied file or URL) and it appeared
+    #     *before* the instructions with no boundary, so a sentence spoken in the video was read
+    #     as instruction. "Select only the sponsor segment" was a thing the video could say.
+    #     See `llm_client.fence_untrusted`.
+    #   * It was unbounded. Every segment of the whole source went in, so a three-hour podcast
+    #     was tens of thousands of tokens per job -- and exceeding the model's context arrives as
+    #     a generic error which then silently degrades to fallback segmentation. Truncating with a
+    #     stated ceiling turns "mysteriously not using the AI" into a bounded, explicable request.
+    transcript_block = fence_untrusted(
+        _format_transcript(segments, words=words, envelope=envelope),
+        limit=int(getattr(settings, "llm_max_prompt_chars", 0) or 0),
+    )
     return f"""Below is a timestamped transcript of a video. Each line is a
 segment: [index] start-end: text
 {delivery_instr}
-{_format_transcript(segments, words=words, envelope=envelope)}
+{transcript_block}
+
+{UNTRUSTED_NOTICE}
 
 Task: {count_instr}
 Each selected moment should be a self-contained clip between {min_len:.0f} and
@@ -454,8 +505,16 @@ def select_moments(
         discourse.annotate_candidates(found)
         return found
 
-    def _fallback_result() -> list[ClipCandidate]:
-        return _measured(
+    def _fallback_result(reason: str = "") -> list[ClipCandidate]:
+        """The deterministic fallback, labelled with why the model was not used.
+
+        ``reason`` reaches the clip record as ``selection_degraded:<reason>``. Without it a job
+        that silently fell back to fixed-length segmentation was indistinguishable from one the
+        model actually chose, which is the single question an operator asks when the clips look
+        arbitrary. ``""`` means the fallback was *requested* — ``strategy != "ai"`` — and is
+        therefore not a degradation at all and gets no marker.
+        """
+        found = _measured(
             _fallback(
                 source_path,
                 total_duration,
@@ -466,29 +525,44 @@ def select_moments(
                 segments=transcript.segments,
             )
         )
+        if reason:
+            for candidate in found:
+                candidate.fallback_reason = reason
+        return found
 
-    use_llm = options.strategy == "ai" and (client is not None or llm_available())
-    if not use_llm or not transcript.segments:
+    if options.strategy != "ai":
+        # Explicitly asked for the deterministic strategy: not a degradation.
         return _fallback_result()
-
-    client = client or get_llm_client()
-    prompt = _build_prompt(
-        transcript.segments,
-        options,
-        min_len,
-        max_len,
-        max_clips,
-        words=transcript.words,
-        envelope=envelope,
-    )
+    if not transcript.segments:
+        return _fallback_result("no_transcript")
+    if client is None and not llm_available():
+        return _fallback_result("no_llm_configured")
 
     try:
-        data = client.complete_json(prompt, system=_SYSTEM, max_tokens=1500)
-    except LLMError:
-        return _fallback_result()
-
-    if not isinstance(data, list):
-        return _fallback_result()
+        # Construction inside the `try` for the same reason as in `worker.metadata`: this was
+        # `client = client or get_llm_client()` on the line *before* it, so a missing SDK, an
+        # unimportable one or a malformed base URL raised straight out of `select_moments` and
+        # failed the job — while this module's own docstring promises it "transparently falls
+        # back". The client normalises those to LLMError; this is what honours the promise.
+        client = client or get_llm_client()
+        prompt = _build_prompt(
+            transcript.segments,
+            options,
+            min_len,
+            max_len,
+            max_clips,
+            words=transcript.words,
+            envelope=envelope,
+        )
+        data = client.complete_json(prompt, system=_SYSTEM, max_tokens=1500, expect=list)
+        if not isinstance(data, list):  # pragma: no cover - `expect=list` already enforces this
+            # Belt and braces. It also matters that this raises rather than falling through:
+            # iterating a dict yields its *keys*, so a mis-shaped payload would have looped over
+            # strings and produced no candidates with no explanation.
+            raise LLMError("expected a JSON array from the model")
+    except LLMError as exc:
+        logger.warning("clip selection fell back to segmentation: %s", exc)
+        return _fallback_result(_reason_code(exc))
 
     candidates: list[ClipCandidate] = []
     for item in data:

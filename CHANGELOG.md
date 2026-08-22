@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the LLM layer failed silently, and its fallback was indistinguishable from success
+
+Eleven defects across `worker/llm_client.py`, `worker/metadata.py`, `worker/selection.py` and
+`publishers/tailoring.py`. They compound in one specific way, which is what makes them worth
+grouping: **every caller treats `LLMError` as "the model is unavailable" and substitutes template
+output without recording anything.** So a parsing bug does not surface as a parse error. It
+surfaces as a product that quietly stops using the AI the user is paying for, and no gate in the
+project could see it — `worker/llm_client.py` had no dedicated test file, and `parse_json`, which
+every LLM feature funnels through, had **no direct test at all**.
+
+**1. `parse_json` destroyed answers it could have recovered.**
+
+- **The type flip, which is the worst of them.** Given a selection array truncated at `max_tokens`
+  as `[{...complete...},{"start":3`, the old code took `[` as the opener, found no `]`, fell
+  through to `{`, and `rfind("}")` returned a **dict**. `select_moments` requires a list, so it
+  discarded every complete, valid pick the model had already produced and fell back to template
+  selection. A partial answer became *no* answer. The mirror case did the same to metadata: a
+  truncated object yielded the `hashtags` array, and `generate_metadata` requires a dict.
+- **The fence pattern matched the first block**, so a model that showed a draft and then a
+  corrected block had its *draft* parsed — silently, since the draft is valid JSON. It also
+  required a *closing* fence, so a truncated reply kept its opening ```` ```json ```` line and
+  failed for a reason unrelated to the JSON.
+- **`rfind` reached past the payload into prose.** A reply ending "use [start, end] as given" made
+  the slice unparseable, so a perfectly good reply became a silent fallback.
+- **It was not lenient**, despite the docstring: trailing commas were a hard failure.
+- **No shape validation.** `complete_json` returned `dict | list` and callers checked afterwards,
+  which is what turned a recoverable mis-shape into a silent discard. `parse_json` now takes
+  `expect=dict|list` and reports a mismatch as the parse failure it is; a truncated array is
+  repaired by keeping the elements that completed and dropping the trailing fragment.
+
+**2. Neither fallback was recorded, in a codebase where every other degradation is.**
+
+`_fallback_metadata` returns a title that is literally the transcript's first ten words and a
+description that is its first N raw characters — and it was byte-identical in shape to a real
+generation, with nothing on the clip record to say which had happened. A user comparing "AI
+titles" across a job could not tell. Selection was worse: its only trace was the free-text
+`reason="Selected by fallback segmentation"` on the candidate, which never reaches the clip
+record, so a job that silently used fixed-length segmentation looked exactly like one the model
+chose. "Is the AI actually running?" was unanswerable from the output.
+
+Both now carry markers — `metadata_degraded:<reason>` and `selection_degraded:<reason>` — with
+reason codes distinguishing `not_configured`, `unusable_reply` and `request_failed`, because those
+three call for different actions. An explicitly requested `strategy != "ai"` is a choice rather
+than a degradation and deliberately gets no marker.
+
+**3. A missing SDK failed the job that both docstrings promise it cannot.**
+
+`client = client or get_llm_client()` sat on the line *before* the `try` in both
+`select_moments` and `generate_metadata`. `get_llm_client()` raises for absent credentials, an
+unimportable SDK and a malformed `OPENAI_BASE_URL` — so every one of those propagated out and
+failed the whole job, while `worker/selection.py` says it "transparently falls back" and
+`worker/metadata.py` says "the pipeline never breaks". Construction is now inside the `try`, and
+the clients normalise import/construction failures to `LLMError` so the existing handlers cover
+them. The Gemini path is `OpenAIClient` with a `base_url`, so a Gemini misconfiguration reported
+`OPENAI_API_KEY is not set`; the new messages name what actually failed.
+
+**4. The transcript is untrusted input, and it reached both prompts raw.**
+
+It is ASR over a file the user uploaded or a URL they pasted. The selection prompt placed it
+**before** the instructions with no boundary at all, and the metadata prompt wrapped it in a bare
+`"""` that was neither escaped nor load-bearing. So a sentence spoken in the video — or read aloud,
+or burned into a downloaded frame — was read by the model as instruction.
+
+That is not only a quality problem. The generated title and hook are **rendered into the video**,
+and the description, hashtags and mentions are **published to the user's own connected accounts**.
+And `_norm_mentions` had no cap, no length limit, no character validation and no de-duplication,
+turning arbitrary text into `@handles` with `f"@{m}"` — so an injected reply could put a hundred
+real accounts out under the user's name.
+
+Now: the transcript is fenced with a delimiter that is stripped from the payload (so it cannot
+close its own fence), the instructions come *after* the block with an explicit statement that the
+block is data, and mentions are capped at 5, length-limited and validated against the character
+set these platforms actually permit. This is mitigation, not a guarantee — no prompt construction
+makes injection impossible — but it raises the cost from "say a sentence" to "defeat an explicit
+boundary", and bounds the damage.
+
+**5. Truncation split visible characters, and the results are published.**
+
+`s[:limit]` slices by code point, and a code point is not a character. Cutting inside a ZWJ
+sequence (👨‍👩‍👧), a regional-indicator pair (🇺🇸) or a base-plus-combining-mark produces a
+fragment — or a *different* character: half of 🇺🇸 is 🇺, a letter U. The word-boundary fallback
+cannot help, because the failure only occurs when the cut lands inside a space-free run. New
+`metadata.safe_truncate` refuses to cut inside a cluster and only ever moves the cut earlier;
+`publishers/tailoring` uses it too.
+
+**6. An X post was still chopped mid-word by the layer that exists to prevent that.**
+
+`publishers/x.py` posts `f"{title}\n\n{caption}"[:280]`, so on X the title and description are two
+halves of *one* 280-character budget. `fit_caption` budgeted against `desc_max` alone and never
+reserved the title, and X's profile summed to 70 + 260 = **332** — so a request `fit_caption` had
+just declared "fitted" overflowed and the publisher cut it. `PlatformProfile.combined_max` now
+states when a platform shares the field, and `fit_caption` reserves the title first.
+
+**7. Smaller ones**
+
+- **`_clamp_text` published Python reprs.** `str(text or "")` accepted anything, so
+  `{"title": {"a": 1}}` — or a proxy's `{"error": {...}}` envelope landing in a text field — was
+  posted as the literal string `"{'a': 1}"`, and a bare `NaN` as `"nan"`. Non-scalars now become
+  an empty field, which is visibly wrong and recoverable.
+- **No timeout on any LLM call.** Every ffmpeg invocation is bounded for a reason that applies
+  identically here — renders run on a pool with one worker — and LLM calls inherited the SDKs'
+  ~600 s default, which reads as a stuck render rather than a stuck request. New
+  `LLM_TIMEOUT_SECONDS` (default 60), passed to both providers.
+- **The selection prompt was unbounded.** Every segment of the whole source went in, so a
+  three-hour podcast was tens of thousands of tokens per job — and exceeding the model's context
+  arrives as a generic error that degrades to fallback segmentation with no explanation. New
+  `LLM_MAX_PROMPT_CHARS` (default 120 000) makes the ceiling stated rather than discovered.
+
 ### Fixed — the core engine could produce a clip that was silently wrong
 
 Eleven defects in the clip-generating engine. None of them crash, and that is the point: this

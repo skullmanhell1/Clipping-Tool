@@ -224,6 +224,22 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         description="Gemini OpenAI-compatible base URL.",
     )
+    # Every ffmpeg invocation is bounded (see ffmpeg_timeout_seconds) for a reason that applies
+    # identically here: jobs run on a pool with a single worker, so one hung call blocks the whole
+    # queue silently. LLM calls had no ceiling at all and inherited the SDKs' ~600 s default, which
+    # is long enough to look like a stuck render rather than a stuck request.
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        description="Ceiling on a single LLM request in seconds; 0 = the SDK default.",
+    )
+    # The whole-source transcript is interpolated into the selection prompt. On a long podcast that
+    # is tens of thousands of tokens per job, with no bound, and exceeding the model's context
+    # arrives as a generic failure that silently degrades to template selection. A character
+    # ceiling is a crude proxy for tokens but a truthful one: it is the thing actually being sent.
+    llm_max_prompt_chars: int = Field(
+        default=120_000,
+        description="Largest transcript block placed in a selection prompt; 0 = unbounded.",
+    )
 
     # ------------------------------------------------------- transcription --
     # faster-whisper model size, e.g. tiny/base/small/medium/large-v3.
