@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `cp .env.example .env && docker compose up` could not boot the app
+
+**Found by actually running it.** The README's quickstart is `cp .env.example .env`, then
+`docker compose up --build`. Following it produced a container that died on import with
+`17 validation errors for Settings`, and the same file run directly on the host worked perfectly.
+
+The cause is that two loaders read this file and they do not agree:
+
+| | inline `# comment` | surrounding quotes |
+|---|---|---|
+| python-dotenv (pydantic-settings, running directly) | stripped | stripped |
+| Docker `env_file` / `--env-file` | **kept** | **kept** |
+
+Docker takes everything after the first `=` to the end of the line. So
+`OUTPUT_SHORT_SIDE=1080           # 720 | 1080 | 1440 | 2160` reached the container as the string
+`1080           # 720 | 1080 | 1440 | 2160`, and `APP_NAME="AI Video Clipper"` arrived with the
+quote characters still in it. 39 lines carried an inline comment and one was quoted.
+
+**The 17 loud failures were the better half.** The other 22 were string-typed, so pydantic
+*accepted* them and the comment became part of the value: `WHISPER_MODEL` was
+`small              # tiny | base | small | medium | large-v3`, a model name that does not exist,
+and `FACE_DETECTOR_BACKEND`, `CAPTION_MODE`, `BACKGROUND_STYLE` and `TRANSITION_STYLE` likewise
+held values matching no branch. Fixing only the settings that errored would have produced a
+container that booted and then quietly misbehaved.
+
+- **Every inline comment moved onto its own line above its setting, and `APP_NAME` unquoted.** The
+  documentation is unchanged in content — it is only positioned where both loaders agree.
+- **`tests/test_config_documentation.py` now enforces both rules.** The existing gates there proved
+  every setting was *documented*; they could not prove a documented value *parses*, which is the
+  gap this shipped through. Deliberately textual checks: reproducing them by loading the file would
+  mean picking one of the two loaders, and the defect lives in the disagreement between them.
+
+### Fixed — `FOO=` in a `.env` meant `""`, not "unset", and pointed the I3 cache at the CWD
+
+The same `cp .env.example .env` exposed a second fault. That file ships 33 keys with an empty
+value, 25 of them optional with a comment saying the default applies — `INTERMEDIATE_CACHE_DIR=`
+is annotated "empty = `<TEMP_DIR>/intermediates`". That sentence was false. An environment variable
+that is present but empty is the string `""`, not absent, so pydantic validated it instead of
+falling back to the field default.
+
+For the 24 `str | None` keys this was invisible: `""` and `None` are both falsy and every call site
+tests truthiness. `intermediate_cache_dir` is `Path | None`, so it became **`Path(".")`** — and
+`worker/intermediate_cache.py` selects with `settings.intermediate_cache_dir or temp_dir /
+"intermediates"`, where `Path(".")` is truthy. The I3 cache is enabled by default, so it wrote
+`envelope-*.json`, `silences-*.json` and `frames-*/` straight into the process working directory.
+On a host that is the repository root; in the container it is `/app`, which is root-owned while the
+app runs as UID 10001, so the documented quickstart aimed a write-heavy cache at a directory the
+application cannot write. It also escaped the boot-time writability probe added in 0.12.4, because
+`intermediate_cache_dir` is in neither `_REQUIRED_DIR_FIELDS` nor `_OPTIONAL_DIR_FIELDS`.
+
+- **`Settings` now normalises a blank value to `None` for every optional field**, via a
+  `model_validator(mode="before")`. Normalising rather than deleting the keys from `.env.example`
+  keeps them documented and discoverable, and makes the sentence they carry true. Only optional
+  fields are touched — emptying a required one still fails loudly instead of silently defaulting.
+- **`tests/test_settings_empty_env.py`** asserts the general rule across all 25 optional fields
+  rather than the single field that happened to hurt, plus the concrete case: that `cache_dir()`
+  resolves under `temp_dir` and not the CWD.
+- `tests/test_storage_writability.py::test_every_directory_setting_is_classified` was already
+  capable of catching this and did, the moment a `.env` existed. It had simply never run with one.
+- **`storage/.cache/` is now git-ignored.** The Dockerfile points `HF_HOME` there, so the first
+  `docker compose up` that transcribes anything left ~460 MB of whisper weights in `git status`.
+
+Verified by running the whole tool in Docker, not just its tests: image built, `.env` copied from
+the fixed `.env.example`, then a 120-second 1920x1080 source with real speech uploaded through
+`POST /api/upload`. Whisper transcribed it, the selector chose moments, and ffmpeg rendered
+**10 vertical 1080x1920 h264/aac clips** with burned-in karaoke captions, thumbnails and per-clip
+metadata JSON, in 156 seconds, `status=completed`. The I3 cache landed in
+`storage/temp/intermediates` and the working tree stayed clean.
+
 ### Fixed — the pinned VMAF ffmpeg was immutable but not durable, and CI cannot fetch it
 
 The backend job's "Fetch the VMAF-capable ffmpeg" step pinned

@@ -85,3 +85,65 @@ def test_the_example_file_parses_as_env_assignments():
 def test_representative_settings_are_present(name):
     """Named spot checks, which give a clearer failure than a set difference."""
     assert name in _documented_keys()
+
+
+# --- The file must be loadable by Docker, not only by python-dotenv ----------------------
+#
+# The tests above prove every setting is *documented*. They cannot prove the documented value
+# *parses*, and that gap shipped a broken quickstart: `cp .env.example .env` followed by
+# `docker compose up` died with 17 pydantic validation errors, because this file used inline
+# trailing comments and Docker does not strip them.
+#
+# Two loaders read this file and they disagree:
+#
+#   python-dotenv (via pydantic-settings, when the app runs directly)
+#       strips inline `#` comments, and strips surrounding quotes.
+#   Docker `env_file` / `--env-file`
+#       strips neither. Everything after the first `=` is the value, to end of line.
+#
+# So the container saw `OUTPUT_SHORT_SIDE=1080           # 720 | 1080 | 1440 | 2160` and tried
+# to parse that whole string as an int. Of the 39 affected lines, 17 failed loudly. The other
+# 22 were string-typed and pydantic **accepted them**, which is the worse half: `WHISPER_MODEL`
+# became `small              # tiny | base | small | medium | large-v3`, a model name that does
+# not exist, and `FACE_DETECTOR_BACKEND` and `CAPTION_MODE` likewise took values matching no
+# branch. Fixing only the loud 17 would have produced a container that booted and misbehaved.
+#
+# These two tests are the ratchet. They are deliberately textual: reproducing them by loading
+# the file would mean choosing one of the two loaders, and the defect lives precisely in the
+# disagreement between them.
+
+#: An assignment whose value is followed by whitespace and then `#`. The whitespace matters —
+#: `#` with no space before it is part of the value (a hex colour, a URL fragment), which is
+#: why this is not simply a search for `#` after `=`.
+_INLINE_COMMENT = re.compile(r"^\s*([A-Z][A-Z0-9_]*)=[^#\n]*?[ \t]+#", re.MULTILINE)
+
+#: An assignment whose value opens with a quote. Docker keeps the quote characters.
+_QUOTED_VALUE = re.compile(r"^\s*([A-Z][A-Z0-9_]*)=[\"']", re.MULTILINE)
+
+
+def test_no_value_carries_an_inline_comment():
+    """Comments belong on their own line above the setting.
+
+    Docker's `env_file` reads to end of line, so an inline comment becomes part of the value.
+    """
+    offenders = sorted(m.group(1) for m in _INLINE_COMMENT.finditer(ENV_EXAMPLE.read_text("utf-8")))
+    assert not offenders, (
+        f"{len(offenders)} setting(s) in .env.example have an inline comment: {offenders}. "
+        "Docker's env_file does not strip them, so the comment becomes part of the value — "
+        "numeric settings fail validation and string settings silently absorb it. "
+        "Move the comment to its own line above the assignment."
+    )
+
+
+def test_no_value_is_quoted():
+    """Quotes are not stripped by Docker, so they end up inside the value.
+
+    `APP_NAME="AI Video Clipper"` reached the container as `"AI Video Clipper"`, quotes and all,
+    and a value containing spaces needs no quoting in either loader.
+    """
+    offenders = sorted(m.group(1) for m in _QUOTED_VALUE.finditer(ENV_EXAMPLE.read_text("utf-8")))
+    assert not offenders, (
+        f"{len(offenders)} setting(s) in .env.example are quoted: {offenders}. "
+        "Docker's env_file keeps the quote characters in the value. Values with spaces are "
+        "fine unquoted in both loaders."
+    )
