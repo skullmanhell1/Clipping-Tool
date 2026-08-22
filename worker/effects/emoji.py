@@ -1856,9 +1856,12 @@ _SLOT_Y = (0.15, 0.24, 0.15)
 def _emoji_px(frame_width: int, size_frac: float) -> int:
     """Emoji width in pixels, at least 2 and always even.
 
-    ``scale=<w>:-1`` derives the height from the aspect ratio and rounds it to an even
-    number; giving it an even width keeps the two consistent, and libx264's 4:2:0 chroma
-    subsampling requires even dimensions anyway.
+    Pairs with ``scale=<w>:-2`` at the call site. **``-1`` does not round to even** — it preserves
+    the aspect ratio exactly, and ``-2`` is the flag that rounds. This docstring previously asserted
+    the opposite, which is the kind of wrong comment that propagates: `broll.py` computed an even
+    overlay height for stated 4:2:0 reasons and then used ``:-1`` on two of its three branches.
+    Even dimensions are what libx264's chroma subsampling requires, and an odd-height RGBA layer
+    lands on a half-pixel chroma boundary in the base frame.
     """
     px = int(max(2.0, float(frame_width) * float(size_frac)))
     return px - (px % 2)
@@ -1921,7 +1924,7 @@ def build_overlay(
     input_offset: int = 1,
     placement: str = "spread",
     caption_position: str = "bottom",
-) -> tuple[list[str], str]:
+) -> tuple[list[str], str, list[EmojiCue]]:
     """Build ffmpeg inputs + a ``-filter_complex`` snippet for emoji overlays.
 
     Args:
@@ -1945,8 +1948,22 @@ def build_overlay(
         caption_position: where the captions are, so ``caption`` placement knows which side of
             them to sit on. Ignored by ``spread``.
 
-    Returns ``(input_args, filtergraph)``. When no emoji resolve, returns
-    ``([], "")`` and the caller should keep using ``base_label``.
+    Returns ``(input_args, filtergraph, composited)``, where ``composited`` is the subset of
+    ``cues`` whose asset resolved and which therefore actually appear on screen. When no emoji
+    resolve, returns ``([], "", [])`` and the caller should keep using ``base_label``.
+
+    ``composited`` exists because dropping an unresolvable glyph silently was producing two
+    downstream errors that could not be detected from ``(input_args, filtergraph)`` alone:
+
+    * the compositor planned an SFX sting per *planned* cue, so a clip with five planned emoji and
+      two resolvable PNGs got five stings — audible accents on nothing, and an ``sfx:N`` marker
+      overstating what happened;
+    * the clip record said ``emoji:<intensity>`` as though every glyph had rendered, with no
+      counterpart to ``caption_emoji_unavailable:<n>`` which the *in-caption* glyph path already
+      emits for exactly this situation.
+
+    Returning the survivors lets the caller be honest about both. The b-roll builder already
+    returns its windows for the same reason.
     """
     resolve = resolver or (lambda c: resolve_asset(c))
 
@@ -1956,7 +1973,7 @@ def build_overlay(
         if path is not None:
             resolved.append((cue, path))
     if not resolved:
-        return [], ""
+        return [], "", []
 
     input_args: list[str] = []
     steps: list[str] = []
@@ -1967,7 +1984,7 @@ def build_overlay(
         input_args += ["-loop", "1", "-t", f"{max(0.1, duration):.3f}", "-i", str(path)]
 
         # Scale relative to the real frame width, then let overlay place it (A8).
-        prep = f"[{idx}:v]scale={_emoji_px(frame_width, size_frac)}:-1,format=rgba"
+        prep = f"[{idx}:v]scale={_emoji_px(frame_width, size_frac)}:-2,format=rgba"
         if animate:
             prep += f",fade=t=in:st={cue.start:.3f}:d=0.18:alpha=1"
         prep += f"[e{i}]"
@@ -1980,8 +1997,13 @@ def build_overlay(
         nxt = out_label if i == len(resolved) - 1 else f"ov{i}"
         steps.append(
             f"[{current}][e{i}]overlay=x='(W-w)*{sx:g}':y='H*{sy:g}':"
-            f"enable='between(t,{cue.start:.3f},{cue.end:.3f})'[{nxt}]"
+            # `gte`/`lt` rather than `between`, which is inclusive at *both* ends -- so two cues
+            # where one ends exactly where the next begins were both enabled on the shared boundary
+            # frame, stacking two glyphs for one frame. `overlays._beat_bump_expr` documents this
+            # same hazard and avoids it the same way; the emoji and b-roll gates were the two places
+            # that did not.
+            f"enable='gte(t,{cue.start:.3f})*lt(t,{cue.end:.3f})'[{nxt}]"
         )
         current = nxt
 
-    return input_args, ";".join(steps)
+    return input_args, ";".join(steps), [cue for cue, _path in resolved]

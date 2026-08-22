@@ -789,7 +789,11 @@ def test_a22_ken_burns_is_off_by_default_so_the_shipped_graph_is_unchanged():
     """It cover-crops stills into a fixed box, which is a visible change to the look."""
     assert settings.broll_ken_burns is False
     assert "zoompan" not in _graph()
-    assert "scale=540:-1" in _graph()
+    # `:-2`, not `:-1`. `-1` preserves the aspect ratio exactly and does not round the derived
+    # height to even, despite two docstrings in this codebase claiming it did; an odd-height RGBA
+    # layer lands on a half-pixel chroma boundary. The *shape* of the shipped graph is what this
+    # test guards, and that is unchanged.
+    assert "scale=540:-2" in _graph()
 
 
 def test_a22_the_overlay_box_is_always_even_sided():

@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — visual effects applied to the wrong thing, or not applied and not admitted
+
+Ten defects in the effects layer. This is where "silently wrong" is hardest to notice, because the
+output still renders and still looks plausible: an emoji on the wrong word reads as an odd editorial
+choice, a crop that includes the letterbox reads as bad tracking, a sting with no glyph behind it
+reads as an audio glitch. None of them fails a build.
+
+**1. The speaker-aware reframe discarded its content rectangle.**
+
+`build_reframe_filter` accepts `origin_x`/`origin_y`, forwards them correctly on the `split_screen`
+branch, and **silently dropped them on `follow_active`** — so the crop was computed in full-frame
+coordinates. On a letterboxed source that is precisely the failure V16 exists to prevent: the pan
+travels across the black bars, and the clamp uses the padded frame's dimensions instead of the
+picture's. `build_sendcmd` is written to confine the crop to the content rectangle and explains at
+length why confining the existing crop is the only workable approach; the single-speaker
+`apply_reframe` uses it correctly.
+
+The **V22 headroom bias** was missing from the same path, which is worse than a missing feature:
+`apply_reframe` applies it, so identical footage framed through the two paths came out with
+different vertical framing and **no marker said which had run**. Frame 0 is now derived by the same
+`biased_center_y` call as the sendcmd script, because `apply_reframe` spells out what happens when
+those two disagree — the clip opens on a visible jump.
+
+**2. One fact, two index spaces.**
+
+C19 exists so the emoji lands on the word the caption highlights. `plan_keywords` was given the
+words flattened out of the caption *cues*; `plan_emoji` was given the raw clip word list. But
+`cap.words_to_cues` skips every word whose text is empty, so the flattened list is a **subset** and
+the two spaces diverge by the number of skipped words at every position after the first. The caption
+highlighted one word and the emoji illustrated another — silently, and the emoji still rendered.
+Both consumers now read the same list.
+
+**3. Claimed but not done.**
+
+- **Phantom SFX stings.** The comment above the call states the contract — *"Only emoji that
+  actually composited. A cue whose asset failed to resolve is not on screen, so a sting for it would
+  be an accent on nothing"* — and the code did not honour it. `build_overlay` drops unresolvable
+  glyphs and returned only `(inputs, graph)`, so the gate could only ask "did *any* resolve" and
+  then handed over every *planned* cue's start. Five planned emoji with two resolvable PNGs
+  produced five stings: three audible accents on nothing, and an `sfx:N` marker overstating what
+  happened. The b-roll side already did this correctly with `broll_duck_windows`.
+- **No degradation marker for missing glyphs.** A partial failure rendered some emoji and reported
+  `emoji:standard` as though all of them had; a *total* failure on the default style produced **no
+  emoji marker at all**, indistinguishable from the feature being switched off. The only signal,
+  `emoji_style_degraded`, is gated on a non-default style. The in-caption glyph path already emits
+  `caption_emoji_unavailable:<n>` for exactly this situation — the overlay path now emits
+  `emoji_unavailable:<n>`.
+- **The emoji block had no failure guard**, unlike b-roll. `resolve_asset` touches the filesystem —
+  it `mkdir`s on every call, cache hit included — so a read-only or full assets volume raised
+  straight out of `render_clip` and **failed the whole clip** for a cosmetic feature.
+- **And markers were discarded with the `None`.** `render_clip` returns `None` when nothing ended up
+  changing, and the caller extends its marker list only `if rendered is not None` — so a degradation
+  recorded inside was thrown away in exactly the case that matters: when the effect that failed was
+  the *only* one requested. A clip whose emoji was unavailable came back with no render **and** no
+  explanation. `render_clip` now takes a `notes` out-parameter, matching `cap.build_ass(notes=...)`
+  and `reframe.apply_reframe(notes=...)` — the established shape here for "tell me what happened
+  even if you produced nothing".
+
+**4. Geometry that only happened to work.**
+
+- **`_grid_regions` was the one compositing site that did not force even tile dimensions.** Tiles go
+  straight into `scale=<w>:<h>` on a yuv420p chain before `hstack`/`vstack`, and 4:2:0 chroma
+  subsampling cannot represent an odd dimension. Every other site here forces even with a comment
+  saying why — `compute_crop_size`, `_emoji_px`, b-roll's `overlay_h`, `aspect_size`. It only bit on
+  a preset whose height does not divide evenly by the row count: `4:5` is (1080, 1350), so three or
+  more speakers give two rows of **675**. Which is why it had never been seen — 9:16 and 1:1 divide
+  cleanly. The remainder is still absorbed by the last row and column, so the tiles tile exactly.
+- **`scale=<w>:-1` does not round the derived height to even; `-2` does.** Two docstrings asserted
+  the opposite, and the wrong one propagated: `broll.py` computes an even `overlay_h` for stated
+  4:2:0 reasons and then used `:-1` on two of its three branches. Both layers are `format=rgba` so
+  nothing failed outright, but an odd-height layer lands on a half-pixel chroma boundary in the base
+  frame.
+- **`between()` is inclusive at both ends**, and the emoji and b-roll `enable` gates used it. Two
+  cues where one ends exactly where the next begins were both enabled on the shared boundary frame,
+  stacking two layers for one frame. This is most likely to bite b-roll, where zero-length windows
+  are *deliberately* widened to exactly one frame — making exactly-abutting windows a normal outcome
+  rather than a coincidence. `overlays._beat_bump_expr` documents this precise hazard and avoids it
+  the same way; these two gates were the places that did not.
+
+**Verified as already correct, so not touched:** there is no `drawtext` anywhere (all text goes
+through libass, so the whole class of filter-argument escaping bugs does not exist here); path
+escaping is centralised; compositor input-index accounting is explicit and self-consistent;
+`sendcmd` instance naming on the split-screen path is right; and determinism is genuinely handled —
+blake2b instead of `hash()`, sorted globs, seeded per-engine RNG, frame-rate-independent ken burns.
+
 ### Fixed — a publish could report success when nothing was posted, or post the same clip twice
 
 Publishing is where this project's failures become **irreversible**. A wrong caption can be

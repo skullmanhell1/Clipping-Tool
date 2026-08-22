@@ -175,8 +175,11 @@ def test_no_sting_for_an_emoji_that_never_reached_the_screen(monkeypatch, tmp_pa
     The same discipline `broll_duck_windows` applies when it dips the bed only under b-roll that
     actually made it on screen.
     """
-    # Cues plan normally, then the overlay build yields nothing at all.
-    monkeypatch.setattr(comp.emoji, "build_overlay", lambda *a, **k: ([], ""))
+    # Cues plan normally, then the overlay build yields nothing at all. The third element is the
+    # list of cues that actually composited — empty here, which is what makes this the total-failure
+    # case. See `test_no_sting_for_the_emoji_that_did_not_resolve` for the partial one, which is
+    # where the real defect was.
+    monkeypatch.setattr(comp.emoji, "build_overlay", lambda *a, **k: ([], "", []))
 
     _cmd, graph, markers = _capture(
         monkeypatch, tmp_path, make_video, mode="emoji", emoji="heavy", emoji_mode="keyword"

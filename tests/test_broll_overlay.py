@@ -67,10 +67,15 @@ def _resolved_cues(draw):
 def test_p20_overlays_bounded_indexed_below_captions(data, offset):
     """Validates: Requirements 10.2, 10.3, 10.4
 
-    Each overlay is time-bounded via ``enable='between(t,...)'``, every ffmpeg
+    Each overlay is time-bounded via ``enable='gte(t,start)*lt(t,end)'``, every ffmpeg
     input index is distinct and contiguous from ``input_offset``, and in a full
     compositor graph the b-roll overlays precede the ``subtitles`` filter so
     captions stay on top.
+
+    The gate is **half-open**, and that is the requirement rather than a detail. ``between()`` is
+    inclusive at both ends, and zero-length windows here are deliberately widened to exactly one
+    frame — so windows that abut exactly are a normal outcome, and both used to light up on the
+    shared boundary frame, stacking two overlays for one frame.
     """
     cues, _duration = data
     n = len(cues)
@@ -84,8 +89,9 @@ def test_p20_overlays_bounded_indexed_below_captions(data, offset):
         input_offset=offset,
     )
 
-    # Every overlay is bounded to its cue window (Req 10.4).
-    assert graph.count("enable='between(t,") == n
+    # Every overlay is bounded to its cue window, half-open (Req 10.4).
+    assert graph.count("enable='gte(t,") == n
+    assert "between(t," not in graph, "an inclusive gate double-enables abutting windows"
 
     # Input indices are distinct and contiguous from the offset (Req 10.3).
     indices = [int(m) for m in re.findall(r"\[(\d+):v\]", graph)]
