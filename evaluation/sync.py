@@ -172,15 +172,28 @@ def make_sync_fixture(
 
 
 _FRAME_INDEX = re.compile(r"^frame:(\d+)", re.MULTILINE)
+#: ``metadata=print`` emits ``frame:N pts:P pts_time:T`` on one line. ``pts_time`` is the frame's
+#: **actual** presentation time, which is what makes this exact for variable frame rate.
+_PTS_TIME = re.compile(r"^frame:\d+\s+pts:\S+\s+pts_time:(-?[0-9.]+)", re.MULTILINE)
 _YAVG = re.compile(r"lavfi\.signalstats\.YAVG=([0-9.]+)")
 
 
 def video_onset(path: str | Path) -> float:
     """Seconds at which the brightest frame occurs.
 
-    Located by decoding and reading per-frame luma, not by reading a container timestamp. The
-    frame index is converted using the stream's **actual** average rate, so a clip that was
-    resampled from VFR to CFR is still measured against the timeline it really has.
+    Located by decoding and reading per-frame luma, not by reading a container timestamp.
+
+    The frame's own ``pts_time`` is used, taken from the same ``metadata=print`` output as the
+    luma. That matters for **variable frame rate**: the previous implementation parsed only the
+    frame *index* and divided by the stream's ``avg_frame_rate``, which is a valid mapping only
+    when frames are evenly spaced. ``make_sync_fixture(vfr=True)`` deliberately produces
+    "genuinely irregular frame durations", so measuring such a file directly placed the flash off
+    by the accumulated frame-spacing skew — reporting A/V drift that was not there, or hiding
+    drift that was. Since this module exists precisely because nothing else in the project would
+    notice sync drift, a wrong reading here is worse than no reading.
+
+    ``avg_frame_rate`` remains the fallback for the case where ``pts_time`` cannot be read, so a
+    decoder that does not emit it still yields the previous answer rather than an error.
     """
     proc = subprocess.run(
         [
@@ -209,19 +222,23 @@ def video_onset(path: str | Path) -> float:
             f"({len(frames)} frame markers, {len(lumas)} luma readings)"
         )
 
-    best_index, best_luma = -1, -1.0
-    for raw_index, raw_luma in zip(frames, lumas, strict=True):
+    best_position, best_index, best_luma = -1, -1, -1.0
+    for position, (raw_index, raw_luma) in enumerate(zip(frames, lumas, strict=True)):
         luma = float(raw_luma)
         if luma > best_luma:
-            best_index, best_luma = int(raw_index), luma
+            best_position, best_index, best_luma = position, int(raw_index), luma
     if best_luma < FLASH_LUMA_MIN:
         raise SyncError(
             f"no visual event found in {path}: brightest frame is {best_luma:.1f}, "
             f"below the {FLASH_LUMA_MIN} threshold. The fixture may be missing its flash."
         )
 
-    fps = _stream_fps(path)
-    return best_index / fps
+    # The frame's own presentation time, exact under VFR. Only fall back to index/avg_fps when
+    # the decoder gave us no usable pts_time for every frame we matched a luma to.
+    times = _PTS_TIME.findall(combined)
+    if len(times) == len(frames):
+        return float(times[best_position])
+    return best_index / _stream_fps(path)
 
 
 def _stream_fps(path: str | Path) -> float:
@@ -319,12 +336,26 @@ def measure_sync(path: str | Path, *, label: str = "") -> Sync_Report:
 
 
 def report_many(reports: Sequence[Sync_Report]) -> dict:
-    """Collect several readings into one committable record, with no verdict beyond tolerance."""
+    """Collect several readings into one committable record, with no verdict beyond tolerance.
+
+    ``measurements_taken`` is carried explicitly, and the two summary fields are ``None`` when it
+    is zero, because the neutral values are indistinguishable from the *ideal* ones. With no
+    measurements, ``all(...)`` is vacuously ``True`` and ``max(..., default=0.0)`` is a perfect
+    0 ms — so a run in which every clip raised :class:`SyncError` and the caller collected nothing
+    produced a committable record reading ``worst_ms: 0.0, all_within_tolerance: true``, directly
+    above a note telling the reader these numbers allege no defect. That is the worst possible
+    place for this shape: an artefact that gets committed and quoted.
+
+    ``None`` rather than an omitted key, for the reason ``fidelity.Metric_Reading`` gives: an
+    absent key reads as "not measured" to one caller and "nothing wrong" to another.
+    """
+    taken = len(reports)
     return {
         "tolerance_ms": TOLERANCE_MS,
+        "measurements_taken": taken,
         "measurements": [r.to_dict() for r in reports],
-        "worst_ms": max((abs(r.offset_ms) for r in reports), default=0.0),
-        "all_within_tolerance": all(r.within_tolerance for r in reports),
+        "worst_ms": max(abs(r.offset_ms) for r in reports) if taken else None,
+        "all_within_tolerance": all(r.within_tolerance for r in reports) if taken else None,
         "note": (
             "This records what was measured. No defect is alleged by the existence of these "
             "numbers: cut_segment's -ss placement is frame-accurate under re-encoding in modern "

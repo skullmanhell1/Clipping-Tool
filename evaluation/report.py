@@ -17,6 +17,16 @@ from dataclasses import dataclass, field
 
 from evaluation.metrics import IOU_THRESHOLDS, PRIMARY_IOU, AggregateScore
 
+#: Below this many measured sources, the text report labels its own comparison an anecdote.
+#:
+#: There is no interval and no significance test here, and a bare ``>`` on a single pair of F1
+#: point estimates reads identically whether it came from one source or twenty. `preference.py`
+#: already refuses to make a significance claim on a small trial and says so in the artefact
+#: (``SMALL_TRIAL_COUNT``); this is the same discipline for the report whose verdict actually gets
+#: quoted. Five is a judgement, not a power calculation — it is the point below which one source
+#: can move pooled F1 by more than a typical selector-versus-baseline gap.
+MIN_SOURCES_FOR_VERDICT = 5
+
 
 @dataclass
 class Report:
@@ -41,7 +51,28 @@ class Report:
         return max(self.baselines, key=lambda score: score.at(PRIMARY_IOU).f1)
 
     @property
+    def sources_measured(self) -> int:
+        """Sources that produced a result, i.e. the dataset minus the ones that raised.
+
+        The harness scores an errored source as *zero predictions*, and
+        ``ThresholdScore.precision``/``recall`` return ``0.0`` for "no predictions" and "no
+        labels" alike — so "measured zero" and "did not measure" are the same number. The errored
+        source's labels still enter ``total_labels``, so pooled recall is diluted while pooled
+        precision's denominator is not: an asymmetric contamination of both headline figures.
+        """
+        return max(0, self.dataset_size - len(self.errors))
+
+    @property
     def beats_baseline(self) -> bool:
+        """Whether the selector beat the best baseline — ``False`` if nothing was measured.
+
+        Without the measurement guard, a run in which *every* source raised rendered a full table
+        of ``0.00`` and then asserted "a selector that does not beat a naive baseline is not
+        selecting; it is sampling, and the LLM call is being paid for nothing" — a maximally strong
+        quality claim derived from zero measurements, on a default exit code of 0.
+        """
+        if self.sources_measured == 0:
+            return False
         best = self.best_baseline
         if best is None:
             return False
@@ -49,7 +80,14 @@ class Report:
 
     def to_dict(self) -> dict:
         return {
-            "dataset": {"sources": self.dataset_size, "labelled_moments": self.moment_count},
+            "dataset": {
+                "sources": self.dataset_size,
+                "labelled_moments": self.moment_count,
+                # Carried explicitly so a partial run cannot be read as a complete one. This is
+                # the `fidelity.Metric_Reading.available` convention applied to the aggregate.
+                "sources_measured": self.sources_measured,
+                "sources_failed": len(self.errors),
+            },
             "k": self.selector.k,
             "primary_iou": PRIMARY_IOU,
             "selector": self.selector.to_dict(),
@@ -100,8 +138,34 @@ def render_text(report: Report) -> str:
     lines.append("-" * 78)
 
     # --- the verdict -------------------------------------------------------
+    # Stated before the comparison, because it governs whether the comparison means anything. An
+    # errored source is scored as zero predictions, so a run where every source failed renders a
+    # table of zeroes that reads exactly like a selector performing badly.
+    if report.sources_measured == 0:
+        lines.append(
+            f"NOTHING WAS MEASURED: all {report.dataset_size} source(s) failed. Every figure "
+            "above is a zero from an absent measurement, not a score. See the errors below."
+        )
+        lines.append("-" * 78)
+    elif report.errors:
+        lines.append(
+            f"PARTIAL: {report.sources_measured} of {report.dataset_size} source(s) measured; "
+            f"{len(report.errors)} failed. Pooled recall counts the failed sources' labels, so "
+            "it is understated relative to a complete run."
+        )
+        lines.append("-" * 78)
+    if report.sources_measured and report.sources_measured < MIN_SOURCES_FOR_VERDICT:
+        lines.append(
+            f"Only {report.sources_measured} source(s) measured: below {MIN_SOURCES_FOR_VERDICT}, "
+            "treat the comparison below as an anecdote. No interval is computed and a single "
+            "source can move F1 by more than the gap being reported."
+        )
+        lines.append("-" * 78)
+
     best = report.best_baseline
-    if best is not None:
+    if report.sources_measured == 0:
+        lines.append("No verdict: a comparison between two sets of zeroes is not a comparison.")
+    elif best is not None:
         mine = selector.at(PRIMARY_IOU)
         theirs = best.at(PRIMARY_IOU)
         delta = mine.f1 - theirs.f1

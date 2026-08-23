@@ -311,6 +311,17 @@ ENVELOPE_HOP_S = 0.02
 #: "is anything being said here", not "how loud is it".
 SPEECH_FLOOR_DB = 30.0
 
+#: Absolute peak below which a clip is treated as carrying no signal at all, in dBFS.
+#:
+#: :data:`SPEECH_FLOOR_DB` is measured *relative to the clip's own peak*, which is what makes it
+#: independent of recording level — and is exactly why an absolute floor is needed beside it. A
+#: silent track has a peak of about -240 dBFS (the RMS epsilon), and every frame sits within 30 dB
+#: of it, so a purely relative threshold marks the whole clip as speech.
+#:
+#: -60 dBFS is far below any speech that a viewer could hear and far above digital silence, so it
+#: separates "quiet recording" from "no signal" without rejecting real material.
+SILENCE_FLOOR_DBFS = -60.0
+
 
 def speech_mask(media: str | Path, *, hop: float = ENVELOPE_HOP_S) -> list[bool]:
     """One flag per ``hop`` seconds: was sound happening in that frame?
@@ -346,10 +357,33 @@ def speech_mask(media: str | Path, *, hop: float = ENVELOPE_HOP_S) -> list[bool]
     per_frame = max(1, int(hop * 16000))
     frames = len(samples) // per_frame
     if frames == 0:
-        return []
+        # Shorter than a single hop. Previously returned ``[]``, which every consumer then turned
+        # into a *perfect* reading (0 ms lag, see `best_fit_lag_ms`). Refusing is the honest
+        # answer, and the one callers already handle — `scripts/measure_caption_sync.py` skips a
+        # clip whose mask raises.
+        raise RuntimeError(
+            f"{media} decoded to less than one {hop * 1000:.0f} ms analysis frame; "
+            "too short to measure caption timing against"
+        )
     blocks = samples[: frames * per_frame].reshape(frames, per_frame)
     rms = np.sqrt(np.maximum((blocks**2).mean(axis=1), 1e-12))
     db = 20 * np.log10(rms)
+
+    # The threshold below is *relative to this clip's own peak*, which is what makes it robust to
+    # recording level — and what makes an absolute floor necessary as well. On digital silence
+    # every RMS clamps to the 1e-12 epsilon, so every value is about -240 dB, the peak is also
+    # about -240, and `db > peak - 30` is true for **every frame**: the mask reads as "sound is
+    # happening continuously". `coverage_overlap` then returns the fraction of the clip the
+    # captions cover — a plausible number about nothing at all.
+    #
+    # The docstring above guards the opposite direction (a missing binary yielding an all-False
+    # mask that would read as a silent clip). That case cannot happen; this one can, and does,
+    # for any clip whose audio track survived the mux but carries no signal.
+    if float(db.max()) < SILENCE_FLOOR_DBFS:
+        raise RuntimeError(
+            f"{media} carries no audible signal (peak {float(db.max()):.0f} dBFS, "
+            f"floor {SILENCE_FLOOR_DBFS:.0f}); caption timing cannot be measured against silence"
+        )
     return [bool(v) for v in (db > (db.max() - SPEECH_FLOOR_DB))]
 
 
@@ -366,12 +400,19 @@ def coverage_overlap(
     well: padding inflates the union as fast as it does the intersection.
     """
     if not mask:
-        return 0.0
+        # "No mask" and "the captions miss the speech entirely" both used to return 0.0, which are
+        # opposite facts. `speech_mask` no longer produces an empty mask, so reaching here means a
+        # caller built one — worth saying rather than scoring.
+        raise RuntimeError("coverage_overlap needs a non-empty speech mask")
     on = [False] * len(mask)
     for event in events:
         first = int(round(event.start / hop)) + shift_frames
+        # Exclusive end: a cue covering [start, end) occupies the hops strictly before `end`.
+        # `range(first, last + 1)` marked one extra 20 ms hop per event, inflating both the
+        # intersection and the union on every measurement — on the order of the 20 ms precision
+        # this module claims, and biasing the ±2 s argmax in `best_fit_lag_ms`.
         last = int(round(event.end / hop)) + shift_frames
-        for index in range(max(0, first), min(len(on), last + 1)):
+        for index in range(max(0, first), min(len(on), max(first, last))):
             on[index] = True
     intersection = sum(1 for a, b in zip(mask, on) if a and b)
     union = sum(1 for a, b in zip(mask, on) if a or b)
@@ -393,7 +434,11 @@ def best_fit_lag_ms(
     read as noise — which is why all three numbers are returned together and not just the lag.
     """
     if not mask:
-        return 0.0, 0.0, 0.0
+        # ``0.0, 0.0, 0.0`` was the *perfect* lag reading, and it was returned for a clip that
+        # could not be measured at all. `scripts/measure_caption_sync.py` appends the lag to a list
+        # it takes the median of and prints as a verdict, so enough unmeasurable clips medianed a
+        # genuine constant offset out of existence.
+        raise RuntimeError("best_fit_lag_ms needs a non-empty speech mask")
     span = int(round(search_s / hop))
     at_zero = coverage_overlap(events, mask, hop=hop)
     best_score, best_shift = at_zero, 0

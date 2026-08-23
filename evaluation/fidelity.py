@@ -142,6 +142,16 @@ class Metric_Reading:
     mean: float = 0.0
     minimum: float = 0.0
     frames: int = 0
+    #: How many of :attr:`frames` the :attr:`mean` was actually computed over.
+    #:
+    #: Equal to ``frames`` in the ordinary case. It differs when some frames read infinite — which
+    #: PSNR does for *any* bit-identical frame, so a static intro, a black frame or a hold frame
+    #: produces it routinely. The mean is then taken over the finite frames only, and without this
+    #: field ``mean`` and ``frames`` were quietly computed over different denominators with no way
+    #: for a reader to tell. That matters for :func:`compare`: differencing two such means across
+    #: runs where the number of identical frames changed reports a fidelity "regression" that is
+    #: nothing of the kind.
+    finite_frames: int = 0
     available: bool = True
     reason: str = ""
 
@@ -420,18 +430,23 @@ def _reduce(values: Sequence[float], metric: str) -> Metric_Reading:
     if not values:
         raise FidelityError(f"{metric}: no per-frame readings parsed")
     finite = [v for v in values if not math.isinf(v)]
-    # Mean over infinities is infinity, which is correct for an identical pair and is what a
-    # reader should see rather than a large finite number implying a measurement.
-    mean = (
-        (sum(finite) / len(finite))
-        if finite and len(finite) == len(values)
-        else (math.inf if not finite else sum(finite) / len(finite))
-    )
+    # Every frame identical: the mean is infinity, which is the honest reading for an identical
+    # pair and is what a reader should see rather than a large finite number implying a
+    # measurement.
+    #
+    # Mixed finite and infinite is the interesting case, and it is *common* rather than exotic:
+    # PSNR reports `inf` for any bit-identical frame, so a static intro or a hold frame produces
+    # it. The strict arithmetic mean would be infinity, which would let one perfect frame erase
+    # the measurement of every other. So the mean is taken over the finite frames — and
+    # `finite_frames` records that it was, because previously `mean` and `frames` were computed
+    # over different denominators with nothing saying so.
+    mean = math.inf if not finite else sum(finite) / len(finite)
     return Metric_Reading(
         metric=metric,
         mean=mean,
         minimum=min(values),
         frames=len(values),
+        finite_frames=len(finite),
     )
 
 
