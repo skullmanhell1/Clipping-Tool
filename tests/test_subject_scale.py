@@ -538,6 +538,12 @@ def test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg(tmp_pa
     Asserted from both sides, because "it crashed" is only meaningful next to a command that does not:
     an `x`/`y`-only script through the same graph renders fine. If a future ffmpeg fixes this, **this
     test fails**, which is exactly the notification needed to revisit the design.
+
+    **Two failure modes, both accepted.** The build used locally aborts the CLI. The build on
+    GitHub's runners *blocks indefinitely* instead — and unbounded, that single call is what kept
+    this repository's CI job from ever finishing. Either outcome supports the claim that the
+    mechanism is unusable; they are distinguished in the assertion message rather than collapsed,
+    because they call for different words in the design note.
     """
     source = _square_source(tmp_path)
 
@@ -581,26 +587,36 @@ def test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg(tmp_pa
 
     moving = render("0.000 crop x 437, crop y 0;\n2.000 crop x 488, crop y 90;\n", "xy")
 
-    # A hang is a third outcome, and it has to be named rather than waited on. The claim under test
-    # is "this mechanism is unusable"; a command that neither completes nor fails is unusable too,
-    # but for a different reason, and conflating the two is how this became invisible.
+    # **The mechanism fails in two different ways depending on the ffmpeg build, and both count.**
+    #
+    # On the apt/johnvansickle builds used locally it aborts the CLI outright. On the build GitHub's
+    # runners carry it does something worse: it neither completes nor exits, blocking indefinitely.
+    # Unbounded, that is what held this job to its 360-minute ceiling for months (see
+    # `tests/conftest.py`), and it is why the last progress line was always `82%` -- this file's
+    # position in the run order.
+    #
+    # The claim this test exists to support is "the crop-size mechanism R2.2 asks for is not usable
+    # here, which is why V23 was implemented another way". A hang supports that claim exactly as
+    # well as an abort does. So both are accepted -- but recorded distinctly, because "it crashes"
+    # and "it wedges the process" call for different words in the design note, and collapsing them
+    # into one boolean is what let the hang hide.
+    how: str
     try:
         resizing = render("2.000 crop w 304, crop h 540, crop x 488, crop y 90;\n", "wh")
     except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"the mid-stream `crop w`/`crop h` command neither completed nor failed within "
-            f"{CROP_COMMAND_TIMEOUT_S:g}s. That is still evidence the mechanism is unusable, but it "
-            "is a *hang* rather than the abort this test asserts, so the assertion below would be "
-            "wrong to call it a pass. This exact call, unbounded, is what held the CI job to its "
-            "360-minute ceiling."
-        )
+        usable = False
+        how = f"blocked indefinitely (no exit within {CROP_COMMAND_TIMEOUT_S:g}s)"
+    else:
+        usable = resizing.returncode == 0
+        how = f"exited {resizing.returncode}"
 
     assert moving.returncode == 0, (
         f"an x/y-only sendcmd script failed, so the comparison below proves nothing: {moving.stderr}"
     )
-    assert resizing.returncode != 0, (
-        "this ffmpeg now accepts mid-stream `crop w`/`crop h` commands, so V23 can be reimplemented "
-        "with the crop-size mechanism R2.2 actually asks for -- see worker/subject_scale.py"
+    assert not usable, (
+        "this ffmpeg now accepts mid-stream `crop w`/`crop h` commands (it "
+        f"{how}), so V23 can be reimplemented with the crop-size mechanism R2.2 actually asks "
+        "for -- see worker/subject_scale.py"
     )
 
 
