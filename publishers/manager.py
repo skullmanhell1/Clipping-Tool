@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from publishers import build_publishers, preflight, retry, tailoring
+from publishers import build_publishers, preflight, resolve_platform, retry, tailoring
 from publishers.base import PublishRequest, PublishState
 from publishers.history import HistoryStore, get_history
 
@@ -122,8 +122,25 @@ class PublishManager:
         selected = platforms or list(routes)
         due = schedule_at or time.time()
         ids = []
-        for platform in selected:
+        for requested in selected:
+            # Aliases resolved before the lookup: `youtube_shorts` is a first-class name in the
+            # scheduling and output-profile tables but has no publisher of its own, so it reached
+            # the `continue` below and the platform silently did not happen.
+            platform = resolve_platform(requested)
             if platform not in self.publishers:
+                # Was a bare `continue`. An unroutable platform is a real outcome a caller needs to
+                # know about -- they asked for a post and will not get one -- and swallowing it is
+                # the same silent-degradation shape this project marks everywhere else. There is no
+                # per-platform error channel on this return value (it is a list of attempt ids), so
+                # this is logged at warning rather than raised: it must not abort the platforms that
+                # *can* be routed.
+                logger.warning(
+                    "publish requested for unknown platform %r (resolved to %r); "
+                    "no attempt created. Known: %s",
+                    requested,
+                    platform,
+                    ", ".join(sorted(self.publishers)),
+                )
                 continue
             # S2: one live attempt per (job, clip, platform).
             #
