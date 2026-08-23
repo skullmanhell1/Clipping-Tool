@@ -284,6 +284,7 @@ def _ffmpeg_filter_names(binary: str = "") -> set[str]:
         capture_output=True,
         text=True,
         timeout=FFMPEG_FILTER_TIMEOUT,
+        stdin=subprocess.DEVNULL,
         check=False,
     )
     listing = _as_text(proc.stdout or "") + "\n" + _as_text(proc.stderr or "")

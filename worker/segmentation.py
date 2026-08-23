@@ -135,9 +135,28 @@ def detect_silences(
     # yielded "" if the attribute were ever renamed, i.e. reported "no silences" rather than
     # failing. Both branches carry `.stderr`, so this parses exactly what it did before.
     try:
-        log = subprocess.run(cmd, capture_output=True, text=True, check=True).stderr or ""
+        # Bounded and with stdin closed, for the reasons `ffmpeg_utils._run` sets out at length:
+        # ffmpeg reads stdin unless told not to, and inherits an interactive one under pytest in CI
+        # where it never sees EOF. This call had **neither** a timeout nor a stdin redirection, so
+        # it could block forever with nothing able to end it. It does not route through `_run`
+        # because it wants the stderr of a command that is expected to "fail"-but-emit.
+        log = (
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=float(settings.ffmpeg_timeout_seconds) or None,
+                stdin=subprocess.DEVNULL,
+            ).stderr
+            or ""
+        )
     except FileNotFoundError as exc:
         raise FFmpegError(f"Binary not found: {cmd[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise FFmpegError(
+            f"silencedetect timed out after {exc.timeout:g}s on {cmd[-3] if len(cmd) > 3 else '?'}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         log = exc.stderr or ""  # still parse whatever was emitted
     starts = [float(m) for m in re.findall(r"silence_start:\s*([0-9.]+)", log)]

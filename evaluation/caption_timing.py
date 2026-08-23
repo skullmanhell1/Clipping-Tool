@@ -333,6 +333,12 @@ def speech_mask(media: str | Path, *, hop: float = ENVELOPE_HOP_S) -> list[bool]
     result = subprocess.run(
         [ffmpeg, "-v", "quiet", "-i", str(media), "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
         capture_output=True,
+        # Bounded, and stdin closed. See `worker.ffmpeg_utils._run`: ffmpeg reads stdin unless told
+        # not to, and under pytest in CI it inherits a pipe that never delivers EOF. With neither a
+        # timeout nor a redirection this could block for ever, which is what took the CI job to its
+        # six-hour limit while the same suite finished in eight minutes locally.
+        timeout=float(getattr(settings, "ffmpeg_timeout_seconds", 900)) or None,
+        stdin=subprocess.DEVNULL,
     )
     if not result.stdout:
         raise RuntimeError(f"no audio decoded from {media}; is ffmpeg present and the file valid?")

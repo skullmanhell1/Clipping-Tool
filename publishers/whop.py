@@ -75,6 +75,10 @@ class WhopPublisher(BasePublisher):
                 check=True,
                 env={**os.environ, "WHOP_API_KEY": settings.whop_api_key or ""},
                 timeout=300,
+                # No `stdin=` here, deliberately: `input=` above already supplies stdin, and
+                # `subprocess` raises ValueError if both are given. The bridge reads its payload
+                # from stdin, so it gets a pipe that is written and then closed — which means it
+                # sees EOF and cannot block the way an ffmpeg inheriting an interactive stdin does.
             )
             try:
                 data = json.loads(p.stdout)

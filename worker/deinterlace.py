@@ -164,6 +164,7 @@ def idet_counts(source: str | Path, *, frames: int = DETECT_FRAMES) -> tuple[int
             capture_output=True,
             text=True,
             timeout=600,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return 0, 0

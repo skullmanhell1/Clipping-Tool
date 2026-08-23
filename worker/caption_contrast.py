@@ -180,6 +180,7 @@ def sample_background(
                 ],
                 capture_output=True,
                 timeout=60,
+                stdin=subprocess.DEVNULL,
             )
         except Exception:
             continue

@@ -79,7 +79,9 @@ def detect_cuts(
         "-",
     ]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL
+        )
     except Exception:
         return []
 
@@ -124,7 +126,9 @@ def scan_cuts(path: Any, *, threshold: float | None = None) -> list[float]:
         "-",
     ]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=900)
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL
+        )
     except Exception:
         return []
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")

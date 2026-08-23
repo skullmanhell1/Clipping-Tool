@@ -2311,6 +2311,7 @@ def _default_runner() -> Command_Runner:
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
         )
 
     return run

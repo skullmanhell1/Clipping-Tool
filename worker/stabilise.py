@@ -310,6 +310,7 @@ def run_analysis(
             capture_output=True,
             text=True,
             timeout=3600,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return False

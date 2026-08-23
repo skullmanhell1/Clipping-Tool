@@ -102,6 +102,11 @@ def _luma_grid(video: str | Path, at: float, ffmpeg: str = "ffmpeg") -> list[int
             "-",
         ],
         capture_output=True,
+        # Bounded, and stdin closed. See `worker.ffmpeg_utils._run` for why an inherited
+        # interactive stdin makes ffmpeg block for ever under pytest in CI. This is one frame, so
+        # the ceiling is generous rather than tight — it exists to make the failure finite.
+        timeout=120,
+        stdin=subprocess.DEVNULL,
     )
     data = result.stdout
     if result.returncode != 0 or len(data) < HASH_GRID * HASH_GRID:
