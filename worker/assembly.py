@@ -428,6 +428,19 @@ def rebase_emoji(cues: Sequence[Any], keeps: Sequence[Interval]) -> list[Any]:
 
     `dataclasses.replace` rather than a constructor call, because `EmojiCue` carries fields this module
     has no business knowing about -- naming them here would silently drop whichever one is added next.
+
+    **Not on the pipeline's path, and that is correct rather than an oversight.** R2.5 names emoji
+    cues as one of three consumers that must follow an assembly, and the other two — words
+    (`rebase_words`) and speaker turns (`rebase_turns`) — are wired at their call sites because they
+    are produced *before* the keep list is applied. Emoji cues are not: `effects.emoji.plan_emoji`
+    is called from the compositor with the already-rebased clip-relative words, so its cues are
+    born on the delivered timeline and there is nothing to remap.
+
+    Kept, rather than deleted as dead code, because the requirement names it and because the
+    invariant it depends on ("cues are planned after the rebase, never before") is a property of
+    the *caller*, not of this module. If any path ever plans cues against source-relative words,
+    this is what it must use -- and a reader who finds no rebaser here would reasonably conclude
+    none is needed.
     """
     from dataclasses import replace as dataclass_replace
 

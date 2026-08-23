@@ -58,7 +58,12 @@ from worker.engines import loader  # noqa: F401  (side-effect import: registers 
 from worker.engines.base import Engine_Stage
 from worker.engines.host import Engine_Host
 from worker.llm_client import BaseLLMClient
-from worker.models import ClipResult, ProcessingOptions, effective_options
+from worker.models import (
+    ClipResult,
+    ProcessingOptions,
+    effective_options,
+    normalisation_markers,
+)
 from worker.transcribe import Transcript, transcribe
 
 logger = logging.getLogger(__name__)
@@ -199,7 +204,11 @@ def run_pipeline(
     # sourcing, and it downgrades ``local_then_external`` -> ``local_only`` when
     # no external provider key is configured. Every downstream stage (selection,
     # captions, b-roll, music) then inherits the normalised options.
+    requested_options = options
     options = effective_options(options)
+    # What that normalisation took away, recorded per clip below. Computed once here, where both
+    # the requested and the effective options are in scope; `effective_options` itself stays pure.
+    normalisation_notes = normalisation_markers(requested_options, options)
 
     # Advanced AV engines (Reqs 4.4, 23.2): the host is built from the ALREADY
     # normalised options, and every hook below is guarded by ``host.active`` — so
@@ -481,6 +490,11 @@ def run_pipeline(
         geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
+        # What `effective_options` removed from the caller's request (a music bed suppressed by
+        # permissibility mode, external b-roll sourcing downgraded for want of a provider key).
+        # Recorded per clip for exactly the reason the translation marker below is: the clip record
+        # is the only thing a caller sees.
+        applied.extend(normalisation_notes)
         # T10: why a requested translated track is not on this clip. Recorded per clip even
         # though the reason is a property of the source, because the clip record is the only
         # thing a caller sees - an absent track with no explanation is indistinguishable from
@@ -748,7 +762,22 @@ def run_pipeline(
         if source_turns:
             clip_turns = diarization.slice_turns(source_turns, c.start, c.end)
             if keep_plan is not None:
-                clip_turns = diarization.rebase_turns(clip_turns, keep_plan)
+                # The same duplicate-aware choice the words make above, and for the same reason.
+                # `diarization.rebase_turns` carries `filler.rebase_words`' single-match ``break``,
+                # so on an assembly — where the retained cold open puts one source range in the
+                # keep list **twice** — a turn got one output position for two occurrences while
+                # the words got both. That leaves turns and words on two different timelines over
+                # the same clip, diverging by the cold open's duration for everything after it.
+                #
+                # Nothing about that is visible: a mis-rebased turn changes no pixel directly. It
+                # points the speaker-aware reframe crop and the AU12 gain ramp at the wrong person
+                # for part of every assembled clip, with no marker, because from their side the
+                # turn list is perfectly well-formed. `assembly.rebase_turns` exists precisely for
+                # this and was written, tested and never called.
+                _rebase_turns = (
+                    assembly.rebase_turns if assembly_plan.assembled else diarization.rebase_turns
+                )
+                clip_turns = _rebase_turns(clip_turns, keep_plan)
 
         # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
         #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.

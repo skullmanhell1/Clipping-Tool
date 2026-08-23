@@ -581,6 +581,11 @@ def effective_options(o: ProcessingOptions) -> ProcessingOptions:
       ``asset_sourcing_mode="local_only"`` (Reqs 8.6, 19.1, 19.3).
     - Downgrade ``asset_sourcing_mode`` from ``local_then_external`` to
       ``local_only`` when no external provider key is configured (Req 8.4).
+
+    Both of those discard something the caller explicitly asked for, so both are
+    degradations and must be *recorded*. This function cannot record them — it
+    returns options, not a clip record — so the caller pairs it with
+    :func:`normalisation_markers`. See that function for why this split exists.
     """
     result = o
     if o.permissibility_mode:
@@ -588,6 +593,41 @@ def effective_options(o: ProcessingOptions) -> ProcessingOptions:
     if result.asset_sourcing_mode == "local_then_external" and not _external_key_configured():
         result = replace(result, asset_sourcing_mode="local_only")
     return result
+
+
+def normalisation_markers(requested: ProcessingOptions, effective: ProcessingOptions) -> list[str]:
+    """Markers for what :func:`effective_options` took away.
+
+    This project's standing rule is that *an absent feature with no explanation is
+    indistinguishable from a broken one*, and the clip record is the only thing a
+    caller sees. Both normalisations above silently discarded an explicit request:
+
+    * a user who asked for a music bed and ran under ``permissibility_mode`` got a
+      clip with no music and an ``effects_applied`` list byte-identical to one from
+      a run that never asked for music. ``music_degraded:synthesised`` — a strictly
+      *lesser* degradation — was already both documented and emitted, which made the
+      gap easy to miss;
+    * ``broll_source:local_only`` was documented in the marker catalogue on
+      :class:`ClipResult` and asserted by the documented-marker test, and **emitted
+      nowhere in the codebase**. The catalogue described a marker that did not exist.
+
+    Derived by comparing the two option objects rather than by returning markers from
+    :func:`effective_options`, so that function stays pure and its signature stays the
+    one every engine's ``resolve_options`` contract is written against.
+
+    Returns markers in a fixed order, so a clip record is byte-comparable across runs.
+    """
+    markers: list[str] = []
+    if requested.music and not effective.music:
+        # Named for the cause, not the effect: "no music" is the observable, and
+        # permissibility mode is the only thing here that removes it.
+        markers.append("music_suppressed:permissibility")
+    if (
+        requested.asset_sourcing_mode == "local_then_external"
+        and effective.asset_sourcing_mode == "local_only"
+    ):
+        markers.append("broll_source:local_only")
+    return markers
 
 
 @dataclass
@@ -634,6 +674,8 @@ class ClipResult:
     #   - ``caption_emoji``               in-caption emoji glyphs were rendered
     #   - ``broll:<keyword>``             a b-roll cue for ``<keyword>`` composited
     #   - ``broll_source:local_only``     b-roll sourced from the local library only
+    #   - ``music_suppressed:permissibility``  a requested music bed was removed by
+    #                                     ``permissibility_mode`` (see ``normalisation_markers``)
     #   - ``broll_asset_failed``          a b-roll asset could not be resolved/decoded
     #   - ``broll_license_unknown``       a b-roll asset was dropped (unknown license)
     #   - ``broll_degraded``              b-roll disabled after a build/compose error

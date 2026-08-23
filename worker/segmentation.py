@@ -159,9 +159,40 @@ def detect_silences(
         ) from exc
     except subprocess.CalledProcessError as exc:
         log = exc.stderr or ""  # still parse whatever was emitted
-    starts = [float(m) for m in re.findall(r"silence_start:\s*([0-9.]+)", log)]
-    ends = [float(m) for m in re.findall(r"silence_end:\s*([0-9.]+)", log)]
-    return list(zip(starts, ends))
+    # One ordered walk, pairing each start with the end that follows it.
+    #
+    # Previously this collected `silence_start` and `silence_end` into two independent lists and
+    # `zip`ped them by position, which is wrong in two ways:
+    #
+    # * `silencedetect` emits a final `silence_start` with **no matching end** when the file ends
+    #   while still silent -- the ordinary case for anything with trailing dead air or a fade-out.
+    #   `zip` truncates to the shorter list, so that interval vanished silently and
+    #   `silence_based_segments` got no cut point in the trailing silence;
+    # * and if the two ever failed to alternate -- a partial log, which the `CalledProcessError`
+    #   branch above deliberately parses -- every *subsequent* pairing was shifted by one. An
+    #   entire interval list off by one reads as "the silence detector is inaccurate" rather than
+    #   as a parsing bug, which is a much harder thing to find.
+    #
+    # An unterminated final start is dropped here rather than closed at the stream's end, because
+    # this function is not told the duration and inventing one would put a cut point past the last
+    # frame. It is the caller's `total_duration` that bounds the tail, and it already does.
+    intervals: list[tuple[float, float]] = []
+    pending_start: float | None = None
+    for match in re.finditer(r"silence_(start|end):\s*(-?[0-9.]+)", log):
+        kind, raw = match.group(1), match.group(2)
+        try:
+            value = float(raw)
+        except ValueError:  # pragma: no cover - the regex already constrains this
+            continue
+        if kind == "start":
+            # A second start with no intervening end means the first was never closed; the later
+            # one is the live edge, so it replaces it.
+            pending_start = value
+        elif pending_start is not None:
+            if value >= pending_start:
+                intervals.append((pending_start, value))
+            pending_start = None
+    return intervals
 
 
 def silence_based_segments(

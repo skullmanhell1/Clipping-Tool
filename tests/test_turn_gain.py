@@ -12,6 +12,7 @@ single speaker, diarisation off, unmeasurable, already balanced.
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import subprocess
@@ -196,13 +197,133 @@ def test_clamp_handles_every_unusable_value(value):
 # --- R7.4: ramped, not stepped --------------------------------------------------------------
 
 
+def _gain_db_at(filter_chain: str, t: float) -> float:
+    """Evaluate the emitted ``volume`` expression at time ``t`` and return the gain in dB.
+
+    The whole point of this helper. The previous version of the test below asserted that the
+    substring ``between(t,3.880,4.000)`` appeared in the filter string — which it did, on the very
+    fixture that demonstrated the bug, because the window was *present in the text* and
+    *unreachable at evaluation*. `if` short-circuits, and that window was nested inside the
+    preceding turn's window, which is tested first.
+
+    ffmpeg's expression syntax is valid Python once ``if(`` and ``between(`` become ordinary
+    function calls, so no parser is needed. Eager evaluation of both branches is harmless here —
+    every divisor is a positive span.
+    """
+    match = re.search(r"volume='(.+)'", filter_chain)
+    assert match, f"no volume expression in {filter_chain!r}"
+    body = match.group(1).replace("between(", "_between(").replace("if(", "_if(")
+    env = {
+        "t": float(t),
+        "pow": pow,
+        "_if": lambda cond, a, b: a if cond else b,
+        "_between": lambda x, lo, hi: lo <= x <= hi,
+    }
+    factor = eval(body, {"__builtins__": {}}, env)
+    return 20.0 * math.log10(factor)
+
+
 def test_the_gain_ramps_at_a_turn_boundary():
     """R7.4. A step change in level is an audible click, which a viewer notices more than the
-    imbalance it was fixing."""
+    imbalance it was fixing.
+
+    Asserted by **evaluating** the expression across the boundary rather than by looking for a
+    window in its text. The two turns here are contiguous, which is the production case — filler
+    removal concatenates keeps, closing the inter-turn silence — and it is exactly the case where
+    the old build's ramp was shadowed by the preceding turn's own window and the level stepped.
+    """
     plan = tg.plan_turn_gain(_turns(("S1", 0.0, 4.0), ("S2", 4.0, 8.0)), _envelope(), enabled=True)
-    # A lead-in window ending exactly at the second turn's start.
-    ramp_start = 4.0 - tg.RAMP_SECONDS
-    assert f"between(t,{ramp_start:.3f},{4.0:.3f})" in plan.filter_chain
+    chain = plan.filter_chain
+    assert chain, "no filter emitted"
+
+    before = _gain_db_at(chain, 4.0 - tg.RAMP_SECONDS - 0.05)  # settled in the first turn
+    after = _gain_db_at(chain, 4.05)  # settled in the second turn
+    assert abs(after - before) > 0.5, (
+        f"the two turns were corrected to within {abs(after - before):.2f} dB of each other, "
+        "so this fixture cannot demonstrate a ramp at all"
+    )
+
+    # The level must move monotonically across the boundary, and be strictly between the two
+    # settled levels partway through -- which is what "ramp" means and what a step is not.
+    low, high = sorted((before, after))
+    midpoint = _gain_db_at(chain, 4.0 - tg.RAMP_SECONDS / 2.0)
+    assert low + 0.01 < midpoint < high - 0.01, (
+        f"halfway through the lead-in the gain is {midpoint:.3f} dB, which is not between the "
+        f"settled levels {before:.3f} and {after:.3f} -- the level stepped instead of ramping"
+    )
+
+    # And it is continuous at both ends of the ramp: no jump into or out of it.
+    assert abs(_gain_db_at(chain, 4.0 - tg.RAMP_SECONDS + 0.001) - before) < 0.15
+    assert abs(_gain_db_at(chain, 4.0 - 0.001) - after) < 0.15
+
+
+def test_a_gap_between_turns_ramps_from_unity():
+    """With silence between the turns the ramp lives in the gap, where the level is 0 dB.
+
+    This is the case the old expression assumed universally, and it still has to work.
+    """
+    plan = tg.plan_turn_gain(_turns(("S1", 0.0, 3.0), ("S2", 5.0, 8.0)), _envelope(), enabled=True)
+    chain = plan.filter_chain
+    assert chain
+
+    assert abs(_gain_db_at(chain, 4.0)) < 0.01  # mid-gap: untouched
+    settled = _gain_db_at(chain, 5.05)
+    midpoint = _gain_db_at(chain, 5.0 - tg.RAMP_SECONDS / 2.0)
+    assert abs(midpoint - settled / 2.0) < 0.35, (
+        f"halfway through a from-silence lead-in the gain is {midpoint:.3f} dB, expected about "
+        f"half of the settled {settled:.3f} dB"
+    )
+
+
+def test_a_ramp_never_takes_more_than_half_of_the_turn_before_it():
+    """The lead-in comes out of the previous turn, so it is capped at half of it.
+
+    A correction that owns less than half its own turn is not a correction, and without the cap a
+    turn shorter than the ramp would be consumed entirely by the next boundary's lead-in.
+
+    Driven through ``gain_expression`` directly rather than ``plan_turn_gain``, because
+    ``MIN_TURN_SECONDS`` refuses turns under 0.5 s and the cap only binds below ``2 * ramp``
+    (0.24 s). That makes this a guard on the arithmetic rather than on a reachable plan — which is
+    worth having, since the two thresholds are independent and either could move.
+    """
+    short = tg.Turn_Gain(
+        start=0.0, end=0.2, speaker="S1", level_db=-20.0, gain_db=-4.0, applied=True
+    )
+    following = tg.Turn_Gain(
+        start=0.2, end=3.0, speaker="S2", level_db=-14.0, gain_db=+4.0, applied=True
+    )
+    chain = tg.gain_expression([short, following])
+    assert chain
+
+    # Half of a 0.2 s turn is 0.1 s, so the ramp may not begin before t=0.1. Sampled just
+    # inside that boundary: an uncapped 0.12 s lead-in would already be ramping at 0.09.
+    assert _gain_db_at(chain, 0.09) == pytest.approx(-4.0, abs=0.01)
+    # ...and by its own end the level has reached the new turn's gain.
+    assert _gain_db_at(chain, 0.199) == pytest.approx(4.0, abs=0.2)
+
+
+def test_a_ramp_is_continuous_from_the_previous_turns_level():
+    """The interpolation starts from the preceding turn's gain, not from 0 dB.
+
+    The old expression always ramped from unity, so with the previous turn corrected to -6 dB the
+    level jumped -6 -> 0 at the ramp's start and then climbed. That is a discontinuity introduced
+    by the very code meant to remove one, and it was invisible because the ramp was unreachable in
+    the contiguous case anyway.
+    """
+    first = tg.Turn_Gain(
+        start=0.0, end=4.0, speaker="S1", level_db=-8.0, gain_db=-6.0, applied=True
+    )
+    second = tg.Turn_Gain(
+        start=4.0, end=8.0, speaker="S2", level_db=-20.0, gain_db=+6.0, applied=True
+    )
+    chain = tg.gain_expression([first, second])
+
+    at_ramp_start = _gain_db_at(chain, 4.0 - tg.RAMP_SECONDS + 0.001)
+    assert at_ramp_start == pytest.approx(-6.0, abs=0.15), (
+        f"the ramp begins at {at_ramp_start:.3f} dB rather than the previous turn's -6 dB"
+    )
+    assert _gain_db_at(chain, 4.0 - tg.RAMP_SECONDS / 2.0) == pytest.approx(0.0, abs=0.2)
+    assert _gain_db_at(chain, 4.0 - 0.001) == pytest.approx(6.0, abs=0.15)
 
 
 def test_the_expression_is_evaluated_per_frame():
