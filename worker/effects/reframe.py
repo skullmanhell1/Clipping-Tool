@@ -38,6 +38,7 @@ from worker.ffmpeg_utils import (
     ASPECT_PRESETS,
     FFmpegError,
     _run,
+    aspect_size,
     detect_letterbox,
     escape_filter_path,
     h264_args,
@@ -63,6 +64,17 @@ class Center:
 # --------------------------------------------------------------------------- #
 # Pure geometry / smoothing helpers (no ffmpeg or cv2 needed — unit-testable)
 # --------------------------------------------------------------------------- #
+def _nearest_even(value: float) -> int:
+    """``value`` snapped to the nearest even integer, floored at 2.
+
+    Even because libx264's 4:2:0 chroma subsampling requires it and an odd dimension fails the
+    encode outright rather than degrading. *Nearest* rather than floored, because this is used for
+    the axis derived from the other one, where flooring biases the emitted aspect ratio away from
+    the requested one by up to a whole pixel in a consistent direction.
+    """
+    return max(2, int(round(value / 2.0)) * 2)
+
+
 def compute_crop_size(src_w: int, src_h: int, aspect_w: int, aspect_h: int) -> tuple[int, int]:
     """Return the largest ``(w, h)`` of the target aspect that fits the source.
 
@@ -72,16 +84,32 @@ def compute_crop_size(src_w: int, src_h: int, aspect_w: int, aspect_h: int) -> t
         raise ValueError("source dimensions must be positive")
     target = aspect_w / aspect_h
     source = src_w / src_h
+
+    # The two axes are **not** independent, and rounding them as though they were is what made the
+    # emitted rectangle drift off the requested ratio.
+    #
+    # Previously the dependent axis was derived from the *unrounded* full axis, and then both were
+    # floored to even separately -- so the axis the other one was computed from changed underneath
+    # it. The order here is the fix: floor the axis taken at full size to even first (it cannot grow
+    # past the source), then derive the dependent axis *from that rounded value*, then snap it to
+    # the **nearest** even rather than flooring it. Flooring the derived axis is what overshot: for
+    # a 1003x2000 source at 9:16 it gave 1002x1780 (ratio 0.5629) where 1002x1782 (0.5623) is
+    # closer to the requested 0.5625.
+    #
+    # The residual error is then the minimum achievable with even integers, which matters because
+    # the crop feeds a `scale` to the output size: any ratio error here is a small anamorphic
+    # stretch, and it is cheaper to not introduce it than to correct it later.
     if target <= source:
         # Target is narrower (or equal): full height, reduced width.
-        ch = src_h
-        cw = int(round(ch * target))
+        ch = src_h - (src_h % 2)
+        cw = _nearest_even(ch * target)
     else:
         # Target is wider: full width, reduced height.
-        cw = src_w
-        ch = int(round(cw / target))
-    cw = min(src_w, cw - (cw % 2))
-    ch = min(src_h, ch - (ch % 2))
+        cw = src_w - (src_w % 2)
+        ch = _nearest_even(cw / target)
+    # Never larger than the (even-floored) source on either axis.
+    cw = min(cw, src_w - (src_w % 2))
+    ch = min(ch, src_h - (src_h % 2))
     return max(2, cw), max(2, ch)
 
 
@@ -1580,7 +1608,13 @@ def apply_reframe(
 
     dest = Path(dest)
     info = probe(video)
-    tw, th = ASPECT_PRESETS[aspect]
+    # `aspect_size`, not `ASPECT_PRESETS[aspect]`. The raw table is the 1080-class baseline; the
+    # *configured* output resolution (O9's `OUTPUT_SHORT_SIDE`, or the O7 platform profile's) only
+    # exists inside `aspect_size`. Reading the table directly meant a host configured for 720-class
+    # output got 720 from the static crop-blur reformat (`ffmpeg_utils.reformat`, which does call
+    # `aspect_size`) and **1080 whenever reframe ran** -- the same footage at two resolutions
+    # depending on a feature flag, with no marker saying which path produced the clip.
+    tw, th = aspect_size(aspect)
     aw, ah = _aspect_ratio_parts(aspect)
 
     # V8: the crop-update rate is a setting rather than a fixed 12/s, which was visible as
@@ -2378,7 +2412,13 @@ def apply_speaker_reframe(
 
     dest = Path(dest)
     info = probe(video)
-    tw, th = ASPECT_PRESETS[aspect]
+    # `aspect_size`, not `ASPECT_PRESETS[aspect]`. The raw table is the 1080-class baseline; the
+    # *configured* output resolution (O9's `OUTPUT_SHORT_SIDE`, or the O7 platform profile's) only
+    # exists inside `aspect_size`. Reading the table directly meant a host configured for 720-class
+    # output got 720 from the static crop-blur reformat (`ffmpeg_utils.reformat`, which does call
+    # `aspect_size`) and **1080 whenever reframe ran** -- the same footage at two resolutions
+    # depending on a feature flag, with no marker saying which path produced the clip.
+    tw, th = aspect_size(aspect)
     aw, ah = _aspect_ratio_parts(aspect)
 
     crop_w, crop_h = compute_crop_size(info.width, info.height, aw, ah)
