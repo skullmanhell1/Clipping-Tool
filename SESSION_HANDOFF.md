@@ -1,8 +1,24 @@
 # Session Handoff
 
-Amended after the dead-code clearing pass (PRs #127-#132). The numbers in §2 and the "what is left"
-list in §3 were both wrong again — for the third consecutive revision — so they have been re-measured
-rather than read forward. A handoff document that is wrong is worse than none.
+Amended after the six-phase correctness pass (PRs #149-#156). A handoff document that is wrong is
+worse than none, and this one **was wrong in a way that cost real work**, so start with that.
+
+> ### Correction: there was never a billing block
+>
+> Every previous revision of this document asserted that CI had "run zero steps since at least
+> 8 August" because of a **GitHub Actions billing block**, and instructed the reader to treat local
+> gates as the only available evidence. That was false, and I repeated it in six pull request bodies
+> before checking it.
+>
+> It was disproved by one question from the repository owner — *"it's public, shouldn't it still run
+> CI?"* — which is exactly right: Actions is free for public repositories on standard runners, and
+> this repository is public and uses `ubuntu-latest`. Measured directly: **483 workflow runs have
+> executed steps**, with per-step timings. The three-second zero-step jobs the old text described
+> belonged to one specific outage window (PRs #138-#147) and were never the general case.
+>
+> The real reasons CI was red are in §1 under "CI: what was actually wrong". They are all fixed. The
+> lesson worth keeping: this document is read as authoritative, so an unverified diagnosis in it
+> propagates. **Re-measure before repeating anything here, including this revision.**
 
 **The headline change: §0's failure mode is cleared.** Every feature that shipped implemented, tested
 and never called is now wired, and `scripts/check_wired.py` reports **0 unwired modules and 0 unread
@@ -128,7 +144,47 @@ when a constant changes, and one module reports "I cannot do this" rather than d
 
 ## 1. Where the work is
 
-**All of it is on `main`.** `main` is at `d309f36` and the probe in "Start here" passes.
+**All of it is on `main`.** The probe in "Start here" passes. Take the current revision with
+`git rev-parse --short origin/main` rather than reading a hash from here — every previous revision of
+this document quoted one that was stale by the time it was read.
+
+### The six-phase correctness pass (#149-#156)
+
+A systematic audit, one layer per PR, working outward from the deployment boundary. Roughly 63 defects.
+The recurring species, which is worth knowing before auditing anything else here:
+
+| PR | Layer | Defects |
+| --- | --- | --- |
+| #149 | Foundation / deployment | 8 — `render.yaml` could not boot at all; the retention sweeper deleted live jobs' files; cancel-during-download reverted |
+| #150 | CI itself | The "boot smoke" that never booted; every action bumped to a node24 major |
+| #151 | Engine (ffmpeg helpers, transcription, cache) | 11 — unchecked outputs, cache keys missing device/compute type, NaN/Inf guards |
+| #152 | LLM | 11 — `parse_json` type-flip on truncation, prompt-injection fencing, `fallback_reason` plumbed to the clip record |
+| #153 | Publishing | 10 — a publisher reading the wrong success field, no double-post guard, tokens in URLs |
+| #154 | Effects | 10 — reframe dropping its origin, odd-sized crops, emoji degradation unmarked |
+| #155 | Path containment + subprocess hygiene | The 6 CodeQL `py/path-injection` findings, and the stdin inheritance behind the six-hour hang |
+| #156 | `worker/engines/` + CI bounds | 9 — see below |
+
+**The four failure families that account for nearly all of them.** Look for these first in any layer
+that has not been audited:
+
+1. **Unmarked degradation** — a feature silently no-ops. The convention is a labelled marker on the
+   clip record; several markers were *defined and never emitted* (`transcript_filter.MARKER`, the
+   emoji overlay's), and one was *emitted and never read, while being wrong half the time*
+   (`engine:kinetic_typography:supersedes_captions`).
+2. **False success** — success reported on a response, exit code or output file that was never
+   checked. `stems._run` accepted a missing `returncode` as 0; `persist_artifact` reported a 0-byte
+   file as stored; the engine host adopted replacement media without stat-ing it.
+3. **Two index spaces** — a value computed against one list and consumed against another. Keyword
+   indices computed on a filtered word list and read against the unfiltered one; ffmpeg input indices
+   reserved from *declared* engine inputs and consumed as *actual* ones.
+4. **"Did not measure" rendered as the ideal value** — the `evaluation/` speciality. An empty
+   measurement set yielding `worst_ms: 0.0, all_within_tolerance: true`; WER 0.00% over zero words
+   ranking first. `evaluation/fidelity.py` is the module that gets this right (`Metric_Reading` carries
+   `available` + `reason` and no numbers when unavailable) and is the pattern to copy.
+
+Everything above was mutation-verified — each fix reverted individually and the corresponding test
+confirmed to go red. That discipline caught five of my *own* vacuous tests, which is the strongest
+argument for it: a test written alongside a fix tends to pass for the wrong reason.
 
 Six PRs landed after `8670063`, which is the revision the previous version of this table described:
 
@@ -149,21 +205,42 @@ settings block, every time.
 
 **Two of the six shipped inert** (V21, AU12) and neither the suite nor CI could tell. See §0.
 
-Version `0.11.0`, and note `CHANGELOG.md` still carries a large `[Unreleased]` section above it — an
-entire release of work with `VERSION` unbumped. Naming that release is a human decision and has not
-been made.
+`VERSION` is `0.12.4`, and `CHANGELOG.md` again carries a large `[Unreleased]` section above it — the
+six-phase correctness pass (#149-#156) plus whatever preceded it, with `VERSION` unbumped. Naming that
+release is a human decision and has not been made. This is the third handoff in a row to say so, which
+is itself the finding: the `[Unreleased]` block is not a staging area, it is a backlog of unnamed
+releases.
 
-**CI has been red on every branch since before #121, for a reason that has nothing to do with the
-code.** The annotation on every failed job is:
+### CI: what was actually wrong
 
-> The job was not started because recent account payments have failed or your spending limit needs to
-> be increased. Please check the 'Billing & plans' section in your settings
+Three separate causes, none of them billing, all now fixed. Measured across 154 pull requests and 483
+workflow runs (388 failure, 67 success, 21 cancelled) — **78 of the 154 PRs carry a red cross**:
 
-Jobs complete in about three seconds having run zero steps, including `Frontend (node 20.19)` and
-`Analyze (javascript-typescript)` on branches touching no JavaScript. That pattern — every job, every
-branch, including ones with nothing to do — is how to recognise it, and it is not fixable from a pull
-request. Until it is resolved, **every gate must be run locally** and the figures in §2 are the only
-evidence available.
+| Group | PRs | Cause | Status |
+| --- | --- | --- | --- |
+| Historical | #1-#137 (~66) | Assorted, long superseded | Immutable — a closed PR's checks cannot be re-run |
+| The outage window | #138-#147 (10) | All six jobs failing in ~3s with zero steps. **This is the window the old billing text described**, and it is genuinely anomalous — but it is ten PRs, not the whole history | Immutable, and it stopped on its own |
+| The live one | #148 onward | `Analyze (python)`: the CodeQL job's `Gate on high-severity security findings` step, failing on `python: 6 blocking, 150 reported (threshold 7.0)` — six `py/path-injection` findings at severity 7.5 in `api/main.py` | Fixed in #155 |
+
+**And the expensive one: the backend job had never completed.** Not once in the last 30 runs. Every
+`Tests` step was either cancelled by a newer push or ran to `358.9m` — GitHub's 360-minute ceiling.
+The cause was an ffmpeg subprocess inheriting pytest's stdin: it never saw EOF, waited forever, and
+the runner's only clue was a final log line reading `82%` and
+`Terminate orphan process: pid (50388) (ffmpeg)`. `worker.ffmpeg_utils._run` passed no `stdin=`, and
+`ffmpeg_timeout_seconds` defaults to 3600.
+
+Two consequences to be careful about:
+
+- **Roughly 550 tests (from 82% of the suite onward) had never executed in CI at all.** Local runs
+  covered them; CI never reached them. Treat the first genuinely completed backend run as new
+  information.
+- Do **not** read "24-31 minutes" anywhere as the backend job's historical duration. Those figures are
+  from *cancelled* runs. There is no measured baseline for a completed run yet.
+
+Fixed in #155 (stdin bounded at the `_run` seam, which covers every routed call rather than every
+remembered one) and hardened in #156: `timeout-minutes` on every job so nothing can reach the 360
+ceiling again, `faulthandler_timeout = 600` so a wedged test dumps every thread's stack and names
+itself, and `--durations=25` so "slow or stuck?" is answerable from the log.
 
 The original problem is kept below because its *shape* recurs whenever PRs are stacked, and this is
 the reference for untangling it. The Phase 1–4 pass was built as a stack of PRs which were all merged
@@ -201,18 +278,19 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on `main` at `5e0b953` (v0.12.0). The `2631` figure in the previous revision was six PRs
-stale, the `2457` before it was four, and the `1994`/`98` pair in
-`.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` is older still. **This table has been stale at every
-single handoff.** Take a fresh measurement rather than trusting any of them, including this one.
+Measured on the six-phase branch tip (PRs #149-#156 applied), 23 August. The `2747` figure in the
+previous revision was seven PRs stale, the `2631` before it six, the `2457` before that four, and the
+`1994`/`98` pair in `.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` older still. **This table has
+been stale at every single handoff, including the ones that said so.** Take a fresh measurement rather
+than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **2747 passed, 0 failed, 0 skipped, 0 warnings** (about 8.5 min) |
+| `pytest` | **3149 passed, 0 failed, 0 skipped, 0 warnings** (498 s) |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 237 files (I9; blocking in CI) |
-| `mypy .` | clean — 117 source files (invoke as `mypy .`; bare `mypy` errors out) |
+| `ruff format --check .` | clean — 259 files (I9; blocking in CI) |
+| `mypy .` | clean — 120 source files (invoke as `mypy .`; bare `mypy` errors out) |
 | `python scripts/check_wired.py --check` | **0 unwired modules, 0 unread settings** — both baselines empty |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
 | `python scripts/fetch_models.py --check` | `all 1 detector model(s) verified: blaze_face_short_range.tflite` |
@@ -226,7 +304,14 @@ an error that does not name the version as the cause. Use
 `export PATH=/root/.nvm/versions/node/v20.20.2/bin:$PATH`.
 
 **Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
-README's Testing section. The full backend suite takes about **five minutes** (290 s measured).
+README's Testing section. The full backend suite takes **498 s** locally (the "about five minutes /
+290 s" in earlier revisions is two passes out of date). In CI it is substantially slower and there is
+still no completed-run baseline to quote — see §1.
+
+Every run now prints its **25 slowest tests** (`--durations=25`, `pyproject.toml`). Use it: the
+slowest honest test is `tests/test_stems_parity.py::test_p17_a_registered_but_disabled_engine_changes_nothing`
+at ~52 s, which is what `faulthandler_timeout = 600` was sized against — an eleven-fold margin, so if
+that dump ever fires it is a real wedge and not a slow machine.
 
 **`VMAF_FFMPEG_BINARY` must point at a libvmaf-capable ffmpeg or the M9 fidelity tests fail**, several
 steps from the cause. Note the static build `scripts/setup_dev_env.sh` fetches (johnvansickle 7.0.2)
@@ -263,11 +348,10 @@ than typing, and the blockers are named below rather than implied.
 
 ### Blocked on a human decision or an account
 
-- **CI has run zero steps since at least 8 August.** Every workflow fails in about three seconds
-  having executed no steps — verified with `gh api .../jobs`, which reports `steps=0` on every job,
-  including JS jobs on branches containing no JS. This is a **GitHub Actions billing block**, not a
-  code failure. It cannot be fixed from a pull request. Until it is cleared, every gate is local-only
-  and the no-skips / warnings-are-errors discipline is unenforced by anything but discipline.
+- ~~**CI has run zero steps since at least 8 August** — a GitHub Actions billing block~~ — **false,
+  and retracted.** See the correction at the top of this file and §1. CI runs, has always run on this
+  public repository, and its actual failures were a CodeQL high-severity gate plus a six-hour test
+  hang. Both fixed (#155, #156). Nothing here is blocked on an account.
 - ~~`VERSION` is still `0.11.0`~~ — **released as `0.12.0`** and tagged `v0.12.0` (#135). Minor rather
   than major because the eight retired environment variables never had an effect, and `Settings` uses
   `extra="ignore"` so a stale key in an existing `.env` stays harmless.
@@ -338,9 +422,14 @@ labelled benchmark (above). With S21 done, the spec's only available work is fin
 > cluster on vision and font paths rather than on whatever you just edited.
 
 ```bash
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+# NOT `python3.11 -m venv`: the shim on PATH fails here. Use the pyenv interpreter directly.
+/root/.pyenv/versions/3.11.15/bin/python -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
 bash scripts/setup_dev_env.sh    # ffmpeg, Liberation fonts, the opencv runtime libs
 ```
+
+Run the suite as `.venv/bin/python -m pytest -q -p no:randomly` while bisecting: the random ordering
+plugin is valuable in CI and a nuisance when reproducing one failure.
 
 **Run `scripts/setup_dev_env.sh` before trusting a green suite**, and re-run it if ffmpeg
 disappears from `PATH` — which happens on a sandbox recycle, since only the workspace survives. It
@@ -366,9 +455,20 @@ reported green.
   gh api -X PATCH repos/{owner}/{repo}/pulls/{n} -f base=main   # retarget
   ```
 
-  `gh run view --log-failed` also fails (`none of the git remotes correspond to the GH_HOST`); read
-  job annotations through `gh api repos/{owner}/{repo}/check-runs/{id}/annotations`, which is where
-  the billing message in §1 was found.
+  `gh run view --log-failed` also fails (`none of the git remotes correspond to the GH_HOST`), so job
+  logs are not directly readable. What *does* work, and is how the CodeQL gate and the six-hour hang in
+  §1 were both diagnosed:
+
+  ```bash
+  # Per-step status and timing — this is what shows a step running for 358.9 minutes.
+  gh api repos/{owner}/{repo}/actions/runs/{run}/jobs \
+    --jq '.jobs[] | .name, (.steps[] | "  \(.status)/\(.conclusion) \(.name) \(.started_at)")'
+  # Annotations carry the gate's own message, e.g. "python: 6 blocking, 150 reported".
+  gh api repos/{owner}/{repo}/check-runs/{id}/annotations
+  ```
+
+  Note the trap that produced a wrong conclusion here: a **cancelled** job's step duration looks like
+  a completed one. Filter on `.conclusion == "success"` before quoting any timing as a baseline.
 - **Commit before mutation testing.** `git checkout <file>` restores from the *index*, so running it
   to undo a mutation destroys any uncommitted work in that file. It cost two rounds of re-doing the
   same edits here.
@@ -460,6 +560,20 @@ caller sees.
   files share one cache entry. A test asserting a cache *miss* then passes or fails depending on
   whether something earlier in the session stored one — it passed in isolation and failed in the
   full suite on U4's first run. Give each fixture unique bytes.
+- **An engine test double must subclass `AV_Engine`, or the host silently skips it.**
+  `Engine_Host._is_enabled` does `getattr(engine, "is_enabled", None)` and treats a non-callable as
+  disabled, so a duck-typed double that defines `flag_field`, `plan` and `run` but not `is_enabled`
+  produces a `skipped` result with no marker — which looks exactly like a correctly gated engine.
+  `is_enabled` is an `AV_Engine` *instance* method that calls `self.flag_field()`, so subclassing and
+  overriding `flag_field` (the way `tests/fakes.FakeEngine` does) is all that is needed. This cost an
+  afternoon of debugging a test that asserted `outcome.media is None` and was right for the wrong
+  reason.
+- **`FakeEngine` derives `max_inputs` from the contribution it was given**, so a double constructed
+  with `max_inputs=2` and no contribution *declares* two ffmpeg inputs and *emits* none. A test built
+  that way pins the divergence between declared and actual rather than the behaviour it looks like it
+  pins — which is how `test_compose_engines_receive_a_reserved_ffmpeg_input_block` came to assert an
+  index the compositor would never hand out.
+- **`config.getini("faulthandler_timeout")` returns a string**, not a number. Cast before comparing.
 - `ClipCandidate` lives in `worker/selection.py`, not `worker/models.py`. It now carries `cuts`
   (U4), which every selection path leaves empty; only an explicit edit populates it.
 - `Transcript` / `TranscriptSegment` / `Word` live in `worker/transcribe.py`.
