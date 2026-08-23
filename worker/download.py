@@ -48,6 +48,39 @@ COOKIES_HINT = (
 )
 
 
+#: Seconds a single socket read may stall before yt-dlp gives up on it.
+#:
+#: yt-dlp sets no socket timeout by default, so a server that accepts the connection and then sends
+#: nothing held a worker thread indefinitely -- with the progress hook's last message still reading
+#: "Downloading video", so the job looked alive.
+DOWNLOAD_SOCKET_TIMEOUT_S = 30
+
+#: Attempts per download and per fragment. Bounded so a persistently failing host cannot retry
+#: forever inside one request; yt-dlp's default of 10 is generous for an interactive ingest.
+DOWNLOAD_RETRIES = 3
+
+#: Ceiling used when ``max_upload_bytes`` is unset or unusable, in bytes (2 GiB).
+DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _max_download_bytes() -> int:
+    """The byte ceiling for a URL download.
+
+    Deliberately the *same* limit an uploaded file is held to (``settings.max_upload_bytes``): how
+    large a video this application will accept is a property of the application, not of which door
+    the video came through. Before this there was no size guard on the URL path at all — no
+    ``max_filesize``, no duration filter — and ``duration`` is only read *after* the download
+    completes, so any URL could write until the volume filled.
+    """
+    from config import settings  # local import: this module must stay import-cheap
+
+    try:
+        configured = int(getattr(settings, "max_upload_bytes", 0) or 0)
+    except (TypeError, ValueError):  # a hostile or unparseable setting
+        configured = 0
+    return configured if configured > 0 else DEFAULT_MAX_DOWNLOAD_BYTES
+
+
 def _is_bot_check(message: str) -> bool:
     """Whether a yt-dlp failure is the sign-in gate rather than a genuine download problem."""
     lowered = message.lower()
@@ -246,7 +279,18 @@ def fetch_metadata(url: str) -> VideoMeta:
     # path that never passes through `api.main`.
     validate_public_url(url)
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True, **auth_opts()}
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        # A metadata probe should not fan out over a whole channel either, and it needs the same
+        # socket bound as the download: this runs inside the API's request handler.
+        "noplaylist": True,
+        "playlist_items": "1",
+        "socket_timeout": DOWNLOAD_SOCKET_TIMEOUT_S,
+        "retries": DOWNLOAD_RETRIES,
+        **auth_opts(),
+    }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -254,6 +298,13 @@ def fetch_metadata(url: str) -> VideoMeta:
         if _is_bot_check(str(exc)):
             raise DownloadError(f"Could not read video info: {COOKIES_HINT}") from exc
         raise DownloadError(f"Could not read video info: {exc}") from exc
+
+    if not isinstance(info, dict):
+        # ``extract_info`` can return ``None`` for a URL an extractor recognises but declines. The
+        # ``info.get(...)`` chain below sits outside the ``try``, so that produced an
+        # ``AttributeError`` escaping this function — bypassing the ``DownloadError`` the API
+        # translates into a 422 and surfacing as a 500 instead.
+        raise DownloadError(f"Could not read video info: no metadata returned for {url}")
 
     return VideoMeta(
         title=info.get("title") or "Untitled",
@@ -334,6 +385,28 @@ def download_video(
         "format": f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best",
         "merge_output_format": "mp4",
         "progress_hooks": [_hook],
+        # --- bounds on an unauthenticated, user-supplied URL ------------------------------
+        #
+        # None of these were set, and each absence is reachable from a single paste into the
+        # ingest field:
+        #
+        # * ``noplaylist`` -- yt-dlp's default for a playlist or channel URL is to download
+        #   **every entry**. `prepare_filename` is then called with the *playlist* info dict,
+        #   whose id/ext match no file on disk, so `resolve_downloaded_path` finds nothing and
+        #   this raises "Downloaded file not found" *after* writing N videos that nothing cleans
+        #   up. An unbounded disk write reported as a confusing failure.
+        # * ``max_filesize`` -- there was no size guard anywhere in this module. `duration` is
+        #   only read *after* the download finishes and nothing rejects on it, so any URL wrote
+        #   until the volume filled.
+        # * ``socket_timeout`` / ``retries`` -- yt-dlp has no socket timeout by default, so a
+        #   slow-loris server held this worker thread indefinitely with progress frozen at
+        #   "Downloading video". The same failure family as an unbounded subprocess, one layer up.
+        "noplaylist": True,
+        "playlist_items": "1",
+        "max_filesize": _max_download_bytes(),
+        "socket_timeout": DOWNLOAD_SOCKET_TIMEOUT_S,
+        "retries": DOWNLOAD_RETRIES,
+        "fragment_retries": DOWNLOAD_RETRIES,
         **auth_opts(),
     }
 
@@ -356,6 +429,16 @@ def download_video(
         # Without this the caller gets a non-existent path and the failure surfaces much later,
         # as an ffprobe error on a file nobody can explain the absence of.
         raise DownloadError(f"Downloaded file not found for {url}")
+    # Existence is not enough, and the reasoning above stops one step short of saying so: a
+    # post-processor that failed *after* creating its output leaves a 0-byte container, which
+    # passes `exists()` and then fails as exactly the unexplainable ffprobe error this guard was
+    # written to prevent.
+    try:
+        if path.stat().st_size <= 0:
+            path.unlink(missing_ok=True)
+            raise DownloadError(f"Downloaded file is empty for {url}")
+    except OSError as exc:
+        raise DownloadError(f"Downloaded file could not be read for {url}: {exc}") from exc
 
     meta = VideoMeta(
         title=info.get("title") or path.stem,

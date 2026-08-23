@@ -50,6 +50,13 @@ MAX_GAIN_DB = 6.0
 #: correction is fully applied within the first syllable of the new speaker. A step here is a click.
 RAMP_SECONDS = 0.12
 
+#: Tolerance for comparing turn boundaries, in seconds.
+#:
+#: Turn boundaries arrive as floats from diarization and are rebased by arithmetic, so "contiguous"
+#: has to mean "within a rounding error" rather than exactly equal. Well below the 1 ms precision
+#: the emitted expression is formatted to.
+_EPSILON = 1e-9
+
 #: Shortest turn that will be corrected, in seconds.
 #:
 #: The stand-in for R7.7's confidence gate, because `Speaker_Turn` carries no confidence. Under half
@@ -311,27 +318,84 @@ def gain_expression(gains: Sequence[Turn_Gain], *, ramp: float = RAMP_SECONDS) -
 
     ramp_s = max(0.001, float(ramp))
     ordered = sorted(applied, key=lambda g: g.start)
+    count = len(ordered)
 
-    # Built inside-out: the innermost value is 0 dB, and each turn wraps it with "if we are inside
-    # this turn, its gain; if we are in its lead-in ramp, interpolate".
-    expr = "0"
-    for gain in reversed(ordered):
-        db = f"{gain.gain_db:.3f}"
-        ramp_start = max(0.0, gain.start - ramp_s)
-        inside = f"between(t,{gain.start:.3f},{gain.end:.3f})"
-        if ramp_start < gain.start:
-            # Interpolated in dB and converted once at the end, because loudness is logarithmic:
-            # ramping the linear factor would move fast at the start and crawl at the end.
-            lead_in = (
-                f"if(between(t,{ramp_start:.3f},{gain.start:.3f}),"
-                f"{db}*(t-{ramp_start:.3f})/{ramp_s:.3f},{expr})"
-            )
+    # --- where each ramp may begin, and what level it starts from ---------------------------
+    #
+    # This is the part that was wrong, and it was wrong in the case the feature exists for.
+    #
+    # The old build nested each turn's lead-in *inside* the preceding turn's `between(t,start,end)`
+    # test. `if` short-circuits left to right, so for **contiguous** turns — `end[k-1] == start[k]`,
+    # which is the production case, because `rebase_turns` concatenates keeps and closes the
+    # inter-turn silence — the lead-in window `[start[k] - ramp, start[k])` lies entirely inside the
+    # previous turn's window and is tested *after* it. The ramp branch was therefore unreachable and
+    # the level changed as a step: exactly the audible click R7.4 exists to prevent.
+    #
+    # It was also interpolating from **0 dB** rather than from the previous turn's gain, so even
+    # when reachable it introduced a discontinuity at the ramp's own start whenever the preceding
+    # turn was corrected.
+    #
+    # Both are fixed by computing disjoint half-open segments up front: a ramp is given room by
+    # truncating the previous turn's window, never by nesting inside it.
+    ramp_starts: list[float | None] = [None] * count
+    ramp_from_db: list[float] = [0.0] * count
+    for index, gain in enumerate(ordered):
+        if index == 0:
+            # A turn starting at t=0 has no room for a lead-in, and there is no earlier level to
+            # ramp from. Emitting one produced a zero-width `between(t,0.000,0.000)`.
+            floor, from_db = 0.0, 0.0
         else:
-            # A turn starting at t=0 has no room for a lead-in. Emitting one produced a zero-width
-            # `between(t,0.000,0.000)` -- harmless but dead expression text, and the expression is
-            # already the longest thing this module writes.
-            lead_in = expr
-        expr = f"if({inside},{db},{lead_in})"
+            previous = ordered[index - 1]
+            if previous.end < gain.start - _EPSILON:
+                # A gap. The level there is the innermost 0 dB, so the ramp lives in the gap and
+                # starts from 0 — which is what the old expression assumed universally.
+                floor, from_db = previous.end, 0.0
+            else:
+                # Contiguous. The ramp has to come out of the previous turn, so it takes at most
+                # half of it: a correction that owns less than half its own turn is not a
+                # correction, and the previous turn's level is what we ramp *from*.
+                floor = previous.start + (gain.start - previous.start) / 2.0
+                from_db = previous.gain_db
+        start_at = max(gain.start - ramp_s, floor)
+        if start_at < gain.start - _EPSILON:
+            ramp_starts[index] = start_at
+            ramp_from_db[index] = from_db
+
+    # A turn's own window ends where the next turn's ramp begins, so the two never overlap and the
+    # ramp cannot be shadowed regardless of test order.
+    inside_ends: list[float] = []
+    for index, gain in enumerate(ordered):
+        end_at = gain.end
+        following = ramp_starts[index + 1] if index + 1 < count else None
+        if following is not None and following < end_at:
+            end_at = following
+        inside_ends.append(end_at)
+
+    # --- assemble -------------------------------------------------------------------------
+    # Segments are disjoint, so nesting order is a readability choice rather than a semantic one.
+    # Ramps are placed outermost anyway: they are the narrow windows, and having them tested first
+    # makes the short-circuit behaviour obvious to anyone reading the emitted string.
+    expr = "0"
+    for index in reversed(range(count)):
+        gain = ordered[index]
+        if inside_ends[index] > gain.start + _EPSILON:
+            expr = (
+                f"if(between(t,{gain.start:.3f},{inside_ends[index]:.3f}),"
+                f"{gain.gain_db:.3f},{expr})"
+            )
+    for index in reversed(range(count)):
+        ramp_at = ramp_starts[index]
+        if ramp_at is None:
+            continue
+        gain = ordered[index]
+        span = gain.start - ramp_at
+        delta = gain.gain_db - ramp_from_db[index]
+        # Interpolated in dB and converted to a linear factor once at the end, because loudness is
+        # logarithmic: ramping the linear factor would move fast at the start and crawl at the end.
+        expr = (
+            f"if(between(t,{ramp_at:.3f},{gain.start:.3f}),"
+            f"{ramp_from_db[index]:.3f}+{delta:.3f}*(t-{ramp_at:.3f})/{span:.3f},{expr})"
+        )
 
     # **`dB` cannot suffix an expression.** ffmpeg's `volume` accepts `volume=-6dB` as a literal but
     # rejects `volume='<expr>dB'` outright: "Invalid chars 'dB' at the end of expression". So the dB
