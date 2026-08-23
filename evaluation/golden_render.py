@@ -148,22 +148,40 @@ def hash_frames(
     *,
     count: int = 5,
     ffmpeg: str = "ffmpeg",
+    allow_partial: bool = False,
 ) -> list[FrameHash]:
     """Sample ``count`` frames evenly across ``duration`` and hash each.
 
     Samples at bucket *midpoints* rather than at 0 and ``duration``: the first frame of an encode
     can be a keyframe with different quantisation, and the last is often past the final decodable
     frame, so both are noisier than the material between them.
+
+    Raises if any sampled frame could not be read, unless ``allow_partial``. A short list is not a
+    usable measurement: it either fails the count check in :func:`compare` for a reason that names
+    the wrong thing, or — worse — gets frozen by :func:`write_golden` as the reference.
     """
     span = max(0.001, float(duration))
     total = max(1, int(count))
     hashes: list[FrameHash] = []
+    failed: list[float] = []
     for index in range(total):
         at = span * (index + 0.5) / total
         measured = _measure(video, at, ffmpeg=ffmpeg)
-        if measured is not None:
-            digest, mean, spread = measured
-            hashes.append(FrameHash(at=at, hash=digest, mean=mean, spread=spread))
+        if measured is None:
+            failed.append(at)
+            continue
+        digest, mean, spread = measured
+        hashes.append(FrameHash(at=at, hash=digest, mean=mean, spread=spread))
+    if failed and not allow_partial:
+        # Silently dropping unreadable frames returned a shorter list with no marker and no
+        # reason. `compare` does correctly fail on a count mismatch — but `write_golden` would
+        # happily freeze the partial list as the reference, after which every *healthy* run fails
+        # that count check and the natural response is to re-freeze the broken golden.
+        raise RuntimeError(
+            f"could not read {len(failed)} of {total} sampled frames from {video} "
+            f"(at {', '.join(f'{t:.3f}s' for t in failed)}); "
+            "refusing to return a partial capture"
+        )
     return hashes
 
 
@@ -180,10 +198,23 @@ class Comparison:
     worst: int
     tolerance: int
     detail: list[dict[str, Any]]
+    #: Frames whose golden entry carried no ``mean``/``spread``, so no level check was possible.
+    #:
+    #: Non-zero means the comparison saw *only* the structural hash, which by design "cannot see a
+    #: grade change" — so a graded render could pass. Surfaced in :meth:`summary` rather than
+    #: failing the comparison, because an old golden is a stale reference, not a regression; the
+    #: fix is to re-freeze it, and the reader has to be told that.
+    level_unchecked: int = 0
 
     def summary(self) -> str:
         if self.ok:
-            return f"matches the golden (worst frame {self.worst}/{HASH_GRID**2} bits)"
+            text = f"matches the golden (worst frame {self.worst}/{HASH_GRID**2} bits)"
+            if self.level_unchecked:
+                text += (
+                    f" -- but {self.level_unchecked} frame(s) had no mean/spread in the golden, "
+                    "so brightness and contrast were NOT checked. Re-freeze it."
+                )
+            return text
         lines = [
             f"differs from the golden: worst frame {self.worst} bits "
             f"(tolerance {self.tolerance}) or luma beyond tolerance"
@@ -216,7 +247,12 @@ def compare(
     the golden has changed in a way worth looking at, and comparing only the overlap would report a
     truncated render as a pass.
     """
-    if len(actual) != len(golden):
+    if len(actual) != len(golden) or not actual:
+        # ``not actual`` is the case that made this a false pass: two empty lists have equal
+        # length, so the loop below never ran and the comparison returned ``ok=True`` —
+        # "matches the golden" — for a render that produced no readable frames at all against a
+        # golden that recorded none. An empty comparison is not agreement; there is nothing to
+        # agree about.
         return Comparison(
             ok=False,
             worst=HASH_GRID**2,
@@ -234,16 +270,23 @@ def compare(
     detail: list[dict[str, Any]] = []
     worst = 0
     level_ok = True
+    level_unchecked = 0
     for sampled, expected in zip(actual, golden):
         gap = distance(sampled.hash, str(expected.get("hash") or "0"))
         worst = max(worst, gap)
         # The luma checks catch what the structural hash is blind to: mean for a brightness
         # change, spread for a contrast change. Neither alone separates a grade from a re-encode.
+        # A golden without these fields cannot be level-checked, and defaulting the gap to 0.0
+        # made that *look* like a pass: the hash alone "cannot see a grade change" (see FrameHash),
+        # which is the entire reason mean and spread exist. So the absence is now recorded and
+        # surfaced instead of being scored as agreement.
         golden_mean = expected.get("mean")
+        golden_spread = expected.get("spread")
+        if golden_mean is None or golden_spread is None:
+            level_unchecked += 1
         level_gap = (
             abs(float(sampled.mean) - float(golden_mean)) if golden_mean is not None else 0.0
         )
-        golden_spread = expected.get("spread")
         spread_gap = (
             abs(float(sampled.spread) - float(golden_spread)) if golden_spread is not None else 0.0
         )
@@ -264,6 +307,7 @@ def compare(
         worst=worst,
         tolerance=tolerance,
         detail=detail,
+        level_unchecked=level_unchecked,
     )
 
 

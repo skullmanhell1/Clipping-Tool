@@ -630,8 +630,34 @@ def test_m1_distance_counts_differing_bits():
 
 
 @requires_ffmpeg
-def test_m1_an_unreadable_frame_is_skipped_not_fatal(tmp_path):
+def test_m1_an_unreadable_frame_refuses_rather_than_returning_a_partial_capture(tmp_path):
+    """A capture that lost frames is not a measurement, and must not become a golden.
+
+    This previously asserted the opposite — that unreadable frames were "skipped, not fatal" and
+    ``hash_frames`` returned ``[]``. That was a false pass waiting to happen, in two steps:
+
+    * ``write_golden`` would freeze the short (or empty) list as the reference, after which every
+      *healthy* run fails ``compare``'s count check and the obvious response is to re-freeze the
+      broken golden;
+    * and ``compare([], [])`` reported ``ok=True`` — "matches the golden" — because two empty
+      lists have equal length, so a render that produced no readable frames compared *equal* to a
+      golden that recorded none.
+
+    ``average_hash`` still returns ``None`` for a single unreadable frame: that is a per-frame
+    query whose contract is "the hash, or nothing", and a caller asking for one frame can see the
+    ``None``. The difference is that ``hash_frames`` returns a *set* whose incompleteness is
+    invisible in the value.
+    """
     broken = tmp_path / "broken.mp4"
     broken.write_bytes(b"not a video")
-    assert gr.hash_frames(broken, 2.0, count=3) == []
+
+    with pytest.raises(RuntimeError, match="refusing to return a partial capture"):
+        gr.hash_frames(broken, 2.0, count=3)
+
+    # Explicitly opting in still yields the old behaviour, for a caller that wants whatever
+    # could be read and is prepared to say so at the call site.
+    assert gr.hash_frames(broken, 2.0, count=3, allow_partial=True) == []
     assert gr.average_hash(broken, 1.0) is None
+
+    # And an empty comparison is not agreement.
+    assert not gr.compare([], []).ok

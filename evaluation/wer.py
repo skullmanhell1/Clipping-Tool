@@ -173,8 +173,24 @@ class WerResult:
         return self.substitutions + self.deletions + self.insertions
 
     @property
+    def measured(self) -> bool:
+        """Whether there was any reference text to score against.
+
+        Zero reference words is **unmeasured**, not perfect, and the difference is not cosmetic:
+        :attr:`wer` returns ``0.0`` in that case, and ``0.0`` is the best possible score. So a
+        model whose every entry was skipped — a mistyped media directory, references that failed
+        to resolve — pooled to "WER 0.00% over 0 words", and :func:`format_comparison` sorts
+        ascending, which made that fabricated zero the ``best`` row that every other model's
+        "vs best" delta was computed against.
+        """
+        return self.reference_words > 0
+
+    @property
     def wer(self) -> float:
-        """Errors per reference word. Can exceed 1.0 - insertions are unbounded."""
+        """Errors per reference word. Can exceed 1.0 - insertions are unbounded.
+
+        ``0.0`` when there is nothing to score; check :attr:`measured` before ranking on it.
+        """
         if self.reference_words == 0:
             return 0.0 if self.errors == 0 else 1.0
         return self.errors / self.reference_words
@@ -182,6 +198,7 @@ class WerResult:
     def to_dict(self) -> dict:
         return {
             "wer": round(self.wer, 4),
+            "measured": self.measured,
             "reference_words": self.reference_words,
             "substitutions": self.substitutions,
             "deletions": self.deletions,
@@ -293,19 +310,38 @@ def format_comparison(rows: Sequence[tuple[str, WerResult]]) -> str:
     """
     if not rows:
         return "no results"
-    ranked = sorted(rows, key=lambda row: row[1].wer)
-    best = ranked[0][1].wer
+    # Unmeasured rows are ranked and rendered separately. A row with zero reference words scores
+    # 0.00% — the best possible WER — so including it in the sort made it `best` and every real
+    # model's delta was then measured against nothing. See `WerResult.measured`.
+    measured = sorted((r for r in rows if r[1].measured), key=lambda row: row[1].wer)
+    unmeasured = [r for r in rows if not r[1].measured]
+    ranked = measured + unmeasured
+    best = measured[0][1].wer if measured else None
     lines = [
         f"{'model':<14} {'WER':>7} {'vs best':>8} {'sub':>6} {'del':>6} {'ins':>6} {'words':>7}",
         "-" * 60,
     ]
     for label, result in ranked:
-        delta = result.wer - best
+        if not result.measured:
+            lines.append(
+                f"{label:<14} {'n/a':>7} {'n/a':>8} {result.substitutions:6d} "
+                f"{result.deletions:6d} {result.insertions:6d} {result.reference_words:7d}"
+            )
+            continue
+        delta = result.wer - (best if best is not None else result.wer)
         lines.append(
             f"{label:<14} {result.wer:7.2%} {delta:+8.2%} {result.substitutions:6d} "
             f"{result.deletions:6d} {result.insertions:6d} {result.reference_words:7d}"
         )
-    worst = ranked[-1][1]
+    if unmeasured:
+        lines.append("")
+        lines.append(
+            f"{len(unmeasured)} model(s) had no reference text to score against and are shown as "
+            "n/a rather than ranked: zero reference words scores 0.00%, which would rank first."
+        )
+    if not measured:
+        return "\n".join(lines)
+    worst = measured[-1][1]
     if worst.deletions > worst.substitutions * 2:
         lines.append("")
         lines.append(
