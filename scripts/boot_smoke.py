@@ -105,6 +105,7 @@ def check_the_production_gate_is_live() -> None:
         env=env,
         cwd=str(Path(__file__).resolve().parent.parent),
         timeout=120,
+        stdin=subprocess.DEVNULL,
     )
     combined = f"{result.stdout}\n{result.stderr}"
     if "InsecureDeploymentError" not in combined:

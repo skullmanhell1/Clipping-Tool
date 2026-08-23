@@ -163,7 +163,9 @@ def make_sync_fixture(
         cmd += ["-vsync", "vfr"]
     cmd += [str(dest)]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL
+    )
     if proc.returncode != 0:
         raise SyncError(f"could not build fixture: {proc.stderr.strip()}")
     return dest
@@ -196,6 +198,7 @@ def video_onset(path: str | Path) -> float:
         capture_output=True,
         text=True,
         timeout=900,
+        stdin=subprocess.DEVNULL,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
     frames = _FRAME_INDEX.findall(combined)
@@ -238,6 +241,7 @@ def _stream_fps(path: str | Path) -> float:
         capture_output=True,
         text=True,
         timeout=120,
+        stdin=subprocess.DEVNULL,
     )
     text = (proc.stdout or "").strip()
     try:
@@ -278,6 +282,7 @@ def audio_onset(path: str | Path, *, sample_rate: int = 48000) -> float:
         ],
         capture_output=True,
         timeout=900,
+        stdin=subprocess.DEVNULL,
     )
     raw = proc.stdout or b""
     count = len(raw) // 2

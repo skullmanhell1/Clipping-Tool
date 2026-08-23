@@ -179,6 +179,7 @@ def _system_families_for(script: str) -> tuple[str, ...]:
             capture_output=True,
             text=True,
             timeout=15,
+            stdin=subprocess.DEVNULL,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):

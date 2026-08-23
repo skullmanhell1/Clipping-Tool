@@ -539,6 +539,22 @@ def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.Complete
             capture_output=True,
             text=True,
             timeout=limit if limit > 0 else None,
+            # **ffmpeg must never inherit this process's stdin.**
+            #
+            # ffmpeg reads stdin for interactive keystrokes unless told otherwise, and with no
+            # redirection it inherits whatever the parent has. Under pytest in CI that is an open
+            # pipe which never delivers EOF, so ffmpeg blocks on the read and never exits — and
+            # because the parent is blocked in `subprocess.run`, the timeout is the only thing that
+            # can end it. Where a call site forgot the timeout, nothing can.
+            #
+            # This is why the suite ran for **six hours** in CI and was killed by the job limit
+            # while finishing in eight minutes locally: an interactive stdin is a property of the
+            # environment, not of the code, so the failure only appears on the runner. The
+            # give-away is the runner's own last line, `Terminate orphan process: pid (ffmpeg)`.
+            #
+            # `-nostdin` in the argv does the same job and is present on *some* commands here.
+            # Setting it at the seam covers every call instead of every remembered one.
+            stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError as exc:  # binary missing
         raise FFmpegError(f"Binary not found: {cmd[0]}") from exc

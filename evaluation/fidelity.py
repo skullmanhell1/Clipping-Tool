@@ -315,6 +315,7 @@ def _probe_geometry(path: str | Path) -> tuple[int, int, int]:
         capture_output=True,
         text=True,
         timeout=600,
+        stdin=subprocess.DEVNULL,
     )
     if proc.returncode != 0:
         raise FidelityError(f"could not probe {path}: {proc.stderr.strip()}")
@@ -406,6 +407,7 @@ def _run_filter(
         capture_output=True,
         text=True,
         timeout=1800,
+        stdin=subprocess.DEVNULL,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
@@ -482,7 +484,13 @@ def provenance(prober: Prober | None = None) -> dict:
 
     def _version_line(binary: str) -> str:
         try:
-            proc = subprocess.run([binary, "-version"], capture_output=True, text=True, timeout=60)
+            proc = subprocess.run(
+                [binary, "-version"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
             return (proc.stdout or "").splitlines()[0] if proc.stdout else ""
         except Exception:
             return "unknown"
@@ -508,7 +516,9 @@ def provenance(prober: Prober | None = None) -> dict:
         # project. Hard-coding an absolute path would break on every platform that installs it
         # somewhere else, and the value is used only as a provenance label.
         git_argv = ["git", "rev-parse", "--short", "HEAD"]
-        proc = subprocess.run(git_argv, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(
+            git_argv, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL
+        )
         revision = (proc.stdout or "").strip() or "unknown"
     except Exception:
         revision = "unknown"
@@ -588,7 +598,9 @@ def timed_encode(argv: Sequence[str]) -> float:
     multiplier is not hypothetical.
     """
     started = time.monotonic()
-    proc = subprocess.run(list(argv), capture_output=True, text=True, timeout=3600)
+    proc = subprocess.run(
+        list(argv), capture_output=True, text=True, timeout=3600, stdin=subprocess.DEVNULL
+    )
     elapsed = time.monotonic() - started
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or "").strip().splitlines()[-10:])

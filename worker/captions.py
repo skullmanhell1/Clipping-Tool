@@ -526,6 +526,7 @@ def _enumerate_system_fonts() -> frozenset[str] | None:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if proc.returncode == 0 and proc.stdout:
                 names: set[str] = set()
@@ -622,6 +623,7 @@ def _codepoint_covered(codepoint: int) -> bool:
             capture_output=True,
             text=True,
             timeout=10,
+            stdin=subprocess.DEVNULL,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -1185,6 +1187,7 @@ def refresh_font_cache() -> bool:
             capture_output=True,
             text=True,
             timeout=30,
+            stdin=subprocess.DEVNULL,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):

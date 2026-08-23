@@ -806,7 +806,9 @@ def measure_loudness(source: str | Path, *, prefilters: Sequence[str] = ()) -> L
         "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL
+        )
     except Exception:
         return None
     if proc.returncode != 0:

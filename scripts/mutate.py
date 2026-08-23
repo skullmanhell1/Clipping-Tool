@@ -162,9 +162,28 @@ def _apply(mutation: Mutation, backups: _Backups) -> bool:
     return True
 
 
+#: Ceiling on one mutated test run, in seconds.
+#:
+#: A mutation can introduce an infinite loop, and an unbounded harness then hangs for ever on it
+#: rather than reporting it. Expiry counts as CAUGHT below, which is the right reading: a mutation
+#: that makes the suite stop terminating *has* been detected by the suite.
+MUTATION_RUN_TIMEOUT_S = 3600.0
+
+
 def _run_tests(command: Sequence[str]) -> tuple[bool, str]:
     """Run ``command``; return ``(something_failed, tail_of_output)``."""
-    proc = subprocess.run(list(command), cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(
+            list(command),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=MUTATION_RUN_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return True, f"the test command did not finish within {MUTATION_RUN_TIMEOUT_S:g}s"
     output = (proc.stdout or "") + (proc.stderr or "")
     # The exit status is the signal, not a grep of the summary line: a collection error, an internal
     # error or a non-zero exit for any other reason all mean the tests noticed something, and a

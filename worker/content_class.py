@@ -186,6 +186,7 @@ def measure(
             capture_output=True,
             text=True,
             timeout=600,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return 0.0, 0.0, 0

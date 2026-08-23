@@ -128,7 +128,9 @@ def energy_envelope(
         "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL
+        )
     except Exception:
         return []
     # ametadata writes to stdout with file=-, but a differently-built ffmpeg may route it to

@@ -221,6 +221,7 @@ def compiled_encoders() -> frozenset[str]:
             capture_output=True,
             text=True,
             timeout=PROBE_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -272,7 +273,12 @@ def encoder_available(name: str) -> bool:
     args += ["-f", "null", "-"]
     try:
         proc = subprocess.run(
-            args, capture_output=True, text=True, timeout=PROBE_TIMEOUT_S, check=False
+            args,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_S,
+            check=False,
+            stdin=subprocess.DEVNULL,
         )
         ok = proc.returncode == 0
         if not ok:

@@ -107,6 +107,7 @@ def _synthetic_source(dest: Path, ffmpeg: str, seconds: float = 7.0) -> Path:
         check=True,
         capture_output=True,
         timeout=300,
+        stdin=subprocess.DEVNULL,
     )
     return dest
 
@@ -248,6 +249,7 @@ def _face_source(dest: Path, ffmpeg: str, seconds: float = 7.0, fps: int = 30) -
         check=True,
         capture_output=True,
         timeout=600,
+        stdin=subprocess.DEVNULL,
     )
     return dest
 
