@@ -78,6 +78,7 @@ from worker.effects import filler
 from worker.engines.artifacts import ENGINE_TEMP_ROOT, artifact_key, sanitize_component
 from worker.engines.base import (
     Compose_Contribution,
+    Compose_Input,
     Engine_Artifact,
     Engine_Stage,
     Engine_Status,
@@ -1186,20 +1187,47 @@ def test_finish_clip_deletes_workspaces_regardless_of_auto_delete_temp(tmp_path,
     assert workspace_leaf_names(tmp_path) == []
 
 
+def _contributing_engine(engine_id, tmp_path, count, *, priority=100, emit=None, **kwargs):
+    """A COMPOSE ``FakeEngine`` that declares ``count`` inputs and emits ``emit`` of them.
+
+    ``FakeEngine`` derives ``max_inputs`` from the canned contribution, so declaring and
+    emitting are the same number unless ``emit`` says otherwise — which is how the
+    short-contribution case is built.
+    """
+    emitted = count if emit is None else emit
+    contribution = Compose_Contribution(
+        engine_id=engine_id,
+        inputs=tuple(Compose_Input(path=tmp_path / f"{engine_id}_{i}.png") for i in range(emitted)),
+    )
+    return FakeEngine(
+        engine_id,
+        Engine_Stage.COMPOSE,
+        priority=priority,
+        contribution=contribution,
+        max_inputs=count,
+        **kwargs,
+    )
+
+
 def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
     """Validates: Requirements 1.5, 10.3 — ``first_input_index`` reservation rules.
 
     The compositor lays the extra ffmpeg inputs out as one contiguous block
-    starting immediately after the primary clip (index 0), so for the enabled
-    COMPOSE engines of a stage run, in registry ``(priority, engine_id)`` order,
-    ``first_input_index == 1 + sum(max_inputs of the preceding engines)``. An
+    starting immediately after the primary clip (index 0), so for the COMPOSE
+    engines of a stage run, in registry ``(priority, engine_id)`` order,
+    ``first_input_index == 1 + (inputs actually contributed before it)``. An
     engine declaring ``max_inputs == 0`` consumes no index space and is given the
     documented meaningless ``0``, and no other stage reserves anything.
+
+    Every contributing engine here really emits the inputs it declares, which is
+    what makes the reserved indices and the real ones coincide. The cases where
+    they diverge — a gated engine, a failed one, a short contribution — are pinned
+    by ``test_a_gated_compose_engine_leaves_no_hole_in_the_input_block``.
     """
-    contributing = FakeEngine("b_two_inputs", Engine_Stage.COMPOSE, priority=10, max_inputs=2)
+    contributing = _contributing_engine("b_two_inputs", tmp_path, 2, priority=10)
     quiet = FakeEngine("c_no_inputs", Engine_Stage.COMPOSE, priority=20)
-    trailing = FakeEngine("d_one_input", Engine_Stage.COMPOSE, priority=30, max_inputs=1)
-    disabled = FakeEngine("a_disabled", Engine_Stage.COMPOSE, priority=5, max_inputs=5)
+    trailing = _contributing_engine("d_one_input", tmp_path, 1, priority=30)
+    disabled = _contributing_engine("a_disabled", tmp_path, 5, priority=5)
     post = FakeEngine("e_post", Engine_Stage.POST, max_inputs=3)
     engines = [contributing, quiet, trailing, disabled, post]
 
@@ -1230,8 +1258,9 @@ def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
             duration=6.0,
         )
 
-    # The block starts: 1 for the first contributing engine, then + its size. The
-    # engine declaring no input neither consumes space nor gets a real index.
+    # The block starts: 1 for the first contributing engine, then + the inputs it
+    # actually emitted. The engine declaring no input neither consumes space nor
+    # gets a real index.
     assert contributing.last_context.first_input_index == 1
     assert quiet.last_context.first_input_index == 0
     assert trailing.last_context.first_input_index == 3
@@ -1242,6 +1271,77 @@ def test_compose_engines_receive_a_reserved_ffmpeg_input_block(tmp_path):
     assert post.last_context.first_input_index == 0
 
     host.finish_clip("clip_a")
+
+
+def test_a_gated_compose_engine_leaves_no_hole_in_the_input_block(tmp_path):
+    """Validates: Requirements 1.5, 10.3, 7.1, 8.1, 8.6 — the reservation cannot desync.
+
+    The compositor appends the inputs it was **actually given**, contiguously. The
+    host, however, decides enablement *before* it runs its gating ladder, so there
+    are three ways for an engine to be enabled-and-declaring-inputs yet contribute
+    nothing:
+
+    * gated on a missing required capability — ``degraded``, body never entered;
+    * ``failed`` — :meth:`_failure` discards the contribution;
+    * a *short* contribution — it emits fewer inputs than it declared.
+
+    Reserving index space from the declared ``max_inputs`` leaves a hole in all
+    three, and every later engine's ``[N:v]`` label then addresses the wrong input
+    (or a filtergraph ffmpeg rejects outright). The index the host publishes must
+    therefore be derived from inputs already collected, not from declarations.
+    """
+    scenarios = {
+        # A gated engine: declares two inputs, never runs, contributes nothing.
+        "gated": (
+            _contributing_engine(
+                "a_blocked", tmp_path, 2, priority=10, required_capabilities=("nope_cap",)
+            ),
+            0,
+        ),
+        # A failing engine: runs, raises, contribution discarded by the host.
+        "failed": (RaisingEngine("a_blocked", Engine_Stage.COMPOSE, priority=10), 0),
+        # A short contribution: declares two inputs, emits one.
+        "short": (_contributing_engine("a_blocked", tmp_path, 2, priority=10, emit=1), 1),
+    }
+
+    for label, (blocked, delivered) in scenarios.items():
+        trailing = _contributing_engine("b_trailing", tmp_path, 1, priority=20)
+        host = build_host(
+            tmp_path,
+            registry_of([blocked, trailing]),
+            all_enabled(["a_blocked", "b_trailing"]),
+            # Nothing is available, so a declared required capability gates.
+            capabilities=Capability_Report(StaticProber({})),
+            clock=FakeClock(),
+        )
+        outcome = host.run_stage(
+            Engine_Stage.COMPOSE,
+            clip_id="clip_a",
+            source="/media/source.mp4",
+            clip_path=tmp_path / "clip_a.mp4",
+            clip_start=0.0,
+            clip_end=6.0,
+            duration=6.0,
+        )
+
+        # The blocked engine really did contribute only ``delivered`` inputs...
+        collected = sum(len(item.inputs) for item in outcome.contributions[:-1])
+        assert collected == delivered, label
+        # ...so the trailing engine's block starts immediately after them, which is
+        # exactly where the compositor will place its first ``-i``.
+        assert trailing.last_context.first_input_index == 1 + delivered, label
+
+        # The invariant stated end-to-end: every contributed input occupies the slot
+        # its own engine was told to expect, with no gap and no overlap.
+        cursor = 1
+        for contribution in outcome.contributions:
+            if not contribution.inputs:
+                continue
+            engine = blocked if contribution.engine_id == "a_blocked" else trailing
+            assert engine.last_context.first_input_index == cursor, label
+            cursor += len(contribution.inputs)
+
+        host.finish_clip("clip_a")
 
 
 # --------------------------------------------------------------------------- #

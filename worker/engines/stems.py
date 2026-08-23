@@ -1494,10 +1494,16 @@ def _run(runner: Any, cmd: Sequence[str], timeout_s: float) -> Any:
     except Exception as exc:  # one failure type for the host (Req 14.3)
         raise FFmpegError(f"{argv[0]} failed: {exc}") from exc
 
-    code = getattr(completed, "returncode", 0)
-    if code not in (0, None):
+    # Only an explicit zero is success. ``Command_Runner`` is a documented
+    # injectable seam (see the class docstring above), so the exit status has to be
+    # something the runner actually reported: defaulting a missing attribute to 0
+    # would read "this object has no returncode" as "the process succeeded", and
+    # ``None`` on a Popen means *still running*, which is not a success either.
+    code = getattr(completed, "returncode", None)
+    if code != 0:
         detail = str(getattr(completed, "stderr", "") or "").strip()[:400]
-        raise FFmpegError(f"{argv[0]} exited {code}: {detail}")
+        reported = "no exit status" if code is None else f"exited {code}"
+        raise FFmpegError(f"{argv[0]} {reported}: {detail}")
     return completed
 
 
@@ -3776,6 +3782,10 @@ class Stem_Inpainting_Engine(AV_Engine):
 
             stem_set: dict[str, Path]
             applied_backend = ""
+            # Whether real per-stem files exist. On the two fallback paths below,
+            # ``stem_set`` maps ``vocals`` to the *unseparated* extraction, so there
+            # are no stems to retain and nothing under ``stems/`` to declare.
+            separated = False
 
             if not plan.needs_separation:
                 # The repair-only path: no backend, no stems, no separation budget. The
@@ -3837,6 +3847,7 @@ class Stem_Inpainting_Engine(AV_Engine):
                     )
                     created.extend(stem_set.values())
                     details.extend(missing_stems)
+                    separated = True
                     applied_backend = str(getattr(backend, "backend_id", "") or "")
 
             # ---- rung 9: spectral downgraded to crossfade ---------------
@@ -3934,7 +3945,17 @@ class Stem_Inpainting_Engine(AV_Engine):
             return self._result(Engine_Status.FAILED, plan, ["failed"], detail=str(exc))
 
         # ---- workspace lifecycle (tasks 15.1, 15.2) --------------------
-        artifacts = self._declare_artifacts(workspace, candidate, stem_set, options)
+        artifacts = self._declare_artifacts(
+            workspace, candidate, stem_set, options, separated=separated
+        )
+        if options.retain_stems and not separated:
+            # ``retain_stems`` was asked for and cannot be honoured: this run never
+            # separated anything, so the only audio on disk is the unseparated
+            # extraction. Say so rather than letting the feature no-op silently —
+            # deliberately not a ``degraded:`` detail, because the host caps those at
+            # one per engine per clip and ``degraded:budget`` from rung 7 would hide
+            # it on the very path where it is most likely to fire.
+            _degradation("retain_stems_unavailable")
         cleanup_details = self._reclaim(
             created,
             keep={
@@ -3998,6 +4019,8 @@ class Stem_Inpainting_Engine(AV_Engine):
         candidate: Any,
         stem_set: Mapping[str, Path],
         options: Stem_Options,
+        *,
+        separated: bool = False,
     ) -> tuple[Any, ...]:
         """The Engine_Artifacts this run publishes (Req 11.1-11.3, 11.5).
 
@@ -4008,6 +4031,24 @@ class Stem_Inpainting_Engine(AV_Engine):
           host persists it through the active Storage_Backend under a ``normalize_key``-ed key
           *before* the workspace is deleted. A persistence failure surfaces as the
           foundation's ``artifact_failed`` marker and the clip is still produced.
+
+        Each durable stem is declared at **the path that was actually written**, taken from
+        ``stem_set``, not at a name reconstructed from the Stem_Name. The two differ, and
+        reconstructing was wrong in both cases:
+
+        * under ``spectral`` the ``music`` entry is ``stems/music_bridged.wav`` — the bridged
+          file that was really mixed — so declaring ``stems/music.wav`` retained the
+          *pre-bridge* stem, which does not correspond to the delivered audio, and let
+          :meth:`_reclaim` delete the bridged one;
+        * on the repair-only and separation-unaffordable paths ``vocals`` is ``in.wav``, so
+          declaring ``stems/vocals.wav`` named a file that is never written — which
+          :meth:`_reclaim` then kept (it is in ``keep``) while deleting ``in.wav`` (it is
+          not), guaranteeing an ``artifact_failed`` marker on every such clip and
+          misreporting a path bug as a storage-backend fault.
+
+        ``separated`` closes the second case at the source: with no separation there are no
+        stems to retain, so none are declared and the caller records
+        ``retain_stems_unavailable`` instead.
 
         Note task 15.1 also asks for the transient intermediates (``in.wav``, ``mixed.wav``,
         the non-durable stems) to be declared. They are deliberately **not**: task 15.2
@@ -4023,17 +4064,36 @@ class Stem_Inpainting_Engine(AV_Engine):
             artifacts.append(
                 workspace.artifact(Path(str(candidate)).name, media_type="video", durable=False)
             )
-            if options.retain_stems:
+            if options.retain_stems and separated:
                 for name in STEM_NAMES:
-                    if name in stem_set:
-                        artifacts.append(
-                            workspace.artifact(
-                                f"stems/{name}.wav", media_type="audio", durable=True
-                            )
-                        )
+                    relative = self._workspace_relative(workspace, stem_set.get(name))
+                    if relative is None:
+                        continue
+                    artifacts.append(workspace.artifact(relative, media_type="audio", durable=True))
         except Exception:  # pragma: no cover - hostile workspace double
             return tuple(artifacts)
         return tuple(artifacts)
+
+    @staticmethod
+    def _workspace_relative(workspace: Any, target: Any) -> str | None:
+        """``target`` as a workspace-relative POSIX path, or ``None`` if it is not inside.
+
+        ``Engine_Workspace.artifact`` takes a workspace-relative name and re-sanitises it,
+        so a stem is declared by handing back the relative form of the path that was really
+        written. ``None`` means the file lives outside the workspace — reachable only from a
+        direct unit-test call using the temp-directory fallback in :meth:`_workspace_path` —
+        and such a file is skipped rather than declared, because the host would resolve the
+        name against the workspace root and persist the wrong thing.
+        """
+        if target is None:
+            return None
+        root = getattr(workspace, "root", None)
+        if root is None:
+            return None
+        try:
+            return Path(str(target)).resolve().relative_to(Path(str(root)).resolve()).as_posix()
+        except (ValueError, OSError):  # outside the workspace, or unresolvable
+            return None
 
     def _reclaim(self, created: Sequence[Any], *, keep: set) -> list[str]:
         """Delete every intermediate except ``keep``, returning marker details (Req 11.4).

@@ -38,6 +38,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import CancelledError as _Future_Cancelled
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _Future_Timeout
 from dataclasses import dataclass, field
@@ -101,6 +102,26 @@ _MEDIA_BEARING_STATUSES: frozenset[Engine_Status] = frozenset(
 SOURCE_CLIP_ID = "source"
 """Clip identifier used for SOURCE-stage workspaces (there is no clip yet)."""
 
+ORPHAN_GRACE_S = 1.0
+"""Real seconds :meth:`Engine_Host.finish_clip` waits for an abandoned thread.
+
+The wall-clock watchdog in :meth:`Engine_Host._execute` cannot *stop* an engine:
+``Future.cancel()`` is a no-op once the task has started running, and the host
+holds no handle on whatever subprocess the engine may be blocked in. So a
+timed-out engine keeps running with its workspace still open, and deleting that
+workspace is a write-under-read race whose ``FileNotFoundError`` would be
+swallowed as a routine cleanup failure.
+
+Rather than race it, ``finish_clip`` gives the thread this long to return — most
+abandoned engines are a fraction of a second from finishing — and if it has not,
+declines to delete that one workspace and records
+``engine:<id>:workspace_retained``. The directory is then reclaimed by the
+job-level sweep or, failing that, by the retention sweeper: leaking a scratch
+directory is recoverable, corrupting a running engine's working set is not.
+
+Measured on the real clock, never the injected one: it bounds an OS thread.
+"""
+
 MIN_WALL_TIMEOUT_S = 1.0
 """Floor on the *wall-clock* watchdog wait (see :meth:`Engine_Host._execute`).
 
@@ -157,6 +178,26 @@ def _coerce_stage(value: Any) -> Engine_Stage | None:
 def _engine_id_of(engine: Any) -> str:
     """The Engine_Id an engine object declares (instance attribute or ClassVar)."""
     return _as_text(getattr(engine, "engine_id", ""))
+
+
+def _media_is_usable(path: Any) -> bool:
+    """Whether ``path`` is a regular file with at least one byte in it.
+
+    The cheapest check that distinguishes "the engine wrote a replacement" from
+    "the engine's subprocess exited 0 and produced nothing" — the two cases an
+    exit code cannot tell apart. Deliberately *not* a decode probe: this runs once
+    per media-bearing engine per clip on the hot path, and a truncated-but-nonempty
+    file is caught downstream by the stage that reads it, whereas a missing or
+    zero-byte one is caught nowhere and is silently carried forward as the clip.
+
+    Any ``OSError`` (an unstattable path, a broken symlink, a permission error)
+    reads as unusable, because none of those can be handed to ffmpeg either.
+    """
+    try:
+        target = Path(_as_text(path))
+        return target.is_file() and target.stat().st_size > 0
+    except (OSError, ValueError):
+        return False
 
 
 def _declared_ids(value: Any) -> tuple[str, ...]:
@@ -343,6 +384,7 @@ class Engine_Host:
         clock: Callable[[], float] = time.monotonic,
         logger: Any | None = None,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
+        orphan_grace_s: float = ORPHAN_GRACE_S,
     ) -> None:
         """Build a host for one ``run_pipeline`` call.
 
@@ -363,6 +405,11 @@ class Engine_Host:
             clock: Monotonic clock used for budgets and deadlines (injectable).
             logger: Logger-like object; defaults to this module's logger.
             sample_rate: Audio sample rate recorded in the shared Time_Base.
+            orphan_grace_s: Real seconds :meth:`finish_clip` waits for a
+                watchdog-abandoned engine thread to return before it declines to
+                delete that engine's workspace (see :data:`ORPHAN_GRACE_S`). This
+                is deliberately **not** measured on the injected ``clock``: it
+                bounds a real OS thread, not simulated budget time.
         """
         self._options = options
         self.job_id = _as_text(job_id)
@@ -373,6 +420,7 @@ class Engine_Host:
         self._clock = clock if callable(clock) else time.monotonic
         self._logger = logger if logger is not None and hasattr(logger, "warning") else _LOGGER
         self._sample_rate = sample_rate
+        self._orphan_grace_s = coerce_float(orphan_grace_s, ORPHAN_GRACE_S, lo=0.0)
 
         self._time_base: Time_Base | None = None
         self._probed_fps: Any = None
@@ -383,6 +431,10 @@ class Engine_Host:
         # persisted key can be written back into the very Engine_Result the
         # caller is holding (Req 18.5).
         self._durables: dict[str, list[tuple[str, Engine_Artifact, list, int]]] = {}
+        # clip_id -> [(engine_id, Future)] for engines the wall-clock watchdog
+        # abandoned. The thread is still running, so its workspace cannot be
+        # deleted underneath it (see :meth:`_await_orphans`).
+        self._orphans: dict[str, list[tuple[str, Any]]] = {}
 
     # --- collaborators ----------------------------------------------------
 
@@ -446,17 +498,20 @@ class Engine_Host:
         Called without ``info`` (or before any probe is available) it yields the
         documented fallback frame rate, flagged as substituted.
         """
-        if self._time_base is None:
-            probed = getattr(info, "fps", None) if info is not None else None
-            if info is None:
-                base = Time_Base(
-                    fps=DEFAULT_FPS, sample_rate=self._sample_rate, fps_substituted=True
-                )
-            else:
-                base = Time_Base.from_media_info(info, sample_rate=self._sample_rate)
-            self._time_base = base
-            self._probed_fps = probed if base.fps_substituted else None
-        return self._time_base
+        if self._time_base is not None:
+            return self._time_base
+        if info is None:
+            # Provisional, and deliberately **not** cached. Caching here would let
+            # any call that happens to precede ``run_source`` — a stage run in a
+            # test, a future caller, a reordering of the Pipeline — pin the whole
+            # job to DEFAULT_FPS with ``fps_substituted=True``, permanently and
+            # invisibly, because the real probe would then never be consulted.
+            # Recomputing an unshared dataclass is far cheaper than that risk.
+            return Time_Base(fps=DEFAULT_FPS, sample_rate=self._sample_rate, fps_substituted=True)
+        base = Time_Base.from_media_info(info, sample_rate=self._sample_rate)
+        self._time_base = base
+        self._probed_fps = getattr(info, "fps", None) if base.fps_substituted else None
+        return base
 
     # --- invocation -------------------------------------------------------
 
@@ -615,9 +670,58 @@ class Engine_Host:
 
         markers = [marker(engine_id, "artifact_failed") for engine_id in failed]
 
+        # An engine the watchdog abandoned may still be running and still writing
+        # into its workspace. Give it a bounded grace period, then leave any
+        # workspace still in use alone rather than racing rmtree against it.
+        stalled = self._await_orphans(key)
+        markers.extend(marker(engine_id, "workspace_retained") for engine_id in stalled)
+
         for workspace in self._workspaces.pop(key, []):
+            if _as_text(getattr(workspace, "engine_id", "")) in stalled:
+                continue
             cleanup_workspace(workspace, logger=self._logger)
         return markers
+
+    def _await_orphans(self, clip_id: str) -> set[str]:
+        """Wait out this clip's watchdog-abandoned threads (:data:`ORPHAN_GRACE_S`).
+
+        Returns the Engine_Ids whose thread is **still running** once the grace
+        period is spent — the engines whose workspace must therefore be left on
+        disk. An engine that finished during the grace period is not in the set and
+        its workspace is deleted normally, which is the common case: the watchdog
+        fires on an engine that is slow, not usually on one that is wedged forever.
+
+        The total wait is bounded by ``orphan_grace_s`` for the whole clip, not per
+        engine, so N abandoned engines cannot multiply the delay.
+        """
+        pending = self._orphans.pop(clip_id, [])
+        if not pending:
+            return set()
+
+        stalled: set[str] = set()
+        deadline = time.monotonic() + self._orphan_grace_s
+        for engine_id, future in pending:
+            if future.cancelled():
+                # ``cancel()`` succeeded, so the body never ran and never opened the
+                # workspace. Nothing to wait for and nothing to protect.
+                continue
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                # ``exception()`` blocks like ``result()`` but returns the engine's
+                # exception instead of raising it, so a wedged engine and a failing
+                # one are distinguished by which branch we land in rather than by
+                # inspecting a re-raised traceback.
+                future.exception(timeout=remaining)
+            except _Future_Timeout:
+                stalled.add(engine_id)
+                self._warn(
+                    "engine %s is still running after its budget was abandoned; "
+                    "leaving its workspace in place rather than deleting it underneath",
+                    engine_id,
+                )
+            except _Future_Cancelled:  # pragma: no cover - cancelled between the two checks
+                continue
+        return stalled
 
     def finish_job(self) -> list[str]:
         """Finalise the SOURCE stage, then release the job's engine scratch space.
@@ -672,9 +776,11 @@ class Engine_Host:
             return outcome
 
         key = _as_text(clip_id)
-        # Reserved ffmpeg input indices for this stage run, computed BEFORE any
-        # engine runs so every Engine_Context can carry its own block start.
-        offsets = self._input_offsets(coerced)
+        # The next free ffmpeg input index for this stage run. It advances by the
+        # number of inputs each engine *actually* contributed, not by the number it
+        # declared, so a gated, failed or short-contributing engine cannot leave a
+        # hole that shifts every later engine's block (see :meth:`_next_input_index`).
+        input_cursor = [1]
         # Clip_Metadata is snapshotted once per stage run: ``None`` becomes the
         # documented empty mapping, and every engine's context gets its own copy,
         # so no engine can reach the caller's mapping or another engine's context
@@ -706,7 +812,7 @@ class Engine_Host:
                 clip_end=clip_end,
                 duration=duration,
                 words=words,
-                first_input_index=offsets.get(_engine_id_of(bound), 0),
+                first_input_index=self._next_input_index(coerced, bound, input_cursor[0]),
                 clip_metadata=metadata,
                 seam_notes=seams,
                 caller_notes=caller_notes,
@@ -720,58 +826,90 @@ class Engine_Host:
             outcome.artifacts.extend(result.artifacts)
             if result.contribution is not None:
                 outcome.contributions.append(result.contribution)
+                # Advance by what the compositor was actually handed. This is the
+                # only place the index space is consumed, so the reservation the
+                # *next* engine is told about is always the truth.
+                input_cursor[0] += len(getattr(result.contribution, "inputs", ()) or ())
             if (
                 result.media is not None
                 and result.status in _MEDIA_BEARING_STATUSES
                 and bool(getattr(engine, "produces_media", False))
             ):
-                outcome.media = result.media
+                if _media_is_usable(result.media):
+                    outcome.media = result.media
+                else:
+                    # An engine whose subprocess exited 0 but wrote nothing must not
+                    # be allowed to replace the clip with a path that cannot be
+                    # decoded: the failure would surface stages later and be
+                    # attributed to the wrong engine. Refuse the file, name the
+                    # engine, and keep the preceding stage's media (Req 8.3).
+                    result = self._reject_media(result)
+                    outcome.results[-1] = result
             self._register_durables(key, result, outcome.results, len(outcome.results) - 1)
 
         outcome.markers = merge_markers(outcome.results)
         return outcome
 
-    def _input_offsets(self, stage: Engine_Stage) -> dict[str, int]:
-        """Reserved ``Engine_Context.first_input_index`` per engine of ``stage``.
+    def _next_input_index(self, stage: Engine_Stage, engine: Any, cursor: int) -> int:
+        """This engine's ``Engine_Context.first_input_index`` (Reqs 1.5, 10.3).
 
         The compositor lays the extra ffmpeg inputs out as one contiguous block
-        immediately after the primary clip (index 0), so for the engines of a
-        stage run, taken in registry ``(priority, engine_id)`` order::
+        immediately after the primary clip (index 0), appending the inputs it was
+        **actually given** in registry ``(priority, engine_id)`` order
+        (``compositor._input_order_contributions``). So the block start of an
+        engine is::
 
-            first_input_index(engine_k) = 1 + sum(max_inputs of preceding engines)
+            first_input_index(engine_k) = 1 + (inputs actually contributed before it)
 
-        Only COMPOSE-stage engines contribute inputs, so every other stage gets an
-        empty mapping and the documented meaningless ``0``. An engine declaring
-        ``max_inputs == 0`` consumes no index space and is likewise given ``0``,
-        which is why the block start of the *first* contributing engine is always
-        exactly ``1`` no matter how many non-contributing engines precede it.
+        which is what ``cursor`` carries. Only COMPOSE-stage engines contribute
+        inputs, so every other stage gets the documented meaningless ``0``, as does
+        any engine declaring ``max_inputs == 0`` — such an engine consumes no index
+        space, which is why the first *contributing* engine always starts at exactly
+        ``1`` no matter how many non-contributing engines precede it.
 
-        The mapping is built from the **enabled** engines of the stage
-        (:meth:`enabled_for`), because a disabled engine is skipped before its body
-        is entered (Req 4.2) and therefore contributes nothing to the compositor's
-        input list. Enablement is pure, so the mapping is deterministic and fixed
-        before any ``run()`` executes.
+        Deriving the index from inputs already received — rather than from the
+        ``max_inputs`` the enabled engines *declared* — is what keeps the label an
+        engine writes pointing at its own input in the three cases where the two
+        diverge:
 
-        Contract for a contributing engine: when it is invoked it must emit exactly
-        ``max_inputs`` inputs, since the compositor appends the inputs it actually
-        receives contiguously. Nothing here can repair a short contribution — an
-        engine that declares two inputs and returns one would shift every later
-        engine's real index. No engine declares an input today (``max_inputs``
-        defaults to ``0``), so the reservation is inert until the first one does.
+        * an engine gated after enablement (``permissibility_blocked``, a missing
+          required capability) never runs, so it contributes nothing;
+        * an engine that ``failed`` or overran its budget has its contribution
+          discarded by :meth:`_failure`;
+        * an engine that declares two inputs and emits one (a short contribution).
+
+        In all three the declared reservation leaves a hole, and every later
+        engine's ``[N:v]`` label would address the wrong input — or a filtergraph
+        ffmpeg rejects outright. The cursor cannot leave a hole because it is only
+        ever advanced in :meth:`_run`, by the length of a contribution that has
+        actually been collected.
         """
         if stage is not Engine_Stage.COMPOSE:
-            return {}
-        offsets: dict[str, int] = {}
-        cursor = 1
-        for engine in self.enabled_for(stage):
-            declared = coerce_int(getattr(engine, "max_inputs", 0), 0, lo=0)
-            engine_id = _engine_id_of(engine)
-            if declared <= 0:
-                offsets[engine_id] = 0
-                continue
-            offsets[engine_id] = cursor
-            cursor += declared
-        return offsets
+            return 0
+        declared = coerce_int(getattr(engine, "max_inputs", 0), 0, lo=0)
+        return coerce_int(cursor, 1, lo=0) if declared > 0 else 0
+
+    def _reject_media(self, result: Engine_Result) -> Engine_Result:
+        """Drop an unusable ``Engine_Result.media`` and name the engine that offered it.
+
+        The host, not the engine, owns this check: an engine reporting media it did
+        not write is exactly the case its own verification missed, and the clip must
+        not carry a path that cannot be decoded into the next stage. The media is
+        cleared and a single ``engine:<id>:media_missing`` marker is added, so the
+        clip record says which engine's output went missing rather than failing
+        anonymously further down the pipeline (Reqs 8.3, 3.3).
+        """
+        detail = marker(result.engine_id, "media_missing")
+        self._warn(
+            "engine %s reported media at %s that is missing or empty; "
+            "keeping the preceding stage's media",
+            result.engine_id,
+            result.media,
+        )
+        markers = tuple(result.markers)
+        if detail not in markers:
+            markers = markers + (detail,)
+        return dataclasses.replace(result, media=None, markers=markers)
 
     def _invoke(
         self, engine: AV_Engine, ctx_factory: Callable[[], Engine_Context]
@@ -864,9 +1002,15 @@ class Engine_Host:
             try:
                 returned, payload = future.result(timeout=wait)
             except _Future_Timeout:
+                # ``cancel()`` cannot stop a task that has already started, so this
+                # is bookkeeping, not a kill. The thread is still running and still
+                # owns its workspace: hand it to ``finish_clip`` so the directory is
+                # not deleted underneath it (Req 8.6, :data:`ORPHAN_GRACE_S`).
                 future.cancel()
+                self._orphans.setdefault(_as_text(ctx.clip_id), []).append((engine_id, future))
                 self._warn(
-                    "engine %s exceeded its %.3fs time budget; abandoning its contribution",
+                    "engine %s exceeded its %.3fs time budget; abandoning its contribution "
+                    "(its thread may still be running)",
                     engine_id,
                     budget,
                 )
@@ -1006,9 +1150,14 @@ class Engine_Host:
         base = self.time_base()
         # Annotated because the conditional expression below infers `tuple[str] | tuple[()]` from
         # its two branches, and the two `notes + tuple(...)` lines that follow then widen it.
-        notes: tuple[str, ...] = (
-            (f"fps_fallback:{_as_text(self._probed_fps)}",) if base.fps_substituted else ()
-        )
+        # ``fps_fallback:`` names the *rejected* value so an engine can tell an
+        # out-of-range probe from no probe at all. With no probed value to name,
+        # ``unprobed`` is used rather than the literal ``None``, which reads as a
+        # probed fps whose value was the string "None".
+        notes: tuple[str, ...] = ()
+        if base.fps_substituted:
+            rejected = _as_text(self._probed_fps) if self._probed_fps is not None else "unprobed"
+            notes = (f"fps_fallback:{rejected}",)
         notes = notes + tuple(_as_text(note) for note in (seam_notes or ()))
         notes = notes + tuple(_as_text(note) for note in (caller_notes or ()))
         budget = coerce_float(getattr(engine, "time_budget_s", 0.0), 0.0, lo=0.0)
