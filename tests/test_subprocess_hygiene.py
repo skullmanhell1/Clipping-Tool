@@ -56,7 +56,11 @@ def _subprocess_calls() -> list[tuple[Path, int, set[str]]]:
                 if getattr(node.func.value, "id", "") != "subprocess":
                     continue
                 found.append(
-                    (path.relative_to(BASE_DIR), node.lineno, {k.arg for k in node.keywords if k.arg})
+                    (
+                        path.relative_to(BASE_DIR),
+                        node.lineno,
+                        {k.arg for k in node.keywords if k.arg},
+                    )
                 )
     return found
 
