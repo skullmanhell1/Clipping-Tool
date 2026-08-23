@@ -517,6 +517,13 @@ def test_the_magnification_actually_changes_the_subject_size(tmp_path):
     )
 
 
+#: Bound on the two sendcmd renders below, in seconds.
+#:
+#: They encode about four seconds of 720p, which is well under a second of work. Thirty seconds is
+#: generous for a slow shared runner and short enough that a wedge is reported as one.
+CROP_COMMAND_TIMEOUT_S = 30.0
+
+
 @requires_ffmpeg
 @pytest.mark.real_binary
 def test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg(tmp_path):
@@ -543,6 +550,17 @@ def test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg(tmp_pa
                 "-hide_banner",
                 "-loglevel",
                 "error",
+                # **This test is why CI never finished.** It deliberately runs a command expected to
+                # abort, and on the CI ffmpeg build it does not abort — it blocks, reading the stdin
+                # it inherited from pytest, which is a pipe that never reaches EOF. The suite then
+                # ran to the 360-minute job ceiling with a final progress line of `82%`, which is
+                # this file's position in the run order.
+                #
+                # `-nostdin` at the argv, *and* the bound the conftest seam now applies to every
+                # `subprocess.run` in the suite. Belt and braces deliberately: this particular call
+                # is the one that cost months of CI, and an argv flag is visible where a fixture is
+                # not.
+                "-nostdin",
                 "-y",
                 "-i",
                 str(source),
@@ -558,10 +576,24 @@ def test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg(tmp_pa
             ],
             capture_output=True,
             text=True,
+            timeout=CROP_COMMAND_TIMEOUT_S,
         )
 
     moving = render("0.000 crop x 437, crop y 0;\n2.000 crop x 488, crop y 90;\n", "xy")
-    resizing = render("2.000 crop w 304, crop h 540, crop x 488, crop y 90;\n", "wh")
+
+    # A hang is a third outcome, and it has to be named rather than waited on. The claim under test
+    # is "this mechanism is unusable"; a command that neither completes nor fails is unusable too,
+    # but for a different reason, and conflating the two is how this became invisible.
+    try:
+        resizing = render("2.000 crop w 304, crop h 540, crop x 488, crop y 90;\n", "wh")
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"the mid-stream `crop w`/`crop h` command neither completed nor failed within "
+            f"{CROP_COMMAND_TIMEOUT_S:g}s. That is still evidence the mechanism is unusable, but it "
+            "is a *hang* rather than the abort this test asserts, so the assertion below would be "
+            "wrong to call it a pass. This exact call, unbounded, is what held the CI job to its "
+            "360-minute ceiling."
+        )
 
     assert moving.returncode == 0, (
         f"an x/y-only sendcmd script failed, so the comparison below proves nothing: {moving.stderr}"

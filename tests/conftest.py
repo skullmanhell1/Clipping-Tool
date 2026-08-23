@@ -40,6 +40,56 @@ settings.ensure_local_dirs()
 
 
 # --------------------------------------------------------------------------- #
+# Every subprocess this suite launches is bounded and has its stdin closed     #
+# --------------------------------------------------------------------------- #
+#: Wall-clock ceiling applied to any ``subprocess.run`` in this suite that does not set its own.
+#:
+#: Generous on purpose: several tests legitimately encode multi-second video, and the slowest
+#: single test in the suite is ~52 s of real ffmpeg work spread over many calls. A *single* call
+#: exceeding five minutes here is a wedge, not slow hardware.
+TEST_SUBPROCESS_TIMEOUT_S = 300.0
+
+_UNPATCHED_RUN = subprocess.run
+
+
+def _bounded_run(*args, **kwargs):
+    """``subprocess.run`` with a default timeout and a closed stdin.
+
+    **This is why CI could never finish.** For months the backend job either ran to GitHub's
+    360-minute ceiling or was cancelled — not once did it complete. The cause was an ffmpeg
+    inheriting pytest's stdin: pytest's own stdin is a pipe that never reaches EOF, ffmpeg reads it
+    unless told otherwise, and a call that should have failed in milliseconds waited for ever. The
+    runner's only evidence was a progress line reading ``82%`` and
+    ``Terminate orphan process: pid (52850) (ffmpeg)``.
+
+    The specific call was ``tests/test_subject_scale.py``'s, which deliberately runs an ffmpeg
+    command *expected to abort* — so on a build where it does not abort but blocks, the test that
+    exists to prove a mechanism is unusable became the thing that made the suite unusable. It sits
+    immediately after ``test_storage_writability`` alphabetically, which is exactly where every
+    hang stopped.
+
+    Production code already does this at its own seam (``worker.ffmpeg_utils._run``), but tests call
+    ``subprocess.run`` directly in **156** places, 129 of them ffmpeg or ffprobe. Patching each one
+    is a mechanical edit across 60 files that a future test would immediately reopen; patching the
+    seam covers all of them and every test written after today.
+
+    Both defaults are ``setdefault``-style, so a test that deliberately passes its own ``timeout``,
+    ``stdin`` or ``input`` is left alone. ``input`` and ``stdin`` are mutually exclusive in
+    ``subprocess`` (it raises ``ValueError``), so ``stdin`` is only supplied when ``input`` is absent.
+    """
+    if "input" not in kwargs and "stdin" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = TEST_SUBPROCESS_TIMEOUT_S
+    return _UNPATCHED_RUN(*args, **kwargs)
+
+
+# Installed at import time rather than through an autouse fixture, so it also covers module-level
+# and collection-time calls (several test modules build fixture media at import).
+subprocess.run = _bounded_run
+
+
+# --------------------------------------------------------------------------- #
 # Hypothesis: no per-example deadline                                           #
 # --------------------------------------------------------------------------- #
 # Hypothesis defaults to a 200 ms per-example deadline and raises DeadlineExceeded

@@ -31,11 +31,13 @@ inherited interactive stdin, and adding an exception mechanism invites the next 
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
 
 from config import BASE_DIR
+from tests import conftest
 
 #: Directories owned by this project. `tests/` is excluded: a test may legitimately drive a
 #: subprocess in an unusual way to exercise a failure path, and this rule is about production code.
@@ -120,3 +122,112 @@ def test_the_central_seam_closes_stdin():
     assert "stdin=subprocess.DEVNULL" in source, (
         "ffmpeg_utils._run no longer closes stdin; every routed ffmpeg call can hang again"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The suite's own subprocesses are bounded too                                 #
+# --------------------------------------------------------------------------- #
+# The production seam above was not enough, and the gap cost months of CI. Tests call
+# `subprocess.run` **directly** in 156 places, 129 of them ffmpeg or ffprobe, and none of
+# them passed a timeout or closed stdin. Any one of those can wedge the whole job:
+# pytest's stdin is a pipe that never reaches EOF, ffmpeg reads it unless told not to, and
+# a call that should fail in milliseconds waits for ever.
+#
+# It was `tests/test_subject_scale.py`'s — a test that deliberately runs a command
+# *expected to abort*, so on a build where it blocks instead, the test written to prove a
+# mechanism unusable is what made the suite unusable. Every hang stopped at `82%`, which is
+# that file's position in the run order.
+#
+# The fix is a seam in `tests/conftest.py`, for the same reason the production fix is a seam
+# in `worker.ffmpeg_utils._run`: it covers every existing call *and* every one written after
+# today, where a 60-file mechanical edit covers only the ones somebody remembered.
+
+
+def test_the_suite_bounds_its_own_subprocesses():
+    """`tests/conftest.py` replaces ``subprocess.run`` with a bounded wrapper."""
+    import subprocess
+
+    from tests.conftest import TEST_SUBPROCESS_TIMEOUT_S, _bounded_run
+
+    assert subprocess.run is _bounded_run, (
+        "the conftest subprocess seam is not installed; every unbounded ffmpeg call in the "
+        "suite can wedge the whole job again"
+    )
+    assert 30.0 <= TEST_SUBPROCESS_TIMEOUT_S <= 1800.0, TEST_SUBPROCESS_TIMEOUT_S
+
+
+def test_the_seam_supplies_a_timeout_and_closes_stdin():
+    """Asserted by observing what reaches the real ``subprocess.run``, not by reading source."""
+    import subprocess
+
+    seen: dict[str, object] = {}
+
+    def _spy(*args, **kwargs):
+        seen.update(kwargs)
+
+        class _Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Done()
+
+    original = conftest._UNPATCHED_RUN
+    conftest._UNPATCHED_RUN = _spy
+    try:
+        subprocess.run([sys.executable, "-c", "pass"])
+    finally:
+        conftest._UNPATCHED_RUN = original
+
+    assert seen.get("stdin") is subprocess.DEVNULL
+    assert seen.get("timeout") == conftest.TEST_SUBPROCESS_TIMEOUT_S
+
+
+def test_the_seam_does_not_override_a_deliberate_choice():
+    """A test that sets its own ``timeout``/``stdin``/``input`` keeps it.
+
+    ``input`` matters specifically: ``subprocess`` raises ``ValueError`` when both ``input``
+    and ``stdin`` are given, so a seam that always set ``stdin`` would break every caller
+    that pipes data in.
+    """
+    import subprocess
+
+    seen: dict[str, object] = {}
+
+    def _spy(*args, **kwargs):
+        seen.clear()
+        seen.update(kwargs)
+
+        class _Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Done()
+
+    original = conftest._UNPATCHED_RUN
+    conftest._UNPATCHED_RUN = _spy
+    try:
+        subprocess.run([sys.executable, "-c", "pass"], timeout=7.5)
+        assert seen.get("timeout") == 7.5
+
+        subprocess.run([sys.executable, "-c", "pass"], input="hello", text=True)
+        assert seen.get("input") == "hello"
+        assert "stdin" not in seen, "stdin must not be supplied alongside input"
+
+        subprocess.run([sys.executable, "-c", "pass"], stdin=subprocess.PIPE)
+        assert seen.get("stdin") is subprocess.PIPE
+    finally:
+        conftest._UNPATCHED_RUN = original
+
+
+def test_a_wedged_subprocess_fails_the_test_rather_than_the_job():
+    """The point of the bound: a hang becomes a named failure in seconds.
+
+    Without it the process waits until the platform kills the job — 360 minutes, with no
+    attribution beyond the last progress line.
+    """
+    import subprocess
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.3)
