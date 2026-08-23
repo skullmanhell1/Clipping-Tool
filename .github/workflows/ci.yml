@@ -52,6 +52,13 @@ jobs:
   backend:
     name: Backend (lint + tests)
     runs-on: ubuntu-latest
+    # A hard ceiling, because the default is GitHub's 360-minute limit and this job has
+    # actually reached it: an ffmpeg call inheriting pytest's stdin blocked forever and
+    # the run ground on for six hours before the platform killed it. Several runs did
+    # this. 90 minutes is well clear of an honest full run (the suite is ffmpeg-heavy and
+    # has never yet completed here, so this is deliberately generous) while turning a
+    # wedge into a fast, obvious failure instead of a wasted afternoon.
+    timeout-minutes: 90
     env:
       # Where the VMAF-capable ffmpeg fetched below lands. Set at job level so the test steps
       # and the coverage pass agree on it; `config.vmaf_ffmpeg_binary` reads it from the
@@ -409,6 +416,9 @@ jobs:
           /tmp/audit-venv/bin/pip-audit --requirement requirements.txt --strict --desc
 
   frontend:
+    # Bounded for the same reason as the backend job (see above). npm ci +
+    # vitest + build is minutes; 30 leaves room for a slow registry.
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -502,6 +512,8 @@ jobs:
 
   docker:
     name: Docker (build + boot)
+    # Bounded for the same reason as the backend job (see above).
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -522,6 +534,9 @@ jobs:
     name: Deploy (main)
     needs: [backend, frontend, docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Bounded for the same reason as every other job here (see the backend job). This one
+    # only POSTs to a deploy hook, so it is generous by an order of magnitude already.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     # The `secrets` context cannot be used inside an `if:` expression — the expression
     # parser does not resolve it, so the previous `if: ${{ secrets.X != '' }}` conditions

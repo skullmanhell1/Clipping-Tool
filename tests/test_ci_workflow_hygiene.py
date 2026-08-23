@@ -182,3 +182,82 @@ def test_the_boot_smoke_actually_boots():
     )
     assert "lifespan + /healthz" in result.stdout
     assert "production gate         refuses to boot when misconfigured" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# No job can occupy a runner for six hours                                     #
+# --------------------------------------------------------------------------- #
+# A fourth failure, and the most expensive: an ffmpeg call inherited pytest's stdin,
+# never saw EOF, and blocked. With no `timeout-minutes` the job ran to GitHub's default
+# 360-minute ceiling before the platform killed it — repeatedly, on several pushes. The
+# evidence left behind was a progress line reading "82%" and an orphan-process notice.
+#
+# The stdin bug itself is fixed. These pins are about the *blast radius* of the next one:
+# a wedge should cost minutes and name itself, not consume an afternoon of runner time
+# and say nothing.
+
+
+def _jobs(workflow) -> dict:
+    parsed = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    return (parsed or {}).get("jobs", {}) or {}
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda p: p.name)
+def test_every_job_that_runs_commands_is_bounded(workflow):
+    """Every job that executes steps declares ``timeout-minutes``.
+
+    Asserted for all workflows, not just CI, because the cost is identical wherever it
+    happens. A job with no bound inherits the 360-minute platform limit, which is long
+    enough that a hang looks like a queue and gets waited on rather than investigated.
+    """
+    unbounded = [
+        name
+        for name, job in _jobs(workflow).items()
+        # `uses:` jobs (reusable workflows) are bounded by the workflow they call.
+        if job.get("steps") and job.get("timeout-minutes") is None
+    ]
+    assert unbounded == [], (
+        f"{workflow.name}: jobs with no timeout-minutes inherit the 360 minute default: {unbounded}"
+    )
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda p: p.name)
+def test_no_job_is_bounded_above_the_platform_limit(workflow):
+    """A bound above 360 minutes is not a bound — the platform kills the job first."""
+    for name, job in _jobs(workflow).items():
+        limit = job.get("timeout-minutes")
+        if limit is None:
+            continue
+        assert 0 < int(limit) <= 360, f"{workflow.name}:{name} timeout-minutes={limit}"
+
+
+def test_the_test_suite_dumps_stacks_rather_than_hanging_silently():
+    """``faulthandler_timeout`` is configured, so a wedged test names itself.
+
+    This is the piece that was missing during the six-hour hang: the run had no per-test
+    time bound and no stack dump, so the log could not distinguish "slow" from "stopped".
+    Core pytest provides both for free and neither was switched on.
+
+    Read from the installed configuration rather than the file, so the assertion covers
+    what pytest is actually running with.
+    """
+    import _pytest.config
+
+    config = _pytest.config.get_config([])
+    config.parse([])
+    # The ini value arrives as a string; pytest itself floats it before use.
+    timeout = float(config.getini("faulthandler_timeout"))
+
+    assert timeout > 0, "faulthandler_timeout is unset: a wedged test would dump nothing"
+    # Generous enough not to fire on the honest ffmpeg/VMAF tests, tight enough to be
+    # well inside the job's own bound so the dump survives into the log.
+    assert 60 <= timeout <= 3600, timeout
+
+
+def test_the_suite_reports_its_slowest_tests():
+    """``--durations`` is on, so "is this slow or stuck?" is answerable from the log."""
+    import _pytest.config
+
+    config = _pytest.config.get_config([])
+    config.parse([])
+    assert config.getoption("durations"), "no --durations: per-test timing is invisible in CI"

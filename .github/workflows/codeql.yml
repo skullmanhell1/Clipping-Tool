@@ -28,6 +28,9 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # Bounded so an analysis that wedges cannot hold a runner to the 360-minute platform
+    # default (see the backend job in ci.yml). CodeQL here completes in ~2 minutes.
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       # Least privilege, listed explicitly. `security-events: write` is the only elevated permission
