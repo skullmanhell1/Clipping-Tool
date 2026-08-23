@@ -15,7 +15,26 @@ addopts = [
     # Show the reason for every skip/xfail, so a test that stops running because a
     # binary went missing is visible instead of hiding in a summary count.
     "-ra",
+    # Name the slowest tests on every run. This is the number that was missing when the
+    # suite wedged in CI: the log ended at "82%" with no indication of whether the run
+    # was slow or stopped, and there was no per-test timing to compare against.
+    "--durations=25",
+    "--durations-min=1.0",
 ]
+
+# Dump the traceback of **every** thread if a single test runs longer than this, then
+# carry on. Core pytest (the faulthandler plugin), so it costs no dependency.
+#
+# This exists because of a six-hour CI hang: ffmpeg inherited pytest's stdin, never saw
+# EOF, and waited forever. The only evidence left behind was the last progress line and
+# an "orphan process" notice from the runner — nothing said which test, and nothing said
+# which call. A stack dump names both, on the first occurrence, without failing an
+# otherwise-legitimate slow test.
+#
+# Set well above the slowest honest test (the ffmpeg/VMAF ones dominate) so it fires on
+# genuine wedges only. It is diagnosis, not enforcement: the hard stop is
+# `timeout-minutes` on the CI job.
+faulthandler_timeout = 600
 
 # Warnings are errors. The bug that motivated most of this hardening was invisible
 # precisely because nothing in the suite objected to it, and a DeprecationWarning is the

@@ -2340,8 +2340,31 @@ class Kinetic_Typography_Engine(AV_Engine):
         except OSError as exc:
             return Engine_Result.failed(ENGINE_ID, f"{type(exc).__name__}: {exc}")
 
+        # Font substitution degrades too: Req 9.4/9.5 hand such a clip back to the
+        # v0.8.0 caption path, which performs the same substitution through
+        # ``_preset_header_styles``. The planner cannot see the font ladder (it is
+        # given the resolved family), so the two degradation sources are OR-ed here.
+        #
+        # Decided *before* the markers and the artifact are built, because a degraded
+        # run gives up its contribution (Reqs 3.6, 3.9) and both of those describe
+        # whether the contribution survives.
+        degraded = bool(kplan.degraded or font_markers)
+        status = Engine_Status.DEGRADED if degraded else Engine_Status.APPLIED
+        #: Whether this run's ASS document is the one that will actually be rendered.
+        #: False on the degraded path, where the compositor falls back to the v0.8.0
+        #: caption path — which it decides from the *contribution*, not from a marker
+        #: (``compositor._kinetic_subtitle_path``).
+        supersedes = status is Engine_Status.APPLIED
+
         artifact = workspace.artifact(  # Reqs 12.2, 12.4, 12.7
-            ASS_NAME, media_type="subtitle", durable=opts.durable_subtitle
+            ASS_NAME,
+            media_type="subtitle",
+            # Only persist the document if it is the one that rendered. Persisting a
+            # discarded ASS file would put a durable artifact in the Storage_Backend
+            # that nothing in the delivered clip corresponds to, and bill the job for
+            # storing it. The file still exists in the workspace and is still declared,
+            # so ``Engine_Result.artifacts`` stays an accurate description of the disk.
+            durable=opts.durable_subtitle and supersedes,
         )
 
         markers = _str_tuple(
@@ -2349,36 +2372,35 @@ class Kinetic_Typography_Engine(AV_Engine):
                 *font_markers,  # <=1 degraded:font: (Req 9.8)
                 *kplan.markers,  # style_substituted / degraded:*
                 marker(ENGINE_ID, f"style:{kplan.style}"),  # Req 3.7
-                marker(ENGINE_ID, "supersedes_captions"),  # Reqs 3.7, 3.9
+                # Claimed only when it is true. On the degraded path the contribution
+                # is dropped and the legacy caption path renders the clip, so emitting
+                # ``supersedes_captions`` there told the clip record the opposite of
+                # what happened — and font substitution alone is enough to degrade,
+                # which makes that the common case rather than an edge one.
+                *((marker(ENGINE_ID, "supersedes_captions"),) if supersedes else ()),
             )
         )
 
-        # Font substitution degrades too: Req 9.4/9.5 hand such a clip back to the
-        # v0.8.0 caption path, which performs the same substitution through
-        # ``_preset_header_styles``. The planner cannot see the font ladder (it is
-        # given the resolved family), so the two degradation sources are OR-ed here.
-        degraded = bool(kplan.degraded or font_markers)
-        status = Engine_Status.DEGRADED if degraded else Engine_Status.APPLIED
-
-        result = Engine_Result(
+        return Engine_Result(
             engine_id=ENGINE_ID,
             status=status,
             markers=markers,
             artifacts=(artifact,),
             plan=kplan.to_dict(),
-            contribution=Compose_Contribution(  # Reqs 2.1, 2.3, 2.4
-                engine_id=ENGINE_ID,
-                inputs=(),
-                video_filters=(),
-                audio_filters=(),
-                subtitle_path=dest,
-                z_order=KINETIC_Z_ORDER,
+            contribution=(
+                Compose_Contribution(  # Reqs 2.1, 2.3, 2.4
+                    engine_id=ENGINE_ID,
+                    inputs=(),
+                    video_filters=(),
+                    audio_filters=(),
+                    subtitle_path=dest,
+                    z_order=KINETIC_Z_ORDER,
+                )
+                if supersedes
+                else None  # Reqs 3.6, 3.9
             ),
             detail=kplan.detail,
         )
-        if status is Engine_Status.DEGRADED:  # Reqs 3.6, 3.9
-            return dataclasses.replace(result, contribution=None)
-        return result
 
     # -- the font ladder (task 9.2) — Reqs 9.1-9.8 -------------------------
 

@@ -494,7 +494,7 @@ def persist_artifact(
     (Req 18.6).
 
     Args:
-        artifact: The artifact to store; its ``path`` must exist.
+        artifact: The artifact to store; its ``path`` must exist and be non-empty.
         job_id: Job identifier for the key.
         clip_id: Clip identifier for the key.
         engine_id: Engine_Id for the key, used verbatim; recovered from the
@@ -513,6 +513,16 @@ def persist_artifact(
     # predicts. Only ``None`` triggers recovery from the workspace path.
     identifier = _engine_id_from_path(record.path) if engine_id is None else _as_text(engine_id)
     key = artifact_key(job_id, clip_id, identifier, record.name or record.path.name)
+
+    # An empty file is not a persisted artifact. A *missing* file already fails
+    # honestly (``save_file`` raises, the host records ``artifact_failed``), but a
+    # zero-byte one stores cleanly and would hand back a ``storage_key`` naming an
+    # object that carries nothing — a durable artifact that claims to exist and
+    # cannot be read back. Treated as the failure it is, so the engine gets the
+    # same ``artifact_failed`` marker rather than a false success (Req 18.6).
+    size = record.path.stat().st_size  # OSError here is the missing-file path
+    if size <= 0:
+        raise ValueError(f"artifact {record.name or record.path.name} is empty ({record.path})")
 
     backend = storage
     if backend is None:
