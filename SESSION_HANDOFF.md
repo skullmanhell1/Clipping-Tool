@@ -162,7 +162,11 @@ The recurring species, which is worth knowing before auditing anything else here
 | #153 | Publishing | 10 — a publisher reading the wrong success field, no double-post guard, tokens in URLs |
 | #154 | Effects | 10 — reframe dropping its origin, odd-sized crops, emoji degradation unmarked |
 | #155 | Path containment + subprocess hygiene | The 6 CodeQL `py/path-injection` findings, and the stdin inheritance behind the six-hour hang |
-| #156 | `worker/engines/` + CI bounds | 9 — see below |
+| #156 | `worker/engines/` + CI bounds | 9 — unreachable ramp, orphaned thread, media adopted unchecked |
+| #157 | `evaluation/` (the measurement harness) | 10 — every one a metric reporting its *ideal* value for something it never measured |
+| #158 | the remaining `worker/` singles | 7 — the audible click, two timelines, an unbounded ingest |
+| #159 | the test suite's own subprocesses | 1, and it is the one that had kept CI from ever finishing |
+| #161 | catalogued backlog | 3 fixed, 2 reported as non-defects |
 
 **The four failure families that account for nearly all of them.** Look for these first in any layer
 that has not been audited:
@@ -220,14 +224,43 @@ workflow runs (388 failure, 67 success, 21 cancelled) — **78 of the 154 PRs ca
 | --- | --- | --- | --- |
 | Historical | #1-#137 (~66) | Assorted, long superseded | Immutable — a closed PR's checks cannot be re-run |
 | The outage window | #138-#147 (10) | All six jobs failing in ~3s with zero steps. **This is the window the old billing text described**, and it is genuinely anomalous — but it is ten PRs, not the whole history | Immutable, and it stopped on its own |
-| The live one | #148 onward | `Analyze (python)`: the CodeQL job's `Gate on high-severity security findings` step, failing on `python: 6 blocking, 150 reported (threshold 7.0)` — six `py/path-injection` findings at severity 7.5 in `api/main.py` | Fixed in #155 |
+| The live one | #148-#154 | `Analyze (python)`: the CodeQL job's `Gate on high-severity security findings` step, failing on `python: 6 blocking, 150 reported (threshold 7.0)` — six `py/path-injection` findings at severity 7.5 in `api/main.py` | **Fixed** in #155 |
+| The hang | every run, always | The backend `Tests` step never completed — see below | **Fixed** in #155/#159/#160; `main` is green |
 
-**And the expensive one: the backend job had never completed.** Not once in the last 30 runs. Every
-`Tests` step was either cancelled by a newer push or ran to `358.9m` — GitHub's 360-minute ceiling.
-The cause was an ffmpeg subprocess inheriting pytest's stdin: it never saw EOF, waited forever, and
-the runner's only clue was a final log line reading `82%` and
-`Terminate orphan process: pid (50388) (ffmpeg)`. `worker.ffmpeg_utils._run` passed no `stdin=`, and
-`ffmpeg_timeout_seconds` defaults to 3600.
+**And the expensive one: the backend job had never completed — now it does.**
+
+> **Status: resolved.** `main` is green on all seven checks, including `Deploy (main)`, which had
+> never run. The suite completes in about 17 minutes. If CI is red when you read this, it is a new
+> failure and the log will name it — that was not true before.
+
+Not once in the previous 30 runs. Every `Tests` step was either cancelled by a newer push or ran to
+`358.9m` — GitHub's 360-minute ceiling.
+
+**The actual cause, and it is worth knowing because the shape recurs.** It was
+`tests/test_subject_scale.py::test_the_documented_crop_size_mechanism_really_does_crash_this_ffmpeg`
+— a test that deliberately runs an ffmpeg command *expected to abort*, in order to prove that
+mid-stream `crop w`/`crop h` commands are unusable and that V23 therefore had to be built another
+way. On the ffmpeg build GitHub's runners carry it does not abort: it **blocks**, reading the stdin
+it inherited from pytest, which is a pipe that never reaches EOF. So the test written to prove a
+mechanism unusable is what made the suite unusable. It sorts immediately after
+`test_storage_writability`, which is exactly why every hang stopped at `82%`.
+
+It was found by *bounding the job first*: `timeout-minutes: 90` plus
+`faulthandler_timeout = 600` turned a silent six-hour hang into an 88-minute stop with a stack dump
+naming the test and the call. Neither of those is a fix; both are what made the fix findable. That is
+the general lesson — **make the failure legible before trying to diagnose it.**
+
+Three layers of fix, because the class of defect is wide:
+
+1. `worker.ffmpeg_utils._run` passed no `stdin=` and `ffmpeg_timeout_seconds` defaults to 3600 —
+   fixed at the production seam (#155);
+2. the **tests** call `subprocess.run` directly in **156 places, 129 of them ffmpeg or ffprobe**,
+   none bounded and none with stdin closed. Fixed at a seam in `tests/conftest.py` rather than 156
+   edits, so it also covers every test written after today (#159). If you add a test that needs a
+   real pipe on stdin, pass `stdin=` or `input=` explicitly — the seam uses `setdefault` semantics
+   and will leave you alone;
+3. the test itself now accepts **both** ways the mechanism fails (abort *and* hang) while still
+   failing if a future ffmpeg makes it work, which is the notification it exists to give (#160).
 
 Two consequences to be careful about:
 
@@ -278,7 +311,7 @@ tooling authenticates. Retargeting or merging from the UI is a human step.
 Do not let these go down. A drop means something stopped running, which is worse than a failure
 because it looks like success.
 
-Measured on the six-phase branch tip (PRs #149-#156 applied), 23 August. The `2747` figure in the
+Measured on `main` at `f3fa183` (PRs #149-#161 applied), 23 August. The `2747` figure in the
 previous revision was seven PRs stale, the `2631` before it six, the `2457` before that four, and the
 `1994`/`98` pair in `.kiro/specs/face-detection-upgrade/CLOSE_OUT.md` older still. **This table has
 been stale at every single handoff, including the ones that said so.** Take a fresh measurement rather
@@ -286,10 +319,10 @@ than trusting any of them, including this one.
 
 | Gate | Expected |
 | --- | --- |
-| `pytest` | **3149 passed, 0 failed, 0 skipped, 0 warnings** (498 s) |
+| `pytest` | **3295 passed, 0 failed, 0 skipped, 0 warnings** (478 s) |
 | `npm run test:run` | **141 passed** (11 files) |
 | `ruff check .` | clean |
-| `ruff format --check .` | clean — 259 files (I9; blocking in CI) |
+| `ruff format --check .` | clean — 262 files (I9; blocking in CI) |
 | `mypy .` | clean — 120 source files (invoke as `mypy .`; bare `mypy` errors out) |
 | `python scripts/check_wired.py --check` | **0 unwired modules, 0 unread settings** — both baselines empty |
 | `python scripts/fetch_emoji.py --check` | `all 326 noto emoji vendored` |
@@ -304,14 +337,26 @@ an error that does not name the version as the cause. Use
 `export PATH=/root/.nvm/versions/node/v20.20.2/bin:$PATH`.
 
 **Warnings are errors** and **a skipped test fails CI** — both deliberate, both explained in the
-README's Testing section. The full backend suite takes **498 s** locally (the "about five minutes /
+README's Testing section. The full backend suite takes **478 s** locally (the "about five minutes /
 290 s" in earlier revisions is two passes out of date). In CI it is substantially slower and there is
 still no completed-run baseline to quote — see §1.
 
-Every run now prints its **25 slowest tests** (`--durations=25`, `pyproject.toml`). Use it: the
-slowest honest test is `tests/test_stems_parity.py::test_p17_a_registered_but_disabled_engine_changes_nothing`
-at ~52 s, which is what `faulthandler_timeout = 600` was sized against — an eleven-fold margin, so if
-that dump ever fires it is a real wedge and not a slow machine.
+**There is now a CI baseline, for the first time.** On `main` at `69f5cbf`:
+
+| CI step | Duration |
+| --- | --- |
+| `Tests` | **17 m 31 s** — `3193 tests ran, none skipped` |
+| `Coverage (reported, not gated)` | 18 m 40 s |
+| whole backend job | ~37 min, against a 90-minute bound |
+
+So CI is roughly 2.2x slower than local, which is ordinary for a shared runner — the suite was never
+slow, it was wedged. Do not read the old "24-31 minutes" anywhere as a duration; those were
+*cancelled* runs.
+
+Every run prints its **25 slowest tests** (`--durations=25`, `pyproject.toml`). Use it. The slowest
+honest test is `tests/test_stems_parity.py::test_p17_a_registered_but_disabled_engine_changes_nothing`
+— ~52 s locally, **98 s in CI** — which is what `faulthandler_timeout = 600` was sized against. Six
+times the CI figure, so if that dump fires it is a real wedge and not a slow machine.
 
 **`VMAF_FFMPEG_BINARY` must point at a libvmaf-capable ffmpeg or the M9 fidelity tests fail**, several
 steps from the cause. Note the static build `scripts/setup_dev_env.sh` fetches (johnvansickle 7.0.2)
@@ -410,6 +455,19 @@ labelled benchmark (above). With S21 done, the spec's only available work is fin
 - **Credentials** — `PB1` (implemented, unexercisable), `PB9`.
 - **Product decision** — `U12`, multi-user auth and per-user storage.
 - **The `INSTALL_ML=true` Docker image has still never been built.** Only the default path is verified.
+
+### Code scanning is not enabled on the repository
+
+The CodeQL workflow probes `/code-scanning/alerts` before uploading SARIF, and in CI that probe
+returns **HTTP 404** — the documented answer when code scanning has never been enabled. So results
+stay in the build rather than reaching the Security tab.
+
+This is not a defect and not fixable from a pull request: it is an owner setting
+(**Security → Code scanning → Set up**). The workflow already degrades correctly — the
+high-severity gate still runs against the local SARIF and the SARIF is kept as an artifact, so the
+analysis is never silently skipped. Enabling it would add the alerts UI and nothing else.
+
+Do not spend time on `available=false` in that job's log. It is telling the truth.
 
 ## 4. Environment
 
