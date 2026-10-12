@@ -217,6 +217,70 @@ function toOptions(settings, publishing) {
   };
 }
 
+const FORMAT_PRESETS = [
+  {
+    id: "shorts",
+    label: "YouTube Shorts",
+    detail: "Vertical · 9:16",
+    glyph: "S",
+    color: "text-red-300 bg-red-400/10",
+    values: { aspect: "9:16", platform: "youtube" },
+  },
+  {
+    id: "tiktok",
+    label: "TikTok",
+    detail: "Vertical · 9:16",
+    glyph: "♪",
+    color: "text-cyan-200 bg-cyan-400/10",
+    values: { aspect: "9:16", platform: "tiktok" },
+  },
+  {
+    id: "reels",
+    label: "Instagram Reels",
+    detail: "Vertical · 9:16",
+    glyph: "◎",
+    color: "text-pink-200 bg-pink-400/10",
+    values: { aspect: "9:16", platform: "instagram" },
+  },
+  {
+    id: "wide",
+    label: "YouTube / landscape",
+    detail: "Widescreen · 16:9",
+    glyph: "▰",
+    color: "text-violet-200 bg-violet-400/10",
+    values: { aspect: "16:9", platform: "youtube" },
+  },
+];
+
+function WorkflowHeading({ number, title, description }) {
+  return (
+    <div className="mb-4 flex items-start gap-3">
+      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/10 text-xs font-bold text-violet-200">
+        {number}
+      </span>
+      <div>
+        <h3 className="text-base font-semibold text-white">{title}</h3>
+        <p className="mt-1 text-sm text-slate-400">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, detail, tone }) {
+  return (
+    <div className="rounded-2xl border border-white/[0.07] bg-slate-900/65 p-4 shadow-lg shadow-black/10">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {label}
+        </span>
+        <span className={`h-1.5 w-1.5 rounded-full ${tone}`} aria-hidden="true" />
+      </div>
+      <div className="mt-3 text-2xl font-semibold tracking-tight text-white">{value}</div>
+      <p className="mt-1 text-xs text-slate-500">{detail}</p>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState("create");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -229,6 +293,8 @@ export default function App() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [jobs, setJobs] = useState([]);
   const [trackedIds, setTrackedIds] = useState(new Set());
+  const [jobsLoaded, setJobsLoaded] = useState(false);
+  const [apiStatus, setApiStatus] = useState("checking");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [watch, setWatch] = useState({ enabled: false, folder: "" });
@@ -289,13 +355,14 @@ export default function App() {
     api
       .info()
       .then((info) => {
+        setApiStatus("connected");
         setLlmAvailable(!!info.llm_available);
         setVersion(info.version || "");
         setEffects(info.effects || null);
         setEngines(Array.isArray(info.engines) ? info.engines : []);
         setCapabilities(info.capabilities || null);
       })
-      .catch(() => {});
+      .catch(() => setApiStatus("offline"));
     api.updates().then(setUpdateInfo).catch(() => {});
     loadPublishingData();
     // Load profiles and pre-fill from the default profile once on startup.
@@ -311,6 +378,27 @@ export default function App() {
       }
     });
   }, [loadPublishingData, loadProfiles]);
+
+  // Jobs are stored by the backend; restore the latest projects so a refresh or a
+  // browser restart does not make active renders or completed clips appear lost.
+  useEffect(() => {
+    let mounted = true;
+    api
+      .listJobs()
+      .then(({ jobs: savedJobs = [] }) => {
+        if (!mounted) return;
+        const recent = Array.isArray(savedJobs) ? savedJobs.slice(0, 12) : [];
+        setJobs(recent);
+        setTrackedIds(new Set(recent.map((job) => job.id).filter(Boolean)));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) setJobsLoaded(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSaveProfile = useCallback(async (name, id) => {
     const saved = await api.saveProfile({ name, id, settings, publishing });
@@ -393,7 +481,9 @@ export default function App() {
   const track = (newJobs) =>
     setTrackedIds((previous) => {
       const next = new Set(previous);
-      newJobs.forEach((job) => next.add(job.id));
+      newJobs.forEach((job) => {
+        if (job?.id) next.add(job.id);
+      });
       return next;
     });
 
@@ -412,21 +502,38 @@ export default function App() {
     }
 
     setSubmitting(true);
+    let submittedAny = false;
+    const addJobs = (newJobs) => {
+      const validJobs = (newJobs || []).filter((job) => job?.id);
+      if (!validJobs.length) return;
+      submittedAny = true;
+      track(validJobs);
+      setJobs((previous) => {
+        const newIds = new Set(validJobs.map((job) => job.id));
+        return [...validJobs, ...previous.filter((job) => !newIds.has(job.id))];
+      });
+    };
+
     try {
-      let created = [];
+      // Uploads and links are separate API operations. Submit both kinds instead of
+      // silently ignoring whichever source type happened to come second in the form.
       if (files.length > 0) {
         const result = await api.upload(files, options);
-        created = result.jobs || [];
-      } else if (urls.length === 1) {
-        created = [await api.submitUrl(urls[0], options)];
-      } else {
-        const result = await api.submitBatch(urls, options);
-        created = result.jobs || [];
+        addJobs(result.jobs || []);
       }
-      track(created);
-      setJobs((previous) => [...created, ...previous]);
+      if (urls.length === 1) {
+        addJobs([await api.submitUrl(urls[0], options)]);
+      } else if (urls.length > 1) {
+        const result = await api.submitBatch(urls, options);
+        addJobs(result.jobs || []);
+      }
     } catch (submissionError) {
-      setError(submissionError.message || "Failed to submit.");
+      const message = submissionError.message || "Failed to submit.";
+      setError(
+        submittedAny
+          ? `${message} The sources already submitted are in Recent work.`
+          : message
+      );
     } finally {
       setSubmitting(false);
     }
@@ -454,23 +561,47 @@ export default function App() {
   const visibleJobs = jobs.filter(
     (job) => trackedIds.has(job.id) || job.source?.includes("/watch/")
   );
+  const sourceCount = input.urls.length + input.files.length;
+  const activeJobCount = visibleJobs.filter((job) => ["queued", "processing"].includes(job.status)).length;
+  const readyClipCount = visibleJobs.reduce(
+    (count, job) => count + (job.status === "completed" ? (job.clips || []).length : 0),
+    0
+  );
+  const approvedClipCount = visibleJobs.reduce(
+    (count, job) => count + (job.clips || []).filter((clip) => clip.review_state === "approved").length,
+    0
+  );
+  const activePreset = FORMAT_PRESETS.find((preset) =>
+    Object.entries(preset.values).every(([key, value]) => settings[key] === value)
+  );
+
+  const applyFormatPreset = (preset) => {
+    setSettings((previous) => ({ ...previous, ...preset.values }));
+    setActiveProfileId("");
+  };
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-6xl px-6 py-10">
-        <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="bg-gradient-to-r from-brand-accent to-brand bg-clip-text text-3xl font-bold text-transparent">
-              AI Video Clipper
-            </h1>
-            <p className="mt-1 text-slate-400">
-              Create, package, schedule, and publish short-form clips.
-              {version && (
-                <span className="ml-2 text-xs text-slate-600">v{version}</span>
-              )}
-            </p>
+    <div className="relative min-h-screen overflow-x-hidden bg-[#090b10] text-slate-100 selection:bg-violet-400/30">
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+        <div className="absolute -left-40 -top-48 h-[34rem] w-[34rem] rounded-full bg-violet-600/[0.09] blur-[120px]" />
+        <div className="absolute -right-40 top-[30rem] h-[28rem] w-[28rem] rounded-full bg-cyan-500/[0.06] blur-[120px]" />
+      </div>
+      <div className="relative z-10 mx-auto max-w-7xl px-4 pb-10 pt-4 sm:px-6 lg:px-8">
+        <header className="sticky top-3 z-30 mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/[0.08] bg-[#0d1018]/90 p-3 shadow-2xl shadow-black/20 backdrop-blur-xl">
+          <div className="flex min-w-0 items-center gap-3 px-1">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-950/50">
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-white" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
+                <path d="m10 9 5 3-5 3V9Z" fill="currentColor" />
+              </svg>
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold tracking-tight text-white sm:text-base">AI Video Clipper</h1>
+              <p className="text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">Creator studio{version ? ` · v${version}` : ""}</p>
+            </div>
           </div>
-          <nav className="flex rounded-xl border border-slate-800 bg-slate-900 p-1">
+
+          <nav aria-label="Primary" className="order-3 flex w-full items-center gap-1 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/20 p-1 sm:order-none sm:w-auto">
             {[
               ["create", "Create"],
               ["schedule", "Schedule"],
@@ -481,16 +612,27 @@ export default function App() {
                 key={id}
                 type="button"
                 onClick={() => setActiveView(id)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                aria-pressed={activeView === id}
+                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition sm:px-4 sm:text-sm ${
                   activeView === id
-                    ? "bg-brand text-white"
-                    : "text-slate-400 hover:text-white"
+                    ? "bg-white/[0.1] text-white shadow-sm"
+                    : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-200"
                 }`}
               >
                 {label}
               </button>
             ))}
           </nav>
+
+          <div className="ml-auto flex items-center gap-2 rounded-full border border-white/[0.07] bg-black/20 px-3 py-2 text-xs text-slate-400 sm:ml-0">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                apiStatus === "connected" ? "bg-emerald-400" : apiStatus === "offline" ? "bg-rose-400" : "animate-pulse bg-amber-400"
+              }`}
+              aria-hidden="true"
+            />
+            <span>{apiStatus === "connected" ? "System ready" : apiStatus === "offline" ? "Server unavailable" : "Connecting"}</span>
+          </div>
         </header>
 
         {updateInfo?.update_available && (
@@ -511,104 +653,267 @@ export default function App() {
           </div>
         )}
 
-        {/* PB7: the schedule was previously a single datetime input with no way to
-            see, move or cancel what had been scheduled. */}
-        {activeView === "schedule" && <ScheduleCalendar onError={setError} />}
+        <main className="space-y-10">
+          {/* PB7: the schedule is a movable, cancellable publishing calendar. */}
+          {activeView === "schedule" && (
+            <section className="space-y-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">Publishing workspace</p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Plan your next posts</h2>
+                <p className="mt-2 max-w-2xl text-sm text-slate-400">See what is queued, find a good time, and adjust your publishing calendar in one place.</p>
+              </div>
+              <ScheduleCalendar onError={setError} />
+            </section>
+          )}
 
-        {activeView === "history" && <HistoryView />}
+          {activeView === "history" && (
+            <section className="space-y-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">Publishing workspace</p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Publishing history</h2>
+                <p className="mt-2 max-w-2xl text-sm text-slate-400">Track what went live, retry failed posts, and follow up on items waiting for review.</p>
+              </div>
+              <HistoryView />
+            </section>
+          )}
 
-        {activeView === "settings" && (
-          <div className="space-y-6">
-            <StorageSettings />
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 text-sm text-slate-400">
-              <div className="mb-1 font-semibold text-slate-300">Version &amp; updates</div>
-              <p>
-                Running <span className="text-slate-200">v{version || "?"}</span>
-                {updateInfo?.latest ? ` · latest v${updateInfo.latest}` : ""}
-                {updateInfo && !updateInfo.update_available && updateInfo.latest
-                  ? " · up to date ✓"
-                  : ""}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Update the app with{" "}
-                <code className="rounded bg-slate-950 px-1">git pull &amp;&amp; docker compose up --build</code>.
-              </p>
-            </div>
-          </div>
-        )}
+          {activeView === "settings" && (
+            <section className="space-y-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">Workspace</p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Storage &amp; system settings</h2>
+                <p className="mt-2 max-w-2xl text-sm text-slate-400">Manage saved media, retention, and the version running in your studio.</p>
+              </div>
+              <StorageSettings />
+              <div className="rounded-2xl border border-white/[0.07] bg-slate-900/65 p-5 text-sm text-slate-400">
+                <div className="mb-1 font-semibold text-slate-200">Version &amp; updates</div>
+                <p>
+                  Running <span className="text-slate-100">v{version || "?"}</span>
+                  {updateInfo?.latest ? ` · latest v${updateInfo.latest}` : ""}
+                  {updateInfo && !updateInfo.update_available && updateInfo.latest
+                    ? " · up to date ✓"
+                    : ""}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Update the app with{" "}
+                  <code className="rounded bg-slate-950 px-1">git pull &amp;&amp; docker compose up --build</code>.
+                </p>
+              </div>
+            </section>
+          )}
 
-        {activeView === "create" && (
-          <>
-            <div className="space-y-4">
-              <ProfilesBar
-                profiles={profiles}
-                defaultId={defaultProfileId}
-                activeId={activeProfileId}
-                onApply={applyProfile}
-                onSave={handleSaveProfile}
-                onSetDefault={handleSetDefaultProfile}
-                onDelete={handleDeleteProfile}
-              />
-              <InputBar onChange={setInput} onPreview={handlePreview} />
-              {input.files.length === 0 && (
-                <PreviewCard preview={preview} loading={previewLoading} />
-              )}
-              <SettingsPanel
-                settings={settings}
-                onChange={setSettings}
-                watch={watch}
-                onToggleWatch={handleToggleWatch}
-                effects={effects}
-                engines={engines}
-                capabilities={capabilities}
-              />
-              <PublishingPanel
-                value={publishing}
-                onChange={setPublishing}
-                statuses={publisherStatuses}
-                campaigns={campaigns}
-                onCampaignSaved={handleCampaignSaved}
-              />
-
-              <button
-                onClick={handleGetClips}
-                disabled={submitting}
-                className="w-full rounded-xl bg-emerald-500 py-4 text-lg font-bold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submitting ? "Submitting…" : "Get Clips"}
-              </button>
-
-              {error && (
-                <div className="rounded-lg border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">
-                  {error}
+          {activeView === "create" && (
+            <>
+              <section className="grid gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(350px,0.8fr)] lg:items-end">
+                <div className="max-w-3xl">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-violet-300/15 bg-violet-400/[0.06] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-violet-300" aria-hidden="true" />
+                    Your creator studio
+                  </div>
+                  <h2 className="mt-5 text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-5xl">
+                    One video.
+                    <span className="block bg-gradient-to-r from-violet-300 via-fuchsia-200 to-cyan-200 bg-clip-text text-transparent">Your best moments, ready to share.</span>
+                  </h2>
+                  <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
+                    Find the moments worth sharing, turn them into polished vertical videos, then review and publish — all from one workspace.
+                  </p>
+                  <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-400">
+                    {["AI-picked highlights", "Dynamic captions", "Review before publishing"].map((feature) => (
+                      <span key={feature} className="rounded-full border border-white/[0.07] bg-white/[0.025] px-3 py-1.5">{feature}</span>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
 
-            {visibleJobs.length > 0 && (
-              <section className="mt-10 space-y-4">
-                <h2 className="text-lg font-semibold text-slate-200">
-                  {watch.enabled ? "Jobs (watch-folder active)" : "Jobs"}
-                </h2>
-                {visibleJobs.map((job) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    llmAvailable={llmAvailable}
-                    publishing={publishing}
-                    publisherStatuses={publisherStatuses}
-                    publishAttempts={publishAttempts}
-                    onClipUpdated={handleClipUpdated}
-                    onPublished={handlePublished}
-                    // U7: a re-render applies whatever is selected in the panel right now, which
-                    // is what makes "change one setting and see it" a single click.
-                    settings={toOptions(settings, publishing)}
+                <div className="grid grid-cols-3 gap-2 sm:gap-3" aria-label="Recent project summary">
+                  <StatCard
+                    label="In progress"
+                    value={jobsLoaded ? activeJobCount : "—"}
+                    detail={jobsLoaded ? "Active projects" : "Restoring work…"}
+                    tone="bg-amber-300"
                   />
-                ))}
+                  <StatCard
+                    label="Clips ready"
+                    value={jobsLoaded ? readyClipCount : "—"}
+                    detail="From recent projects"
+                    tone="bg-emerald-300"
+                  />
+                  <StatCard
+                    label="Approved"
+                    value={jobsLoaded ? approvedClipCount : "—"}
+                    detail="Marked for publishing"
+                    tone="bg-cyan-300"
+                  />
+                </div>
               </section>
-            )}
-          </>
-        )}
+
+              <section className="space-y-6">
+                <ProfilesBar
+                  profiles={profiles}
+                  defaultId={defaultProfileId}
+                  activeId={activeProfileId}
+                  onApply={applyProfile}
+                  onSave={handleSaveProfile}
+                  onSetDefault={handleSetDefaultProfile}
+                  onDelete={handleDeleteProfile}
+                />
+
+                <section>
+                  <WorkflowHeading
+                    number="01"
+                    title="Choose your source"
+                    description="Paste a link, upload a file, or combine several videos in one batch."
+                  />
+                  <InputBar onChange={setInput} onPreview={handlePreview} />
+                  {input.urls.length === 1 && (
+                    <div className="mt-4">
+                      <PreviewCard preview={preview} loading={previewLoading} />
+                    </div>
+                  )}
+                </section>
+
+                <section>
+                  <WorkflowHeading
+                    number="02"
+                    title="Set the format and style"
+                    description="Start with a platform-ready preset, then fine-tune any of the advanced options."
+                  />
+                  <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3" role="group" aria-label="Quick format presets">
+                    {FORMAT_PRESETS.map((preset) => {
+                      const selected = activePreset?.id === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => applyFormatPreset(preset)}
+                          aria-pressed={selected}
+                          className={`group flex min-h-[92px] items-start gap-3 rounded-2xl border p-3 text-left transition sm:p-4 ${
+                            selected
+                              ? "border-violet-300/50 bg-violet-400/[0.08] shadow-lg shadow-violet-950/20"
+                              : "border-white/[0.07] bg-slate-900/55 hover:border-white/20 hover:bg-slate-900"
+                          }`}
+                        >
+                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-bold ${preset.color}`} aria-hidden="true">
+                            {preset.glyph}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-xs font-semibold leading-4 text-slate-100 sm:text-sm">{preset.label}</span>
+                            <span className="mt-1 block text-[10px] text-slate-500 sm:text-xs">{preset.detail}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <SettingsPanel
+                    settings={settings}
+                    onChange={setSettings}
+                    watch={watch}
+                    onToggleWatch={handleToggleWatch}
+                    effects={effects}
+                    engines={engines}
+                    capabilities={capabilities}
+                  />
+                </section>
+
+                <section>
+                  <WorkflowHeading
+                    number="03"
+                    title="Choose how to publish"
+                    description="Keep clips in review mode or route them to a saved publishing campaign."
+                  />
+                  <PublishingPanel
+                    value={publishing}
+                    onChange={setPublishing}
+                    statuses={publisherStatuses}
+                    campaigns={campaigns}
+                    onCampaignSaved={handleCampaignSaved}
+                  />
+                </section>
+
+                <div className="sticky bottom-3 z-20 rounded-2xl border border-white/[0.1] bg-[#12151e]/95 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl sm:p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 px-1">
+                      <p className="text-sm font-semibold text-white" aria-live="polite">
+                        {sourceCount === 0
+                          ? "Your next project starts with a video"
+                          : `${sourceCount} source${sourceCount === 1 ? "" : "s"} ready to clip`}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {sourceCount === 0
+                          ? "Add a link or upload a video above to get started."
+                          : `${settings.aspect} format · Captions ${settings.captions ? "on" : "off"} · ${publishing.mode === "review" ? "Review before publishing" : "Auto publish"}`}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGetClips}
+                      disabled={submitting || sourceCount === 0}
+                      aria-busy={submitting}
+                      className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-indigo-500 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-violet-950/40 transition hover:from-violet-400 hover:to-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#12151e] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {submitting ? (
+                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity=".25" strokeWidth="3" />
+                          <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                        </svg>
+                      ) : (
+                        <span aria-hidden="true">✦</span>
+                      )}
+                      {submitting ? "Submitting videos…" : sourceCount === 0 ? "Add a source to begin" : "Generate clips"}
+                      {!submitting && sourceCount > 0 ? <span aria-hidden="true">→</span> : null}
+                    </button>
+                  </div>
+                  {error && (
+                    <div role="alert" className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-200">
+                      {error}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="space-y-4" aria-labelledby="recent-work-heading">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.17em] text-slate-500">Your projects</p>
+                    <h2 id="recent-work-heading" className="mt-1 text-xl font-semibold text-white">Recent work</h2>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {watch.enabled ? "Watch-folder is active" : jobsLoaded ? `${visibleJobs.length} recent project${visibleJobs.length === 1 ? "" : "s"}` : "Restoring saved projects…"}
+                  </p>
+                </div>
+                {visibleJobs.length > 0 ? (
+                  <div className="space-y-4">
+                    {visibleJobs.map((job) => (
+                      <JobCard
+                        key={job.id}
+                        job={job}
+                        llmAvailable={llmAvailable}
+                        publishing={publishing}
+                        publisherStatuses={publisherStatuses}
+                        publishAttempts={publishAttempts}
+                        onClipUpdated={handleClipUpdated}
+                        onPublished={handlePublished}
+                        // U7: a re-render applies the settings selected above.
+                        settings={toOptions(settings, publishing)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-start gap-3 rounded-2xl border border-dashed border-white/[0.09] bg-white/[0.02] p-6 sm:flex-row sm:items-center">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.04] text-lg text-slate-400" aria-hidden="true">▣</span>
+                    <div>
+                      <p className="text-sm font-medium text-slate-200">
+                        {jobsLoaded ? "Your projects will appear here" : "Restoring your workspace…"}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {jobsLoaded ? "Generated clips and active renders stay available when you return." : "Checking for active renders and recently completed clips."}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </main>
 
         <footer className="mt-12 border-t border-slate-800 pt-6 text-xs text-slate-500">
           You are responsible for holding the rights to any source footage you process.

@@ -354,16 +354,17 @@ exit path including a signal.
 bash scripts/setup_dev_env.sh
 ```
 
-Installs ffmpeg/ffprobe, the Liberation fonts and the opencv runtime libraries, and registers the
-bundled caption faces with fontconfig the way the Dockerfile does. Idempotent, and it prints what it
-found so a partial setup is visible immediately.
+Installs ffmpeg/ffprobe, the Liberation fonts and the OpenCV/MediaPipe runtime libraries (`libGL`,
+`glib2`, EGL and GLES), and registers the bundled caption faces with fontconfig the way the
+Dockerfile does. Idempotent, and it prints what it found so a partial setup is visible immediately.
 
-Each of those is load-bearing rather than convenience. Without ffmpeg the real-binary capability
+Each dependency is load-bearing rather than convenience. Without ffmpeg the real-binary capability
 tests cannot run, and they exist to catch the probe bugs every mocked test misses. Without
 `libGL`/`glib2`, `import cv2` raises and every vision path silently takes its degraded branch —
-CI installed opencv and got no coverage from it for a while for exactly this reason. And the
-capability probe reads the *system* font list, so without the bundled faces installed
-`font_available()` disagrees with what will actually render.
+CI installed opencv and got no coverage from it for a while for exactly this reason. MediaPipe's
+Python API can import without `libEGL`/`libGLES`, but task construction cannot; the detector then
+silently falls back to Haar. And the capability probe reads the *system* font list, so without the
+bundled faces installed `font_available()` disagrees with what will actually render.
 
 ## Local development (without Docker)
 
