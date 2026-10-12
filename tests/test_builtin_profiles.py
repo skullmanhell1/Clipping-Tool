@@ -25,8 +25,14 @@ from worker.models import BUILTIN_PROFILES, ProcessingOptions
 # --------------------------------------------------------------------------- #
 # U2: the bundles are coherent and real                                        #
 # --------------------------------------------------------------------------- #
-def test_the_four_profiles_the_plan_asks_for_exist():
-    assert sorted(BUILTIN_PROFILES) == ["educational", "gaming", "podcast", "talking_head"]
+def test_the_builtin_profiles_the_plan_asks_for_exist():
+    assert sorted(BUILTIN_PROFILES) == [
+        "boxabl_campaign",
+        "educational",
+        "gaming",
+        "podcast",
+        "talking_head",
+    ]
     for name, profile in BUILTIN_PROFILES.items():
         assert profile.name == name, "the key and the profile's own name must agree"
         assert profile.label and profile.description and profile.rationale
@@ -95,6 +101,33 @@ def test_an_explicit_false_also_beats_the_profile():
     assert options.zoom is False
 
 
+def test_boxabl_campaign_stays_review_only_and_preserves_the_full_home():
+    options = ProcessingOptions.from_dict(
+        {
+            "profile": "boxabl_campaign",
+            "publish_to": ["youtube"],
+            "publish_mode": "auto",
+            "schedule_at": 123.0,
+            "reframe": True,
+            "zoom": True,
+            "kinetic_typography_enabled": True,
+            "broll": True,
+            "music": "upbeat",
+        }
+    )
+    assert options.publish_to == []
+    assert options.publish_mode == "review"
+    assert options.schedule_at is None
+    assert options.reframe is False
+    assert options.zoom is False
+    assert options.kinetic_typography_enabled is False
+    assert options.broll is False
+    assert options.music == ""
+    assert options.permissibility_mode is True
+    assert options.captions is True
+    assert options.subtitle_sidecar is True
+
+
 def test_an_unknown_profile_is_ignored_rather_than_recorded():
     """A job must not claim a bundle that does not exist."""
     for value in ("nope", "", None, "PODCAST-ish", 7):
@@ -116,7 +149,7 @@ def test_no_profile_leaves_the_global_defaults_alone():
 
 
 def test_profiles_disagree_with_each_other():
-    """Four bundles that resolved to the same thing would be four labels, not four profiles.
+    """Bundles that resolved to the same thing would be labels, not distinct profiles.
 
     Guards the actual product claim - that picking a profile changes the output - rather than
     just that the plumbing runs.

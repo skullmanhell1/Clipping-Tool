@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from config import settings
 from worker import branding, caption_contrast, turn_gain
 from worker import captions as cap
+from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
 from worker.effects import audio, broll, caption_presets, emoji, overlays, sfx
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
@@ -322,6 +323,11 @@ def render_clip(
     burn_captions = str(getattr(settings, "caption_mode", "burned") or "burned") != "soft"
     need_caps = options.captions and bool(words) and burn_captions
     need_hook = options.hook_title and bool(hook_text.strip())
+    # The campaign's explicit brand beat is placed at 0:05–0:08 in the rendered frame. This is
+    # separate from the opening hook, so a silent viewer sees the required brand during the
+    # guide's specified window even when the speaker never says it.
+    campaign_brand_text = "BOXABL" if options.profile == BOXABL_PROFILE_NAME else ""
+    need_brand = bool(campaign_brand_text) and duration > 5.0
 
     # Caption ownership (Reqs 3.2, 3.9). ``None`` on every v0.8.0 / all-off run,
     # so this whole branch is inert and the ladder below is byte-for-byte the
@@ -363,7 +369,7 @@ def render_clip(
         if need_hook:
             # Req 3.3 — the engine re-emitted the hook title into its own ASS.
             applied.append("hook_title")
-    elif need_caps or need_hook:
+    elif need_caps or need_hook or need_brand:
         ass_path = temp_dir / f"{base_clip.stem}.ass"
         cues = cap.words_to_cues(words) if need_caps else []
 
@@ -434,6 +440,10 @@ def render_clip(
                 keyword_indices=keyword_indices,
                 position=options.caption_position or None,
                 hook_text=hook_text if need_hook else "",
+                hook_duration=2.0 if campaign_brand_text else 2.5,
+                brand_text=campaign_brand_text if need_brand else "",
+                brand_start=5.0,
+                brand_duration=3.0,
                 clip_duration=duration,
                 permissibility=options.permissibility_mode,
                 notes=caption_notes,
@@ -471,6 +481,10 @@ def render_clip(
                 template=options.caption_template,
                 position=options.caption_position,
                 hook_text=hook_text if need_hook else "",
+                hook_duration=2.0 if campaign_brand_text else 2.5,
+                brand_text=campaign_brand_text if need_brand else "",
+                brand_start=5.0,
+                brand_duration=3.0,
                 notes=legacy_notes,
                 language=language,
                 # V15 on the legacy branch too. C20's auto-contrast covers only the preset path, and

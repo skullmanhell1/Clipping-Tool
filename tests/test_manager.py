@@ -40,6 +40,24 @@ def test_submit_routes_via_campaign(tmp_path, fake_clip, video_file):
     assert attempt["state"] == "queued"
 
 
+def test_x_route_carries_affiliate_url_in_the_preserved_mention_tail(
+    tmp_path, fake_clip, video_file
+):
+    manager, store = _manager(tmp_path, {"x": FakePublisher("x")})
+    affiliate_url = "https://affiliate.example/track/creator"
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=video_file,
+        platforms=["x"],
+        mode="review",
+        route_overrides={"x": {"affiliate_url": affiliate_url}},
+    )
+    request = store.get_attempt(ids[0])["request_json"]
+    assert affiliate_url in request["mentions"]
+    assert fake_clip.mentions[0] in request["mentions"]
+
+
 def test_submit_skips_unknown_platform(tmp_path, fake_clip, video_file):
     manager, store = _manager(tmp_path, {"youtube": FakePublisher("youtube")})
     ids = manager.submit(

@@ -1528,7 +1528,11 @@ class Settings(BaseSettings):
     whop_api_key: str | None = Field(default=None)
     whop_company_id: str | None = Field(default=None)
     whop_node_binary: str = Field(default="node")
-    # YouTube OAuth
+    # Google Drive OAuth (the Drive connector in the assistant is separate from this app).
+    google_drive_client_id: str | None = Field(default=None)
+    google_drive_client_secret: str | None = Field(default=None)
+    google_drive_refresh_token: str | None = Field(default=None)
+    # YouTube OAuth; uploads require a refresh token, not an API key.
     youtube_client_id: str | None = Field(default=None)
     youtube_client_secret: str | None = Field(default=None)
     youtube_refresh_token: str | None = Field(default=None)

@@ -1596,6 +1596,9 @@ def build_ass(
     hook_text: str = "",
     hook_duration: float = 2.5,
     hook_font_size: int = 110,
+    brand_text: str = "",
+    brand_start: float = 5.0,
+    brand_duration: float = 3.0,
     karaoke: bool | None = None,
     *,
     preset: CaptionPreset | None = None,
@@ -1617,6 +1620,8 @@ def build_ass(
         position: ``bottom`` | ``center`` | ``top`` (caption placement).
         hook_text: When non-empty, a large hook title is shown at the top for
             ``hook_duration`` seconds with a fade in/out.
+        brand_text: Optional timed campaign brand card, shown at the top from
+            ``brand_start`` for up to ``brand_duration`` seconds.
         karaoke: Force karaoke on/off; defaults to the template's behaviour.
 
     When ``preset`` is supplied the caption look (animation, font, colours,
@@ -1765,6 +1770,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         h_end = _ass_timestamp(max(0.5, hook_duration))
         hook = _escape(hook_text.strip().upper())
         lines.append(f"Dialogue: 1,{h_start},{h_end},Hook,,0,0,0,,{{\\fad(250,350)}}{hook}")
+
+    # A campaign brand card is a distinct timed overlay rather than relying on the speaker to
+    # say a proper noun that speech recognition may miss. Its window is clipped to the media
+    # duration, so short clips never produce an invalid out-of-range ASS event.
+    if brand_text.strip():
+        try:
+            brand_at = max(0.0, float(brand_start))
+            brand_for = max(0.0, float(brand_duration))
+            media_duration = (
+                float(clip_duration) if clip_duration is not None else brand_at + brand_for
+            )
+        except (TypeError, ValueError):
+            brand_at, brand_for, media_duration = 5.0, 3.0, 8.0
+        brand_from = min(brand_at, max(0.0, media_duration))
+        brand_until = min(brand_at + brand_for, max(0.0, media_duration))
+        if brand_until > brand_from:
+            b_start = _ass_timestamp(brand_from)
+            b_end = _ass_timestamp(brand_until)
+            brand = _escape(brand_text.strip().upper())
+            lines.append(f"Dialogue: 2,{b_start},{b_end},Hook,,0,0,0,,{{\\fad(200,250)}}{brand}")
+            if notes is not None and "campaign_brand_overlay" not in notes:
+                notes.append("campaign_brand_overlay")
 
     lines.extend(body)
 

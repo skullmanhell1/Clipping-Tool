@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 from config import settings as _settings
+from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
 from worker.effects.caption_presets import BUILTIN_PRESETS as _BUILTIN_CAPTION_PRESETS
 
 #: Job defaults that come from configuration rather than from a literal here.
@@ -405,6 +406,26 @@ class ProcessingOptions:
             if enum_field in valid:
                 v = valid[enum_field]
                 valid[enum_field] = v if v in known else default
+        if valid.get("profile") == BOXABL_PROFILE_NAME:
+            # This is a human-reviewed campaign. Never let a saved profile, explicit request, or
+            # UI publishing toggle turn its batch into unattended auto-publishing.
+            valid.update(
+                publish_to=[],
+                publish_mode="review",
+                schedule_at=None,
+                captions=True,
+                subtitle_sidecar=True,
+                reframe=False,
+                zoom=False,
+                transitions=False,
+                hook_title=True,
+                visual_selection=True,
+                kinetic_typography_enabled=False,
+                broll=False,
+                asset_sourcing_mode="off",
+                music="",
+                permissibility_mode=True,
+            )
         return cls(**valid)
 
 
@@ -566,6 +587,62 @@ BUILTIN_PROFILES: dict[str, BuiltinProfile] = {
             "emoji": "subtle",
             "caption_keyword_highlight": True,
             "caption_emoji": False,
+        },
+    ),
+    "boxabl_campaign": BuiltinProfile(
+        name="boxabl_campaign",
+        label="BOXABL campaign",
+        description="BOXABL Casita cuts with whole-home framing, exact brand captions and review-first publishing.",
+        rationale=(
+            "The campaign brief calls for a strong first-two-second hook, the whole Casita "
+            "visible by seconds 2–5, exact BOXABL branding by seconds 5–8, brisk pacing, "
+            "and captions that are legible without sound. This profile preserves the full "
+            "source frame inside a vertical canvas instead of face-tracking or zoom-cropping "
+            "the home; it adds a timed BOXABL brand card and deterministic metadata. "
+            "Visual/source-content checks remain human-reviewed, and publishing is review-only."
+        ),
+        settings={
+            "clip_length": "30-60s",
+            "aspect": "9:16",
+            "strategy": "ai",
+            "captions": True,
+            "subtitle_sidecar": True,
+            "topic": (
+                "BOXABL Casita: show the complete 20x20 ft foldable factory-built home, "
+                "its real features, price when stated, or a genuine guest reaction."
+            ),
+            "vibe": "Energetic, clear, factual, positive, fast-paced; never political or negative-bait.",
+            "platform": "youtube",
+            "hashtag_count": 5,
+            "vocabulary": "BOXABL, Casita, foldable factory-built home, 20 by 20 feet",
+            "metadata": True,
+            "publish_to": [],
+            "publish_mode": "review",
+            "reframe": False,
+            "zoom": False,
+            "transitions": False,
+            "hook_title": True,
+            "fades": True,
+            "progress_bar": True,
+            "emoji": "off",
+            "filler_removal": False,
+            "caption_preset": "karaoke_bold",
+            "caption_position": "bottom",
+            "caption_keyword_highlight": True,
+            "caption_keyword_ai": False,
+            "caption_emoji": False,
+            "broll": False,
+            "asset_sourcing_mode": "off",
+            "selection_prompt": (
+                "Choose moments that open with a compelling first-two-second hook, show the "
+                "entire BOXABL Casita within the first five seconds, and naturally include "
+                "its features, stated price, or an authentic guest reaction. Keep the full "
+                "home in frame; do not crop or zoom it away. Avoid politics, negative bait, "
+                "Kanye West, stock/equity/ticker discussion, and unedited-rip moments."
+            ),
+            "visual_selection": True,
+            "permissibility_mode": True,
+            "kinetic_typography_enabled": False,
         },
     ),
 }

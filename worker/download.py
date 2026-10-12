@@ -20,6 +20,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from worker.google_drive import (
+    GoogleDriveError,
+)
+from worker.google_drive import (
+    download_file as download_drive_file,
+)
+from worker.google_drive import (
+    extract_file_id as google_drive_file_id,
+)
+from worker.google_drive import (
+    get_file_metadata as get_drive_file_metadata,
+)
+
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 #: Schemes yt-dlp may be handed. Anything else - `file://` most importantly - is refused
@@ -270,14 +283,28 @@ def fetch_metadata(url: str) -> VideoMeta:
         UnsafeURLError: if the URL points somewhere ingest must not reach.
         DownloadError: if info extraction fails.
     """
-    import yt_dlp
-
     # Guarded here rather than only in the API layer. This is the cheaper of the two yt-dlp
     # entry points and therefore the more attractive probe: it makes a real request, returns
     # promptly, and its error text is handed straight back to the caller as a 422 - a blind-SSRF
     # oracle. Validating inside the module covers every caller, including any future ingest
     # path that never passes through `api.main`.
     validate_public_url(url)
+
+    drive_id = google_drive_file_id(url)
+    if drive_id:
+        try:
+            metadata = get_drive_file_metadata(drive_id)
+        except GoogleDriveError as exc:
+            raise DownloadError(str(exc)) from exc
+        return VideoMeta(
+            title=str(metadata.get("name") or "Google Drive video"),
+            duration=None,
+            thumbnail=None,
+            source=url,
+            uploader="Google Drive",
+        )
+
+    import yt_dlp
 
     opts = {
         "quiet": True,
@@ -357,14 +384,33 @@ def download_video(
         UnsafeURLError: if the URL points somewhere ingest must not reach.
         DownloadError: on any download failure.
     """
-    import yt_dlp
-
     # `worker.jobs` calls this with the URL held on the job record, which nothing re-checks
     # between submission and execution - so the guard belongs here, not only at the endpoint.
     validate_public_url(url)
 
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    drive_id = google_drive_file_id(url)
+    if drive_id:
+        try:
+            path, metadata = download_drive_file(
+                drive_id,
+                dest_dir,
+                max_bytes=_max_download_bytes(),
+                progress_cb=progress_cb,
+            )
+        except GoogleDriveError as exc:
+            raise DownloadError(str(exc)) from exc
+        return path, VideoMeta(
+            title=str(metadata.get("name") or path.stem),
+            duration=None,
+            thumbnail=None,
+            source=url,
+            uploader="Google Drive",
+        )
+
+    import yt_dlp
 
     def _hook(d: dict) -> None:
         if progress_cb is None:

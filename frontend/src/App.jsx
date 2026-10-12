@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
+import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
 import ProfilesBar from "./components/ProfilesBar.jsx";
@@ -123,6 +124,7 @@ const DEFAULT_SETTINGS = {
   reframe_layout: "follow_active",
   reframe_intensity: "standard",
   face_detector: "haar",
+  profile: "",
   // Advanced AV engines — every flag/option default, forwarded generically
   ...DEFAULT_ENGINE_SETTINGS,
 };
@@ -135,6 +137,7 @@ const DEFAULT_PUBLISHING = {
   account_id: "",
   target_type: "",
   target_id: "",
+  affiliate_url: "",
 };
 
 const numOrNull = (value) =>
@@ -212,6 +215,7 @@ function toOptions(settings, publishing) {
     reframe_layout: settings.reframe_layout,
     reframe_intensity: settings.reframe_intensity,
     face_detector: settings.face_detector,
+    profile: settings.profile,
     // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
     ...engineOptions(settings),
   };
@@ -307,6 +311,8 @@ export default function App() {
   // capabilities.kinetic_typography.styles / .reveal_modes).
   const [capabilities, setCapabilities] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
+  const [driveConfigured, setDriveConfigured] = useState(false);
+  const [builtinProfiles, setBuiltinProfiles] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
   const [activeProfileId, setActiveProfileId] = useState("");
@@ -335,9 +341,28 @@ export default function App() {
     if (!id) return;
     const profile = profiles.find((p) => p.id === id);
     if (!profile) return;
-    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}) });
-    setPublishing({ ...DEFAULT_PUBLISHING, ...(profile.publishing || {}) });
+    const profileSettings = { ...DEFAULT_SETTINGS, ...(profile.settings || {}) };
+    setSettings(profileSettings);
+    setPublishing({
+      ...DEFAULT_PUBLISHING,
+      ...(profile.publishing || {}),
+      ...(profileSettings.profile === "boxabl_campaign" ? { mode: "review" } : {}),
+    });
   }, [profiles]);
+
+  const applyBoxablCampaign = useCallback(() => {
+    const profile = builtinProfiles.find((item) => item.name === "boxabl_campaign");
+    if (!profile) return;
+    setActiveProfileId("");
+    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}), profile: profile.name });
+    setPublishing((current) => ({
+      ...DEFAULT_PUBLISHING,
+      ...current,
+      platforms: [],
+      campaign_id: "",
+      mode: "review",
+    }));
+  }, [builtinProfiles]);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -361,8 +386,10 @@ export default function App() {
         setEffects(info.effects || null);
         setEngines(Array.isArray(info.engines) ? info.engines : []);
         setCapabilities(info.capabilities || null);
+        setDriveConfigured(!!info.google_drive?.configured);
       })
       .catch(() => setApiStatus("offline"));
+    api.builtinProfiles().then((data) => setBuiltinProfiles(data.profiles || [])).catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
     loadPublishingData();
     // Load profiles and pre-fill from the default profile once on startup.
@@ -746,7 +773,13 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="space-y-6">
+              <section className="space-y-5">
+                <BoxablCampaignPanel
+                  active={settings.profile === "boxabl_campaign"}
+                  driveConfigured={driveConfigured}
+                  profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
+                  onApply={applyBoxablCampaign}
+                />
                 <ProfilesBar
                   profiles={profiles}
                   defaultId={defaultProfileId}
@@ -823,6 +856,7 @@ export default function App() {
                   <PublishingPanel
                     value={publishing}
                     onChange={setPublishing}
+                    campaignProfile={settings.profile}
                     statuses={publisherStatuses}
                     campaigns={campaigns}
                     onCampaignSaved={handleCampaignSaved}

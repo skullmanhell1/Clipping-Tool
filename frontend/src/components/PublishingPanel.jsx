@@ -18,6 +18,7 @@ export default function PublishingPanel({
   statuses,
   campaigns,
   onCampaignSaved,
+  campaignProfile = "",
 }) {
   const [show, setShow] = useState(false);
   const [name, setName] = useState("");
@@ -68,6 +69,7 @@ export default function PublishingPanel({
   };
 
   const statusEntries = Object.entries(statuses || {});
+  const isBoxablCampaign = campaignProfile === "boxabl_campaign";
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
@@ -147,12 +149,15 @@ export default function PublishingPanel({
             <label className="text-xs text-slate-400">
               Mode
               <select
-                value={value.mode}
+                value={isBoxablCampaign ? "review" : value.mode}
                 onChange={(event) => onChange({ ...value, mode: event.target.value })}
+                disabled={isBoxablCampaign}
                 className={inputClass}
               >
-                <option value="review">Review / draft</option>
-                <option value="auto">Auto publish</option>
+                <option value="review">
+                  {isBoxablCampaign ? "Review / draft (campaign required)" : "Review / draft"}
+                </option>
+                {!isBoxablCampaign ? <option value="auto">Auto publish</option> : null}
               </select>
             </label>
             <label className="text-xs text-slate-400">
@@ -206,6 +211,23 @@ export default function PublishingPanel({
             </label>
           </div>
 
+          {isBoxablCampaign && value.platforms.includes("x") ? (
+            <label className="block text-xs text-amber-100">
+              Personal, trackable BOXABL affiliate URL for X
+              <input
+                type="url"
+                value={value.affiliate_url || ""}
+                onChange={(event) => onChange({ ...value, affiliate_url: event.target.value })}
+                placeholder="https://your-trackable-affiliate-link"
+                className={inputClass}
+                required
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Use your own link from the affiliate portal. Do not use a generic or invented link.
+              </span>
+            </label>
+          ) : null}
+
           <div className="flex flex-wrap gap-2">
             <input
               value={name}
@@ -224,9 +246,9 @@ export default function PublishingPanel({
           </div>
           {error && <p className="text-xs text-rose-400">{error}</p>}
           <p className="text-xs text-slate-500">
-            Auto mode publishes completed clips through a saved campaign. Review mode
-            leaves publishing to each clip button. Schedule times are entered in your
-            browser’s local time and converted to UTC for the server.
+            {isBoxablCampaign
+              ? "The BOXABL profile always requires a human-reviewed clip and a review/draft upload. Instagram native account tagging and any final publishing step must be completed in the platform app."
+              : "Auto mode publishes completed clips through a saved campaign. Review mode leaves publishing to each clip button."} Schedule times are entered in your browser’s local time and converted to UTC for the server.
           </p>
         </div>
       )}

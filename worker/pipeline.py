@@ -53,6 +53,14 @@ from worker import metadata as meta_mod
 # 23 tests with "module 'worker.pipeline' has no attribute 'sel'".
 from worker import selection as sel  # noqa: F401
 from worker import transcript_trim as trim
+from worker.boxabl_campaign import (
+    PROFILE_NAME as BOXABL_PROFILE_NAME,
+)
+from worker.boxabl_campaign import (
+    enrich_campaign_metadata,
+    normalize_boxabl_text,
+    normalize_boxabl_words,
+)
 from worker.effects import broll, compositor, filler, reframe
 from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
@@ -570,6 +578,9 @@ def run_pipeline(
 
         # 2. AI metadata first, so the hook title is available to the renderer.
         clip_text = c.text or cap_text(transcript, c.start, c.end)
+        is_boxabl_campaign = options.profile == BOXABL_PROFILE_NAME
+        if is_boxabl_campaign:
+            clip_text = normalize_boxabl_text(clip_text)
         if options.metadata:
             report(base + clip_span / n * 0.3, f"Writing copy for clip {idx + 1}")
             md = meta_mod.generate_metadata(clip_text, options, client=llm_client)
@@ -580,6 +591,8 @@ def run_pipeline(
                 applied.append(f"metadata_degraded:{md.fallback_reason}")
         else:
             md = meta_mod.ClipMetadata(platform=options.platform)
+        if is_boxabl_campaign:
+            md = enrich_campaign_metadata(md)
 
         # Selection fell back to deterministic segmentation rather than the model. A property of
         # the job rather than of this clip, but the clip record is the only thing a caller sees -
@@ -596,6 +609,9 @@ def run_pipeline(
         translated_words = (
             cap.slice_words(translated, c.start, c.end) if translated is not None else []
         )
+        if is_boxabl_campaign:
+            normalize_boxabl_words(words)
+            normalize_boxabl_words(translated_words)
 
         # 3. filler-word / long-pause removal and U4 transcript trimming. Both remove
         #    regions from the clip, so they resolve to ONE keep list and ONE re-encode:

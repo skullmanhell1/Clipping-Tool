@@ -330,7 +330,12 @@ export default function JobCard({
                   key={clip.id}
                   jobId={job.id}
                   clip={clip}
-                  settings={settings}
+                  campaignProfile={job.options?.profile || ""}
+                  settings={
+                    job.options?.profile === "boxabl_campaign"
+                      ? { ...(settings || {}), profile: "boxabl_campaign" }
+                      : settings
+                  }
                   selected={selectedClips.has(clip.id)}
                   onToggleSelected={toggleSelected}
                   focused={index === focusIndex}

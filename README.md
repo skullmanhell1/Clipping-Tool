@@ -481,6 +481,12 @@ music, consult a qualified professional.
 
 ---
 
+## BOXABL campaign setup
+
+The optional `boxabl_campaign` profile is based on the supplied BOXABL clipper guide and Drive source list. It includes individual-link source allow-listing, a timed 0:05–0:08 BOXABL caption card, deterministic caption/metadata branding, human review gates, Google Drive file-link import, and review-only campaign publishing. See [`docs/BOXABL_CAMPAIGN_SETUP.md`](docs/BOXABL_CAMPAIGN_SETUP.md) for the Drive and YouTube OAuth setup steps. YouTube uploads require OAuth refresh-token credentials; a public API key alone cannot upload.
+
+---
+
 ## License
 
 TBD.

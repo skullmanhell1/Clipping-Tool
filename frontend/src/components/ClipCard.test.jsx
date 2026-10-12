@@ -211,6 +211,104 @@ describe("ClipCard transcript trimming (U4)", () => {
   });
 });
 
+describe("BOXABL campaign publish preflight", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api, "publishClip").mockResolvedValue({ attempts: [] });
+  });
+
+  it("requires every manual checklist item before an approved clip can be uploaded", async () => {
+    const user = userEvent.setup();
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignProfile: "boxabl_campaign",
+        publishing: { platforms: ["youtube"], mode: "review" },
+        publisherStatuses: { youtube: { configured: true, message: "Ready" } },
+      },
+    );
+
+    await user.click(screen.getByRole("button", { name: /upload for review/i }));
+    expect(await screen.findByText(/complete every boxabl campaign review checkbox/i)).toBeInTheDocument();
+    expect(api.publishClip).not.toHaveBeenCalled();
+  });
+
+  it("sends completed BOXABL checks to the API in review mode", async () => {
+    const user = userEvent.setup();
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignProfile: "boxabl_campaign",
+        publishing: { platforms: ["youtube"], mode: "review" },
+        publisherStatuses: { youtube: { configured: true, message: "Ready" } },
+      },
+    );
+    const labels = [
+      /source link is on the approved/i,
+      /complete casita is visible/i,
+      /exact boxabl branding/i,
+      /strong first-two-second hook/i,
+      /captions are readable/i,
+      /no kanye west/i,
+    ];
+    for (const label of labels) {
+      await user.click(screen.getByRole("checkbox", { name: label }));
+    }
+    await user.click(screen.getByRole("button", { name: /upload for review/i }));
+
+    await waitFor(() => expect(api.publishClip).toHaveBeenCalledWith(
+      "job1",
+      "c1",
+      expect.objectContaining({ mode: "review", affiliate_url: "" }),
+    ));
+    const body = api.publishClip.mock.calls[0][2];
+    expect(Object.values(body.campaign_checks)).toHaveLength(6);
+    expect(Object.values(body.campaign_checks).every(Boolean)).toBe(true);
+  });
+
+  it("clears campaign checks after a re-render so changed framing is reviewed again", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "rerenderClip").mockResolvedValue({ ...CLIP, duration: 6 });
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignProfile: "boxabl_campaign",
+        publishing: { platforms: ["youtube"], mode: "review" },
+        publisherStatuses: { youtube: { configured: true, message: "Ready" } },
+      },
+    );
+    const labels = [
+      /source link is on the approved/i,
+      /complete casita is visible/i,
+      /exact boxabl branding/i,
+      /strong first-two-second hook/i,
+      /captions are readable/i,
+      /no kanye west/i,
+    ];
+    for (const label of labels) {
+      await user.click(screen.getByRole("checkbox", { name: label }));
+    }
+
+    await user.click(screen.getByRole("button", { name: /re-render this clip/i }));
+    await waitFor(() => expect(api.rerenderClip).toHaveBeenCalled());
+    expect(screen.getByRole("checkbox", { name: labels[0] })).not.toBeChecked();
+  });
+
+  it("blocks Instagram API publish so the native account tag is not skipped", async () => {
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignProfile: "boxabl_campaign",
+        publishing: { platforms: ["instagram"], mode: "review" },
+        publisherStatuses: { instagram: { configured: true, message: "Ready" } },
+      },
+    );
+    await userEvent.click(screen.getByRole("button", { name: /upload for review/i }));
+    expect(await screen.findByText(/native @boxabl tag/i)).toBeInTheDocument();
+    expect(api.publishClip).not.toHaveBeenCalled();
+  });
+});
+
 describe("ClipCard batch selection and player (U3, U9)", () => {
   it("offers a batch checkbox only when the parent handles selection", () => {
     setup(CLIP, { onToggleSelected: undefined });

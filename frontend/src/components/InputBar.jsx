@@ -132,7 +132,7 @@ export default function InputBar({ onChange = () => {}, onPreview }) {
               Add your video
             </h3>
             <p className="mt-1 text-sm text-slate-400">
-              Paste a public link or upload a local video. You can mix both in one run.
+              Paste a supported YouTube link, a Google Drive file link, or upload a local video. You can mix sources in one run.
             </p>
           </div>
           <div className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs font-medium text-slate-300">
@@ -152,7 +152,7 @@ export default function InputBar({ onChange = () => {}, onPreview }) {
             id="video-url-list"
             value={urlText}
             onChange={handleUrlChange}
-            placeholder="Paste a YouTube, TikTok, or other supported video URL…"
+            placeholder="Paste an approved YouTube video URL or Google Drive file link…"
             rows={5}
             className="w-full resize-y rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 placeholder-slate-600 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20"
           />

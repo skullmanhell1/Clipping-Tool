@@ -54,6 +54,13 @@ from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker import captions as cap
+from worker.boxabl_campaign import (
+    PROFILE_NAME as BOXABL_PROFILE_NAME,
+)
+from worker.boxabl_campaign import (
+    campaign_publish_blockers,
+    is_approved_source_url,
+)
 from worker.download import (
     DownloadError,
     UnsafeURLError,
@@ -66,6 +73,7 @@ from worker.effects import broll, caption_presets
 # Side-effect import: populates the default engine registry so `/api/info`
 # advertises every AV engine (each still default-off). See worker/engines/loader.py.
 from worker.engines import loader  # noqa: F401
+from worker.google_drive import configured as google_drive_configured
 from worker.jobs import get_manager
 from worker.metadata import PLATFORM_PROFILES, REGENERATABLE_FIELDS, regenerate_field
 from worker.models import BUILTIN_PROFILES, ProcessingOptions
@@ -346,9 +354,9 @@ class OptionsModel(BaseModel):
     # Written next to the clip as .srt/.vtt. Present on the upload form but not here, so it
     # worked for an uploaded file and was dropped for the same job submitted as a URL.
     subtitle_sidecar: bool = False
-    # A named built-in bundle (podcast / gaming / talking_head / educational), expanded by
+    # A named built-in bundle (including the BOXABL campaign profile), expanded by
     # `ProcessingOptions.from_dict`, which has always supported it. `/api/profiles/builtin`
-    # advertises the four, so they were offered by the API and accepted by nothing.
+    # advertises the bundles so clients can apply them before submitting a job.
     profile: str = ""
 
     def to_options(self) -> ProcessingOptions:
@@ -359,8 +367,8 @@ class OptionsModel(BaseModel):
         It is what lets ``profile`` work at all. ``from_dict`` expands a named bundle and then
         lets explicit keys win, which is the right precedence - but ``model_dump()`` emits
         *every* field, so every one of them counted as explicit and the bundle was overridden
-        in full, every time. ``/api/profiles/builtin`` advertises four profiles that were
-        therefore accepted and silently ignored.
+        in full, every time. ``/api/profiles/builtin`` advertises named profiles that are
+        therefore accepted and applied.
 
         And it makes :class:`ProcessingOptions` the single source of truth for a default. A
         field the caller did not mention now never reaches ``from_dict``, so the dataclass
@@ -451,7 +459,9 @@ class PublishClipRequest(BaseModel):
     campaign_id: str = ""
     mode: str = "auto"
     schedule_at: float | None = None
-    routes: dict[str, dict[str, str]] = {}
+    routes: dict[str, dict[str, str]] = Field(default_factory=dict)
+    campaign_checks: dict[str, bool] = Field(default_factory=dict)
+    affiliate_url: str = ""
 
 
 class RescheduleModel(BaseModel):
@@ -514,6 +524,7 @@ def healthz() -> dict[str, str]:
 @app.get("/api/info", tags=["system"])
 def info() -> dict[str, object]:
     engines, capabilities = _engines_info()
+    drive_is_configured = google_drive_configured()
     return {
         "app_name": settings.app_name,
         "environment": settings.environment,
@@ -528,6 +539,10 @@ def info() -> dict[str, object]:
         # with the reasoning behind each, come from GET /api/profiles/builtin.
         "builtin_profiles": list(BUILTIN_PROFILES),
         "llm_available": _llm_available_safe(),
+        "google_drive": {
+            "configured": drive_is_configured,
+            "mode": "OAuth refresh token" if drive_is_configured else "not_configured",
+        },
         "effects": {
             "music_moods": ["upbeat", "chill", "dramatic", "corporate", "suspense"],
             "color_presets": ["vivid", "warm", "cool", "cinematic", "bw"],
@@ -834,7 +849,16 @@ def submit_url(req: UrlJobRequest) -> dict:
         validate_public_url(req.url)
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    job = get_manager().submit("url", req.url, req.options.to_options())
+    options = req.options.to_options()
+    if options.profile == BOXABL_PROFILE_NAME and not is_approved_source_url(req.url):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "BOXABL campaign URL sources must be individual links from the approved "
+                "Drive / YouTube source list in the campaign brief."
+            ),
+        )
+    job = get_manager().submit("url", req.url, options)
     return job.to_dict()
 
 
@@ -848,13 +872,22 @@ def submit_batch(req: BatchRequest) -> dict:
     # existing filter silently drops anything `is_url` rejects, which is defensible for a typo in
     # a pasted list; silently dropping an attempt to reach 169.254.169.254 would hide it instead,
     # and a submitter who included one deserves to be told which.
+    options = req.options.to_options()
     for candidate in urls:
         try:
             validate_public_url(candidate)
         except UnsafeURLError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if options.profile == BOXABL_PROFILE_NAME and not is_approved_source_url(candidate):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Every BOXABL campaign URL must be an individual link from the approved "
+                    "Drive / YouTube source list in the campaign brief."
+                ),
+            )
     items = [{"input_type": "url", "source": u} for u in urls]
-    batch_id = get_manager().submit_batch(items, req.options.to_options())
+    batch_id = get_manager().submit_batch(items, options)
     return {"batch_id": batch_id, "jobs": get_manager().store.snapshot_batch(batch_id)}
 
 
@@ -1264,13 +1297,40 @@ def get_batch(batch_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Clip metadata editing + per-field regeneration
 # ---------------------------------------------------------------------------
+def _invalidate_boxabl_review(
+    job: Any,
+    clip: Any,
+    fields: dict[str, Any],
+    *,
+    force: bool = False,
+) -> None:
+    """Require a fresh human review after a BOXABL clip or its copy changes."""
+    if getattr(getattr(job, "options", None), "profile", "") != BOXABL_PROFILE_NAME:
+        return
+
+    changed = force or any(
+        getattr(clip, name, object()) != value
+        for name, value in fields.items()
+        if name not in {"review_state", "review_note"}
+    )
+    if changed:
+        fields["review_state"] = "pending"
+        fields["review_note"] = "Re-review this BOXABL campaign clip before publishing."
+
+
 @app.patch("/api/jobs/{job_id}/clips/{clip_id}", tags=["metadata"])
 def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
     """Update editable metadata fields on a clip (title, hashtags, hook, ...)."""
     fields = {k: v for k, v in edit.model_dump().items() if v is not None}
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
-    clip = get_manager().store.update_clip(job_id, clip_id, fields)
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    original = manager.store.get_clip(job_id, clip_id)
+    if job is None or original is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    _invalidate_boxabl_review(job, original, fields)
+    clip = manager.store.update_clip(job_id, clip_id, fields)
     if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, clip)
@@ -1580,8 +1640,10 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
         name: getattr(updated, name)
         for name in ("duration", "effects_applied", "broll_assets", "start", "end")
     }
-    stored = manager.store.update_clip(job_id, clip_id, fields)
-    return (stored or updated).to_dict()
+    _invalidate_boxabl_review(job, clip, fields, force=True)
+    stored = manager.store.update_clip(job_id, clip_id, fields) or updated
+    get_history().sync_clip(job_id, stored)
+    return stored.to_dict()
 
 
 @app.post(
@@ -1629,7 +1691,9 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
     # `clip` was already resolved non-None above and nothing removes a clip from a job, so the
     # update cannot miss. Falling back to it keeps the expression total without inventing an
     # error path for a state the store cannot reach.
-    updated = manager.store.update_clip(job_id, clip_id, {req.field: value}) or clip
+    fields = {req.field: value}
+    _invalidate_boxabl_review(job, clip, fields)
+    updated = manager.store.update_clip(job_id, clip_id, fields) or clip
     get_history().sync_clip(job_id, updated)
     return {"field": req.field, "value": value, "clip": updated.to_dict()}
 
@@ -1663,6 +1727,23 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     if req.mode not in ("auto", "review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
+    routes = {platform: dict(route) for platform, route in req.routes.items()}
+    if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
+        blockers = campaign_publish_blockers(
+            job=job,
+            clip=clip,
+            platforms=req.platforms,
+            mode=req.mode,
+            checks=req.campaign_checks,
+            affiliate_url=req.affiliate_url,
+        )
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="BOXABL campaign preflight failed: " + " ".join(blockers),
+            )
+        if "x" in {platform.strip().lower() for platform in req.platforms}:
+            routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,
@@ -1672,7 +1753,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         campaign_id=req.campaign_id,
         mode=req.mode,
         schedule_at=req.schedule_at,
-        route_overrides=req.routes,
+        route_overrides=routes,
     )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")
