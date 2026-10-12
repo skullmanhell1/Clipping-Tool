@@ -48,6 +48,33 @@ describe("video source intake", () => {
     expect(screen.queryByText("interview.mp4")).not.toBeInTheDocument();
   });
 
+  it("previews a selected File through the media object API rather than a URL string", async () => {
+    const previous = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, "srcObject");
+    Object.defineProperty(HTMLVideoElement.prototype, "srcObject", {
+      configurable: true,
+      get() {
+        return this._testSrcObject;
+      },
+      set(value) {
+        this._testSrcObject = value;
+      },
+    });
+
+    try {
+      const user = userEvent.setup();
+      render(<InputBar />);
+      const file = videoFile();
+      await user.upload(screen.getByLabelText("Choose video files"), file);
+      expect(screen.getByLabelText("Preview interview.mp4").srcObject).toBe(file);
+    } finally {
+      if (previous) {
+        Object.defineProperty(HTMLVideoElement.prototype, "srcObject", previous);
+      } else {
+        delete HTMLVideoElement.prototype.srcObject;
+      }
+    }
+  });
+
   it("accepts videos by drag and drop and explains skipped non-video files", () => {
     const onChange = vi.fn();
     render(<InputBar onChange={onChange} />);

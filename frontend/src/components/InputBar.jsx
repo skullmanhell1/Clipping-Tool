@@ -32,21 +32,29 @@ export default function InputBar({ onChange = () => {}, onPreview }) {
   const [files, setFiles] = useState([]);
   const [fileError, setFileError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
-  const [localPreviewUrl, setLocalPreviewUrl] = useState("");
   const fileRef = useRef(null);
+  const previewRef = useRef(null);
   const dragDepthRef = useRef(0);
   const urls = parseUrls(urlText);
   const totalBytes = files.reduce((total, file) => total + file.size, 0);
 
   useEffect(() => {
+    const video = previewRef.current;
     const file = files[0];
-    if (!file || typeof URL.createObjectURL !== "function") {
-      setLocalPreviewUrl("");
+    if (!video || !file || !("srcObject" in video)) return undefined;
+
+    // Assign the selected File directly. Avoid turning its bytes into a URL string and feeding
+    // that string back into a DOM URL sink; this preview only needs a local media object.
+    try {
+      video.srcObject = file;
+    } catch {
+      // Browsers without File support for srcObject still allow selecting and uploading files;
+      // the preview is an optional convenience, not a prerequisite for processing.
       return undefined;
     }
-    const objectUrl = URL.createObjectURL(file);
-    setLocalPreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL?.(objectUrl);
+    return () => {
+      video.srcObject = null;
+    };
   }, [files]);
 
   const emit = (text, selectedFiles) => {
@@ -233,15 +241,13 @@ export default function InputBar({ onChange = () => {}, onPreview }) {
                   Clear all
                 </button>
               </div>
-              {localPreviewUrl ? (
-                <video
-                  src={localPreviewUrl}
-                  controls
-                  preload="metadata"
-                  className="aspect-video max-h-52 w-full bg-black object-contain"
-                  aria-label={`Preview ${files[0].name}`}
-                />
-              ) : null}
+              <video
+                ref={previewRef}
+                controls
+                preload="metadata"
+                className="aspect-video max-h-52 w-full bg-black object-contain"
+                aria-label={`Preview ${files[0].name}`}
+              />
               <ul className="max-h-36 divide-y divide-slate-800/80 overflow-y-auto">
                 {files.map((file, index) => (
                   <li key={`${file.name}-${file.size}-${file.lastModified}-${index}`} className="flex items-center gap-3 px-3 py-2">
