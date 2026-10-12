@@ -163,6 +163,12 @@ class PublishManager:
                 )
                 continue
             route = routes.get(platform, {})
+            mentions = list(clip.mentions or [])
+            affiliate_url = str(route.get("affiliate_url") or "").strip()
+            if platform.lower() == "x" and affiliate_url and affiliate_url not in mentions:
+                # The campaign's X affiliate link is placed in the untruncated tail with mentions
+                # and hashtags, rather than in the description where platform fitting might cut it.
+                mentions.append(affiliate_url)
             req = {
                 "video_path": str(video_path),
                 "title": clip.title,
@@ -170,7 +176,7 @@ class PublishManager:
                 "hashtags": clip.hashtags,
                 "hook_text": clip.hook_text,
                 "cta": clip.cta,
-                "mentions": clip.mentions,
+                "mentions": mentions,
                 "account_id": route.get("account_id", ""),
                 "campaign_id": campaign_id,
                 "target_type": route.get("target_type", ""),

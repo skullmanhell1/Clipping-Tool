@@ -30,6 +30,15 @@ const REVIEW_STYLES = {
   pending: "border-slate-700 bg-slate-800/60 text-slate-400",
 };
 
+const BOXABL_REVIEW_ITEMS = [
+  ["source_approved", "Source link is on the approved Drive / YouTube list."],
+  ["whole_home_2_5", "The complete Casita is visible by 0:02–0:05."],
+  ["brand_by_8", "Exact BOXABL branding is spoken or visible by 0:05–0:08."],
+  ["hook_and_pacing", "Strong first-two-second hook; brisk edits and clean framing."],
+  ["captions_verified", "Captions are readable and BOXABL is spelled exactly BOXABL."],
+  ["no_prohibited_content", "No Kanye West, stock/equity/ticker talk, political/negative bait, or unedited rip."],
+];
+
 function scoreColor(score) {
   if (score >= 80) return "bg-emerald-500/90";
   if (score >= 60) return "bg-lime-500/90";
@@ -71,6 +80,7 @@ const toEpoch = (localDateTime) => {
 export default function ClipCard({
   jobId,
   clip,
+  campaignProfile = "",
   llmAvailable,
   publishing,
   publisherStatuses,
@@ -104,6 +114,8 @@ export default function ClipCard({
   const [reviewing, setReviewing] = useState(false);
   const [rerendering, setRerendering] = useState(false);
   const [editingTranscript, setEditingTranscript] = useState(false);
+  const [campaignChecks, setCampaignChecks] = useState({});
+  const isBoxablCampaign = campaignProfile === "boxabl_campaign";
 
   useEffect(() => {
     setSelectedPlatforms(publishing?.platforms || []);
@@ -111,6 +123,7 @@ export default function ClipCard({
 
   const update = (key) => (event) => {
     setForm((current) => ({ ...current, [key]: event.target.value }));
+    setCampaignChecks({});
     setDirty(true);
   };
 
@@ -149,6 +162,7 @@ export default function ClipCard({
       } else {
         setForm((current) => ({ ...current, [field]: value }));
       }
+      setCampaignChecks({});
       setDirty(true);
     } catch (regenerateError) {
       setError(regenerateError.message || "Regenerate failed");
@@ -162,6 +176,7 @@ export default function ClipCard({
   // hook-order violation. This is an ordinary event handler.
   const applyAlternative = (alternative) => {
     setForm((current) => ({ ...current, title: alternative }));
+    setCampaignChecks({});
     setDirty(true);
   };
 
@@ -183,6 +198,29 @@ export default function ClipCard({
       setError("Save metadata changes before publishing.");
       return;
     }
+    if (isBoxablCampaign) {
+      if (publishing?.mode !== "review") {
+        setError("BOXABL clips must be uploaded in review mode.");
+        return;
+      }
+      if (clip.review_state !== "approved") {
+        setError("Watch and approve this clip before publishing it.");
+        return;
+      }
+      if (selectedPlatforms.includes("instagram")) {
+        setError("Instagram API publishing is blocked for this campaign because it cannot set the required native @boxabl tag. Download the clip and publish/tag it manually in Instagram.");
+        return;
+      }
+      const requiredChecks = BOXABL_REVIEW_ITEMS.map(([key]) => key);
+      if (requiredChecks.some((key) => campaignChecks[key] !== true)) {
+        setError("Complete every BOXABL campaign review checkbox before uploading.");
+        return;
+      }
+      if (selectedPlatforms.includes("x") && !publishing?.affiliate_url?.trim()) {
+        setError("Add your personal trackable affiliate URL in Publishing settings for X.");
+        return;
+      }
+    }
 
     const routes = {};
     selectedPlatforms.forEach((platform) => {
@@ -201,6 +239,8 @@ export default function ClipCard({
         mode: publishing.mode || "review",
         schedule_at: toEpoch(publishing.schedule),
         routes,
+        campaign_checks: isBoxablCampaign ? campaignChecks : {},
+        affiliate_url: isBoxablCampaign ? publishing?.affiliate_url || "" : "",
       });
       onPublished?.(result.attempts || []);
     } catch (publishError) {
@@ -239,6 +279,7 @@ export default function ClipCard({
       try {
         const updated = await api.rerenderClip(jobId, clip.id, settings || {}, cuts);
         onUpdated?.(updated);
+        if (isBoxablCampaign) setCampaignChecks({});
         // U4: the struck words have been applied and the clip record replaced, so leaving the
         // editor open would show a selection against a transcript that no longer describes the
         // media. Closing it forces a fresh fetch if the user wants to trim again.
@@ -249,7 +290,7 @@ export default function ClipCard({
         setRerendering(false);
       }
     },
-    [clip.id, jobId, onUpdated, settings],
+    [clip.id, isBoxablCampaign, jobId, onUpdated, settings],
   );
 
   // U4: the transcript editor is a panel rather than a separate view, so the player stays
@@ -497,6 +538,47 @@ export default function ClipCard({
             </span>
           )}
         </div>
+
+        {isBoxablCampaign ? (
+          <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-200">
+                  BOXABL campaign review
+                </h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  A 0:05–0:08 BOXABL title card is rendered automatically. Watch the clip to
+                  verify the Casita framing, source, spoken branding, captions, and context.
+                </p>
+              </div>
+              <span className="rounded-full border border-amber-300/20 px-2 py-1 text-[10px] text-amber-100">
+                {clip.review_state === "approved" ? "Clip approved" : "Approval required"}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {BOXABL_REVIEW_ITEMS.map(([key, label]) => (
+                <label key={key} className="flex items-start gap-2 text-xs leading-5 text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={campaignChecks[key] === true}
+                    onChange={(event) =>
+                      setCampaignChecks((current) => ({ ...current, [key]: event.target.checked }))
+                    }
+                    className="mt-1 accent-amber-300"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            {selectedPlatforms.includes("instagram") ? (
+              <p className="mt-2 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-2 text-[11px] leading-5 text-rose-200">
+                Instagram API publishing is blocked for this campaign because the current publisher cannot
+                apply its required native @boxabl account tag. Download this clip and post/tag it manually
+                in Instagram.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

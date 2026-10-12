@@ -26,7 +26,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "^10.4.19",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
@@ -36,21 +36,19 @@
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "vite": "^8.2.0",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.11"
   },
   "//overrides": [
-    "Both are transitive, dev-only and reached through tooling we do not choose the version of:",
-    "js-yaml via eslint -> @eslint/eslintrc, nanoid via postcss. Each pin is a patched release",
-    "inside the major its dependent already asks for (eslintrc wants ^4.1.0, postcss ^3.3.11), so",
-    "this is not a version bump - `npm ci` resolves the same tree and `npm run build` emits",
-    "byte-identical output. Unlike the brace-expansion advisory this replaces, both had clean",
-    "fixes: that one had no fix that was not worse than the finding, which is why the CI gate is",
-    "--audit-level=critical. The gate is a floor, not a claim that high is acceptable - prefer",
-    "fixing an advisory over widening the gate, and drop an entry here once the dependent ships a",
-    "range that already excludes the vulnerable versions."
+    "These are narrow overrides for transitive, dev-only dependencies whose upstream ranges",
+    "still admit vulnerable releases: js-yaml (eslint -> @eslint/eslintrc) and nanoid (postcss).",
+    "Each pin stays inside the major version already requested by its dependent. Keep the entries",
+    "only while they are needed; remove one once the upstream range excludes the vulnerable release.",
+    "The CI audit is a blocking critical-severity floor, not a claim that lower-severity findings",
+    "are acceptable. Fix compatible transitive advisories normally; reserve major toolchain bumps",
+    "for a tested change rather than widening the audit threshold."
   ],
   "overrides": {
-    "js-yaml": "4.3.1",
+    "js-yaml": "4.3.2",
     "nanoid": "3.3.18"
   }
 }

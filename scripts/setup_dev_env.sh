@@ -17,6 +17,10 @@
 #                      them, so every vision path silently takes its degraded branch even though
 #                      the packages are installed. CI installed opencv and got no coverage from it
 #                      for a while for exactly this reason.
+#   EGL + GLES         MediaPipe's Python API imports without these, but constructing its task
+#                      detector loads a native library that needs `libEGL.so.1` and `libGLESv2.so.2`.
+#                      Without them it silently falls back to Haar, so an import smoke test is not
+#                      enough; the real detector tests catch the difference.
 #
 # It also installs the bundled caption faces the way the Dockerfile does (A2). libass reaches them
 # through `fontsdir` regardless, but the capability probe reads the *system* font list, so without
@@ -35,7 +39,7 @@ install_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update >/dev/null 2>&1
     apt-get install -y --no-install-recommends \
-      fonts-liberation fontconfig libgl1 libglib2.0-0 xz-utils >/dev/null 2>&1
+      fonts-liberation fontconfig libgl1 libglib2.0-0 libegl1 libgles2 xz-utils >/dev/null 2>&1
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
       fontconfig mesa-libGL mesa-libGLES glib2 xz >/dev/null 2>&1
@@ -45,7 +49,16 @@ install_packages() {
   fi
 }
 
+system_deps_present=true
 if ! fc-list : family 2>/dev/null | grep -qi liberation; then
+  system_deps_present=false
+fi
+for library in 'libGL.so.1' 'libEGL.so.1' 'libGLESv2.so.2'; do
+  if ! ldconfig -p 2>/dev/null | grep -q "$library"; then
+    system_deps_present=false
+  fi
+done
+if [ "$system_deps_present" != true ]; then
   install_packages
 fi
 

@@ -354,16 +354,17 @@ exit path including a signal.
 bash scripts/setup_dev_env.sh
 ```
 
-Installs ffmpeg/ffprobe, the Liberation fonts and the opencv runtime libraries, and registers the
-bundled caption faces with fontconfig the way the Dockerfile does. Idempotent, and it prints what it
-found so a partial setup is visible immediately.
+Installs ffmpeg/ffprobe, the Liberation fonts and the OpenCV/MediaPipe runtime libraries (`libGL`,
+`glib2`, EGL and GLES), and registers the bundled caption faces with fontconfig the way the
+Dockerfile does. Idempotent, and it prints what it found so a partial setup is visible immediately.
 
-Each of those is load-bearing rather than convenience. Without ffmpeg the real-binary capability
+Each dependency is load-bearing rather than convenience. Without ffmpeg the real-binary capability
 tests cannot run, and they exist to catch the probe bugs every mocked test misses. Without
 `libGL`/`glib2`, `import cv2` raises and every vision path silently takes its degraded branch —
-CI installed opencv and got no coverage from it for a while for exactly this reason. And the
-capability probe reads the *system* font list, so without the bundled faces installed
-`font_available()` disagrees with what will actually render.
+CI installed opencv and got no coverage from it for a while for exactly this reason. MediaPipe's
+Python API can import without `libEGL`/`libGLES`, but task construction cannot; the detector then
+silently falls back to Haar. And the capability probe reads the *system* font list, so without the
+bundled faces installed `font_available()` disagrees with what will actually render.
 
 ## Local development (without Docker)
 
@@ -477,6 +478,12 @@ to use. When in doubt, don't.
 This tool does not grant you any rights to third-party content and does not
 provide legal advice. If you're unsure about the rights to specific footage or
 music, consult a qualified professional.
+
+---
+
+## BOXABL campaign setup
+
+The optional `boxabl_campaign` profile is based on the supplied BOXABL clipper guide and Drive source list. It includes individual-link source allow-listing, a timed 0:05–0:08 BOXABL caption card, deterministic caption/metadata branding, human review gates, Google Drive file-link import, and review-only campaign publishing. See [`docs/BOXABL_CAMPAIGN_SETUP.md`](docs/BOXABL_CAMPAIGN_SETUP.md) for the Drive and YouTube OAuth setup steps. YouTube uploads require OAuth refresh-token credentials; a public API key alone cannot upload.
 
 ---
 

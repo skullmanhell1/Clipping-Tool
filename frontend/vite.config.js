@@ -6,26 +6,20 @@ import react from "@vitejs/plugin-react";
 // SPA and API can be developed side by side.
 export default defineConfig({
   plugins: [react()],
-  // I10: required since the vite 8 / @vitejs/plugin-react 5 / vitest 3 upgrade.
+  // I10: keep Vitest's JSX transform on the automatic runtime. This was added after the Vite 8 /
+  // @vitejs/plugin-react 5 / Vitest 3 upgrade made `.jsx` tests use the classic runtime: component
+  // tests then failed with `React is not defined` while the production build remained green. The
+  // frontend now uses Vitest 4.1.11, and this setting still passes the full 148-test suite.
   //
-  // Under that combination vitest transformed `.jsx` test files with the *classic* JSX runtime,
-  // which needs `React` in lexical scope - so all 81 component tests failed with
-  // "ReferenceError: React is not defined" while `npm run build` was completely fine, because the
-  // build goes through the plugin's own transform and the tests do not. Stating it explicitly
-  // makes both pipelines emit `jsx-runtime` imports, and means the answer does not depend on
-  // which of the two transforms happens to see a file first.
-  //
-  // `npm run build` warns "Both esbuild and oxc options were set... esbuild options will be
-  // ignored" on every run. **That warning is expected — do not act on it.** Vite 8 builds with oxc
-  // and the plugin sets `oxc.jsx` itself, which is the "both" being reported, but *vitest* still
-  // reads `esbuild`, so this key is the only thing keeping the test transform on the automatic
-  // runtime. Both tidy-ups the warning invites were measured on this revision and both take the
-  // suite from 141 passing to **100 failed / 41 passed**: deleting the key, and moving it to `oxc`.
-  // Silencing a cosmetic build warning by breaking 100 tests is the wrong trade. If you change
-  // anything here, `npm run test:run` is the check that matters — `npm run build` stays green
-  // through the failure and will not tell you.
+  // `npm run build` warns that both esbuild and oxc options were set. **That warning is expected.**
+  // Vite 8 builds with oxc; Vitest's test transform uses the esbuild setting above. Keep the
+  // setting unless `npm run test:run` proves it can be removed or moved — a green build alone
+  // will not catch a JSX-transform regression.
   esbuild: { jsx: "automatic" },
   server: {
+    host: "0.0.0.0",
+    // The preview is served from a per-session *.e2b.app hostname.
+    allowedHosts: [".e2b.app"],
     port: 5173,
     proxy: {
       "/api": "http://localhost:8000",

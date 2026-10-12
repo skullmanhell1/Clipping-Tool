@@ -55,6 +55,25 @@ def test_hook_title_event(tmp_path):
     assert "\\fad(" in text  # fade in/out
 
 
+def test_campaign_brand_card_uses_the_five_to_eight_second_window(tmp_path):
+    dest = tmp_path / "campaign.ass"
+    notes = []
+    build_ass([], dest, brand_text="BOXABL", clip_duration=12.0, notes=notes)
+    text = dest.read_text()
+    assert "Dialogue: 2,0:00:05.00,0:00:08.00,Hook" in text
+    assert "BOXABL" in text
+    assert notes == ["campaign_brand_overlay"]
+
+
+def test_campaign_brand_card_is_clipped_to_short_media(tmp_path):
+    dest = tmp_path / "short-campaign.ass"
+    notes = []
+    build_ass([], dest, brand_text="BOXABL", clip_duration=6.0, notes=notes)
+    text = dest.read_text()
+    assert "Dialogue: 2,0:00:05.00,0:00:06.00,Hook" in text
+    assert "campaign_brand_overlay" in notes
+
+
 def test_subtitles_filter_escapes_path():
     f = subtitles_filter("/tmp/a:bّ.ass")
     assert f.startswith("subtitles='")

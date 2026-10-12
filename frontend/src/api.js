@@ -260,6 +260,7 @@ export const api = {
     apiFetch(`/api/jobs/${jobId}/source?confirm=true`, { method: "DELETE" }).then(jsonOrThrow),
 
   profiles: () => apiFetch("/api/profiles").then(jsonOrThrow),
+  builtinProfiles: () => apiFetch("/api/profiles/builtin").then(jsonOrThrow),
   saveProfile: (payload) =>
     apiFetch("/api/profiles", {
       method: "POST",
