@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 OAUTH_EXCHANGE_ENDPOINT = "https://oauth2.googleapis.com/token"
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
@@ -47,6 +47,18 @@ def extract_file_id(url: str) -> str | None:
     elif path_parts and path_parts[0] in {"open", "uc"}:
         file_id = parse_qs(parts.query).get("id", [None])[0]
     return file_id if file_id and _FILE_ID_RE.fullmatch(file_id) else None
+
+
+def _file_resource_url(file_id: str, *, export: bool = False) -> str:
+    """Build a fixed-host Drive URL with the ID encoded as exactly one path segment."""
+    value = str(file_id or "")
+    if not _FILE_ID_RE.fullmatch(value):
+        raise GoogleDriveError("That Google Drive file ID is not valid.")
+    # Keep untrusted IDs out of URL syntax: validate the Drive alphabet and percent-encode the
+    # value as a single path component before appending it to the fixed Google API endpoint.
+    encoded_id = quote(value, safe="")
+    suffix = "/export" if export else ""
+    return f"{FILES_URL}/{encoded_id}{suffix}"
 
 
 def configured() -> bool:
@@ -120,7 +132,7 @@ def _get_file_metadata(
         raise GoogleDriveError("That Google Drive file ID is not valid.")
     try:
         response = httpx.get(
-            f"{FILES_URL}/{file_id}",
+            _file_resource_url(file_id),
             params={
                 "fields": "id,name,mimeType,size,modifiedTime,version,headRevisionId,md5Checksum",
             },
@@ -162,10 +174,10 @@ def download_text_file(file_id: str, *, mime_type: str = "") -> tuple[str, dict]
     metadata = _get_file_metadata(file_id, headers, require_video=False)
     source_mime = str(mime_type or metadata.get("mimeType") or "")
     if source_mime == "application/vnd.google-apps.document":
-        url = f"{FILES_URL}/{file_id}/export"
+        url = _file_resource_url(file_id, export=True)
         params = {"mimeType": "text/plain"}
     elif source_mime.startswith("text/") or source_mime == "application/json":
-        url = f"{FILES_URL}/{file_id}"
+        url = _file_resource_url(file_id)
         params = {"alt": "media"}
     else:
         raise GoogleDriveError(
@@ -217,7 +229,7 @@ def download_file(
     try:
         with httpx.stream(
             "GET",
-            f"{FILES_URL}/{file_id}",
+            _file_resource_url(file_id),
             params={"alt": "media"},
             headers=headers,
             follow_redirects=True,
@@ -290,7 +302,7 @@ def download_asset(
         raise GoogleDriveError("That Google Drive asset ID is not valid.")
     try:
         response = httpx.get(
-            f"{FILES_URL}/{file_id}",
+            _file_resource_url(file_id),
             params={"fields": "id,name,mimeType,size"},
             headers=headers,
             timeout=20.0,
@@ -309,7 +321,7 @@ def download_asset(
         written = 0
         with httpx.stream(
             "GET",
-            f"{FILES_URL}/{file_id}",
+            _file_resource_url(file_id),
             params={"alt": "media"},
             headers=headers,
             follow_redirects=True,

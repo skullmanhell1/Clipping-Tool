@@ -29,11 +29,7 @@ logger = logging.getLogger(__name__)
 _RATIO_RE = re.compile(r"(?<!\d)(\d{1,3})\s*:\s*(\d{1,3})(?!\d)")
 _HASHTAG_RE = re.compile(r"(?<![\w])#([\w][\w-]*)", re.UNICODE)
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-_ASSET_RE = re.compile(
-    r"(?:[\w ._/-]+\.(?:ttf|otf|woff2?|png|jpe?g|svg|webp)|"
-    r"(?:assets|fonts|logos?)[\\/][^\s,;|)]+)",
-    re.IGNORECASE,
-)
+_ASSET_SUFFIXES = (".ttf", ".otf", ".woff", ".woff2", ".png", ".jpg", ".jpeg", ".svg", ".webp")
 _DATE_RE = re.compile(
     r"\b(?:"
     r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
@@ -142,7 +138,8 @@ def _split_values(value: Any) -> list[str]:
 
 
 def _field_value(line: str, labels: tuple[str, ...]) -> str | None:
-    label_pattern = "|".join(re.escape(label) for label in labels)
+    # Longer labels must win before their prefixes (for example, "font assets" before "font").
+    label_pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
     match = re.match(
         rf"^\s*(?:[-*•]\s*)?(?:#+\s*)?(?:{label_pattern})\b\s*(?::|=|-|–)?\s*(.*?)\s*$",
         line,
@@ -318,6 +315,29 @@ def _canonical_platform(value: Any) -> str:
     return _PLATFORM_ALIASES.get(text, text.replace(" ", "_"))
 
 
+def _platform_line_parts(line: str) -> tuple[str, str] | None:
+    """Parse a known platform label without running a backtracking regex on user text."""
+    text = str(line or "").strip()
+    if text[:1] in {"-", "*", "•"}:
+        text = text[1:].lstrip()
+    if not text or not text[0].isalpha():
+        return None
+
+    delimiter = next((index for index, char in enumerate(text) if char in ":=–-"), None)
+    if delimiter is None:
+        return None
+    label = text[:delimiter].strip()
+    if not label or not label[0].isalpha():
+        return None
+    if any(not (char.isalpha() or char in " \t") for char in label):
+        return None
+
+    name = _canonical_platform(label)
+    if name not in _PLATFORM_ALIASES.values():
+        return None
+    return name, text[delimiter + 1 :].strip()
+
+
 def _ratios_from_values(value: Any) -> list[str]:
     raw = value if isinstance(value, (list, tuple, set)) else _split_values(value)
     return _stable_unique([ratio for item in raw for ratio in [_normalise_ratio(item)] if ratio])
@@ -397,12 +417,8 @@ def _dates_from_text(text: str) -> list[PromotionalDate]:
         if not parsed:
             continue
         label = line[: matches[0].start()].strip(" -*#:")
-        platform = ""
-        first_word = re.match(r"\s*(?:[-*•]\s*)?([A-Za-z][A-Za-z ]*)\s*[:\-–]", line)
-        if first_word:
-            candidate = _canonical_platform(first_word.group(1))
-            if candidate in _PLATFORM_ALIASES.values():
-                platform = candidate
+        platform_parts = _platform_line_parts(line)
+        platform = platform_parts[0] if platform_parts else ""
         result.append(
             PromotionalDate(
                 start_date=parsed[0],
@@ -454,14 +470,25 @@ def _dedupe_dates(values: list[PromotionalDate]) -> list[PromotionalDate]:
 
 
 def _asset_values(value: str, *, kind: str) -> list[str]:
-    urls = [match.rstrip(".,;:)") for match in _URL_RE.findall(value)]
+    text = str(value or "")
+    urls = [match.rstrip(".,;:)") for match in _URL_RE.findall(text)]
     references = list(urls)
-    references.extend(
-        match.rstrip(".,;:)")
-        for match in _ASSET_RE.findall(value)
-        if not any(match in url for url in urls)
-    )
-    # Font family names are useful even when a doc does not include a file path.  Logo values are
+    # URLs are already captured above. Remove them before scanning local references so punctuation
+    # in a URL cannot be misread as an asset path.
+    residual = _URL_RE.sub(" ", text)
+    for chunk in re.split(r"[,;|()\n]", residual):
+        candidate = chunk.strip().strip("`\\\"'<> ")
+        candidate = candidate.rstrip(".,;:")
+        if not candidate:
+            continue
+        normalized = candidate.replace("\\", "/").casefold()
+        path_parts = normalized.lstrip("/").split("/")
+        under_asset_dir = any(
+            part in {"assets", "font", "fonts", "logo", "logos"} for part in path_parts[:-1]
+        )
+        if normalized.endswith(_ASSET_SUFFIXES) or under_asset_dir:
+            references.append(candidate)
+    # Font family names are useful even when a doc does not include a file path. Logo values are
     # retained only when they look like a path/URL, avoiding a generic heading becoming an asset.
     if not references and kind == "font":
         references.extend(_split_values(value))
@@ -471,18 +498,13 @@ def _asset_values(value: str, *, kind: str) -> list[str]:
 def _deterministic_parse(raw_text: str) -> CampaignBrief:
     text = str(raw_text or "")
     lines = text.splitlines()
-    platform_pattern = re.compile(
-        r"^\s*(?:[-*•]\s*)?(youtube\s+shorts|youtube|tiktok|instagram\s+reels|"
-        r"instagram|reels|twitter|facebook|linkedin|whop|x)\s*(?::|=|-|–)\s*(.*?)\s*$",
-        re.IGNORECASE,
-    )
     ratios = [_normalise_ratio(match.group(0)) for match in _RATIO_RE.finditer(text)]
     # Platform-specific hashtags belong to each platform's metadata, not the
     # campaign-wide hashtag list. Keep hashes on ordinary lines as global tags.
     hashtags = [
         _normalise_hashtag(match.group(0))
         for line in lines
-        if not platform_pattern.match(line)
+        if _platform_line_parts(line) is None
         for match in _HASHTAG_RE.finditer(line)
     ]
     voice = ""
@@ -521,11 +543,10 @@ def _deterministic_parse(raw_text: str) -> CampaignBrief:
 
     platforms: dict[str, PlatformBrief] = {}
     for line in lines:
-        match = platform_pattern.match(line)
-        if not match:
+        platform_parts = _platform_line_parts(line)
+        if platform_parts is None:
             continue
-        name = _canonical_platform(match.group(1))
-        payload = match.group(2).strip()
+        name, payload = platform_parts
         metadata: dict[str, Any] = {}
         # Preserve arbitrary key/value instructions, while also extracting typed values from them.
         pairs = re.findall(r"([A-Za-z][\w -]{0,24})\s*(?:=|:)\s*([^,;|]+)", payload)
