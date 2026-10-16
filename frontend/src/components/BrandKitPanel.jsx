@@ -170,6 +170,46 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
             className="mt-2 w-full accent-brand-accent"
           />
         </Row>
+
+        <Row label="Logo background" hint="Remove a flat white or black matte, or leave automatic detection on.">
+          <select
+            value={settings.brand_logo_background || "auto"}
+            onChange={(event) => set("brand_logo_background")(event.target.value)}
+            className={inputClass}
+            disabled={!settings.brand_logo}
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="white">White</option>
+            <option value="black">Black</option>
+            <option value="none">Keep as-is</option>
+          </select>
+        </Row>
+
+        <Row
+          label="Intro bumper"
+          hint="Optional local video path. In Docker, place it under the project assets/ folder and use its /app/assets/... container path."
+        >
+          <input
+            type="text"
+            value={settings.brand_intro_asset || ""}
+            onChange={(event) => set("brand_intro_asset")(event.target.value)}
+            placeholder="/app/assets/brand/intro.mp4"
+            className={inputClass}
+          />
+        </Row>
+
+        <Row
+          label="Outro bumper"
+          hint="Optional local video path, mounted into the app container just like the intro."
+        >
+          <input
+            type="text"
+            value={settings.brand_outro_asset || ""}
+            onChange={(event) => set("brand_outro_asset")(event.target.value)}
+            placeholder="/app/assets/brand/outro.mp4"
+            className={inputClass}
+          />
+        </Row>
       </div>
     </section>
   );

@@ -66,7 +66,11 @@ PLATFORM_LIMITS: dict[str, PlatformLimits] = {
     "tiktok": PlatformLimits(
         name="tiktok",
         min_duration_s=1.0,
-        max_duration_s=600.0,
+        # TikTok's Content Posting API exposes the creator's current maximum
+        # duration through creator_info; the documented example is 300 seconds.
+        # Use that conservative ceiling until the publisher queries the account
+        # dynamically, rather than allowing a clip the API may reject.
+        max_duration_s=300.0,
         max_file_mb=500.0,
         preferred_aspects=(_VERTICAL,),
     ),
@@ -80,11 +84,20 @@ PLATFORM_LIMITS: dict[str, PlatformLimits] = {
     "youtube": PlatformLimits(
         name="youtube",
         min_duration_s=1.0,
-        # Shorts are capped at 60 s; a longer clip is still a valid YouTube upload, so this
-        # is the generous reading rather than the Shorts one.
+        # A longer clip is still a valid ordinary YouTube upload, so this is
+        # intentionally more permissive than the Shorts-specific entry below.
         max_duration_s=900.0,
         max_file_mb=2000.0,
         preferred_aspects=(_VERTICAL, _LANDSCAPE, _SQUARE),
+    ),
+    "youtube_shorts": PlatformLimits(
+        name="youtube_shorts",
+        min_duration_s=1.0,
+        # YouTube's current Shorts product limit is three minutes for square or
+        # vertical uploads. Keep this distinct from ordinary YouTube uploads.
+        max_duration_s=180.0,
+        max_file_mb=2000.0,
+        preferred_aspects=(_VERTICAL, _SQUARE),
     ),
     "x": PlatformLimits(
         name="x",
@@ -233,11 +246,18 @@ def validate_clip(video_path: str | Path, platform: str) -> PreflightReport:
                 "minimum worth publishing"
             )
         aspect = info.width / info.height
-        if not any(abs(aspect - want) <= _ASPECT_TOLERANCE for want in limits.preferred_aspects):
-            report.warnings.append(
+        preferred = any(
+            abs(aspect - want) <= _ASPECT_TOLERANCE for want in limits.preferred_aspects
+        )
+        if not preferred:
+            message = (
                 f"aspect {aspect:.3f} ({info.width}x{info.height}) is not one "
-                f"{limits.name} is designed around; it will be cropped or letterboxed"
+                f"{limits.name} is designed around"
             )
+            if limits.name == "youtube_shorts":
+                report.errors.append(message + "; Shorts require square or vertical video")
+            else:
+                report.warnings.append(message + "; it will be cropped or letterboxed")
 
     # --- frame rate --------------------------------------------------------
     if info.fps > limits.max_fps:

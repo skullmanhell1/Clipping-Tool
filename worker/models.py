@@ -183,6 +183,15 @@ class ProcessingOptions:
     # Feature C — prompt / visual selection
     selection_prompt: str = ""  # free-text selection prompt
     visual_selection: bool = True  # enable visual/keyframe-aided selection (U1)
+    # Retention-first engagement editing. ``off`` preserves the pre-feature ranking;
+    # ``balanced`` blends measured delivery/reaction signals and adds restrained
+    # zoom/caption cues; ``aggressive`` also removes long dead-air gaps and places
+    # low-level emphasis stings at a small number of high-signal events.
+    retention_mode: str = "off"  # off | balanced | aggressive
+    # Optional source-relative JSON: [{"time": 12.4, "count": 18}]. This is
+    # intentionally a text field so URL, upload, batch and rerender paths share
+    # exactly the same contract without introducing a second media upload.
+    audience_reactions: str = ""
     #
     # Cross-cutting
     permissibility_mode: bool = False  # forces local_only sourcing + no added audio
@@ -257,7 +266,8 @@ class ProcessingOptions:
     # clip by the LLM so it varied run to run, and a logo could not be applied at all.
     #
     # All empty by default, and each is additive - an unset field leaves the preset's own value
-    # alone rather than overwriting it with a default.
+    # alone rather than overwriting it with a default. Bumper assets are materialized and appended
+    # after the main clip has been composited.
     brand_font: str = ""  # caption font, overriding the preset's
     brand_primary_color: str = ""  # "#RRGGBB"; converted to ASS internally
     brand_highlight_color: str = ""  # "#RRGGBB"
@@ -266,6 +276,11 @@ class ProcessingOptions:
     brand_logo_position: str = "top_right"  # top_left|top_right|bottom_left|bottom_right
     brand_logo_scale: float = 0.16  # fraction of frame width
     brand_logo_opacity: float = 0.85  # 0..1
+    brand_logo_background: str = "auto"  # auto | white | black | none
+    brand_intro_asset: str = ""
+    brand_outro_asset: str = ""
+    brand_profile_id: str = ""
+    brief_id: str = ""
 
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
@@ -292,6 +307,7 @@ class ProcessingOptions:
     _CAPTION_ANIMATIONS = ("", "none", "pop", "typewriter", "karaoke_fill")
     _BROLL_INTENSITIES = ("off", "subtle", "standard", "heavy")
     _ASSET_SOURCING_MODES = ("off", "local_only", "local_then_external")
+    _RETENTION_MODES = ("off", "balanced", "aggressive")
     _REFRAME_LAYOUTS = ("follow_active", "split_screen")
     _REFRAME_INTENSITIES = ("subtle", "standard", "heavy")
     # Kept as a literal here rather than imported from worker.effects.reframe: models.py is
@@ -399,6 +415,7 @@ class ProcessingOptions:
             ("caption_animation", cls._CAPTION_ANIMATIONS, ""),
             ("broll_intensity", cls._BROLL_INTENSITIES, "standard"),
             ("asset_sourcing_mode", cls._ASSET_SOURCING_MODES, "off"),
+            ("retention_mode", cls._RETENTION_MODES, "off"),
             ("reframe_layout", cls._REFRAME_LAYOUTS, "follow_active"),
             ("reframe_intensity", cls._REFRAME_INTENSITIES, "standard"),
             ("face_detector", cls._FACE_DETECTORS, _default_face_detector()),
@@ -727,6 +744,7 @@ class ClipResult:
 
     # --- Phase 2: smart selection + metadata ------------------------------
     score: float = 0.0  # virality score 0..100
+    engagement_score: float = 0.0  # measured retention/engagement score 0..100
     reason: str = ""  # why this moment was picked
     platform: str = "generic"  # platform the metadata targets
     title_alternatives: list[str] = field(default_factory=list)
@@ -737,6 +755,13 @@ class ClipResult:
     mentions: list[str] = field(default_factory=list)  # @tags
     thumbnail_text: str = ""  # thumbnail text idea
     transcript_text: str = ""  # clip transcript (for regen)
+    # Deterministic retention cues used by the renderer and exposed for review.
+    # The dict is intentionally additive so older persisted ClipResult records
+    # continue to load with an empty plan.
+    retention_plan: dict = field(default_factory=dict)
+    # Raw measured selection signals are retained so an explicit rerender can
+    # rebuild the same retention cues without re-running model selection.
+    engagement_features: dict = field(default_factory=dict)
 
     # --- Phase 4: which visual effects were applied to this clip ----------
     # ``effects_applied`` holds free-form string markers describing which
@@ -766,6 +791,7 @@ class ClipResult:
     #                                    finished record.
     #   - ``visual_selection``            visual/keyframe-aided selection was used
     #   - ``visual_degraded``             visual selection fell back to transcript-only
+    #   - ``retention:<mode>``             retention-first ranking and edit planning
     #   - ``music_degraded:synthesised``  the "music" bed is the synthesised two-tone
     #                                    fallback, not a real track (A15). Recorded
     #                                    alongside ``music:<mood>``, which on its own
@@ -828,6 +854,11 @@ class ClipResult:
     # about to produce - reads as unreviewed rather than silently approved.
     review_state: str = "pending"  # pending | approved | rejected
     review_note: str = ""
+    # Optional campaign-brief sync state. Empty/False preserves the pre-brief representation and
+    # means this clip has no pending brief-driven work.
+    needs_rerender: bool = False
+    brief_revision: str = ""
+    brief_content_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -866,7 +897,8 @@ class Job:
     # known only inside the job body and thrown away, which is why re-rendering one clip
     # previously meant re-downloading and re-running the whole job.
     source_path: str = ""
-    # I5: the windows selection chose, as ``{"start", "end", "reason", "score"}`` dicts.
+    # I5: the windows selection chose, with retention evidence and edit metadata
+    # when available, as ``{"start", "end", "reason", "score", ...}`` dicts.
     #
     # Recorded so an interrupted job can be resumed rather than restarted. Without it a resume
     # would have to re-run selection, which with an LLM in it is not deterministic - so the

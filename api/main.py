@@ -61,6 +61,10 @@ from worker.boxabl_campaign import (
     campaign_publish_blockers,
     is_approved_source_url,
 )
+from worker.brand_profiles import BrandProfileStore
+from worker.campaign_brief import parse_campaign_brief
+from worker.campaign_brief_sync import CampaignBriefSyncService
+from worker.compliance import check_compliance
 from worker.download import (
     DownloadError,
     UnsafeURLError,
@@ -295,6 +299,10 @@ class OptionsModel(BaseModel):
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = ""
     visual_selection: bool = True
+    # Retention-first engagement editing. See ProcessingOptions for the
+    # deterministic cue and optional audience-reaction contract.
+    retention_mode: str = "off"
+    audience_reactions: str = ""
     # Tier 1 — cross-cutting
     permissibility_mode: bool = False
     # v0.8.0 — Speaker diarisation & multi-speaker reframe (default OFF)
@@ -333,7 +341,7 @@ class OptionsModel(BaseModel):
     stem_retain_stems: bool = False
     # U6 brand kit. These were absent, and their absence was silent: FastAPI matches a
     # request body against this model and drops unrecognised keys without a 422, so the UI's
-    # font, CTA, colour pickers and logo sliders all sent values that were discarded on
+    # font, CTA, colour pickers, logo sliders, and bumper assets all sent values that were discarded on
     # arrival. `ProcessingOptions` has always carried them and the renderer has always
     # honoured them, so nothing was broken except the wiring between the two.
     brand_font: str = ""
@@ -344,6 +352,11 @@ class OptionsModel(BaseModel):
     brand_logo_position: str = "top_right"
     brand_logo_scale: float = 0.16
     brand_logo_opacity: float = 0.85
+    brand_logo_background: str = "auto"
+    brand_intro_asset: str = ""
+    brand_outro_asset: str = ""
+    brand_profile_id: str = ""
+    brief_id: str = ""
     # AU1/AU2/AU7. These three default ON, which is why their absence was easy to miss: a
     # caller could not observe them failing to switch on, only failing to switch OFF. An
     # operator disabling loudness normalisation on a clip that is already mastered, or
@@ -375,7 +388,64 @@ class OptionsModel(BaseModel):
         default applies rather than this model's restatement of it - which had drifted on ten
         fields, all of them the U1 default-on effects.
         """
-        return ProcessingOptions.from_dict(self.model_dump(exclude_unset=True))
+        explicit = set(getattr(self, "model_fields_set", set()))
+        options = ProcessingOptions.from_dict(self.model_dump(exclude_unset=True))
+        return _apply_campaign_defaults(options, explicit=explicit)
+
+
+def _apply_campaign_defaults(
+    options: ProcessingOptions, *, explicit: set[str] | None = None
+) -> ProcessingOptions:
+    """Apply optional brief/profile defaults to options from any submission surface.
+
+    JSON jobs go through :class:`OptionsModel`, but uploads and watch-folder submissions build
+    ``ProcessingOptions`` directly. Keeping this enrichment outside the request model prevents
+    those paths from silently losing brand-profile bumpers and brief metadata.
+    """
+    explicit = explicit or set()
+    # Brief/profile application happens after normal option expansion so explicit request values
+    # still win, while a brief can supply defaults for fields the request left blank.
+    try:
+        brief_campaign_id = options.brief_id or options.campaign_id
+        if brief_campaign_id:
+            campaign = get_history().campaign(brief_campaign_id)
+            brief = getattr(campaign, "brief", None) if campaign else None
+            if brief is not None:
+                if "aspect" not in explicit and brief.target_aspect_ratios:
+                    options.aspect = brief.target_aspect_ratios[0]
+                if not options.brand_font:
+                    options.brand_font = brief.font_assets[0] if brief.font_assets else ""
+                if not options.brand_logo:
+                    options.brand_logo = brief.logo_assets[0] if brief.logo_assets else ""
+                if not options.brand_cta:
+                    options.brand_cta = brief.cta
+        profile_store = BrandProfileStore(settings.brand_profiles_path)
+        profile = (
+            profile_store.get(options.brand_profile_id)
+            if options.brand_profile_id
+            else profile_store.for_campaign(options.campaign_id)
+        )
+        if profile is not None:
+            if not options.brand_profile_id:
+                options.brand_profile_id = profile.id
+            if not options.brand_font:
+                options.brand_font = profile.font
+            if not options.brand_logo:
+                options.brand_logo = profile.watermark
+            if not options.brand_primary_color:
+                options.brand_primary_color = profile.primary_color
+            if not options.brand_highlight_color:
+                options.brand_highlight_color = profile.highlight_color
+            if not options.brand_cta:
+                options.brand_cta = profile.cta
+            if not options.brand_intro_asset:
+                options.brand_intro_asset = profile.intro_asset
+            if not options.brand_outro_asset:
+                options.brand_outro_asset = profile.outro_asset
+    except Exception:
+        # Missing/corrupt optional brief/profile state must not break legacy processing.
+        pass
+    return options
 
 
 class ClipEditModel(BaseModel):
@@ -476,6 +546,35 @@ class CampaignModel(BaseModel):
     id: str = ""
 
 
+class BriefRequest(BaseModel):
+    raw_text: str
+    campaign_id: str = ""
+    source_ref: str = ""
+    source_revision: str = ""
+    affected_clip_ids: list[str] = Field(default_factory=list)
+
+
+class BrandProfileModel(BaseModel):
+    id: str = ""
+    name: str
+    watermark: str = ""
+    primary_color: str = ""
+    highlight_color: str = ""
+    font: str = ""
+    cta: str = ""
+    intro_asset: str = ""
+    outro_asset: str = ""
+    forbidden_words: list[str] = Field(default_factory=list)
+    required_words: list[str] = Field(default_factory=list)
+    campaign_ids: list[str] = Field(default_factory=list)
+
+
+class ComplianceRequest(BaseModel):
+    text: str
+    forbidden_words: list[str] = Field(default_factory=list)
+    required_words: list[str] = Field(default_factory=list)
+
+
 class StorageSettingsModel(BaseModel):
     """User-tunable storage settings (runtime-persisted)."""
 
@@ -573,6 +672,7 @@ def info() -> dict[str, object]:
             "asset_sourcing_modes": ["off", "local_only", "local_then_external"],
             "broll_intensities": list(broll.BROLL_INTENSITY.keys()),
             "broll_providers": _available_broll_providers(),
+            "retention_modes": list(ProcessingOptions._RETENTION_MODES),
             # v0.8.0 — Speaker Diarisation & Multi-Speaker Reframe (additive;
             # Reqs 7.4, 10.6, 17.5, 18.1). Sourced from the ProcessingOptions
             # known-value sets so the API stays in lockstep with the model.
@@ -858,8 +958,12 @@ def submit_url(req: UrlJobRequest) -> dict:
                 "Drive / YouTube source list in the campaign brief."
             ),
         )
-    job = get_manager().submit("url", req.url, options)
-    return job.to_dict()
+    manager = get_manager()
+    job = manager.submit("url", req.url, options)
+    # The worker starts as soon as submit returns.  Serialise the response under the same store
+    # lock used by polling so a fast failure/progress update cannot race JSON encoding here.
+    snapshot = getattr(manager.store, "snapshot", None)
+    return (snapshot(job.id) or job.to_dict()) if snapshot is not None else job.to_dict()
 
 
 @app.post("/api/jobs/batch", tags=["jobs"], dependencies=[Depends(rate_limit)])
@@ -1001,6 +1105,8 @@ async def upload(
     # Tier 1 — Feature C: prompt / visual selection
     selection_prompt: str = Form(""),
     visual_selection: bool = Form(True),
+    retention_mode: str = Form("off"),
+    audience_reactions: str = Form(""),
     # Tier 1 — cross-cutting
     permissibility_mode: bool = Form(False),
     # v0.8.0 — Speaker diarisation & multi-speaker reframe
@@ -1059,6 +1165,11 @@ async def upload(
     brand_logo_position: str | None = Form(None),
     brand_logo_scale: str | None = Form(None),
     brand_logo_opacity: str | None = Form(None),
+    brand_logo_background: str | None = Form(None),
+    brand_intro_asset: str | None = Form(None),
+    brand_outro_asset: str | None = Form(None),
+    brand_profile_id: str | None = Form(None),
+    brief_id: str | None = Form(None),
     loudness_normalise: str | None = Form(None),
     music_duck: str | None = Form(None),
     trim_silence: str | None = Form(None),
@@ -1108,6 +1219,11 @@ async def upload(
         "brand_logo_position": brand_logo_position,
         "brand_logo_scale": brand_logo_scale,
         "brand_logo_opacity": brand_logo_opacity,
+        "brand_logo_background": brand_logo_background,
+        "brand_intro_asset": brand_intro_asset,
+        "brand_outro_asset": brand_outro_asset,
+        "brand_profile_id": brand_profile_id,
+        "brief_id": brief_id,
         "loudness_normalise": loudness_normalise,
         "music_duck": music_duck,
         "trim_silence": trim_silence,
@@ -1162,6 +1278,8 @@ async def upload(
             "broll_provider": broll_provider,
             "selection_prompt": selection_prompt,
             "visual_selection": visual_selection,
+            "retention_mode": retention_mode,
+            "audience_reactions": audience_reactions,
             "permissibility_mode": permissibility_mode,
             "diarization": diarization,
             "speaker_reframe": speaker_reframe,
@@ -1171,6 +1289,7 @@ async def upload(
             **{key: value for key, value in optional_form.items() if value is not None},
         }
     )
+    options = _apply_campaign_defaults(options)
 
     uploads_dir = Path(settings.uploads_dir)
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -1638,7 +1757,16 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
 
     fields = {
         name: getattr(updated, name)
-        for name in ("duration", "effects_applied", "broll_assets", "start", "end")
+        for name in (
+            "duration",
+            "effects_applied",
+            "broll_assets",
+            "start",
+            "end",
+            "engagement_score",
+            "retention_plan",
+            "engagement_features",
+        )
     }
     _invalidate_boxabl_review(job, clip, fields, force=True)
     stored = manager.store.update_clip(job_id, clip_id, fields) or updated
@@ -1718,6 +1846,111 @@ def save_campaign(req: CampaignModel) -> dict:
     return get_history().save_campaign(req.name.strip(), req.routes, req.id).to_dict()
 
 
+@app.post("/api/briefs/parse", tags=["campaigns"])
+def parse_brief(req: BriefRequest) -> dict:
+    """Parse and optionally persist raw Google Docs text.
+
+    Drive webhooks/pollers can call this after fetching the document. The endpoint accepts raw text
+    rather than credentials, so OAuth remains server-side and the same route is useful to local
+    connectors and offline tests.
+    """
+    llm_client = None
+    try:
+        from worker.llm_client import get_llm_client
+
+        llm_client = get_llm_client()
+    except Exception:
+        # The deterministic parser is the offline and no-credentials fallback.
+        pass
+    if req.campaign_id:
+        from worker.campaign_brief_sync import DriveBriefSnapshot
+
+        result = CampaignBriefSyncService(get_history(), job_store=get_manager().store).sync(
+            req.campaign_id,
+            source_file_id=req.source_ref or None,
+            snapshot=DriveBriefSnapshot.from_content(
+                req.source_ref,
+                req.raw_text,
+                revision_id=req.source_revision,
+            ),
+            llm_client=llm_client,
+        )
+        return result.to_dict()
+    brief = parse_campaign_brief(req.raw_text, llm_client=llm_client)
+    return {"brief": brief.to_dict()}
+
+
+@app.get("/api/briefs/{campaign_id}", tags=["campaigns"])
+def get_brief(campaign_id: str) -> dict:
+    campaign = get_history().campaign(campaign_id)
+    if campaign is None or campaign.brief is None:
+        raise HTTPException(status_code=404, detail="Campaign brief not found")
+    return {
+        "brief": campaign.brief.to_dict(),
+        "sync_status": campaign.brief_sync_status,
+        "revision": campaign.brief_revision,
+        "content_hash": campaign.brief_content_hash,
+    }
+
+
+@app.post("/api/briefs/{campaign_id}/sync", tags=["campaigns"])
+def sync_brief_webhook(campaign_id: str, req: BriefRequest) -> dict:
+    """Webhook/polling connector entry point; unchanged revisions are no-ops."""
+    if req.campaign_id and req.campaign_id != campaign_id:
+        raise HTTPException(status_code=400, detail="campaign_id does not match the URL")
+    from worker.campaign_brief_sync import DriveBriefSnapshot
+
+    result = CampaignBriefSyncService(get_history(), job_store=get_manager().store).sync(
+        campaign_id,
+        source_file_id=req.source_ref or None,
+        snapshot=DriveBriefSnapshot.from_content(
+            req.source_ref,
+            req.raw_text,
+            revision_id=req.source_revision,
+        ),
+    )
+    return result.to_dict()
+
+
+@app.post("/api/briefs/compliance", tags=["campaigns"])
+def check_brief_compliance(req: ComplianceRequest) -> dict:
+    result = check_compliance(
+        req.text,
+        forbidden_words=req.forbidden_words,
+        required_words=req.required_words,
+    )
+    return {**result.__dict__, "blockers": result.blockers}
+
+
+@app.get("/api/brand-profiles", tags=["profiles"])
+def list_brand_profiles() -> dict:
+    store = BrandProfileStore(settings.brand_profiles_path)
+    return {"profiles": [profile.to_dict() for profile in store.list()]}
+
+
+@app.post("/api/brand-profiles", tags=["profiles"])
+def save_brand_profile(req: BrandProfileModel) -> dict:
+    store = BrandProfileStore(settings.brand_profiles_path)
+    if req.id:
+        existing = store.get(req.id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Brand profile not found")
+        profile = existing
+        for key, value in req.model_dump(exclude={"id"}).items():
+            setattr(profile, key, value)
+        return store.save(profile).to_dict()
+    profile = store.create(req.name, **req.model_dump(exclude={"id", "name"}))
+    return profile.to_dict()
+
+
+@app.post("/api/brand-profiles/{profile_id}/campaigns/{campaign_id}", tags=["profiles"])
+def map_brand_profile(profile_id: str, campaign_id: str) -> dict:
+    profile = BrandProfileStore(settings.brand_profiles_path).map_campaign(campaign_id, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Brand profile not found")
+    return profile.to_dict()
+
+
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/publish", tags=["publishing"])
 def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     manager = get_manager()
@@ -1727,6 +1960,12 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     if req.mode not in ("auto", "review"):
         raise HTTPException(status_code=400, detail="mode must be auto or review")
+    publish_campaign_id = str(
+        req.campaign_id
+        or getattr(job.options, "campaign_id", "")
+        or getattr(job.options, "brief_id", "")
+        or ""
+    ).strip()
     routes = {platform: dict(route) for platform, route in req.routes.items()}
     if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
         blockers = campaign_publish_blockers(
@@ -1744,13 +1983,35 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             )
         if "x" in {platform.strip().lower() for platform in req.platforms}:
             routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
+    brief_id = str(getattr(job.options, "brief_id", "") or publish_campaign_id or "").strip()
+    campaign = get_history().campaign(brief_id) if brief_id else None
+    brief = getattr(campaign, "brief", None) if campaign else None
+    profile = (
+        BrandProfileStore(settings.brand_profiles_path).get(job.options.brand_profile_id)
+        if getattr(job.options, "brand_profile_id", "")
+        else None
+    )
+    forbidden = [
+        *(brief.forbidden_words if brief else []),
+        *(profile.forbidden_words if profile else []),
+    ]
+    required = [*(profile.required_words if profile else [])]
+    if brief or profile:
+        from worker.compliance import check_clip
+
+        compliance = check_clip(clip, forbidden_words=forbidden, required_words=required)
+        if not compliance.passed:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Campaign compliance failed", "blockers": compliance.blockers},
+            )
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,
         clip=clip,
         video_path=path,
         platforms=req.platforms,
-        campaign_id=req.campaign_id,
+        campaign_id=publish_campaign_id,
         mode=req.mode,
         schedule_at=req.schedule_at,
         route_overrides=routes,

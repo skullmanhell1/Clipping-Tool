@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,6 +174,42 @@ def test_an_explicit_value_still_beats_the_profile():
     assert resolved.caption_preset == "minimal"
     # ...while the rest of the bundle still applies.
     assert resolved.kinetic_typography_enabled is True
+
+
+def test_blank_bumper_options_inherit_from_a_brand_profile(monkeypatch):
+    """The UI sends blank strings for untouched inputs, which must still inherit profile assets."""
+    import api.main as api_main
+
+    profile = SimpleNamespace(
+        id="profile-1",
+        watermark="",
+        primary_color="",
+        highlight_color="",
+        font="",
+        cta="",
+        intro_asset="intro.mp4",
+        outro_asset="outro.mp4",
+    )
+
+    class FakeStore:
+        def __init__(self, _path):
+            pass
+
+        def get(self, profile_id):
+            return profile if profile_id == profile.id else None
+
+    monkeypatch.setattr(api_main, "BrandProfileStore", FakeStore)
+    resolved = OptionsModel(brand_profile_id=profile.id).to_options()
+
+    assert resolved.brand_intro_asset == "intro.mp4"
+    assert resolved.brand_outro_asset == "outro.mp4"
+
+    upload_options = ProcessingOptions.from_dict(
+        {"brand_profile_id": profile.id, "brand_intro_asset": "", "brand_outro_asset": ""}
+    )
+    upload_options = api_main._apply_campaign_defaults(upload_options)
+    assert upload_options.brand_intro_asset == "intro.mp4"
+    assert upload_options.brand_outro_asset == "outro.mp4"
 
 
 # --------------------------------------------------------------------------- #
