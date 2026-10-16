@@ -113,6 +113,28 @@ _LIST_MARKERS: tuple[str, ...] = (
 #: Number words that make "N <plural noun>" read as a promise of a list.
 _COUNT_WORDS = frozenset({"two", "three", "four", "five", "six", "seven", "ten"})
 
+# Phrases that commonly close a spoken thought. This is deliberately a small,
+# conservative list: it is a payoff cue, not a claim that lexical phrases can
+# understand meaning on their own.
+_PAYOFF_MARKERS: tuple[str, ...] = (
+    "that's why",
+    "thats why",
+    "the point is",
+    "the answer is",
+    "which means",
+    "in other words",
+    "it turns out",
+    "turns out",
+    "the result is",
+    "the bottom line",
+    "ultimately",
+    "finally",
+)
+
+_DANGLING_ENDINGS = frozenset(
+    {"and", "or", "but", "because", "if", "when", "while", "to", "of", "for"}
+)
+
 #: Conversational tags that carry a question mark without asking anything.
 #:
 #: These end an enormous share of ordinary speech, and a question mark is the *only* thing that
@@ -507,17 +529,56 @@ def standalone_completeness(text: str) -> Standalone:
     )
 
 
+def ending_payoff(text: str) -> float:
+    """Estimate whether a transcript window lands cleanly instead of trailing off.
+
+    This is intentionally a bounded editorial cue, not semantic understanding. A
+    complete terminal mark and a small set of explicit conclusion phrases are
+    positive evidence; a conjunction/preposition as the final word is negative
+    evidence. Empty or punctuation-only text remains neutral.
+    """
+    body = (text or "").strip()
+    words = _WORD_RE.findall(body.lower())
+    if not words:
+        return 0.5
+
+    score = 0.65
+    if body.endswith((".", "!", "?", '"', "'", "”")):
+        score += 0.15
+    tail = " ".join(words[-12:])
+    terminal_marker = next(
+        (
+            marker
+            for marker in sorted(_PAYOFF_MARKERS, key=len, reverse=True)
+            if tail.endswith(marker)
+        ),
+        "",
+    )
+    if terminal_marker:
+        # "The answer is" is a promise, not a payoff. A marker only earns a
+        # bonus when substantive words follow it.
+        score -= 0.25
+        if body.endswith((".", "!", "?", '"', "'", "”")):
+            score -= 0.15
+    elif any(marker in tail for marker in _PAYOFF_MARKERS):
+        score += 0.15
+    if words[-1] in _DANGLING_ENDINGS:
+        score -= 0.3
+    return max(0.0, min(1.0, round(score, 3)))
+
+
 # --------------------------------------------------------------------------- #
 # annotation
 # --------------------------------------------------------------------------- #
 
 
 def describe(text: str) -> dict[str, Any]:
-    """All three signals for one passage, as a features dict."""
+    """All transcript-structure signals for one passage, as a features dict."""
     return {
         **detect_structure(text).to_dict(),
         **emotional_intensity(text).to_dict(),
         **standalone_completeness(text).to_dict(),
+        "payoff_score": ending_payoff(text),
     }
 
 
@@ -564,4 +625,8 @@ def prompt_note(text: str) -> str | None:
         notes.append("starts mid-thought")
     if intensity.score >= 0.8:
         notes.append("emphatic")
+    # A terminal full stop is only evidence of completion; reserve the prompt
+    # annotation for a stronger lexical payoff signal.
+    if ending_payoff(text) >= 0.9:
+        notes.append("lands a payoff")
     return ", ".join(notes) if notes else None

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — retention-first engagement editing
+
+- Added optional Balanced and Aggressive retention modes that blend hook quality,
+  delivery changes, discourse structure and optional source-relative audience
+  reaction events into clip ranking.
+- Added deterministic retention plans for bounded zoom accents, caption emphasis,
+  dead-air pacing cuts and low-level emphasis SFX, with cue timing rebased after
+  destructive edits.
+- Added retention controls to the API and frontend, clip-card provenance metrics,
+  transcript-faithful hook guidance and `docs/RETENTION_EDITING.md`.
+- Added a research-backed payoff signal and review-card quality axes for Flow,
+  Impact, Clarity and Relevance, with neutral handling when relevance is not measured.
+- Added creator-topic relevance to retention ranking, safer process-range boundaries,
+  stable retention reranking, payoff lead-in guards, and deterministic keyword hashtags
+  when no LLM is configured.
+- Fixed YouTube Shorts publishing preflight so the alias still uses the Shorts-specific
+  three-minute and vertical/square product limits after routing through the YouTube publisher.
+- Tightened TikTok preflight from 600 to 300 seconds to match the current Content Posting API
+  creator-info ceiling until account-specific duration discovery is wired in.
+- Made selection prompts work with transcript-only selection as well as visual selection, kept
+  prompt words out of creator-topic relevance scoring, and made relevance matching accent- and
+  Unicode-aware for multilingual topics.
+- Added `docs/SHORT_FORM_BENCHMARK.md` documenting competitor patterns, platform
+  constraints and the quality guardrails used for this pass.
+
 ### Fixed — visual effects applied to the wrong thing, or not applied and not admitted
 
 Ten defects in the effects layer. This is where "silently wrong" is hardest to notice, because the

@@ -15,6 +15,7 @@ simply keep the input clip. This keeps frame-by-frame work strictly optional.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -119,6 +120,21 @@ def _input_order_contributions(
     return [c for c in contributions if c is not None]
 
 
+def _remap_word_indices(
+    source_words: Sequence[Any], target_words: Sequence[Any], indices: Sequence[int]
+) -> set[int]:
+    """Map word indices from the original transcript onto a filtered cue-word list."""
+    selected = {int(index) for index in indices if 0 <= int(index) < len(source_words)}
+    if not selected:
+        return set()
+    source_index_by_id = {id(word): index for index, word in enumerate(source_words)}
+    return {
+        target_index
+        for target_index, word in enumerate(target_words)
+        if source_index_by_id.get(id(word)) in selected
+    }
+
+
 def _engine_input_args(
     contributions: Sequence[Compose_Contribution],
 ) -> list[str]:
@@ -172,6 +188,7 @@ def _plan_sfx(
     *,
     emoji_starts: Sequence[float],
     transition_times: Sequence[float],
+    retention_times: Sequence[float] = (),
     duration: float,
     temp_dir: Path,
 ) -> tuple[list[sfx.SfxHit], list[str]]:
@@ -193,6 +210,7 @@ def _plan_sfx(
     planned = sfx.plan_hits(
         emoji_starts=tuple(emoji_starts),
         transition_times=tuple(transition_times),
+        retention_times=tuple(retention_times),
         duration=float(duration),
     )
     if not planned:
@@ -252,6 +270,9 @@ def render_clip(
     language: str = "",
     speaker_turns: Sequence[Any] = (),
     notes: list[str] | None = None,
+    retention_beats: Sequence[float] = (),
+    retention_sfx_times: Sequence[float] = (),
+    retention_emphasis_indices: Sequence[int] = (),
 ) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -385,6 +406,7 @@ def render_clip(
             options.caption_preset != "karaoke"
             or bool(options.caption_animation)
             or options.caption_keyword_highlight
+            or bool(retention_emphasis_indices)
             or options.caption_emoji
         )
 
@@ -420,14 +442,21 @@ def render_clip(
 
             # Keyword highlighting: compute indices only when enabled. When
             # disabled we pass ``None`` and make NO llm call (Req 3.6).
-            if options.caption_keyword_highlight:
+            if options.caption_keyword_highlight or retention_emphasis_indices:
                 # Recorded on `keyword_words` so `plan_emoji` reads the indices in the same space
                 # they were computed in. See the declaration above for what went wrong otherwise.
                 keyword_words = [w for cue in cues for w in cue.words]
-                keyword_indices = caption_presets.plan_keywords(
-                    keyword_words,
-                    use_ai=options.caption_keyword_ai,
-                    client=llm_client,
+                keyword_indices = (
+                    caption_presets.plan_keywords(
+                        keyword_words,
+                        use_ai=options.caption_keyword_ai,
+                        client=llm_client,
+                    )
+                    if options.caption_keyword_highlight
+                    else set()
+                )
+                keyword_indices.update(
+                    _remap_word_indices(words, keyword_words, retention_emphasis_indices)
                 )
 
             caption_notes: list[str] = []
@@ -508,6 +537,15 @@ def render_clip(
     # them — below the captions so text stays legible (Req 10.2). When no b-roll
     # is present the two are re-joined into the single chain the compositor has
     # always built, preserving byte-for-byte behaviour.
+    beat_values = list(_beat_times(base_clip, options))
+    for value in retention_beats:
+        try:
+            beat = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(beat) and 0.0 <= beat < duration:
+            beat_values.append(beat)
+    render_beats = tuple(sorted(set(beat_values)))
     look_chain = overlays.build_video_chain(
         duration=duration,
         fps=fps,
@@ -525,7 +563,7 @@ def render_clip(
         color_lut=str(getattr(settings, "color_lut", "") or ""),
         # V19: eased Ken Burns, and scale bumps on real audio accents.
         zoom_ease=bool(getattr(settings, "zoom_ease", False)),
-        beats=_beat_times(base_clip, options),
+        beats=render_beats,
     )
     # Engine compose contributions render *below* the caption layer (Req 23.3),
     # so they sit above the look chain and any b-roll but under captions/progress
@@ -902,6 +940,7 @@ def render_clip(
                 duration,
                 fade=options.fades,
                 duck=options.music_duck,
+                speech_intervals=audio.speech_intervals(words, duration),
                 # A22: dip the bed under each b-roll window, so a visual
                 # accent has an audible one. Only the windows that actually
                 # composited - a cue whose asset failed to resolve is not on
@@ -976,6 +1015,7 @@ def render_clip(
             # the cues that survived, so this can be what it claims to be.
             emoji_starts=tuple(float(getattr(cue, "start", 0.0)) for cue in emoji_composited),
             transition_times=(0.0,) if options.transitions else (),
+            retention_times=retention_sfx_times,
             duration=duration,
             temp_dir=temp_dir,
         )

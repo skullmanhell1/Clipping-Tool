@@ -353,11 +353,7 @@ def test_o7_youtube_and_shorts_are_separate_profiles():
 
 
 def test_o7_the_shorts_ceiling_is_the_shorts_limit_not_youtubes():
-    """Preflight has no Shorts entry, so reading it gave a one-hour ceiling for Shorts.
-
-    Correctly so on preflight's side - a Shorts upload *is* a YouTube upload and is validated as
-    one - which is exactly why the profile needs its own override.
-    """
+    """The encoder profile and publish preflight agree on the Shorts ceiling."""
     shorts = op.profile_for("youtube_shorts")
     assert shorts.max_duration_s == 180.0
     assert op.profile_for("youtube").max_duration_s > shorts.max_duration_s
@@ -367,7 +363,7 @@ def test_o7_duration_ceilings_come_from_the_preflight_table():
     """One number, one home: the encoder and the validator cannot disagree."""
     from publishers.preflight import limits_for
 
-    for platform in ("tiktok", "instagram", "youtube", "x", "whop"):
+    for platform in ("tiktok", "instagram", "youtube", "youtube_shorts", "x", "whop"):
         assert op.profile_for(platform).max_duration_s == limits_for(platform).max_duration_s
 
 

@@ -181,6 +181,30 @@ work is opt-in and adds render time).
 > `.env` to enable AI features. Without a key, the tool still produces clips and
 > basic metadata via the deterministic fallback.
 
+## Retention-first engagement editing
+
+The selector can now combine hook quality, delivery changes, emotional and
+question/answer structure, optional pitch variation, and source-relative
+audience reaction events. Choose **Balanced** or **Aggressive** under Advanced
+settings to blend those measurements into ranking and generate a reviewable
+retention plan containing:
+
+- a first-three-seconds hook score and transcript-faithful hook text;
+- bounded zoom accents at energy, pitch or reaction events;
+- deterministic caption emphasis indices;
+- optional pacing cuts over long dead-air gaps; and
+- up to four low-level emphasis sound effects in Aggressive mode;
+- review-card quality axes for **Flow**, **Impact**, **Clarity** and creator-topic
+  **Relevance**, plus an ending/payoff check to avoid clips that trail off.
+
+Reaction input is optional JSON such as
+`[{"time":42.5,"count":18},{"time":43.1,"count":7}]`, where timestamps
+are relative to the original source video. Invalid entries are ignored. The
+planner is offline and deterministic, and recalculates cues after trimming so
+the times shown on a clip describe the delivered file. See
+[`docs/RETENTION_EDITING.md`](docs/RETENTION_EDITING.md) for the scoring model,
+prompt instructions, edit workflow and review guidance.
+
 ## Phase 1 — what works today
 
 - **Inputs:** single file upload, paste a video URL (yt-dlp), a **batch** of

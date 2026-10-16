@@ -229,6 +229,63 @@ MAX_MENTIONS = 5
 #: TikTok 24, YouTube 30), so this rejects nonsense without second-guessing a real limit.
 _MAX_HANDLE_LENGTH = 30
 
+_FALLBACK_HASHTAG_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "about",
+        "after",
+        "again",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "before",
+        "being",
+        "by",
+        "can",
+        "do",
+        "could",
+        "for",
+        "from",
+        "has",
+        "have",
+        "how",
+        "i",
+        "if",
+        "in",
+        "is",
+        "it",
+        "into",
+        "just",
+        "more",
+        "of",
+        "on",
+        "or",
+        "that",
+        "their",
+        "there",
+        "these",
+        "they",
+        "this",
+        "through",
+        "to",
+        "was",
+        "we",
+        "what",
+        "when",
+        "where",
+        "who",
+        "which",
+        "with",
+        "will",
+        "would",
+        "you",
+    }
+)
+
 
 def _norm_mentions(mentions: Any) -> list[str]:
     """Normalise, validate, de-duplicate and cap suggested @handles.
@@ -263,7 +320,9 @@ def _norm_mentions(mentions: Any) -> list[str]:
 
 _SYSTEM = (
     "You are a viral social media copywriter. You write scroll-stopping titles, "
-    "captions, and hashtags tailored to each platform's culture and limits."
+    "captions, and hashtags tailored to each platform's culture and limits. "
+    "You optimise for honest viewer retention: the first line must earn attention "
+    "without inventing facts or promising something absent from the clip."
 )
 
 
@@ -275,6 +334,13 @@ def _build_prompt(
 ) -> str:
     topic = f"Content focus / keywords: {options.topic}." if options.topic.strip() else ""
     vibe = f"Desired vibe/tone: {options.vibe}." if options.vibe.strip() else ""
+    retention = ""
+    if getattr(options, "retention_mode", "off") != "off":
+        retention = (
+            "Retention editing is enabled. Make the hook earn attention in the first three "
+            "seconds with a concrete tension, question, surprising transcript phrase or "
+            "emotional turn. Do not use generic clickbait or invent a payoff."
+        )
     # Fenced, and the instructions come after it. The transcript is untrusted - see
     # `llm_client.fence_untrusted` for why that matters more here than anywhere else in the
     # project: this function's output is rendered into the video *and* published to the user's
@@ -285,12 +351,18 @@ def _build_prompt(
 {UNTRUSTED_NOTICE}
 
 Target platform: {profile.name} (tone: {profile.tone}).
-{topic} {vibe}
+{topic} {vibe} {retention}
 
 Constraints:
   - Title <= {profile.title_max} characters.
   - Description <= {profile.desc_max} characters.
   - Exactly {min(hashtag_count, profile.hashtag_max)} hashtags.
+  - Make "hook_text" a direct, curiosity-inducing 2-6 word opening for the first
+    3 seconds. Prefer a surprising transcript phrase, concrete tension, a question,
+    or an emotional turn. Do not use generic clickbait ("you won't believe this"),
+    fabricate a claim, or reveal the payoff before the clip earns it.
+  - Keep the hook faithful to the supplied transcript and do not mention audience
+    reactions, stats, or context that the transcript does not contain.
 
 Return a JSON object with keys:
   - "title": string
@@ -344,7 +416,13 @@ def generate_metadata(
     profile = get_profile(platform)
 
     if client is None and not llm_available():
-        return _fallback_metadata(transcript_text, profile, "no_llm_configured")
+        return _fallback_metadata(
+            transcript_text,
+            profile,
+            "no_llm_configured",
+            topic=options.topic,
+            hashtag_count=hashtag_count,
+        )
 
     # Construction is inside the `try`, not before it. `get_llm_client()` raises for a missing
     # SDK, an unimportable one, a malformed base URL and absent credentials — and with it outside,
@@ -362,7 +440,13 @@ def generate_metadata(
             raise LLMError("expected a JSON object from the model")
     except LLMError as exc:
         logger.warning("metadata generation fell back to a template: %s", exc)
-        return _fallback_metadata(transcript_text, profile, _reason_code(exc))
+        return _fallback_metadata(
+            transcript_text,
+            profile,
+            _reason_code(exc),
+            topic=options.topic,
+            hashtag_count=hashtag_count,
+        )
 
     return _parse_metadata(data, options, profile, hashtag_count)
 
@@ -383,7 +467,12 @@ def _reason_code(exc: Exception) -> str:
 
 
 def _fallback_metadata(
-    transcript_text: str, profile: PlatformProfile, reason: str = "no_llm_configured"
+    transcript_text: str,
+    profile: PlatformProfile,
+    reason: str = "no_llm_configured",
+    *,
+    topic: str = "",
+    hashtag_count: int = 0,
 ) -> ClipMetadata:
     """Deterministic metadata when no LLM is available.
 
@@ -392,10 +481,25 @@ def _fallback_metadata(
     """
     words = (transcript_text or "").split()
     title = _clamp_text(" ".join(words[:10]) or "Untitled clip", profile.title_max)
+    # A deterministic fallback should still give the renderer a useful opening
+    # title when no provider is configured.  Keep it short and transcript-faithful;
+    # the first phrase is safer than invented clickbait.
+    hook = _clamp_text(" ".join(words[:6]), 40)
+    candidates = []
+    for source, value in (("topic", topic), ("transcript", transcript_text)):
+        for raw in str(value or "").split():
+            hashtag = _norm_hashtag(raw)
+            bare = hashtag[1:].lower() if hashtag else ""
+            acronym = raw.lstrip("#").isupper() and 2 <= len(raw.lstrip("#")) <= 4
+            minimum = 2 if source == "topic" or acronym else 3
+            if len(bare) < minimum or bare in _FALLBACK_HASHTAG_STOPWORDS:
+                continue
+            candidates.append(hashtag)
     return ClipMetadata(
         title=title,
         description=_clamp_text(transcript_text, profile.desc_max),
-        hashtags=[],
+        hook_text=hook,
+        hashtags=_clamp_hashtags(candidates, hashtag_count, profile.hashtag_max),
         platform=profile.name,
         fallback_reason=reason,
     )

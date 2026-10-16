@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from config import settings
 from worker.ffmpeg_utils import _run, escape_filter_path
@@ -340,6 +341,148 @@ def bed_fit_filter(
     return ",".join(parts) + f"[{label_out}]"
 
 
+def _finite_seconds(value: Any) -> float | None:
+    """Convert a timing value to finite seconds, rejecting malformed JSON/timeline values."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _merge_speech_windows(
+    windows: Sequence[tuple[float, float]], *, merge_gap: float = 0.0
+) -> list[tuple[float, float]]:
+    """Sort, sanitise and merge overlapping/tightly spaced speech windows."""
+    parsed: list[tuple[float, float]] = []
+    for raw_start, raw_end in windows:
+        start = _finite_seconds(raw_start)
+        end = _finite_seconds(raw_end)
+        if start is None or end is None or end <= start:
+            continue
+        start = max(0.0, start)
+        if end > start:
+            parsed.append((start, end))
+    parsed.sort()
+    if not parsed:
+        return []
+
+    gap = max(0.0, _finite_seconds(merge_gap) or 0.0)
+    merged: list[tuple[float, float]] = [parsed[0]]
+    for start, end in parsed[1:]:
+        previous_start, previous_end = merged[-1]
+        if start <= previous_end + gap:
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def speech_intervals(
+    words: Sequence[object],
+    duration: float,
+    *,
+    padding: float | None = None,
+    merge_gap: float | None = None,
+) -> list[tuple[float, float]]:
+    """Return padded, clipped and merged speech windows from timed transcript words.
+
+    A small lead/lag protects consonants at word boundaries. Nearby words are
+    merged so the music does not pump between syllables; intervals are clipped
+    to the delivered clip, which may already have been trimmed and rebased.
+    ``padding`` and ``merge_gap`` default to the corresponding music-duck
+    settings.
+    """
+    clip_duration = _finite_seconds(duration)
+    if clip_duration is None or clip_duration <= 0.0:
+        return []
+
+    if padding is None:
+        padding = getattr(settings, "music_duck_padding_s", 0.08)
+    if merge_gap is None:
+        merge_gap = getattr(settings, "music_duck_merge_gap_s", 0.04)
+    pad = max(0.0, _finite_seconds(padding) or 0.0)
+    gap = max(0.0, _finite_seconds(merge_gap) or 0.0)
+
+    intervals: list[tuple[float, float]] = []
+    for word in words:
+        if isinstance(word, Mapping):
+            raw_start, raw_end = word.get("start"), word.get("end")
+        else:
+            raw_start, raw_end = getattr(word, "start", None), getattr(word, "end", None)
+        start = _finite_seconds(raw_start)
+        end = _finite_seconds(raw_end)
+        if start is None or end is None or end <= start:
+            continue
+        padded_start = max(0.0, start - pad)
+        padded_end = min(clip_duration, end + pad)
+        if padded_end > padded_start:
+            intervals.append((padded_start, padded_end))
+    return _merge_speech_windows(intervals, merge_gap=gap)
+
+
+def speech_duck_filter(
+    label_in: str,
+    label_out: str,
+    intervals: Sequence[tuple[float, float]],
+    *,
+    attenuation: float | None = None,
+    attack: float | None = None,
+    release: float | None = None,
+) -> str:
+    """Duck the music bed during transcript-timed speech with one smoothed volume expression.
+
+    ``attenuation`` is the fraction removed from the bed (0..1). The attack
+    and release are seconds. A single expression takes the deepest overlapping
+    dip, so overlapping word windows cannot multiply the attenuation.
+    """
+    if attenuation is None:
+        attenuation = getattr(settings, "music_duck_attenuation", 0.65)
+    if attack is None:
+        attack = getattr(settings, "music_duck_attack_s", 0.05)
+    if release is None:
+        release = getattr(settings, "music_duck_release_s", 0.30)
+
+    amount = _finite_seconds(attenuation)
+    attack_s = _finite_seconds(attack)
+    release_s = _finite_seconds(release)
+    amount = max(0.0, min(1.0, amount if amount is not None else 0.65))
+    attack_s = max(0.0, attack_s if attack_s is not None else 0.05)
+    release_s = max(0.0, release_s if release_s is not None else 0.30)
+    spans = _merge_speech_windows(intervals)
+    if not spans or amount <= 0.0:
+        return f"[{label_in}]anull[{label_out}]"
+
+    terms: list[str] = []
+    for start, end in spans:
+        span = end - start
+        local_attack = min(attack_s, span)
+        local_release = min(release_s, span)
+        if local_attack + local_release > span:
+            scale = span / (local_attack + local_release)
+            local_attack *= scale
+            local_release *= scale
+        rise_end = start + local_attack
+        fall_start = end - local_release
+
+        if local_attack > 0.0:
+            terms.append(
+                f"between(t,{start:.3f},{rise_end:.3f})*{amount:.3f}*"
+                f"(t-{start:.3f})/{local_attack:.3f}"
+            )
+        if fall_start > rise_end or (local_attack == 0.0 and local_release == 0.0):
+            terms.append(f"between(t,{rise_end:.3f},{fall_start:.3f})*{amount:.3f}")
+        if local_release > 0.0:
+            terms.append(
+                f"between(t,{fall_start:.3f},{end:.3f})*{amount:.3f}*"
+                f"({end:.3f}-t)/{local_release:.3f}"
+            )
+    depth = terms[0]
+    for term in terms[1:]:
+        depth = f"max({depth},{term})"
+    return f"[{label_in}]volume=volume='1-({depth})':eval=frame[{label_out}]"
+
+
 def broll_duck_filter(
     label_in: str,
     label_out: str,
@@ -414,25 +557,31 @@ def music_mix_filter(
     duck: bool = True,
     broll_windows: Sequence[tuple[float, float]] = (),
     broll_duck: float = 0.0,
+    speech_intervals: Sequence[tuple[float, float]] | None = None,
+    duck_attenuation: float | None = None,
+    duck_attack: float | None = None,
+    duck_release: float | None = None,
 ) -> str:
     """Return a ``-filter_complex`` snippet mixing a music bed under speech.
 
     The bed is volume-scaled (and optionally faded), then mixed with the original audio
     without re-normalising, so speech stays at full level.
 
-    ``duck`` (AU2) routes the bed through ``sidechaincompress`` keyed on the speech, so the
-    music drops while someone is talking and returns in the gaps. A flat ``volume=0.12`` bed
-    has no good setting: loud enough to be heard between sentences is loud enough to fight
-    the speech during them, and quiet enough not to fight it is inaudible - which is the
-    same as no music, at the cost of an extra encode. Ducking is what makes a bed audible
-    *and* out of the way, and it is the reason a mix sounds produced rather than layered.
+    ``duck`` (AU2) enables ducking so the music drops while someone is talking and returns in the
+    gaps. A flat ``volume=0.12`` bed has no good setting: loud enough to be heard between sentences
+    is loud enough to fight the speech during them, and quiet enough not to fight it is inaudible -
+    which is the same as no music, at the cost of an extra encode. Ducking is what makes a bed
+    audible *and* out of the way, and it is the reason a mix sounds produced rather than layered.
 
-    The speech is duplicated with ``asplit``: one copy keys the compressor, the other is
-    mixed. It has to be both, and a filter output cannot be consumed twice.
+    When transcript timings are available, a single smoothed ``volume`` expression ducks the bed
+    over those intervals. If they are absent, ``sidechaincompress`` remains the safe fallback.
 
     ``broll_windows``/``broll_duck`` add A22's dip under each b-roll overlay - see
-    :func:`broll_duck_filter`. Zero (the default) leaves the graph exactly as it was.
+    :func:`broll_duck_filter`. Zero (the default) leaves that part of the graph unchanged.
     """
+    if not music_label:
+        return f"[{original_label}]anull[{out_label}]"
+
     vol = max(0.0, min(1.0, volume))
     ratio = max(1.0, float(settings.music_duck_ratio))
     ducking = duck and ratio > 1.0
@@ -470,14 +619,42 @@ def music_mix_filter(
         parts.append(f"{speech_chain}[bedv]amix=inputs=2:duration=first:normalize=0[{out_label}]")
         return ";".join(parts)
 
+    timed_intervals = _merge_speech_windows(speech_intervals or ())
+    if timed_intervals:
+        parts.append(
+            speech_duck_filter(
+                "bedv",
+                "bedduck",
+                timed_intervals,
+                attenuation=duck_attenuation,
+                attack=duck_attack,
+                release=duck_release,
+            )
+        )
+        parts.append(
+            f"{speech_chain}[bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]"
+        )
+        return ";".join(parts)
+
     parts.append(f"{speech_chain}asplit=2[sckey][spmix]")
     # threshold is a linear amplitude, not dB: 0.03 is about -30 dBFS, low enough that
     # ordinary speech opens the compressor and room tone does not. attack is short so the
     # bed is already down on the first syllable; release is long so it does not pump
     # between words - it should feel like the bed breathing, not stuttering.
+    attack_s = duck_attack
+    release_s = duck_release
+    if attack_s is None:
+        attack_s = getattr(settings, "music_duck_attack_s", 0.05)
+    if release_s is None:
+        release_s = getattr(settings, "music_duck_release_s", 0.30)
+    attack_seconds = _finite_seconds(attack_s)
+    release_seconds = _finite_seconds(release_s)
+    attack_ms = max(1.0, (attack_seconds if attack_seconds is not None else 0.05) * 1000.0)
+    release_ms = max(1.0, (release_seconds if release_seconds is not None else 0.30) * 1000.0)
     parts.append(
         f"[bedv][sckey]sidechaincompress="
-        f"threshold=0.03:ratio={ratio:g}:attack=20:release=350:makeup=1[bedduck]"
+        f"threshold=0.03:ratio={ratio:g}:attack={attack_ms:g}:"
+        f"release={release_ms:g}:makeup=1[bedduck]"
     )
     parts.append(f"[spmix][bedduck]amix=inputs=2:duration=first:normalize=0[{out_label}]")
     return ";".join(parts)
