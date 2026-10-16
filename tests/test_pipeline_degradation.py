@@ -247,8 +247,8 @@ def test_p27_visual_selection_failing_sampler_degrades(make_video, tmp_path, mon
     """Validates: Requirements 18.1, 18.2, 18.4
 
     Visual selection enabled but keyframe sampling fails: selection degrades to
-    transcript-only, the pipeline still produces the clip, and the
-    ``visual_selection`` marker is recorded.
+    transcript-only, the pipeline still produces the clip, and the distinct
+    ``visual_degraded`` marker is recorded.
     """
     import worker.pipeline as pl
 
@@ -267,7 +267,8 @@ def test_p27_visual_selection_failing_sampler_degrades(make_video, tmp_path, mon
     clips = pl.run_pipeline(src, opts, clips_dir=tmp_path / "clips", temp_dir=tmp_path / "tmp")
     assert len(clips) == 1
     clip = clips[0]
-    assert "visual_selection" in clip.effects_applied
+    assert "visual_degraded" in clip.effects_applied
+    assert "visual_selection" not in clip.effects_applied
     assert (tmp_path / "clips" / clip.filename).exists()
 
 
