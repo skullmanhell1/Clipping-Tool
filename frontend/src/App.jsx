@@ -3,6 +3,7 @@ import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
+import CampaignAutomationPanel from "./components/CampaignAutomationPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
 import ProfilesBar from "./components/ProfilesBar.jsx";
@@ -123,6 +124,9 @@ const DEFAULT_SETTINGS = {
   retention_mode: "off",
   audience_reactions: "",
   permissibility_mode: false,
+  campaign_preset: {},
+  storytelling_enabled: false,
+  public_visibility: "public",
   // Speaker diarisation & multi-speaker reframe (all default OFF / follow_active / standard)
   diarization: false,
   speaker_reframe: false,
@@ -177,6 +181,9 @@ function toOptions(settings, publishing) {
     campaign_id: publishing.campaign_id,
     publish_mode: publishing.mode,
     schedule_at: scheduleToEpoch(publishing.schedule),
+    campaign_preset: settings.campaign_preset || {},
+    storytelling_enabled: settings.storytelling_enabled,
+    public_visibility: "public",
     // Phase 4 — visual effects
     caption_template: settings.caption_template,
     caption_position: settings.caption_position,
@@ -588,6 +595,26 @@ export default function App() {
     setCampaigns((previous) => [campaign, ...previous.filter((item) => item.id !== campaign.id)]);
   };
 
+  const handlePresetApplied = (preset) => {
+    setSettings((previous) => ({
+      ...previous,
+      campaign_preset: preset,
+      storytelling_enabled: true,
+      aspect: preset.aspect_ratios?.[0] || previous.aspect,
+      brand_logo: preset.branding?.logo || previous.brand_logo,
+      brand_font: preset.branding?.font || previous.brand_font,
+      brand_primary_color: preset.branding?.colors?.primary || previous.brand_primary_color,
+      brand_highlight_color: preset.branding?.colors?.accent || previous.brand_highlight_color,
+      brand_cta: preset.cta || previous.brand_cta,
+      caption_preset: preset.caption_style || previous.caption_preset,
+    }));
+    setPublishing((previous) => ({
+      ...previous,
+      campaign_id: previous.campaign_id || "",
+      mode: "review",
+    }));
+  };
+
   const handlePublished = (attempts) => {
     setPublishAttempts((previous) => [
       ...(attempts || []),
@@ -789,6 +816,13 @@ export default function App() {
                   driveConfigured={driveConfigured}
                   profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
                   onApply={applyBoxablCampaign}
+                />
+                <CampaignAutomationPanel
+                  campaigns={campaigns}
+                  publisherStatuses={publisherStatuses}
+                  jobs={jobs}
+                  onPresetApplied={handlePresetApplied}
+                  onScheduled={loadPublishingData}
                 />
                 <ProfilesBar
                   profiles={profiles}

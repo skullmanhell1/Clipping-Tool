@@ -102,6 +102,11 @@ class ProcessingOptions:
     campaign_id: str = ""
     publish_mode: str = "review"  # auto | review
     schedule_at: float | None = None  # UTC epoch; None = now
+    # Campaign automation is opt-in.  A resolved Google-Doc preset is kept with the job so
+    # rerenders and publish preflight use the same policy even if the source document changes.
+    campaign_preset: dict = field(default_factory=dict)
+    storytelling_enabled: bool = False
+    public_visibility: str = "public"
 
     # --- Phase 4: visual effects (all individually toggleable) -----------
     #
@@ -382,6 +387,7 @@ class ProcessingOptions:
             "broll",
             "visual_selection",
             "permissibility_mode",
+            "storytelling_enabled",
             # v0.8.0 boolean flags
             "diarization",
             "speaker_reframe",
@@ -762,6 +768,12 @@ class ClipResult:
     # Raw measured selection signals are retained so an explicit rerender can
     # rebuild the same retention cues without re-running model selection.
     engagement_features: dict = field(default_factory=dict)
+    # Optional campaign automation outputs. Empty values preserve the legacy record shape while
+    # giving a resolved preset, storytelling recommendations, and mechanical compliance report a
+    # durable home for review and publish preflight.
+    storytelling_plan: dict = field(default_factory=dict)
+    campaign_preset: dict = field(default_factory=dict)
+    compliance_report: dict = field(default_factory=dict)
 
     # --- Phase 4: which visual effects were applied to this clip ----------
     # ``effects_applied`` holds free-form string markers describing which
