@@ -136,3 +136,165 @@ def test_a_symlink_to_a_prefix_sharing_sibling_is_refused(clips_root, tmp_path):
     with pytest.raises(HTTPException) as caught:
         _resolve_clip_file("j1", "sneaky.mp4")
     assert caught.value.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# The same guarantee, asserted through the HTTP routes                         #
+# --------------------------------------------------------------------------- #
+# Everything above tests `_resolve_clip_file`. That is the right place for the symlink and
+# prefix-sharing cases, which are awkward to reach over HTTP — but on its own it leaves a real
+# gap, and PR #148 named it precisely while describing the *other* route:
+#
+#   "`download_clip` was only accidentally safe, because it also looks the job up and
+#    `store.get('..')` returns None. That is second-order protection that stops holding the
+#    moment someone reorders the checks."
+#
+# Exactly so, and it applies to the resolver too. A helper-level test proves the helper is
+# correct; it does not prove the routes still *call* it.
+#
+# **And that observation turns out to be load-bearing here, which is worth writing down.** Both
+# routes cross-check the requested filename against the job record, and that check independently
+# defeats traversal: `store.get("..")` returns `None`, and a traversing *filename* reduces under
+# `.name` to something no clip is called. Measured by mutation:
+#
+#   * replace the resolver with the old `Path(x).name` construction and leave the job cross-check
+#     -> every behavioural test below still passes. Only `test_every_clip_route_goes_through_the
+#     _resolver` fails. The route is "accidentally safe" exactly as the quote describes.
+#   * remove both -> three of the traversal cases leak the planted secret and the behavioural
+#     tests fail.
+#
+# So neither style of test is redundant and neither is sufficient. The behavioural ones prove the
+# vulnerability is really closed end to end (they fail on the genuine pre-fix code). The structural
+# one is what notices containment being removed while a second-order check happens to mask it —
+# which is the state this code was in before, and the state a future refactor would restore.
+#
+# Note also which spellings reach the handler: only the percent-encoded forms arrive as a literal
+# `..` path component. A bare `..` is normalised by the client and router before dispatch, so it
+# never reaches the route at all. That is why the encoded variants are the load-bearing cases.
+#
+# So these go through the real ASGI app, unauthenticated (`api_auth_token = None`, which is the
+# default configuration and the one the original report was filed against), against a planted
+# secret one directory above `clips_dir` — which in a real deployment is `storage/`, holding
+# `jobs.db`, `history.db`, every uploaded source video, and whatever the operator put there.
+
+
+@pytest.fixture
+def served_app(tmp_path, monkeypatch):
+    """The real app over an isolated ``storage/`` tree, with no auth token configured.
+
+    Yields ``(client, secret_path, job_id, clip_name)``. The secret sits *directly inside*
+    ``storage/`` — one level above ``clips_dir`` — because that is the position the traversal
+    reached and the position the cookie-jar guidance used to recommend.
+    """
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    storage = tmp_path / "storage"
+    clips = storage / "clips"
+    (clips / "j1").mkdir(parents=True)
+    (clips / "j1" / "clip_01.mp4").write_bytes(b"\0" * 64)
+
+    secret = storage / "cookies.txt"
+    secret.write_text("SECRET-COOKIE-JAR", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "clips_dir", str(clips))
+    monkeypatch.setattr(settings, "api_auth_token", None)  # the default: unauthenticated
+
+    # A real job record carrying the clip. Both routes cross-check the filename against the job
+    # (deliberately — without it they would serve sidecar JSON and intermediates), so the positive
+    # control needs one or it 404s for a reason that has nothing to do with containment. Registering
+    # it is also what makes the negative cases meaningful: the traversal is refused by the *path*
+    # guard, not incidentally by the job lookup, which is the "only accidentally safe" trap.
+    from worker.jobs import get_manager
+    from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
+
+    job = Job(input_type="file", source="seed.mp4", options=ProcessingOptions())
+    job.id = "j1"
+    job.status = JobStatus.COMPLETED
+    job.clips = [ClipResult(id="c1", filename="clip_01.mp4", start=0.0, end=4.0, duration=4.0)]
+    get_manager().store.add(job)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client, secret, "j1", "clip_01.mp4"
+
+
+#: The traversal spellings from the original report, plus the encodings a denylist would miss.
+_TRAVERSALS = [
+    "%2E%2E",
+    "..",
+    "%2e%2e",
+    "....%2F%2F",
+    "%2e%2e%2f",
+    ".%2E",
+]
+
+
+@pytest.mark.parametrize("job", _TRAVERSALS)
+@pytest.mark.parametrize("route", ["video", "download"])
+def test_no_route_serves_a_file_above_the_clips_directory(served_app, job, route):
+    """Unauthenticated traversal must not read `storage/cookies.txt` through either route.
+
+    ``Path("..").name`` is ``".."`` — pathlib treats it as an ordinary final component — so
+    ``.name`` alone never stopped this. The assertion checks the **bytes**, not just the status
+    code: a 200 carrying an error page and a 200 carrying the credential are very different
+    outcomes, and only one of them is a breach.
+    """
+    client, secret, _job_id, _clip = served_app
+
+    response = client.get(f"/api/clips/{job}/cookies.txt/{route}")
+
+    assert secret.read_text(encoding="utf-8") == "SECRET-COOKIE-JAR"  # fixture is still valid
+    assert b"SECRET-COOKIE-JAR" not in response.content, (
+        f"/{route} leaked a file above clips_dir for job_id={job!r} (status {response.status_code})"
+    )
+    assert response.status_code == 404, response.status_code
+
+
+@pytest.mark.parametrize("route", ["video", "download"])
+def test_the_clips_root_itself_is_not_servable(served_app, route):
+    """An empty job component resolves to the root, which is a directory, not a clip."""
+    client, _secret, _job_id, clip = served_app
+    assert client.get(f"/api/clips/%2E/{clip}/{route}").status_code == 404
+
+
+def test_a_real_clip_is_still_served(served_app):
+    """The guard must not decay into "404 everything", which would pass every test above."""
+    client, _secret, job_id, clip = served_app
+
+    response = client.get(f"/api/clips/{job_id}/{clip}/video")
+    assert response.status_code == 200, response.text
+    assert response.content == b"\0" * 64
+
+
+def test_a_genuine_miss_inside_the_root_is_still_a_plain_404(served_app):
+    """A missing clip and a refused traversal are both 404, which is intended.
+
+    Distinguishing them in the response would tell an attacker which paths exist.
+    """
+    client, _secret, job_id, _clip = served_app
+    assert client.get(f"/api/clips/{job_id}/absent.mp4/video").status_code == 404
+
+
+@pytest.mark.parametrize("route", ["video", "download"])
+def test_every_clip_route_goes_through_the_resolver(route):
+    """A third route over the same directory is how the looser one gets forgotten.
+
+    Asserted structurally as well as behaviourally: the tests above cover the two routes that
+    exist today, and this one fails if a future route is added over ``clips_dir`` without the
+    resolver. Comments are stripped, because the resolver's own docstring names the unsafe
+    pattern in order to explain why it is unsafe.
+    """
+    import inspect
+
+    from api import main as api_main
+
+    handler = {"video": api_main.download_video_only, "download": api_main.download_clip}[route]
+    raw = inspect.getsource(handler)
+    code = "\n".join(
+        line.split("#", 1)[0] for line in raw.splitlines() if not line.strip().startswith("#")
+    )
+    assert "_resolve_clip_file(" in code, f"{handler.__name__} no longer uses the resolver"
+    assert "Path(settings.clips_dir)" not in code, (
+        f"{handler.__name__} builds a clips path directly again, bypassing containment"
+    )
