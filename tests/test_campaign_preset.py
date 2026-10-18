@@ -177,7 +177,7 @@ def _original_split(text: str) -> tuple[str, str] | None:
 # helper agree only on single lines; the alphabet reflects that.
 _LINE_TEXT = st.text(alphabet="ab #:=–-\t*_`•Z", max_size=120)
 _COLOR_TEXT = st.text(alphabet="ab_ -:=#f0\t,;xé", max_size=60)
-_DURATION_TEXT = st.text(alphabet="12.+- sSecondEC\t9aé", max_size=40)
+_DURATION_TEXT = st.text(alphabet="12.+- sSecondEC\t9aé_\u017f", max_size=40)
 
 
 @settings(max_examples=3000, deadline=None)

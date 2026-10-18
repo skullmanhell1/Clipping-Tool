@@ -341,7 +341,8 @@ _LINE_SEPARATORS = ":=–-"
 _LINE_LABEL_MAX = 80
 _COLOR_VALUE_RE = re.compile(r"\s*(#[\da-fA-F]{3,8}|[\w-]+)")
 _COLOR_SEPARATOR_RE = re.compile(r"[:=]")
-_DURATION_RE = re.compile(r"[-+]?\d+(?:\.\d+)?\s*(?:seconds?|secs?|s)\b", re.IGNORECASE)
+# Tried in the order the regex alternation `(seconds?|secs?|s)` tried them.
+_DURATION_UNITS = ("seconds", "second", "secs", "sec", "s")
 
 
 def _split_label_line(text: str) -> tuple[str, str] | None:
@@ -413,8 +414,52 @@ def _color_pairs(value: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _unit_char_matches(ch: str, wanted: str) -> bool:
+    # `re.IGNORECASE` on str patterns also folds the long s (U+017F) onto "s".
+    return ch.lower() == wanted or (wanted == "s" and ch == "\u017f")
+
+
+def _duration_end(text: str, index: int) -> int | None:
+    """End of a ``[-+]?\\d+(?:\\.\\d+)?\\s*(seconds?|secs?|s)\\b`` match at ``index``, if any.
+
+    Hand-written so no regex quantifier runs over the digits. Backtracking into a digit run could
+    never help the regex (a shorter run is followed by a digit, which no unit accepts), so only
+    the with-fraction and without-fraction ends are tried, in that order.
+    """
+
+    size = len(text)
+    start = index + 1 if text[index] in "+-" else index
+    digits_end = start
+    while digits_end < size and text[digits_end].isdecimal():
+        digits_end += 1
+    if digits_end == start:
+        return None
+    ends = []
+    if digits_end + 1 < size and text[digits_end] == "." and text[digits_end + 1].isdecimal():
+        fraction_end = digits_end + 1
+        while fraction_end < size and text[fraction_end].isdecimal():
+            fraction_end += 1
+        ends.append(fraction_end)
+    ends.append(digits_end)
+    for number_end in ends:
+        unit_start = number_end
+        while unit_start < size and text[unit_start].isspace():
+            unit_start += 1
+        for unit in _DURATION_UNITS:
+            unit_end = unit_start + len(unit)
+            if unit_end > size or not all(
+                _unit_char_matches(text[unit_start + offset], wanted)
+                for offset, wanted in enumerate(unit)
+            ):
+                continue
+            # `\b`: the unit must not run on into another word character.
+            if unit_end == size or not (text[unit_end].isalnum() or text[unit_end] == "_"):
+                return unit_end
+    return None
+
+
 def _strip_durations(text: str) -> str:
-    """Remove ``5s`` / ``1.5 seconds`` tokens, as ``re.sub`` of :data:`_DURATION_RE` did.
+    """Remove ``5s`` / ``1.5 seconds`` tokens exactly as the former ``re.sub`` did.
 
     A match is only attempted where a number begins. Starting later inside the same digit run
     sees the same suffix and fails the same way, so skipping those positions changes nothing
@@ -430,10 +475,10 @@ def _strip_durations(text: str) -> str:
         signed = ch in "+-" and text[index + 1 : index + 2].isdecimal()
         number_start = ch.isdecimal() and not (prev and (prev.isdecimal() or prev in "+-"))
         if signed or number_start:
-            match = _DURATION_RE.match(text, index)
-            if match:
+            end = _duration_end(text, index)
+            if end is not None:
                 pieces.append(text[kept_from:index])
-                kept_from = index = match.end()
+                kept_from = index = end
                 continue
         index += 1
     pieces.append(text[kept_from:])
