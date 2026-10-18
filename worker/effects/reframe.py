@@ -1211,7 +1211,9 @@ def resolve_detector(
 
     if cv2_module is None:
         try:
-            import cv2 as cv2_module
+            import cv2 as cv2_lib
+
+            cv2_module = cv2_lib
         except Exception:
             cv2_module = None
 

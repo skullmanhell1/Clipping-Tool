@@ -1084,7 +1084,10 @@ def submit_batch(req: BatchRequest) -> dict:
     manager = get_manager()
     project_cleanup = manager.start_new_project() if req.new_project else None
     batch_id = manager.submit_batch(items, options)
-    response = {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
+    response: dict[str, Any] = {
+        "batch_id": batch_id,
+        "jobs": manager.store.snapshot_batch(batch_id),
+    }
     if project_cleanup is not None:
         response["project_cleanup"] = project_cleanup
     return response
@@ -1432,6 +1435,7 @@ async def upload(
 
     manager = get_manager()
     project_cleanup = manager.start_new_project() if new_project else None
+    response: dict[str, Any]
     if len(saved) == 1:
         job = manager.submit("file", saved[0]["source"], options, title=saved[0]["title"])
         # Snapshot rather than `job.to_dict()`: the worker may already be updating this job by
@@ -1442,7 +1446,10 @@ async def upload(
         return response
 
     batch_id = manager.submit_batch(saved, options)
-    response = {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
+    response = {
+        "batch_id": batch_id,
+        "jobs": manager.store.snapshot_batch(batch_id),
+    }
     if project_cleanup is not None:
         response["project_cleanup"] = project_cleanup
     return response
