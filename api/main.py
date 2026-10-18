@@ -2196,6 +2196,24 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         or ""
     ).strip()
     routes = {platform: dict(route) for platform, route in req.routes.items()}
+    if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
+        blockers = campaign_publish_blockers(
+            job=job,
+            clip=clip,
+            platforms=req.platforms,
+            mode=req.mode,
+            checks=req.campaign_checks,
+            affiliate_url=req.affiliate_url,
+        )
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="BOXABL campaign preflight failed: " + " ".join(blockers),
+            )
+        if "x" in {platform.strip().lower() for platform in req.platforms}:
+            routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
+    # Public-only platform readiness runs after the BOXABL preflight so a campaign clip sent in
+    # auto mode gets the specific "use review mode" answer rather than a platform status error.
     public_only = req.mode == "auto"
     if public_only:
         publish_manager = get_publish_manager()
@@ -2219,22 +2237,6 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                         "Complete platform approval before using auto publish."
                     ),
                 )
-    if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
-        blockers = campaign_publish_blockers(
-            job=job,
-            clip=clip,
-            platforms=req.platforms,
-            mode=req.mode,
-            checks=req.campaign_checks,
-            affiliate_url=req.affiliate_url,
-        )
-        if blockers:
-            raise HTTPException(
-                status_code=409,
-                detail="BOXABL campaign preflight failed: " + " ".join(blockers),
-            )
-        if "x" in {platform.strip().lower() for platform in req.platforms}:
-            routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
     brief_id = str(getattr(job.options, "brief_id", "") or publish_campaign_id or "").strip()
     campaign = get_history().campaign(brief_id) if brief_id else None
     brief = getattr(campaign, "brief", None) if campaign else None
