@@ -472,6 +472,11 @@ rebuilds:
 git pull && docker compose up --build
 ```
 
+Campaign preset parsing, storytelling plans, compliance checks, and the exactly-two-public-clips
+daily scheduler are documented in [`docs/CAMPAIGN_AUTOMATION.md`](docs/CAMPAIGN_AUTOMATION.md).
+After updating, keep `.env` and `storage/` intact, rebuild the image, and confirm that each
+platform reports direct-public approval before using the campaign scheduler.
+
 The app checks GitHub for newer releases and shows an **"update available"**
 banner in the UI (and on the **Settings** tab) when your `VERSION` is behind the
 latest release. Set `UPDATE_CHECK_ENABLED=false` to disable the check, or

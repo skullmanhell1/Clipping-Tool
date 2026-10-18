@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — campaign automation and storytelling plans
+
+- Added deterministic Google-Doc campaign presets for branding, captions, formats, hashtags,
+  CTAs, hooks, cliffhangers, pattern-interrupter cadence, and public-only publishing policy.
+- Added contextual proof-card, concept/meme, poll/question, curiosity-loop, pattern-reset, and
+  Part 2 end-card planning with licensed-asset provenance markers.
+- Added campaign compliance reports to rendered clip records and a daily scheduler that accepts
+  exactly two clips at distinct peak-time slots.
+- Added a dashboard campaign automation panel and Docker update/runbook documentation in
+  `docs/CAMPAIGN_AUTOMATION.md`.
+
 ### Added — retention-first engagement editing
 
 - Added optional Balanced and Aggressive retention modes that blend hook quality,

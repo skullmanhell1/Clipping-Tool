@@ -113,6 +113,7 @@ class PublishManager:
         mode: str = "auto",
         schedule_at: float | None = None,
         route_overrides: dict[str, dict[str, str]] | None = None,
+        public_only: bool = False,
     ):
         routes = {}
         campaign = self.history.campaign(campaign_id) if campaign_id else None
@@ -206,6 +207,7 @@ class PublishManager:
                 "target_type": route.get("target_type", ""),
                 "target_id": route.get("target_id", ""),
                 "mode": mode,
+                "public_only": bool(public_only),
                 # Keep the requested product separate from the registered
                 # publisher. `youtube_shorts` routes through YouTube, but its
                 # preflight duration/aspect rules are stricter.
@@ -271,6 +273,7 @@ class PublishManager:
             target_id=data.get("target_id", ""),
             mode=data.get("mode", "auto"),
         )
+        req.metadata["public_only"] = bool(data.get("public_only", False))
         if not req.video_path.exists():
             self.history.update_attempt(
                 item["id"],
@@ -312,7 +315,39 @@ class PublishManager:
         # `token_kind="static"` and are left alone, since retrying a dead static token cannot help.
         self._ensure_credentials(pub, req.account_id)
 
+        if req.metadata.get("public_only") and not pub.status(req.account_id).direct_publish:
+            self.history.update_attempt(
+                item["id"],
+                state=PublishState.FAILED.value,
+                error=(
+                    f"{pub.name} cannot satisfy the public-only campaign policy: "
+                    f"{pub.status(req.account_id).message}"
+                ),
+                completed_at=time.time(),
+            )
+            return
+
         result = pub.publish(req)
+        if req.metadata.get("public_only") and result.state is not PublishState.PUBLISHED:
+            state = (
+                PublishState.UNKNOWN.value
+                if getattr(result, "side_effect_possible", False)
+                else PublishState.FAILED.value
+            )
+            self.history.update_attempt(
+                item["id"],
+                state=state,
+                url=result.url,
+                external_id=result.external_id,
+                error=(
+                    result.error
+                    or f"{pub.name} returned {result.state.value}; public visibility is required"
+                ),
+                message=result.message,
+                result_json=result.to_dict(),
+                completed_at=time.time(),
+            )
+            return
         if not result.success and result.state == PublishState.FAILED:
             if self._schedule_retry(item, pub, result):
                 return

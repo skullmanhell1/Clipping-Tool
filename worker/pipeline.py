@@ -39,6 +39,7 @@ from worker import (
     intermediate_cache,
     segmentation,
     stabilise,
+    storytelling,
     subtitle_export,
     thumbnail,
     video_encoders,
@@ -64,6 +65,7 @@ from worker.boxabl_campaign import (
     normalize_boxabl_text,
     normalize_boxabl_words,
 )
+from worker.campaign_preset import CampaignPreset, validate_clip_against_preset
 from worker.effects import broll, compositor, filler, reframe
 from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
@@ -544,6 +546,7 @@ def run_pipeline(
         geo = temp_dir / f"geo_{clip_id}.mp4"
         final = clips_dir / f"clip_{clip_id}.mp4"
         applied: list[str] = []
+        campaign_preset = dict(getattr(options, "campaign_preset", {}) or {})
         # What `effective_options` removed from the caller's request (a music bed suppressed by
         # permissibility mode, external b-roll sourcing downgraded for want of a provider key).
         # Recorded per clip for exactly the reason the translation marker below is: the clip record
@@ -646,6 +649,12 @@ def run_pipeline(
             md = meta_mod.ClipMetadata(platform=options.platform)
         if is_boxabl_campaign:
             md = enrich_campaign_metadata(md)
+        if campaign_preset:
+            policy = CampaignPreset.from_dict(campaign_preset)
+            md.hashtags = list(dict.fromkeys([*policy.hashtags, *md.hashtags]))
+            md.cta = md.cta or policy.cta
+            if md.platform == "generic" and policy.allowed_platforms:
+                md.platform = policy.allowed_platforms[0]
 
         # Selection fell back to deterministic segmentation rather than the model. A property of
         # the job rather than of this clip, but the clip record is the only thing a caller sees -
@@ -1413,6 +1422,55 @@ def run_pipeline(
             applied.extend(out.markers)
             applied.extend(host.finish_clip(clip_id))
 
+        storytelling_plan = {}
+        compliance_report = {}
+        if getattr(options, "storytelling_enabled", False) or campaign_preset:
+            try:
+                storytelling_plan = storytelling.plan_storytelling(
+                    words,
+                    clip_duration,
+                    entities=(getattr(c, "features", {}) or {}).get("entities"),
+                    pattern_interval=CampaignPreset.from_dict(
+                        campaign_preset
+                    ).pattern_interrupter_interval
+                    or 5,
+                ).to_dict()
+                applied.append("storytelling_plan")
+            except Exception:
+                # Planning is advisory and must never turn a rendered clip into a failed job.
+                logger.warning("storytelling planning degraded for clip %s", clip_id, exc_info=True)
+                applied.append("storytelling_degraded")
+        if campaign_preset:
+            try:
+                compliance = validate_clip_against_preset(
+                    campaign_preset,
+                    {
+                        "visibility": getattr(options, "public_visibility", "public"),
+                        "platform": md.platform,
+                        "aspect_ratio": options.aspect,
+                        "hashtags": md.hashtags,
+                        "cta": md.cta,
+                        "caption_style": getattr(options, "caption_preset", ""),
+                        "branding": {
+                            "logo": getattr(options, "brand_logo", ""),
+                            "font": getattr(options, "brand_font", ""),
+                            "colors": {
+                                "primary": getattr(options, "brand_primary_color", ""),
+                                "accent": getattr(options, "brand_highlight_color", ""),
+                            },
+                        },
+                        "hook": bool(md.hook_text),
+                        "cliffhanger": bool(storytelling_plan.get("end_card", {}).get("detected")),
+                    },
+                )
+                compliance_report = compliance.to_dict()
+                applied.append(f"campaign_compliance:{compliance.status}")
+            except Exception:
+                logger.warning(
+                    "campaign compliance planning degraded for clip %s", clip_id, exc_info=True
+                )
+                applied.append("campaign_compliance:unknown")
+
         results.append(
             ClipResult(
                 id=clip_id,
@@ -1446,6 +1504,9 @@ def run_pipeline(
                 transcript_text=clip_text,
                 retention_plan=retention_plan.to_dict(),
                 engagement_features=dict(getattr(c, "features", {}) or {}),
+                storytelling_plan=storytelling_plan,
+                campaign_preset=campaign_preset,
+                compliance_report=compliance_report,
                 effects_applied=applied,
                 broll_assets=broll_assets,
             )

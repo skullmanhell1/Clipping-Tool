@@ -424,6 +424,37 @@ export default function ClipCard({
           </div>
         )}
 
+        {clip.storytelling_plan && Object.keys(clip.storytelling_plan).length > 0 && (
+          <div className="rounded-lg border border-violet-400/20 bg-violet-400/[0.04] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-violet-200">Storytelling plan</span>
+              <span className="text-[10px] text-slate-500">Suggestions require review/licensed assets</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-slate-300">
+              <span className="rounded-full bg-slate-800 px-2 py-0.5">Proof cards {(clip.storytelling_plan.entity_proof_cards || []).length}</span>
+              <span className="rounded-full bg-slate-800 px-2 py-0.5">Visual beats {(clip.storytelling_plan.concept_overlays || []).length}</span>
+              <span className="rounded-full bg-slate-800 px-2 py-0.5">Resets {(clip.storytelling_plan.pattern_interrupters || []).length}</span>
+              <span className="rounded-full bg-slate-800 px-2 py-0.5">Questions {(clip.storytelling_plan.interactive_overlays || []).length}</span>
+              {clip.storytelling_plan.curiosity_loop?.detected ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-200">Curiosity opener</span> : null}
+              {clip.storytelling_plan.end_card?.detected ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-200">Part 2 end-card</span> : null}
+            </div>
+          </div>
+        )}
+
+        {clip.compliance_report?.status && (
+          <div className={`rounded-lg border p-3 ${clip.compliance_report.status === "pass" ? "border-emerald-400/20 bg-emerald-400/[0.04]" : clip.compliance_report.status === "fail" ? "border-rose-400/20 bg-rose-400/[0.04]" : "border-amber-400/20 bg-amber-400/[0.04]"}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-300">Campaign compliance</span>
+              <span className="text-xs font-semibold uppercase text-slate-300">{clip.compliance_report.status}</span>
+            </div>
+            <div className="mt-2 space-y-1 text-[10px] text-slate-400">
+              {(clip.compliance_report.results || []).filter((item) => item.status !== "pass").slice(0, 4).map((item) => (
+                <div key={`${item.rule}-${item.status}`}><span className="font-medium text-slate-300">{item.rule}:</span> {item.message}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* U4: mounted only while open, so the transcript request happens on demand and a
             re-open after a trim re-fetches rather than showing stale word times. */}
         {editingTranscript ? (

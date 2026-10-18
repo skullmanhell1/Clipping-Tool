@@ -28,12 +28,14 @@ Run: ``uvicorn api.main:app --reload``
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +48,7 @@ from pydantic import BaseModel, Field
 from api.security import ClipsAuthMiddleware, rate_limit, require_api_token
 from config import settings
 from profiles import get_profile_store
-from publishers import best_times
+from publishers import best_times, resolve_platform
 from publishers.base import PublishState
 from publishers.history import get_history
 from publishers.manager import get_publish_manager
@@ -64,6 +66,12 @@ from worker.boxabl_campaign import (
 from worker.brand_profiles import BrandProfileStore
 from worker.campaign_brief import parse_campaign_brief
 from worker.campaign_brief_sync import CampaignBriefSyncService
+from worker.campaign_preset import (
+    CampaignPreset,
+    parse_campaign_preset,
+    plan_daily_slots,
+    validate_clip_against_preset,
+)
 from worker.compliance import check_compliance
 from worker.download import (
     DownloadError,
@@ -268,6 +276,9 @@ class OptionsModel(BaseModel):
     campaign_id: str = ""
     publish_mode: str = "review"
     schedule_at: float | None = None
+    campaign_preset: dict = {}
+    storytelling_enabled: bool = False
+    public_visibility: str = "public"
     # Phase 4 — visual effects (all individually toggleable)
     reframe: bool = True
     zoom: bool = True
@@ -419,6 +430,18 @@ def _apply_campaign_defaults(
                     options.brand_logo = brief.logo_assets[0] if brief.logo_assets else ""
                 if not options.brand_cta:
                     options.brand_cta = brief.cta
+                if not options.campaign_preset:
+                    options.campaign_preset = CampaignPreset.from_dict(
+                        {
+                            **brief.to_dict(),
+                            "name": getattr(campaign, "name", "") if campaign else "",
+                        }
+                    ).to_dict()
+                if "storytelling_enabled" not in explicit:
+                    options.storytelling_enabled = True
+                # Campaign automation is deliberately public-only. A platform without direct
+                # publish approval is rejected before upload instead of silently creating a draft.
+                options.public_visibility = "public"
         profile_store = BrandProfileStore(settings.brand_profiles_path)
         profile = (
             profile_store.get(options.brand_profile_id)
@@ -442,6 +465,26 @@ def _apply_campaign_defaults(
                 options.brand_intro_asset = profile.intro_asset
             if not options.brand_outro_asset:
                 options.brand_outro_asset = profile.outro_asset
+        if options.campaign_preset:
+            preset = CampaignPreset.from_dict(options.campaign_preset)
+            options.campaign_preset = preset.to_dict()
+            if "aspect" not in explicit and preset.aspect_ratios:
+                options.aspect = preset.aspect_ratios[0]
+            if "platform" not in explicit and preset.allowed_platforms:
+                options.platform = preset.allowed_platforms[0]
+            if not options.brand_logo:
+                options.brand_logo = preset.branding.logo
+            if not options.brand_font:
+                options.brand_font = preset.branding.font
+            if not options.brand_primary_color:
+                options.brand_primary_color = preset.branding.colors.get("primary", "")
+            if not options.brand_highlight_color:
+                options.brand_highlight_color = preset.branding.colors.get("accent", "")
+            if not options.brand_cta:
+                options.brand_cta = preset.cta
+            if "storytelling_enabled" not in explicit:
+                options.storytelling_enabled = True
+            options.public_visibility = "public"
     except Exception:
         # Missing/corrupt optional brief/profile state must not break legacy processing.
         pass
@@ -532,6 +575,26 @@ class PublishClipRequest(BaseModel):
     routes: dict[str, dict[str, str]] = Field(default_factory=dict)
     campaign_checks: dict[str, bool] = Field(default_factory=dict)
     affiliate_url: str = ""
+
+
+class CampaignPresetRequest(BaseModel):
+    """Parse or validate the operator's Google-Doc campaign policy."""
+
+    text: str = ""
+    preset: dict = Field(default_factory=dict)
+
+
+class DailyScheduleRequest(BaseModel):
+    """Schedule exactly two clips for one campaign day."""
+
+    job_id: str
+    clip_ids: list[str]
+    platforms: list[str] = Field(default_factory=list)
+    day: str = ""
+    timezone: str = "UTC"
+    peak_hours: list[str] = Field(default_factory=lambda: ["12:00", "19:00"])
+    visibility: str = "public"
+    routes: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class RescheduleModel(BaseModel):
@@ -641,6 +704,13 @@ def info() -> dict[str, object]:
         "google_drive": {
             "configured": drive_is_configured,
             "mode": "OAuth refresh token" if drive_is_configured else "not_configured",
+        },
+        "campaign_automation": {
+            "preset_parser": "deterministic_google_doc",
+            "daily_clip_target": 2,
+            "public_visibility_required": True,
+            "storytelling_planner": True,
+            "pattern_interrupter_seconds": [4, 6],
         },
         "effects": {
             "music_moods": ["upbeat", "chill", "dramatic", "corporate", "suspense"],
@@ -1075,6 +1145,9 @@ async def upload(
     campaign_id: str = Form(""),
     publish_mode: str = Form("review"),
     schedule_at: float | None = Form(None),
+    campaign_preset: str | None = Form(None),
+    storytelling_enabled: str | None = Form(None),
+    public_visibility: str | None = Form(None),
     # Phase 4 — visual effects
     reframe: bool = Form(True),
     zoom: bool = Form(True),
@@ -1189,7 +1262,7 @@ async def upload(
     # then took the stem engine's, and now the brand kit and the three default-on audio
     # switches - a name describing a third of its contents is how the next person adds a
     # field to the signature and forgets this dict.
-    optional_form: dict[str, str | None] = {
+    optional_form: dict[str, object] = {
         "kinetic_typography_enabled": kinetic_typography_enabled,
         "kinetic_style": kinetic_style,
         "kinetic_reveal": kinetic_reveal,
@@ -1228,7 +1301,15 @@ async def upload(
         "music_duck": music_duck,
         "trim_silence": trim_silence,
         "profile": profile,
+        "storytelling_enabled": storytelling_enabled,
+        "public_visibility": public_visibility,
     }
+
+    if campaign_preset:
+        try:
+            optional_form["campaign_preset"] = json.loads(campaign_preset)
+        except (TypeError, ValueError):
+            optional_form["campaign_preset"] = {}
 
     options = ProcessingOptions.from_dict(
         {
@@ -1922,6 +2003,154 @@ def check_brief_compliance(req: ComplianceRequest) -> dict:
     return {**result.__dict__, "blockers": result.blockers}
 
 
+@app.post("/api/campaign-presets/parse", tags=["campaigns"])
+def parse_campaign_preset_endpoint(req: CampaignPresetRequest) -> dict:
+    """Turn a Google Doc brief into a reviewable, deterministic campaign preset."""
+
+    if req.text.strip():
+        preset = parse_campaign_preset(req.text)
+    elif req.preset:
+        preset = CampaignPreset.from_dict(req.preset)
+    else:
+        raise HTTPException(status_code=400, detail="Provide campaign brief text or a preset")
+    return {"preset": preset.to_dict(), "requires_review": True}
+
+
+def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -> dict[str, Any]:
+    """Project a rendered clip into the pure campaign-policy vocabulary."""
+
+    options = job.options
+    return {
+        "visibility": visibility,
+        "platform": platform,
+        "aspect_ratio": getattr(options, "aspect", ""),
+        "hashtags": list(getattr(clip, "hashtags", []) or []),
+        "cta": getattr(clip, "cta", ""),
+        "caption_style": getattr(options, "caption_preset", ""),
+        "branding": {
+            "logo": getattr(options, "brand_logo", ""),
+            "font": getattr(options, "brand_font", ""),
+            "colors": {
+                "primary": getattr(options, "brand_primary_color", ""),
+                "accent": getattr(options, "brand_highlight_color", ""),
+            },
+        },
+        "hook": bool(getattr(clip, "hook_text", "")),
+        "cliffhanger": bool(
+            (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected")
+        ),
+    }
+
+
+@app.post("/api/campaigns/{campaign_id}/daily-schedule", tags=["publishing"])
+def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
+    """Queue exactly two public clips at two distinct peak-time slots."""
+
+    if len(req.clip_ids) != 2 or len(set(req.clip_ids)) != 2:
+        raise HTTPException(status_code=400, detail="Exactly two different clip_ids are required")
+    if str(req.visibility).strip().casefold() != "public":
+        raise HTTPException(
+            status_code=400, detail="Campaign automation only supports public visibility"
+        )
+    campaign = get_history().campaign(campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    job = get_manager().store.get(req.job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    platforms = list(req.platforms or campaign.routes.keys())
+    if not platforms:
+        raise HTTPException(status_code=400, detail="Campaign has no publishing routes")
+    manager = get_publish_manager()
+    routes = {platform: dict(route) for platform, route in req.routes.items()}
+    for requested in platforms:
+        platform = resolve_platform(requested)
+        publisher = manager.publishers.get(platform)
+        if publisher is None:
+            raise HTTPException(status_code=400, detail=f"Unknown publishing platform: {requested}")
+        account_id = str(
+            routes.get(requested, campaign.routes.get(platform, {})).get("account_id") or ""
+        )
+        status = publisher.status(account_id)
+        if not status.configured or not status.direct_publish:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"{platform} is not ready for public publishing",
+                    "platform": platform,
+                    "status": status.to_dict(),
+                },
+            )
+
+    timezone = req.timezone.strip() or str(getattr(settings, "schedule_timezone", "UTC") or "UTC")
+    calendar_day = req.day.strip()
+    if not calendar_day:
+        from zoneinfo import ZoneInfo
+
+        calendar_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
+    slots = plan_daily_slots(calendar_day, timezone, req.peak_hours, visibility="public")
+    preset_data = getattr(job.options, "campaign_preset", {}) or {}
+    campaign_brief = getattr(campaign, "brief", None)
+    if not preset_data and campaign_brief is not None:
+        preset_data = CampaignPreset.from_dict(
+            {
+                **campaign_brief.to_dict(),
+                "name": getattr(campaign, "name", ""),
+            }
+        ).to_dict()
+    preset = CampaignPreset.from_dict(preset_data)
+
+    clip_items = []
+    for clip_id, slot in zip(req.clip_ids, slots, strict=True):
+        clip = get_manager().store.get_clip(req.job_id, clip_id)
+        if clip is None:
+            raise HTTPException(status_code=404, detail=f"Clip not found: {clip_id}")
+        report = validate_clip_against_preset(
+            preset,
+            _clip_preset_facts(job, clip, visibility="public", platform=platforms[0]),
+        )
+        if report.status == "fail":
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Campaign preset compliance failed", "report": report.to_dict()},
+            )
+        ids = manager.submit(
+            job_id=req.job_id,
+            clip=clip,
+            video_path=Path(settings.clips_dir) / req.job_id / clip.filename,
+            platforms=platforms,
+            campaign_id=campaign_id,
+            mode="auto",
+            schedule_at=slot,
+            route_overrides=routes,
+            public_only=True,
+        )
+        clip_items.append(
+            {
+                "clip_id": clip_id,
+                "slot": slot,
+                "attempt_ids": ids,
+                "compliance": report.to_dict(),
+            }
+        )
+    return {
+        "campaign_id": campaign_id,
+        "job_id": req.job_id,
+        "day": calendar_day,
+        "timezone": timezone,
+        "visibility": "public",
+        "daily_clip_target": 2,
+        "slots": list(slots),
+        "clips": clip_items,
+        "attempts": [
+            get_history().get_attempt(attempt_id)
+            for item in clip_items
+            for attempt_id in item["attempt_ids"]
+        ],
+    }
+
+
 @app.get("/api/brand-profiles", tags=["profiles"])
 def list_brand_profiles() -> dict:
     store = BrandProfileStore(settings.brand_profiles_path)
@@ -1983,6 +2212,31 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             )
         if "x" in {platform.strip().lower() for platform in req.platforms}:
             routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
+    # Public-only platform readiness runs after the BOXABL preflight so a campaign clip sent in
+    # auto mode gets the specific "use review mode" answer rather than a platform status error.
+    public_only = req.mode == "auto"
+    if public_only:
+        publish_manager = get_publish_manager()
+        for requested in req.platforms:
+            platform = resolve_platform(requested)
+            publisher = publish_manager.publishers.get(platform)
+            if publisher is None:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown publishing platform: {requested}"
+                )
+            status = publisher.status(str(routes.get(requested, {}).get("account_id") or ""))
+            if not status.configured:
+                raise HTTPException(
+                    status_code=409, detail=f"{platform} is not configured: {status.message}"
+                )
+            if not status.direct_publish:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{platform} is not eligible for public-only publishing: {status.message}. "
+                        "Complete platform approval before using auto publish."
+                    ),
+                )
     brief_id = str(getattr(job.options, "brief_id", "") or publish_campaign_id or "").strip()
     campaign = get_history().campaign(brief_id) if brief_id else None
     brief = getattr(campaign, "brief", None) if campaign else None
@@ -2005,6 +2259,42 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                 status_code=409,
                 detail={"message": "Campaign compliance failed", "blockers": compliance.blockers},
             )
+    preset_data = dict(getattr(job.options, "campaign_preset", {}) or {})
+    if preset_data:
+        preset = CampaignPreset.from_dict(preset_data)
+        report = validate_clip_against_preset(
+            preset,
+            {
+                "visibility": "public" if public_only else "private",
+                "platform": req.platforms[0] if req.platforms else clip.platform,
+                "aspect_ratio": getattr(job.options, "aspect", ""),
+                "hashtags": clip.hashtags,
+                "cta": clip.cta,
+                "caption_style": getattr(job.options, "caption_preset", ""),
+                "branding": {
+                    "logo": getattr(job.options, "brand_logo", ""),
+                    "font": getattr(job.options, "brand_font", ""),
+                    "colors": {
+                        "primary": getattr(job.options, "brand_primary_color", ""),
+                        "accent": getattr(job.options, "brand_highlight_color", ""),
+                    },
+                },
+                "hook": bool(clip.hook_text),
+                "cliffhanger": bool(
+                    (getattr(clip, "storytelling_plan", {}) or {})
+                    .get("end_card", {})
+                    .get("detected")
+                ),
+            },
+        )
+        if report.status == "fail":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Campaign preset compliance failed",
+                    "report": report.to_dict(),
+                },
+            )
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,
@@ -2015,6 +2305,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         mode=req.mode,
         schedule_at=req.schedule_at,
         route_overrides=routes,
+        public_only=public_only,
     )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")
@@ -2459,10 +2750,14 @@ def watch_options(options: OptionsModel) -> dict:
 # Clip downloads. The primary download is a ZIP containing video + metadata TXT.
 # ---------------------------------------------------------------------------
 def _clip_metadata_text(clip) -> str:
+    compliance = getattr(clip, "compliance_report", {}) or {}
+    storytelling_plan = getattr(clip, "storytelling_plan", {}) or {}
     return (
         f"Title\n{clip.title}\n\nCaption / Description\n{clip.description}\n\n"
         f"Hashtags\n{' '.join(clip.hashtags)}\n\nHook\n{clip.hook_text}\n\n"
-        f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n"
+        f"CTA\n{clip.cta}\n\nMentions\n{' '.join(clip.mentions)}\n\n"
+        f"Campaign compliance\n{compliance.get('status', 'not configured')}\n\n"
+        f"Storytelling plan\n{json.dumps(storytelling_plan, sort_keys=True)}\n"
     )
 
 

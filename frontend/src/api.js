@@ -87,7 +87,9 @@ export const api = {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     Object.entries(options).forEach(([k, v]) => {
-      if (v !== null && v !== undefined) fd.append(k, v);
+      if (v !== null && v !== undefined) {
+        fd.append(k, typeof v === "object" ? JSON.stringify(v) : v);
+      }
     });
     return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
   },
@@ -142,6 +144,18 @@ export const api = {
   saveCampaign: (name, routes, id = "") =>
     apiFetch("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, routes, id }) }).then(jsonOrThrow),
+  parseCampaignPreset: (text, preset = {}) =>
+    apiFetch("/api/campaign-presets/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, preset }),
+    }).then(jsonOrThrow),
+  scheduleCampaignDay: (campaignId, payload) =>
+    apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/daily-schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(jsonOrThrow),
   publishClip: (jobId, clipId, payload) =>
     apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
