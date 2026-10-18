@@ -217,6 +217,33 @@ class HistoryStore:
                 ),
             )
 
+    def clear_for_new_project(self, *, protected_job_ids: set[str] | None = None) -> dict[str, int]:
+        """Delete clip and publish history while preserving campaigns and tokens.
+
+        Active jobs are passed as ``protected_job_ids`` by the coordinated project
+        cleanup. Orphaned history rows are removed too, so the dashboard cannot
+        retain a clip whose job record is already gone.
+        """
+        protected = sorted(protected_job_ids or set())
+        with self._lock, self._connect() as db:
+            if protected:
+                placeholders = ",".join("?" for _ in protected)
+                clips = db.execute(
+                    f"DELETE FROM clips WHERE job_id NOT IN ({placeholders})",  # noqa: S608 - placeholders are generated from protected ids
+                    tuple(protected),
+                )
+                attempts = db.execute(
+                    f"DELETE FROM publish_attempts WHERE job_id NOT IN ({placeholders})",  # noqa: S608 - placeholders are generated from protected ids
+                    tuple(protected),
+                )
+            else:
+                clips = db.execute("DELETE FROM clips")
+                attempts = db.execute("DELETE FROM publish_attempts")
+        return {
+            "clips_removed": int(clips.rowcount or 0),
+            "publish_attempts_removed": int(attempts.rowcount or 0),
+        }
+
     def flag_campaign_clips(
         self,
         campaign_id: str,
