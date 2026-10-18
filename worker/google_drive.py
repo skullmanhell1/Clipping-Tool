@@ -33,17 +33,47 @@ class GoogleDriveError(RuntimeError):
 
 
 def extract_file_id(url: str) -> str | None:
-    """Extract an ID from a Google Drive direct-file link; folders are not accepted."""
+    """Extract an ID from a Google Docs or Drive direct-file link.
+
+    Only the fixed Google hosts and direct-file URL shapes are accepted. In particular, folder
+    links, arbitrary Google pages, user-info URLs, and non-HTTP schemes never reach the OAuth
+    reader. The same helper is used by video ingest and campaign-brief import so the browser only
+    ever submits an opaque URL; credentials stay on the server.
+    """
     try:
         parts = urlsplit(str(url or "").strip())
     except ValueError:
         return None
-    if (parts.hostname or "").lower() not in {"drive.google.com", "www.drive.google.com"}:
+    if parts.scheme.lower() not in {"http", "https"}:
+        return None
+    if parts.username or parts.password:
+        return None
+    hostname = (parts.hostname or "").lower()
+    if hostname not in {
+        "drive.google.com",
+        "www.drive.google.com",
+        "docs.google.com",
+        "www.docs.google.com",
+    }:
         return None
     path_parts = [part for part in parts.path.split("/") if part]
     file_id = None
     if len(path_parts) >= 3 and path_parts[0] == "file" and path_parts[1] == "d":
         file_id = path_parts[2]
+    elif hostname in {"docs.google.com", "www.docs.google.com"} and path_parts[:2] == [
+        "document",
+        "d",
+    ]:
+        file_id = path_parts[2] if len(path_parts) >= 3 else None
+    elif (
+        hostname in {"docs.google.com", "www.docs.google.com"}
+        and len(path_parts) >= 5
+        and path_parts[0] == "document"
+        and path_parts[1] == "u"
+        and path_parts[2].isdigit()
+        and path_parts[3] == "d"
+    ):
+        file_id = path_parts[4]
     elif path_parts and path_parts[0] in {"open", "uc"}:
         file_id = parse_qs(parts.query).get("id", [None])[0]
     return file_id if file_id and _FILE_ID_RE.fullmatch(file_id) else None

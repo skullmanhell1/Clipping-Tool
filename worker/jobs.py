@@ -25,6 +25,7 @@ from worker import cancellation, observability
 from worker import download as dl
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
+from worker.project_cleanup import _ACTIVE_STATUSES, PROJECT_CLEANUP_LOCK, cleanup_for_new_project
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,14 @@ class JobStore:
         if self._persistence is None or job is None:
             return
         try:
-            self._persistence.save(job, payload=payload)
+            # Cleanup and persistence share this lock. Re-check membership after
+            # taking it: a mutation captured just before a reset must not
+            # resurrect its row after the reset deletes it.
+            with PROJECT_CLEANUP_LOCK:
+                with self._lock:
+                    if self._jobs.get(job.id) is not job:
+                        return
+                self._persistence.save(job, payload=payload)
         except Exception:
             logger.exception("failed to persist job %s", getattr(job, "id", "?"))
 
@@ -331,6 +339,38 @@ class JobStore:
                 return None
             return next((c for c in job.clips if c.id == clip_id), None)
 
+    def clear_for_new_project(self, *, include_active: bool = False) -> dict[str, Any]:
+        """Remove old jobs, retaining queued/processing jobs unless explicitly requested."""
+        with PROJECT_CLEANUP_LOCK:
+            with self._lock:
+                protected = {
+                    job.id for job in self._jobs.values() if job.status in _ACTIVE_STATUSES
+                }
+                if include_active:
+                    protected.clear()
+                removed_ids = [job_id for job_id in self._jobs if job_id not in protected]
+                for job_id in removed_ids:
+                    del self._jobs[job_id]
+
+            persistence_removed = 0
+            if self._persistence is not None and removed_ids:
+                try:
+                    delete_many = getattr(self._persistence, "delete_many", None)
+                    if delete_many is not None:
+                        persistence_removed = int(delete_many(removed_ids) or 0)
+                    else:  # Compatibility with a small injected persistence fake.
+                        for job_id in removed_ids:
+                            self._persistence.delete(job_id)
+                            persistence_removed += 1
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("failed to clear previous project jobs")
+
+            return {
+                "removed_job_ids": removed_ids,
+                "protected_job_ids": sorted(protected),
+                "persistence_removed": persistence_removed,
+            }
+
 
 class JobManager:
     """Owns the bounded worker pool and drives jobs through the pipeline.
@@ -391,6 +431,21 @@ class JobManager:
         mirrors :meth:`ThreadPoolExecutor.shutdown`; no public API route depends on it.
         """
         self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def start_new_project(self, *, include_active: bool = False) -> dict[str, Any]:
+        """Clear prior project state before a fresh submission.
+
+        Active jobs are protected by default because their workers may still be
+        writing files. ``include_active`` is reserved for an explicit operator
+        action that accepts clearing those jobs as well.
+        """
+        from publishers.history import get_history
+
+        return cleanup_for_new_project(
+            self.store,
+            get_history(),
+            include_active=include_active,
+        )
 
     def _reserve_slot(self, job_id: str) -> bool:
         """Reserve one bounded queue slot, rejecting duplicate scheduling attempts."""

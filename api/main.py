@@ -72,6 +72,10 @@ from worker.campaign_preset import (
     plan_daily_slots,
     validate_clip_against_preset,
 )
+from worker.campaign_preset_sync import (
+    CampaignPresetDriveService,
+    CampaignPresetImportError,
+)
 from worker.compliance import check_compliance
 from worker.download import (
     DownloadError,
@@ -578,10 +582,18 @@ class PublishClipRequest(BaseModel):
 
 
 class CampaignPresetRequest(BaseModel):
-    """Parse or validate the operator's Google-Doc campaign policy."""
+    """Parse a campaign policy from Drive, paste text, or an existing preset."""
 
+    source_url: str = ""
     text: str = ""
     preset: dict = Field(default_factory=dict)
+
+
+class CampaignPresetDriveRequest(BaseModel):
+    """Import one Google Docs or Drive file URL using server-side OAuth."""
+
+    url: str = ""
+    source_url: str = ""
 
 
 class DailyScheduleRequest(BaseModel):
@@ -659,11 +671,15 @@ class ProfileModel(BaseModel):
 class UrlJobRequest(BaseModel):
     url: str
     options: OptionsModel = OptionsModel()
+    # A submission starts a fresh dashboard project by default. Callers that
+    # submit several source types as one project set this false on follow-ups.
+    new_project: bool = True
 
 
 class BatchRequest(BaseModel):
     urls: list[str]
     options: OptionsModel = OptionsModel()
+    new_project: bool = True
 
 
 class PreviewRequest(BaseModel):
@@ -1029,11 +1045,15 @@ def submit_url(req: UrlJobRequest) -> dict:
             ),
         )
     manager = get_manager()
+    project_cleanup = manager.start_new_project() if req.new_project else None
     job = manager.submit("url", req.url, options)
     # The worker starts as soon as submit returns.  Serialise the response under the same store
     # lock used by polling so a fast failure/progress update cannot race JSON encoding here.
     snapshot = getattr(manager.store, "snapshot", None)
-    return (snapshot(job.id) or job.to_dict()) if snapshot is not None else job.to_dict()
+    response = (snapshot(job.id) or job.to_dict()) if snapshot is not None else job.to_dict()
+    if project_cleanup is not None:
+        response["project_cleanup"] = project_cleanup
+    return response
 
 
 @app.post("/api/jobs/batch", tags=["jobs"], dependencies=[Depends(rate_limit)])
@@ -1061,8 +1081,13 @@ def submit_batch(req: BatchRequest) -> dict:
                 ),
             )
     items = [{"input_type": "url", "source": u} for u in urls]
-    batch_id = get_manager().submit_batch(items, options)
-    return {"batch_id": batch_id, "jobs": get_manager().store.snapshot_batch(batch_id)}
+    manager = get_manager()
+    project_cleanup = manager.start_new_project() if req.new_project else None
+    batch_id = manager.submit_batch(items, options)
+    response = {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
+    if project_cleanup is not None:
+        response["project_cleanup"] = project_cleanup
+    return response
 
 
 async def _save_upload(upload_file: UploadFile, uploads_dir: Path) -> dict:
@@ -1247,6 +1272,7 @@ async def upload(
     music_duck: str | None = Form(None),
     trim_silence: str | None = Form(None),
     profile: str | None = Form(None),
+    new_project: bool = Form(True),
 ) -> dict:
     """Upload one or more video files and submit them for processing.
 
@@ -1405,14 +1431,21 @@ async def upload(
         raise
 
     manager = get_manager()
+    project_cleanup = manager.start_new_project() if new_project else None
     if len(saved) == 1:
         job = manager.submit("file", saved[0]["source"], options, title=saved[0]["title"])
         # Snapshot rather than `job.to_dict()`: the worker may already be updating this job by
         # the time the response is built, since `submit` schedules it before returning.
-        return {"jobs": [manager.store.snapshot(job.id) or job.to_dict()]}
+        response = {"jobs": [manager.store.snapshot(job.id) or job.to_dict()]}
+        if project_cleanup is not None:
+            response["project_cleanup"] = project_cleanup
+        return response
 
     batch_id = manager.submit_batch(saved, options)
-    return {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
+    response = {"batch_id": batch_id, "jobs": manager.store.snapshot_batch(batch_id)}
+    if project_cleanup is not None:
+        response["project_cleanup"] = project_cleanup
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -2003,17 +2036,63 @@ def check_brief_compliance(req: ComplianceRequest) -> dict:
     return {**result.__dict__, "blockers": result.blockers}
 
 
-@app.post("/api/campaign-presets/parse", tags=["campaigns"])
-def parse_campaign_preset_endpoint(req: CampaignPresetRequest) -> dict:
-    """Turn a Google Doc brief into a reviewable, deterministic campaign preset."""
+def _import_campaign_preset_from_drive(source_url: str) -> dict:
+    """Import a review-only preset and keep Drive/OAuth failures safe for the browser."""
 
+    try:
+        return CampaignPresetDriveService().import_url(source_url).to_dict()
+    except CampaignPresetImportError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={
+                "message": str(exc),
+                "code": exc.code,
+                "fall_back_to_paste": True,
+            },
+        ) from exc
+
+
+@app.post("/api/campaign-presets/parse", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def parse_campaign_preset_endpoint(req: CampaignPresetRequest) -> dict:
+    """Turn a Google Doc link, pasted brief, or existing preset into a reviewable preset."""
+
+    if req.source_url.strip():
+        return _import_campaign_preset_from_drive(req.source_url)
     if req.text.strip():
         preset = parse_campaign_preset(req.text)
-    elif req.preset:
+        return {
+            "preset": preset.to_dict(),
+            "requires_review": True,
+            "sync": {"status": "offline_paste", "parser": "deterministic"},
+            "provenance": {"source_type": "paste"},
+            "sync_status": "offline_paste",
+        }
+    if req.preset:
         preset = CampaignPreset.from_dict(req.preset)
-    else:
-        raise HTTPException(status_code=400, detail="Provide campaign brief text or a preset")
-    return {"preset": preset.to_dict(), "requires_review": True}
+        return {
+            "preset": preset.to_dict(),
+            "requires_review": True,
+            "sync": {"status": "local_preset", "parser": "existing"},
+            "provenance": {"source_type": "local_preset"},
+            "sync_status": "local_preset",
+        }
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "message": "Provide a Google Doc link or use the paste fallback.",
+            "code": "missing_source",
+            "fall_back_to_paste": True,
+        },
+    )
+
+
+@app.post(
+    "/api/campaign-presets/from-drive", tags=["campaigns"], dependencies=[Depends(rate_limit)]
+)
+def import_campaign_preset_from_drive(req: CampaignPresetDriveRequest) -> dict:
+    """Import a Google Docs/Drive brief without creating or saving a publish campaign."""
+
+    return _import_campaign_preset_from_drive(req.url.strip() or req.source_url.strip())
 
 
 def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -> dict[str, Any]:

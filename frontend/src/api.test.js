@@ -242,6 +242,47 @@ describe("transcript trimming requests (U4)", () => {
   });
 });
 
+
+
+describe("campaign preset import", () => {
+  it("sends a Google Doc URL without putting credentials in the payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ preset: {}, sync_status: "synced" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.parseCampaignPresetFromDrive("https://docs.google.com/document/d/brief-12345/edit");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/campaign-presets/from-drive");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      url: "https://docs.google.com/document/d/brief-12345/edit",
+    });
+  });
+
+  it("uses structured backend detail messages for Drive failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          detail: {
+            code: "not_configured",
+            message: "Use the paste fallback.",
+            fall_back_to_paste: true,
+          },
+        }),
+      }),
+    );
+
+    await expect(api.parseCampaignPresetFromDrive("https://drive.google.com/file/d/brief-12345/view")).rejects.toThrow(
+      "Use the paste fallback.",
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The shared secret (Phase 1 security)
 //

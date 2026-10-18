@@ -81,7 +81,7 @@ describe("creator studio workflow", () => {
       expect(upload).toHaveBeenCalledTimes(1);
       expect(submitUrl).toHaveBeenCalledWith(
         "https://video.example/1",
-        expect.objectContaining({ aspect: "9:16" }),
+        expect.objectContaining({ aspect: "9:16", new_project: false }),
       );
     });
   });

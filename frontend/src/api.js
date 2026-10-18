@@ -54,7 +54,12 @@ function withToken(url) {
 async function jsonOrThrow(res) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || `Request failed (${res.status})`);
+    const detail = data.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail?.message || `Request failed (${res.status})`;
+    throw new Error(message);
   }
   return data;
 }
@@ -69,28 +74,34 @@ export const api = {
       body: JSON.stringify({ url }),
     }).then(jsonOrThrow),
 
-  submitUrl: (url, options) =>
-    apiFetch("/api/jobs/url", {
+  submitUrl: (url, options) => {
+    const { new_project: newProject = true, ...processingOptions } = options || {};
+    return apiFetch("/api/jobs/url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, options }),
-    }).then(jsonOrThrow),
+      body: JSON.stringify({ url, options: processingOptions, new_project: newProject }),
+    }).then(jsonOrThrow);
+  },
 
-  submitBatch: (urls, options) =>
-    apiFetch("/api/jobs/batch", {
+  submitBatch: (urls, options) => {
+    const { new_project: newProject = true, ...processingOptions } = options || {};
+    return apiFetch("/api/jobs/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls, options }),
-    }).then(jsonOrThrow),
+      body: JSON.stringify({ urls, options: processingOptions, new_project: newProject }),
+    }).then(jsonOrThrow);
+  },
 
   upload: (files, options) => {
+    const { new_project: newProject = true, ...processingOptions } = options || {};
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
-    Object.entries(options).forEach(([k, v]) => {
+    Object.entries(processingOptions).forEach(([k, v]) => {
       if (v !== null && v !== undefined) {
         fd.append(k, typeof v === "object" ? JSON.stringify(v) : v);
       }
     });
+    fd.append("new_project", String(newProject));
     return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
   },
 
@@ -149,6 +160,12 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, preset }),
+    }).then(jsonOrThrow),
+  parseCampaignPresetFromDrive: (url) =>
+    apiFetch("/api/campaign-presets/from-drive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
     }).then(jsonOrThrow),
   scheduleCampaignDay: (campaignId, payload) =>
     apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/daily-schedule`, {

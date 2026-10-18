@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly two clips at distinct peak-time slots.
 - Added a dashboard campaign automation panel and Docker update/runbook documentation in
   `docs/CAMPAIGN_AUTOMATION.md`.
+- Campaign automation now imports a Google Docs/Drive link through the server's authenticated
+  Drive reader, with a paste fallback for offline use; importing remains review-only and does not
+  create a publish campaign automatically.
+- Starting a new video project now clears terminal jobs, rendered clip files, and publish history
+  from the previous project while protecting active jobs, source uploads, campaigns, profiles, and
+  credentials.
 
 ### Added — retention-first engagement editing
 

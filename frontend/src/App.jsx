@@ -547,14 +547,22 @@ export default function App() {
 
     setSubmitting(true);
     let submittedAny = false;
-    const addJobs = (newJobs) => {
+    let firstSubmission = true;
+    const addJobs = (newJobs, replaceProject = false) => {
       const validJobs = (newJobs || []).filter((job) => job?.id);
       if (!validJobs.length) return;
       submittedAny = true;
-      track(validJobs);
+      if (replaceProject) {
+        setTrackedIds(new Set(validJobs.map((job) => job.id)));
+        setPublishAttempts([]);
+      } else {
+        track(validJobs);
+      }
       setJobs((previous) => {
         const newIds = new Set(validJobs.map((job) => job.id));
-        return [...validJobs, ...previous.filter((job) => !newIds.has(job.id))];
+        return replaceProject
+          ? validJobs
+          : [...validJobs, ...previous.filter((job) => !newIds.has(job.id))];
       });
     };
 
@@ -562,14 +570,20 @@ export default function App() {
       // Uploads and links are separate API operations. Submit both kinds instead of
       // silently ignoring whichever source type happened to come second in the form.
       if (files.length > 0) {
-        const result = await api.upload(files, options);
-        addJobs(result.jobs || []);
+        const result = await api.upload(files, { ...options, new_project: firstSubmission });
+        addJobs(result.jobs || [], firstSubmission);
+        firstSubmission = false;
       }
       if (urls.length === 1) {
-        addJobs([await api.submitUrl(urls[0], options)]);
+        addJobs(
+          [await api.submitUrl(urls[0], { ...options, new_project: firstSubmission })],
+          firstSubmission,
+        );
+        firstSubmission = false;
       } else if (urls.length > 1) {
-        const result = await api.submitBatch(urls, options);
-        addJobs(result.jobs || []);
+        const result = await api.submitBatch(urls, { ...options, new_project: firstSubmission });
+        addJobs(result.jobs || [], firstSubmission);
+        firstSubmission = false;
       }
     } catch (submissionError) {
       const message = submissionError.message || "Failed to submit.";
@@ -821,6 +835,7 @@ export default function App() {
                   campaigns={campaigns}
                   publisherStatuses={publisherStatuses}
                   jobs={jobs}
+                  driveConfigured={driveConfigured}
                   onPresetApplied={handlePresetApplied}
                   onScheduled={loadPublishingData}
                 />

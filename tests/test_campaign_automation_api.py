@@ -8,6 +8,7 @@ from api.main import app
 from publishers.base import PublisherStatus
 from publishers.history import HistoryStore
 from publishers.manager import PublishManager
+from worker.campaign_brief_sync import DriveBriefSnapshot
 from worker.models import ClipResult
 
 
@@ -84,3 +85,63 @@ def test_public_only_flag_is_persisted_on_publish_attempt(tmp_path):
     )
     attempt = history.get_attempt(ids[0])
     assert attempt["request_json"]["public_only"] is True
+
+
+def test_campaign_preset_drive_endpoint_reads_and_parses_without_saving_campaign(
+    monkeypatch,
+):
+    """A mocked authenticated Drive read returns provenance and only a reviewable preset."""
+    from worker import campaign_preset_sync
+
+    class Reader:
+        def fetch(self, file_id, **kwargs):
+            assert file_id == "drive-brief-12345"
+            return DriveBriefSnapshot.from_content(
+                file_id,
+                "Campaign: Spring Launch\nAspect ratios: 9:16\nHashtags: #launch",
+                revision_id="rev-7",
+            )
+
+    monkeypatch.setattr(campaign_preset_sync, "configured", lambda: True)
+    monkeypatch.setattr(campaign_preset_sync, "GoogleDriveBriefReader", Reader)
+    with TestClient(app) as client:
+        before = client.get("/api/campaigns").json()["campaigns"]
+        response = client.post(
+            "/api/campaign-presets/from-drive",
+            json={
+                "url": "https://docs.google.com/document/d/drive-brief-12345/edit",
+            },
+        )
+        after = client.get("/api/campaigns").json()["campaigns"]
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_review"] is True
+    assert body["preset"]["name"] == "Spring Launch"
+    assert body["preset"]["hashtags"] == ["#launch"]
+    assert body["sync"]["status"] == "synced"
+    assert body["provenance"]["source_type"] == "google_docs"
+    assert body["provenance"]["file_id"] == "drive-brief-12345"
+    assert body["sync"]["revision_id"] == "rev-7"
+    assert after == before
+
+
+def test_campaign_preset_drive_endpoint_surfaces_safe_configuration_errors(monkeypatch):
+    from worker import campaign_preset_sync
+
+    monkeypatch.setattr(campaign_preset_sync, "configured", lambda: False)
+    with TestClient(app) as client:
+        invalid = client.post(
+            "/api/campaign-presets/from-drive", json={"url": "https://example.com/brief"}
+        )
+        missing_config = client.post(
+            "/api/campaign-presets/from-drive",
+            json={"url": "https://drive.google.com/file/d/drive-brief-12345/view"},
+        )
+
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_url"
+    assert invalid.json()["detail"]["fall_back_to_paste"] is True
+    assert missing_config.status_code == 409
+    assert missing_config.json()["detail"]["code"] == "not_configured"
+    assert "paste fallback" in missing_config.json()["detail"]["message"].lower()
