@@ -2091,10 +2091,11 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         calendar_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
     slots = plan_daily_slots(calendar_day, timezone, req.peak_hours, visibility="public")
     preset_data = getattr(job.options, "campaign_preset", {}) or {}
-    if not preset_data and getattr(campaign, "brief", None) is not None:
+    campaign_brief = getattr(campaign, "brief", None)
+    if not preset_data and campaign_brief is not None:
         preset_data = CampaignPreset.from_dict(
             {
-                **campaign.brief.to_dict(),
+                **campaign_brief.to_dict(),
                 "name": getattr(campaign, "name", ""),
             }
         ).to_dict()
