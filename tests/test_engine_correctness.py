@@ -340,6 +340,7 @@ def test_the_llm_reply_is_held_to_the_requested_clip_length():
             # One absurd range and one reasonable one.
             return [
                 {"start": 0.0, "end": 240.0, "score": 90, "reason": "too long"},
+                {"start": 0.0, "end": 10.0, "score": 100, "reason": "too short"},
                 {"start": 100.0, "end": 130.0, "score": 80, "reason": "fine"},
             ]
 
@@ -352,6 +353,9 @@ def test_the_llm_reply_is_held_to_the_requested_clip_length():
     )
     assert found, "selection returned nothing"
     for candidate in found:
+        assert candidate.end - candidate.start >= 30.0 - 1e-6, (
+            f"a {candidate.end - candidate.start:.1f}s clip shipped below the requested minimum"
+        )
         assert candidate.end - candidate.start <= 60.0 + 1e-6, (
             f"a {candidate.end - candidate.start:.1f}s clip shipped from a 30-60s request"
         )

@@ -65,6 +65,17 @@ const VIBES = [
   { value: "chill", label: "Chill" },
 ];
 
+const RETENTION_MODES = [
+  { value: "off", label: "Off (current ranking)" },
+  { value: "balanced", label: "Balanced" },
+  { value: "aggressive", label: "Aggressive" },
+];
+const RETENTION_MODE_LABELS = {
+  off: "Off (current ranking)",
+  balanced: "Balanced",
+  aggressive: "Aggressive",
+};
+
 // --- Phase 4: visual effects option lists ---------------------------------
 const CAPTION_TEMPLATES = [
   { value: "karaoke", label: "Karaoke (word fill)" },
@@ -349,6 +360,11 @@ export default function SettingsPanel({
       label: entry.available === false ? `${base} — unavailable` : base,
     };
   });
+  const retentionModeOptions = labelledOptions(
+    effects?.retention_modes,
+    RETENTION_MODE_LABELS,
+    RETENTION_MODES
+  );
   const engineRows = Array.isArray(engines) ? engines : [];
   // Kinetic typography: the option domains ride in /api/info's `capabilities`
   // block under the Engine_Id, while availability is reported on the engine row
@@ -516,6 +532,37 @@ export default function SettingsPanel({
               className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
             />
           </label>
+
+          <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+            <div className="mb-2">
+              <h4 className="text-sm font-medium text-slate-200">Retention-first engagement editing</h4>
+              <p className="mt-1 text-xs text-slate-500">
+                Optionally rank clips using hook, delivery, story structure and audience-response cues.
+                Off keeps the current ranking unchanged.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Dropdown
+                label="Retention mode"
+                value={settings.retention_mode || "off"}
+                onChange={set("retention_mode")}
+                options={retentionModeOptions}
+              />
+              <label className="flex flex-col gap-1.5 text-sm">
+                <span className="text-slate-400">Audience reaction data (optional JSON)</span>
+                <textarea
+                  rows="2"
+                  value={settings.audience_reactions || ""}
+                  onChange={(e) => onChange({ ...settings, audience_reactions: e.target.value })}
+                  placeholder='[{"time":42.5,"count":18}]'
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
+                />
+                <span className="text-xs text-slate-500">
+                  Timestamps are seconds in the original source video. Invalid entries are ignored.
+                </span>
+              </label>
+            </div>
+          </section>
 
           <Toggle
             label="Visual selection"

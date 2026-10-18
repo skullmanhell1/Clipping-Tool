@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from functools import lru_cache
@@ -133,6 +134,7 @@ def words_to_cues(
     max_duration: float = 3.0,
     *,
     fit: TextFit | None = None,
+    speaker_turns: Sequence[Any] | None = None,
 ) -> list[Cue]:
     """Group ``words`` into readable cues.
 
@@ -145,14 +147,36 @@ def words_to_cues(
     decide this: three words in Anton at 96 px occupy a different width from three words in
     Archivo Black, and the same three words are a comfortable line or an overflowing one depending
     on which letters they contain. Without it the wrap below has to drop words to stay inside the
-    frame, which is a caption missing its ending.
+    frame, which is a caption missing its ending.  ``speaker_turns`` optionally breaks a cue at a
+    diarised hand-off so burned captions do not put two speakers on the same subtitle event.  It
+    uses the same overlap-based assignment as sidecar subtitles and remains inert when omitted.
     """
     cues: list[Cue] = []
     current: list[Word] = []
+    current_speaker: str | None = None
+
+    speaker_for_interval = None
+    if speaker_turns is not None:
+        # Imported lazily to keep the caption renderer's existing import graph
+        # lightweight and to share the sidecar's overlap/tie-break logic.
+        from worker.subtitle_export import speaker_for_interval as _speaker_for_interval
+
+        speaker_for_interval = _speaker_for_interval
 
     for w in words:
         if not w.text:
             continue
+        speaker = None
+        if speaker_for_interval is not None:
+            speaker = speaker_for_interval(
+                w.start,
+                w.end,
+                speaker_turns or (),
+                previous_label=current_speaker,
+            )
+            if current and speaker != current_speaker:
+                cues.append(Cue(current[0].start, current[-1].end, current))
+                current = []
         if current:
             gap = w.start - current[-1].end
             span = w.end - current[0].start
@@ -164,6 +188,8 @@ def words_to_cues(
                 cues.append(Cue(current[0].start, current[-1].end, current))
                 current = []
         current.append(w)
+        if speaker_for_interval is not None:
+            current_speaker = speaker
 
     if current:
         cues.append(Cue(current[0].start, current[-1].end, current))
@@ -287,14 +313,21 @@ def apply_span_hygiene(
 
 def _ass_timestamp(seconds: float) -> str:
     """Format ``seconds`` as an ASS timestamp ``H:MM:SS.cs`` (centiseconds)."""
-    seconds = max(0.0, seconds)
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    centis = int(round((seconds - int(seconds)) * 100))
-    if centis == 100:  # rounding overflow
-        centis = 0
-        secs += 1
+    # Quantise first, then split the integer centisecond count. Splitting the
+    # floating-point seconds before rounding can produce ``SS=60`` at a
+    # boundary such as 59.9999, which libass treats as a malformed timestamp.
+    # The integer representation also makes the carry into minutes/hours
+    # explicit and keeps every caller (legacy and kinetic) on one formatter.
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        value = 0.0
+    if not math.isfinite(value):
+        value = 0.0
+    total_centis = max(0, int(round(value * 100)))
+    hours, remainder = divmod(total_centis, 360000)
+    minutes, remainder = divmod(remainder, 6000)
+    secs, centis = divmod(remainder, 100)
     return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
 
@@ -775,9 +808,13 @@ def _word_bounds(word: Any) -> tuple[float, float]:
         start = float(getattr(word, "start", 0.0) or 0.0)
     except (TypeError, ValueError):
         start = 0.0
+    if not math.isfinite(start):
+        start = 0.0
     try:
         end = float(getattr(word, "end", start) or start)
     except (TypeError, ValueError):
+        end = start
+    if not math.isfinite(end):
         end = start
     if end < start:
         end = start
@@ -1740,7 +1777,7 @@ def build_ass(
             f"Style: Hook,{font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
             f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
         )
-        body = _legacy_dialogue_lines(cues, use_karaoke)
+        body = _legacy_dialogue_lines(cues, use_karaoke, clip_duration=clip_duration)
 
     # C21: 2 means "no automatic wrapping", which C6's measured `\N` breaks depend on. A shaping
     # script gets 0 instead, so libass wraps it - an Arabic word's rendered width is not the sum of
@@ -1916,22 +1953,52 @@ def write_end_card_ass(
     return dest
 
 
-def _legacy_dialogue_lines(cues: list[Cue], use_karaoke: bool) -> list[str]:
-    """Render legacy (template-driven) dialogue lines (unchanged behaviour)."""
+def _legacy_dialogue_lines(
+    cues: list[Cue], use_karaoke: bool, *, clip_duration: float | None = None
+) -> list[str]:
+    """Render legacy dialogue lines, optionally bounded to the clip duration.
+
+    With no duration this keeps the historical helper contract. Render callers
+    pass the media duration so a static/block fallback cannot emit an event
+    outside the file it is composited onto.
+    """
+    duration: float | None = None
+    if clip_duration is not None:
+        try:
+            duration = max(0.0, float(clip_duration))
+        except (TypeError, ValueError):
+            duration = 0.0
+        if not math.isfinite(duration):
+            duration = 0.0
+
+    def bounded(value: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        if duration is None:
+            return max(0.0, number)
+        return min(max(0.0, number), duration)
+
     lines: list[str] = []
     for cue in cues:
         if not cue.words:
             continue
-        start = _ass_timestamp(cue.start)
-        end = _ass_timestamp(cue.end)
+        bounded_start = bounded(cue.start)
+        bounded_end = max(bounded_start, bounded(cue.end))
+        start = _ass_timestamp(bounded_start)
+        end = _ass_timestamp(bounded_end)
         if use_karaoke:
             parts = []
             for w in cue.words:
-                dur_cs = max(1, int(round((w.end - w.start) * 100)))
-                parts.append(f"{{\\kf{dur_cs}}}{_escape(w.text)}")
+                word_start, word_end = _word_bounds(w)
+                dur_cs = max(1, int(round((word_end - word_start) * 100)))
+                parts.append(f"{{\\kf{dur_cs}}}{_escape(_word_text(w))}")
             text = " ".join(parts)
         else:
-            text = " ".join(_escape(w.text) for w in cue.words)
+            text = " ".join(_escape(_word_text(w)) for w in cue.words)
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
     return lines
 

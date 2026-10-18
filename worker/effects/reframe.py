@@ -684,6 +684,85 @@ class Face_Track:
         return max(0.0, min(1.0, covered / window))
 
 
+def smooth_bounding_boxes(boxes: Sequence[FaceBox], *, alpha: float = 0.35) -> list[FaceBox]:
+    """Suppress isolated detector spikes and smooth small face-box jitter.
+
+    A single bad detection can be internally consistent enough to form a track, so identity
+    tracking alone does not protect the crop path from a one-frame jump. First replace an
+    interior box only when it is far from the time-interpolated position of two nearby boxes;
+    then apply the existing zero-phase smoother to the x/y centres. This preserves genuine
+    motion while reducing alternating detector wobble without introducing camera lag.
+
+    Large gaps split the smoothing segments, so a missing stretch or scene cut cannot pull a
+    later position backward into the preceding shot. The returned boxes retain their original
+    timestamps and dimensions. This is pure geometry and does not modify the input sequence.
+    """
+    source = list(boxes)
+    if len(source) < 3:
+        return source
+
+    centers = [box.center for box in source]
+    corrected = list(centers)
+    sample_gaps = [
+        source[index + 1].t - source[index].t
+        for index in range(len(source) - 1)
+        if source[index + 1].t > source[index].t
+    ]
+    typical_gap = sorted(sample_gaps)[len(sample_gaps) // 2] if sample_gaps else 0.0
+    segment_breaks = {
+        index
+        for index in range(1, len(source))
+        if source[index].t - source[index - 1].t > max(0.75, typical_gap * 2.5)
+    }
+
+    # Reject a single-frame excursion only when its neighbours agree on a plausible path.
+    for index in range(1, len(source) - 1):
+        if index in segment_breaks or index + 1 in segment_breaks:
+            continue
+        previous, current, following = source[index - 1], source[index], source[index + 1]
+        span = following.t - previous.t
+        if span <= 0:
+            continue
+        fraction = (current.t - previous.t) / span
+        expected_x = centers[index - 1][0] + fraction * (
+            centers[index + 1][0] - centers[index - 1][0]
+        )
+        expected_y = centers[index - 1][1] + fraction * (
+            centers[index + 1][1] - centers[index - 1][1]
+        )
+        deviation = math.hypot(centers[index][0] - expected_x, centers[index][1] - expected_y)
+        neighbour_motion = math.hypot(
+            centers[index + 1][0] - centers[index - 1][0],
+            centers[index + 1][1] - centers[index - 1][1],
+        )
+        face_scale = max(
+            1.0, min(current.w, current.h, previous.w, previous.h, following.w, following.h)
+        )
+        if deviation > max(face_scale * 0.75, neighbour_motion * 2.0):
+            corrected[index] = (expected_x, expected_y)
+
+    # Smooth each contiguous run independently. `ema_smooth_zero_phase` is symmetric, so it
+    # reduces detector wobble without the trailing crop lag of a causal-only filter.
+    bounds = [0, *sorted(segment_breaks), len(source)]
+    smoothed_x: list[float] = []
+    smoothed_y: list[float] = []
+    for start, end in zip(bounds, bounds[1:]):
+        run = corrected[start:end]
+        smoothed_x.extend(ema_smooth_zero_phase([point[0] for point in run], alpha))
+        smoothed_y.extend(ema_smooth_zero_phase([point[1] for point in run], alpha))
+
+    return [
+        FaceBox(
+            box.t,
+            int(round(cx - box.w / 2.0)),
+            int(round(cy - box.h / 2.0)),
+            box.w,
+            box.h,
+        )
+        for box, cx, cy in zip(source, smoothed_x, smoothed_y)
+    ]
+
+
 def _default_sample_interval() -> float:
     """Fallback face-sampling interval (seconds) derived from config."""
     fps = float(settings.reframe_sample_fps) or 5.0
@@ -1241,7 +1320,10 @@ def sample_face_report(
     try:
         import cv2
     except Exception:
-        return replace(empty, resolved_backend="none")
+        # An injected detector still identifies the configured path even when OpenCV is
+        # unavailable to decode frames. Report the sampling failure separately via the empty
+        # sample list rather than mislabelling the detector as "none".
+        return replace(empty, resolved_backend="injected" if detector is not None else "none")
 
     resolved_detector, label = resolve_detector(
         backend if backend is not None else DEFAULT_FACE_DETECTOR_BACKEND,
@@ -1866,7 +1948,10 @@ def build_follow_active_path(
     command_fps = max(1.0, float(command_fps))
 
     frame_center = (src_w / 2.0, src_h / 2.0)
-    track_by_id = {tr.track_id: tr for tr in tracks}
+    track_by_id = {
+        track.track_id: Face_Track(track.track_id, smooth_bounding_boxes(track.boxes))
+        for track in tracks
+    }
 
     # Dense, evenly-spaced time grid over [0, duration] (endpoint included).
     n = max(1, int(round(duration * command_fps)))
@@ -1984,8 +2069,9 @@ def _track_mean_center(track: Face_Track | None) -> tuple[float, float] | None:
     """Average centre of a track's boxes (or ``None`` when it has no boxes)."""
     if track is None or not track.boxes:
         return None
-    xs = [b.center[0] for b in track.boxes]
-    ys = [b.center[1] for b in track.boxes]
+    boxes = smooth_bounding_boxes(track.boxes)
+    xs = [box.center[0] for box in boxes]
+    ys = [box.center[1] for box in boxes]
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 
@@ -2017,6 +2103,7 @@ def build_region_centers(
     duration = max(0.0, float(duration))
     if track is None or not track.boxes or duration <= 0:
         return ()
+    track = Face_Track(track.track_id, smooth_bounding_boxes(track.boxes))
     if command_fps is None:
         command_fps = float(getattr(settings, "reframe_command_fps", 24.0) or 24.0)
     command_fps = max(1.0, float(command_fps))

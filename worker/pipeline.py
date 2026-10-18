@@ -28,10 +28,13 @@ from pathlib import Path
 from config import settings
 from worker import (
     assembly,
+    brand_bumpers,
+    branding,
     colour,
     content_class,
     deinterlace,
     diarization,
+    engagement,
     frame_rate,
     intermediate_cache,
     segmentation,
@@ -51,7 +54,7 @@ from worker import metadata as meta_mod
 # it — but the tests patch ``pipeline.sel.select_moments`` to control which moments get
 # chosen, so the alias is the seam that makes the pipeline testable. Removing it breaks
 # 23 tests with "module 'worker.pipeline' has no attribute 'sel'".
-from worker import selection as sel  # noqa: F401
+from worker import selection as sel
 from worker import transcript_trim as trim
 from worker.boxabl_campaign import (
     PROFILE_NAME as BOXABL_PROFILE_NAME,
@@ -72,7 +75,7 @@ from worker.models import (
     effective_options,
     normalisation_markers,
 )
-from worker.transcribe import Transcript, transcribe
+from worker.transcribe import Transcript, TranscriptSegment, transcribe
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +163,35 @@ def _filter_transcript_to_range(
         return transcript
     lo = start if start is not None else float("-inf")
     hi = end if end is not None else float("inf")
-    segs = [s for s in transcript.segments if s.end > lo and s.start < hi]
+    segs: list[TranscriptSegment] = []
+    for segment in transcript.segments:
+        if segment.end <= lo or segment.start >= hi:
+            continue
+        segment_start = max(float(segment.start), lo)
+        segment_end = min(float(segment.end), hi)
+        # A segment without word timings cannot be safely clipped to a partial processing range:
+        # retaining its original text would leak words from outside the requested window.
+        if not segment.words and (
+            segment_start > float(segment.start) or segment_end < float(segment.end)
+        ):
+            continue
+        words = [
+            word
+            for word in segment.words
+            if float(getattr(word, "end", segment_end)) > segment_start
+            and float(getattr(word, "start", segment_start)) < segment_end
+        ]
+        text = " ".join(str(getattr(word, "text", "") or "") for word in words).strip()
+        segs.append(
+            TranscriptSegment(
+                start=segment_start,
+                end=segment_end,
+                text=text or segment.text,
+                words=words,
+                no_speech_prob=segment.no_speech_prob,
+                avg_logprob=segment.avg_logprob,
+            )
+        )
     return Transcript(language=transcript.language, segments=segs)
 
 
@@ -386,7 +417,9 @@ def run_pipeline(
     # --- AI highlight selection (with process-range + fallback) -----------
     ranged = _filter_transcript_to_range(transcript, options.range_start, options.range_end)
     # The effective duration selection may span (respect an explicit range end).
-    eff_duration = min(info.duration, options.range_end) if options.range_end else info.duration
+    eff_duration = (
+        min(info.duration, options.range_end) if options.range_end is not None else info.duration
+    )
 
     # Visual / prompt-aware selection (Feature C). ``select_moments_visual``
     # delegates straight back to ``sel.select_moments`` when visual selection is
@@ -403,11 +436,20 @@ def run_pipeline(
         eff_duration,
         client=llm_client,
     )
-    # Enforce the process-range floor on candidate starts.
-    if options.range_start is not None:
-        candidates = [c for c in candidates if c.end > options.range_start]
-        for c in candidates:
-            c.start = max(c.start, options.range_start)
+    # Enforce both process-range boundaries on every path, including explicit
+    # candidates used by rerender. Selection normally receives a trimmed
+    # transcript, but this is the final safety boundary for stale plans.
+    range_start = options.range_start if options.range_start is not None else 0.0
+    range_end = options.range_end if options.range_end is not None else info.duration
+    bounded: list = []
+    for candidate in candidates:
+        candidate.start = max(float(candidate.start), range_start)
+        candidate.end = min(float(candidate.end), range_end)
+        if candidate.end <= candidate.start:
+            continue
+        candidate.text = sel.text_between(ranged.segments, candidate.start, candidate.end)
+        bounded.append(candidate)
+    candidates = bounded
 
     # I5: publish the plan before any rendering starts. A job interrupted halfway can then be
     # resumed against the windows it actually chose, instead of re-running a selection that -
@@ -424,6 +466,10 @@ def run_pipeline(
     if not candidates:
         report(1.0, "Done")
         return []
+
+    # Audience reactions are optional source-relative evidence. Parse once per
+    # job so malformed user input can never fail an individual clip render.
+    reaction_events = engagement.parse_reactions(getattr(options, "audience_reactions", ""))
 
     # --- per-clip processing ---------------------------------------------
     results: list[ClipResult] = []
@@ -526,12 +572,17 @@ def run_pipeline(
         keep_plan: list | None = None
         # Final clip duration for b-roll planning; shrinks after filler removal.
         clip_duration = c.end - c.start
-        # Best-effort visual-selection marker (Req 18.2): when visual selection
-        # is enabled and candidates were produced, note it on the clip. The
-        # entry point degrades to transcript-only internally, so this is a
-        # best-effort provenance marker rather than a strict guarantee.
-        if options.visual_selection:
-            applied.append("visual_selection")
+        # Visual selection annotates merged candidates with provenance. An enabled
+        # option alone is not proof that sampling contributed: sampling may have
+        # failed and the selector may have returned transcript-only candidates.
+        if options.visual_selection and not explicit_candidates:
+            visual_used = bool(
+                getattr(c, "features", {})
+                and getattr(c, "features", {}).get("visual_selection_used")
+            )
+            applied.append("visual_selection" if visual_used else "visual_degraded")
+        if getattr(options, "retention_mode", "off") != "off":
+            applied.append(f"retention:{options.retention_mode}")
 
         # 0. AU7: pull the cut points onto speech before cutting, so the clip does not open
         # on dead air - the first second is where a viewer decides whether to keep watching.
@@ -544,6 +595,8 @@ def run_pipeline(
             if (trimmed_start, trimmed_end) != (c.start, c.end):
                 c.start, c.end = trimmed_start, trimmed_end
                 clip_duration = c.end - c.start
+                c.text = sel.text_between(transcript.segments, c.start, c.end)
+                engagement.refresh_text_features([c], topic=getattr(options, "topic", ""))
                 applied.append("silence_trimmed")
 
         # 1. cut the selected segment
@@ -613,6 +666,18 @@ def run_pipeline(
             normalize_boxabl_words(words)
             normalize_boxabl_words(translated_words)
 
+        # Retention plan is built from the actual clip-relative words. Its event
+        # evidence remains source-relative, so a silence-trimmed boundary can be
+        # moved without applying a second offset by mistake.
+        retention_plan = engagement.plan_edit(
+            words,
+            getattr(c, "features", {}),
+            clip_duration,
+            mode=getattr(options, "retention_mode", "off"),
+            source_start=c.start,
+            reactions=reaction_events,
+        )
+
         # 3. filler-word / long-pause removal and U4 transcript trimming. Both remove
         #    regions from the clip, so they resolve to ONE keep list and ONE re-encode:
         #    applying them in sequence would concatenate twice, and the second pass's
@@ -625,6 +690,15 @@ def run_pipeline(
             if plan.changed:
                 pending = plan.keeps
                 pending_markers.append("filler_removal")
+        if retention_plan.pacing_cuts:
+            retention_trim = trim.plan_cuts(
+                retention_plan.pacing_cuts,
+                c.duration,
+                base_keeps=pending,
+            )
+            if retention_trim.changed:
+                pending = retention_trim.keeps
+                pending_markers.append("retention_pacing_cuts")
         # U4: the user's struck-out words, intersected with whatever filler removal
         # already claimed. Refusals (a cut list that empties the clip, or one long
         # enough to be the problem itself) land on the clip record as a marker and
@@ -794,6 +868,14 @@ def run_pipeline(
                     assembly.rebase_turns if assembly_plan.assembled else diarization.rebase_turns
                 )
                 clip_turns = _rebase_turns(clip_turns, keep_plan)
+
+        # A one-speaker diarisation result is intentionally inert for subtitle
+        # output.  It should not add an ``S1:`` prefix or change cue grouping;
+        # the speaker-aware path is only needed when there is an actual label
+        # transition in the delivered clip.
+        subtitle_turns = (
+            clip_turns if len({turn.speaker_label for turn in clip_turns}) > 1 else None
+        )
 
         # 4. geometry: precedence ladder (Reqs 12.1-12.4, 14.1-14.5).
         #    speaker-aware reframe -> single-speaker reframe -> static crop-blur.
@@ -1062,6 +1144,41 @@ def run_pipeline(
                 },
             )
         try:
+            # Rebuild the plan after any destructive timeline edit so the exposed
+            # cue times describe the media that will actually be delivered.
+            plan_features = dict(getattr(c, "features", {}) or {})
+            plan_reactions = reaction_events
+            plan_source_start = c.start
+            if keep_plan is not None:
+                event_origin = float(
+                    plan_features.get("engagement_event_start", c.start) or c.start
+                )
+                event_values = {}
+                for key in ("energy_onsets", "pitch_events"):
+                    raw_values = plan_features.get(key, ())
+                    if isinstance(raw_values, (list, tuple)):
+                        source_local: list[float] = []
+                        for value in raw_values:
+                            try:
+                                source_local.append(float(value) + event_origin - c.start)
+                            except (TypeError, ValueError):
+                                continue
+                        event_values[key] = engagement.rebase_times(source_local, keep_plan)
+                plan_features.update(event_values)
+                # The rebased event arrays and reactions are now local to the
+                # delivered file, so switch the planner to its local coordinate
+                # space rather than applying the source offset a second time.
+                plan_features["engagement_event_start"] = 0.0
+                plan_reactions = engagement.rebase_reactions(reaction_events, c.start, keep_plan)
+                plan_source_start = 0.0
+            retention_plan = engagement.plan_edit(
+                words,
+                plan_features,
+                clip_duration,
+                mode=getattr(options, "retention_mode", "off"),
+                source_start=plan_source_start,
+                reactions=plan_reactions,
+            )
             rendered = compositor.render_clip(
                 geo,
                 final,
@@ -1090,6 +1207,9 @@ def run_pipeline(
                 # Passed unconditionally -- empty whenever diarisation did not run -- so the
                 # compositor's own default never diverges from what the pipeline knows.
                 speaker_turns=clip_turns,
+                retention_beats=retention_plan.zoom_beats,
+                retention_sfx_times=retention_plan.sfx_times,
+                retention_emphasis_indices=retention_plan.emphasis_indices,
                 # Markers reach `applied` even when the compositor decides nothing needs rendering.
                 # Without this, a degradation recorded inside `render_clip` was discarded along with
                 # the `None` it returns when no effect ended up changing the frame — which is
@@ -1126,6 +1246,48 @@ def run_pipeline(
         if compose is not None:
             applied.extend(compose.markers)
 
+        # Brand-profile bumpers are applied after the main clip's compositor so they do not inherit
+        # captions, emoji, or a crop intended for the source footage. They are normalized into the
+        # delivered frame contract and concatenated with a silent track when an asset has no audio.
+        intro_asset = str(getattr(options, "brand_intro_asset", "") or "").strip()
+        outro_asset = str(getattr(options, "brand_outro_asset", "") or "").strip()
+        if intro_asset or outro_asset:
+            try:
+                intro = (
+                    branding.materialize_video(intro_asset, dest_dir=temp_dir)
+                    if intro_asset
+                    else None
+                )
+                outro = (
+                    branding.materialize_video(outro_asset, dest_dir=temp_dir)
+                    if outro_asset
+                    else None
+                )
+            except (OSError, ValueError):
+                intro = None
+                outro = None
+            if (intro_asset and intro is None) or (outro_asset and outro is None):
+                applied.append("brand_bumper_unavailable")
+            else:
+                bumper_output = temp_dir / f"bumpers_{clip_id}.mp4"
+                try:
+                    delivered_info = fu.probe(final)
+                    brand_bumpers.apply_bumpers(
+                        final,
+                        bumper_output,
+                        intro=intro,
+                        outro=outro,
+                        width=delivered_info.width,
+                        height=delivered_info.height,
+                        fps=delivered_fps,
+                    )
+                    bumper_output.replace(final)
+                    clip_duration = fu.probe(final).duration
+                    applied.append("brand_bumpers")
+                except (fu.FFmpegError, OSError):
+                    bumper_output.unlink(missing_ok=True)
+                    applied.append("brand_bumper_degraded")
+
         # 6. thumbnail from the finished clip
         # Two names because they mean different things: `thumb_path` is where the thumbnail would
         # go and is always a path, while `thumb` is the result recorded on the clip and is None
@@ -1159,13 +1321,22 @@ def run_pipeline(
         #     the clip-relative words, so they are in sync with the file they sit next to.
         if getattr(options, "subtitle_sidecar", False):
             try:
-                subtitle_export.write_sidecars(words, final.with_suffix(""))
+                subtitle_export.write_sidecars(
+                    words,
+                    final.with_suffix(""),
+                    speaker_turns=subtitle_turns,
+                    include_speaker_labels=bool(subtitle_turns),
+                )
                 # T10: the translation goes beside it as `clip_N.en.srt`/`.vtt`, tagged so an
                 # upload form can tell the two apart. The untagged pair keeps its existing
                 # names, so nothing that already consumes them has to change.
                 if translated_words:
                     subtitle_export.write_sidecars(
-                        translated_words, final.with_suffix(""), language="en"
+                        translated_words,
+                        final.with_suffix(""),
+                        language="en",
+                        speaker_turns=subtitle_turns,
+                        include_speaker_labels=bool(subtitle_turns),
                     )
             except OSError as exc:
                 # A sidecar is an extra, never a reason to lose a clip that has already cost
@@ -1191,7 +1362,11 @@ def run_pipeline(
         try:
             if caption_mode in ("soft", "both") and words:
                 srt = subtitle_export.write_sidecars(
-                    words, temp_dir / f"soft_{clip_id}", formats=("srt",)
+                    words,
+                    temp_dir / f"soft_{clip_id}",
+                    formats=("srt",),
+                    speaker_turns=subtitle_turns,
+                    include_speaker_labels=bool(subtitle_turns),
                 )
                 if srt:
                     # Labelled with the language actually spoken, not a fixed "eng": a track
@@ -1204,6 +1379,8 @@ def run_pipeline(
                     temp_dir / f"soft_{clip_id}",
                     formats=("srt",),
                     language="en",
+                    speaker_turns=subtitle_turns,
+                    include_speaker_labels=bool(subtitle_turns),
                 )
                 if srt_en:
                     subtitle_tracks.append((srt_en[0], "eng"))
@@ -1253,6 +1430,10 @@ def run_pipeline(
                 video_url=f"clips/{final.parent.name}/{final.name}",
                 thumbnail_url=(f"clips/{final.parent.name}/{thumb.name}" if thumb else ""),
                 score=c.score,
+                engagement_score=round(
+                    100.0 * float((getattr(c, "features", {}) or {}).get("engagement_score", 0.0)),
+                    1,
+                ),
                 reason=c.reason,
                 platform=md.platform,
                 title_alternatives=md.title_alternatives,
@@ -1263,6 +1444,8 @@ def run_pipeline(
                 mentions=md.mentions,
                 thumbnail_text=md.thumbnail_text,
                 transcript_text=clip_text,
+                retention_plan=retention_plan.to_dict(),
+                engagement_features=dict(getattr(c, "features", {}) or {}),
                 effects_applied=applied,
                 broll_assets=broll_assets,
             )
