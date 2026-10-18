@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
+from worker import campaign_preset as cp
 from worker.campaign_preset import (
     Branding,
     CampaignPreset,
@@ -146,3 +151,71 @@ def test_daily_slot_planning_rejects_non_public_visibility():
 
     with pytest.raises(ValueError, match="two distinct"):
         plan_daily_slots("2026-03-05", "UTC", [9, 9])
+
+
+# --- ReDoS hardening (CodeQL py/polynomial-redos) -------------------------------------------
+#
+# `parse_campaign_preset` runs on operator-supplied text behind `POST /api/campaign-presets/parse`.
+# Three of its regexes were polynomial on adversarial input (long runs of spaces or digits), so
+# they were replaced by linear-time helpers. These properties pin the helpers to the *exact*
+# results of the original regexes, which are reproduced verbatim below as the oracle, so the
+# hardening cannot quietly change what a brief parses to.
+
+_ORIGINAL_LINE_RE = re.compile(r"^(?:#+\s*)?([^:=–-]{1,80}?)(?:\s*[:=–-]\s*(.*))?$")
+_ORIGINAL_COLOR_RE = re.compile(r"([\w -]+?)\s*[:=]\s*(#[\da-fA-F]{3,8}|[\w-]+)")
+_ORIGINAL_DURATION_RE = re.compile(r"[-+]?\d+(?:\.\d+)?\s*(seconds?|secs?|s)\b", re.I)
+
+
+def _original_split(text: str) -> tuple[str, str] | None:
+    match = _ORIGINAL_LINE_RE.match(text)
+    if not match:
+        return None
+    return match.group(1), (match.group(2) or "").strip()
+
+
+# Lines never contain "\n" (the parser iterates `splitlines()`), so the oracle's `.`/`$` and the
+# helper agree only on single lines; the alphabet reflects that.
+_LINE_TEXT = st.text(alphabet="ab #:=–-\t*_`•Z", max_size=120)
+_COLOR_TEXT = st.text(alphabet="ab_ -:=#f0\t,;xé", max_size=60)
+_DURATION_TEXT = st.text(alphabet="12.+- sSecondEC\t9aé", max_size=40)
+
+
+@settings(max_examples=3000, deadline=None)
+@given(_LINE_TEXT)
+def test_split_label_line_matches_the_original_regex(text):
+    expected = _original_split(text)
+    actual = cp._split_label_line(text)
+    if expected is None or actual is None:
+        assert actual == expected
+    else:
+        # The raw label can differ only in characters `_label` strips (a backed-off "#" or a
+        # space); the normalised label and the value are what the parser consumes.
+        assert cp._label(actual[0]) == cp._label(expected[0])
+        assert actual[1] == expected[1]
+
+
+@settings(max_examples=3000, deadline=None)
+@given(_COLOR_TEXT)
+def test_color_pairs_match_the_original_findall(text):
+    assert cp._color_pairs(text) == _ORIGINAL_COLOR_RE.findall(text)
+
+
+@settings(max_examples=3000, deadline=None)
+@given(_DURATION_TEXT)
+def test_strip_durations_matches_the_original_sub(text):
+    assert cp._strip_durations(text) == _ORIGINAL_DURATION_RE.sub("", text)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Colors: " + "a" + " " * 50_000 + "!",  # the space run CodeQL reported for _colors
+        "x" + " " * 50_000 + "y",  # and for _line_parts
+        "Hook: " + "9" * 50_000 + "x",  # and the digit run for the duration strip
+        "Cliffhanger: " + "1." * 25_000 + "q",
+    ],
+)
+def test_adversarial_brief_lines_parse_in_linear_time(line):
+    started = time.perf_counter()
+    parse_campaign_preset(line)
+    assert time.perf_counter() - started < 2.0

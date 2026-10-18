@@ -331,19 +331,117 @@ class CampaignPreset:
         )
 
 
+# The brief parser runs on operator-supplied text (`POST /api/campaign-presets/parse`), so every
+# pattern below is linear-time. The earlier one-liners placed a lazy run next to `\s*` over
+# overlapping character classes and were scanned from every start position by `findall`/`sub`,
+# which CodeQL rated py/polynomial-redos (severity 7.5): a long run of spaces or digits made a
+# single request quadratic. The helpers keep the exact results of those regexes - pinned by the
+# property tests in tests/test_campaign_preset.py - while doing the ambiguous part by hand.
+_LINE_SEPARATORS = ":=–-"
+_LINE_LABEL_MAX = 80
+_COLOR_VALUE_RE = re.compile(r"\s*(#[\da-fA-F]{3,8}|[\w-]+)")
+_COLOR_SEPARATOR_RE = re.compile(r"[:=]")
+_DURATION_RE = re.compile(r"[-+]?\d+(?:\.\d+)?\s*(?:seconds?|secs?|s)\b", re.IGNORECASE)
+
+
+def _split_label_line(text: str) -> tuple[str, str] | None:
+    """Split ``label: value`` exactly as ``^(?:#+\\s*)?([^:=–-]{1,80}?)(?:\\s*[:=–-]\\s*(.*))?$``.
+
+    The label cannot contain a separator, so it ends at the first one (or the end of the line).
+    It starts after the ``#`` heading marker; if that would leave it empty, the regex backed off
+    the marker by one character, which is reproduced here. ``text`` is a single line.
+    """
+
+    hashes = len(text) - len(text.lstrip("#"))
+    start = len(text) - len(text[hashes:].lstrip()) if hashes else 0
+    cut = min((text.find(sep) for sep in _LINE_SEPARATORS if sep in text), default=-1)
+    if (len(text) if cut < 0 else cut) == start:
+        if start == 0:
+            return None
+        start -= 1
+    if cut < 0:
+        label = text[start:]
+    else:
+        label = text[start:cut].rstrip() or text[start : start + 1]
+    if len(label) > _LINE_LABEL_MAX:
+        return None
+    return label, ("" if cut < 0 else text[cut + 1 :].strip())
+
+
 def _line_parts(line: str) -> tuple[str, str] | None:
     text = line.strip().strip("*_`")
     text = re.sub(r"^[-*•]\s*", "", text)
     if not text:
         return None
-    match = re.match(r"^(?:#+\s*)?([^:=–-]{1,80}?)(?:\s*[:=–-]\s*(.*))?$", text)
-    if not match:
+    parts = _split_label_line(text)
+    if parts is None:
         return None
-    return _label(match.group(1)), (match.group(2) or "").strip()
+    return _label(parts[0]), parts[1]
+
+
+def _is_color_key_char(ch: str) -> bool:
+    return ch == " " or ch == "-" or ch == "_" or ch.isalnum()
+
+
+def _color_pairs(value: str) -> list[tuple[str, str]]:
+    """``key: value`` pairs, as ``re.findall(r"([\\w -]+?)\\s*[:=]\\s*(#hex|[\\w-]+)")`` gave.
+
+    Each ``:``/``=`` is examined once. Its key is the run of word/space/hyphen characters that
+    ends where the whitespace before the separator begins, bounded by the end of the previous
+    pair; when there is no such run the regex settled for a single space, if one is present.
+    """
+
+    pairs: list[tuple[str, str]] = []
+    floor = 0
+    for sep in _COLOR_SEPARATOR_RE.finditer(value):
+        if sep.start() < floor:
+            continue
+        ws_start = sep.start()
+        while ws_start > floor and value[ws_start - 1].isspace():
+            ws_start -= 1
+        key_start = ws_start
+        while key_start > floor and _is_color_key_char(value[key_start - 1]):
+            key_start -= 1
+        if key_start < ws_start:
+            key = value[key_start:ws_start]
+        else:
+            key = " " if value.find(" ", ws_start, sep.start()) >= 0 else ""
+        item = _COLOR_VALUE_RE.match(value, sep.end())
+        if key and item:
+            pairs.append((key, item.group(1)))
+            floor = item.end()
+    return pairs
+
+
+def _strip_durations(text: str) -> str:
+    """Remove ``5s`` / ``1.5 seconds`` tokens, as ``re.sub`` of :data:`_DURATION_RE` did.
+
+    A match is only attempted where a number begins. Starting later inside the same digit run
+    sees the same suffix and fails the same way, so skipping those positions changes nothing
+    and keeps the scan linear.
+    """
+
+    pieces: list[str] = []
+    kept_from = 0
+    index = 0
+    while index < len(text):
+        ch = text[index]
+        prev = text[index - 1] if index else ""
+        signed = ch in "+-" and text[index + 1 : index + 2].isdecimal()
+        number_start = ch.isdecimal() and not (prev and (prev.isdecimal() or prev in "+-"))
+        if signed or number_start:
+            match = _DURATION_RE.match(text, index)
+            if match:
+                pieces.append(text[kept_from:index])
+                kept_from = index = match.end()
+                continue
+        index += 1
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
 
 
 def _colors(value: str) -> dict[str, str]:
-    pairs = re.findall(r"([\w -]+?)\s*[:=]\s*(#[\da-fA-F]{3,8}|[\w-]+)", value)
+    pairs = _color_pairs(value)
     if pairs:
         return {_label(key): _color(item) for key, item in pairs}
     hexes = re.findall(r"#[\da-fA-F]{3,8}\b", value)
@@ -362,7 +460,7 @@ def _setting(value: str, default_duration: float) -> tuple[bool, float, str]:
         enabled = False
     duration = _number(text, default_duration)
     style = re.sub(r"\b(enabled|disabled|on|off|true|false|yes|no)\b", "", text, flags=re.I)
-    style = re.sub(r"[-+]?\d+(?:\.\d+)?\s*(seconds?|secs?|s)\b", "", style, flags=re.I)
+    style = _strip_durations(style)
     return enabled, duration, style.strip(" ,;:/-")
 
 
