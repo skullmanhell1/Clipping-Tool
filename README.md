@@ -142,6 +142,10 @@ work is opt-in and adds render time).
   platform to the right account/target.
 - **Throttling + scheduling** — post now or pick a time; a background scheduler
   respects a minimum per-platform interval so you don't hit rate limits.
+- **YouTube OAuth preflight** — Publishing settings can exchange the configured refresh token,
+  confirm the `youtube.upload` scope when Google returns it, and report an actionable error before
+  a real upload is queued. The resumable upload sends the bearer token and exact file length on both
+  the session-initiation and binary-upload requests.
 - **Multi-platform direct scheduler** — the Schedule workspace can push one completed clip now or
   queue it for TikTok, YouTube Shorts, and Instagram Reels together. Saved campaign routes are
   reused, Shorts stays distinct from ordinary YouTube, and the picker surfaces each destination's

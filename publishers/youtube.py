@@ -9,6 +9,7 @@ import httpx
 from config import settings
 from publishers.base import (
     BasePublisher,
+    PublisherError,
     PublisherStatus,
     PublishResult,
     PublishState,
@@ -27,6 +28,39 @@ TOKEN_EXPIRY_MARGIN_S = 120.0
 #: refreshing too often rather than using a dead token.
 DEFAULT_TOKEN_TTL_S = 1800.0
 
+YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+YOUTUBE_UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+
+
+def _google_error(response, action: str) -> PublisherError:
+    """Turn a Google error response into an actionable, secret-free message."""
+    try:
+        payload = response.json()
+    except Exception:  # pragma: no cover - defensive for a proxy returning HTML
+        payload = {}
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        nested_errors = error.get("errors")
+        nested_reason = ""
+        if isinstance(nested_errors, list) and nested_errors:
+            first_error = nested_errors[0]
+            if isinstance(first_error, dict):
+                nested_reason = str(first_error.get("reason") or "").strip()
+        reason = str(
+            nested_reason or error.get("status") or error.get("code") or ""
+        ).strip()
+        message = str(error.get("message") or "").strip()
+        details = ": ".join(part for part in (reason, message) if part)
+    else:
+        details = str(error or "").strip()
+    if response.status_code == 400 and str(error).lower() == "invalid_grant":
+        details = "refresh token was rejected; re-authorize the app with offline access"
+    if response.status_code == 403 and not details:
+        details = "YouTube Data API access was denied"
+    suffix = f": {details}" if details else ""
+    return PublisherError(f"YouTube {action} failed ({response.status_code}){suffix}")
+
 
 class YouTubePublisher(BasePublisher):
     name = "youtube"
@@ -36,6 +70,7 @@ class YouTubePublisher(BasePublisher):
         self.client = client or httpx.Client(timeout=300)
         self._history = history
         self._clock = clock
+        self._last_scopes: tuple[str, ...] = ()
 
     @property
     def history(self):
@@ -86,7 +121,7 @@ class YouTubePublisher(BasePublisher):
     def _exchange(self) -> tuple[str, float]:
         """Trade the refresh token for an access token; return ``(token, expires_at)``."""
         response = self.client.post(
-            "https://oauth2.googleapis.com/token",
+            YOUTUBE_TOKEN_URL,
             data={
                 "client_id": settings.youtube_client_id,
                 "client_secret": settings.youtube_client_secret,
@@ -94,9 +129,19 @@ class YouTubePublisher(BasePublisher):
                 "grant_type": "refresh_token",
             },
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise _google_error(response, "OAuth token exchange")
         payload = response.json()
-        token = payload["access_token"]
+        token = str(payload.get("access_token") or "").strip()
+        if not token:
+            raise PublisherError("YouTube OAuth token exchange returned no access token")
+        raw_scope = str(payload.get("scope") or "").strip()
+        self._last_scopes = tuple(scope for scope in raw_scope.split() if scope)
+        if self._last_scopes and YOUTUBE_UPLOAD_SCOPE not in self._last_scopes:
+            raise PublisherError(
+                "YouTube OAuth token is missing the youtube.upload scope; "
+                "re-authorize the app with offline access and upload permission"
+            )
         try:
             ttl = float(payload.get("expires_in") or DEFAULT_TOKEN_TTL_S)
         except (TypeError, ValueError):
@@ -135,6 +180,33 @@ class YouTubePublisher(BasePublisher):
             return True
         except Exception:
             return False
+
+    def verify_credentials(self, account_id: str = "") -> dict:
+        """Verify the refresh token can mint an upload-capable access token.
+
+        This is intentionally a credential preflight, not a fake upload. Google only returns the
+        granted scope set during the OAuth exchange, so this proves the refresh token is live and
+        checks ``youtube.upload`` when Google includes the scope list. The first real upload still
+        remains the authoritative check that the API is enabled for the Cloud project.
+        """
+        if not self.status(account_id).configured:
+            return {
+                "verified": False,
+                "message": "Set YouTube OAuth client ID, secret, and refresh token first",
+            }
+        try:
+            token = self._token(account_id, force=True)
+            cached = self._cached_token(account_id or (settings.youtube_channel_id or "")) or {}
+            return {
+                "verified": True,
+                "message": "OAuth refresh succeeded; YouTube upload permission is ready",
+                "account_id": account_id or (settings.youtube_channel_id or ""),
+                "expires_at": cached.get("expires_at"),
+                "scopes": list(self._last_scopes),
+                "access_token_present": bool(token),
+            }
+        except Exception as exc:
+            return {"verified": False, "message": str(exc)}
 
     def invalidate_credentials(self, account_id: str = "") -> None:
         try:
@@ -197,11 +269,12 @@ class YouTubePublisher(BasePublisher):
                 "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
             }
             init = self.client.post(
-                "https://www.googleapis.com/upload/youtube/v3/videos",
+                YOUTUBE_UPLOAD_URL,
                 params={"uploadType": "resumable", "part": "snippet,status"},
                 json=meta,
                 headers={
                     "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json; charset=UTF-8",
                     "X-Upload-Content-Type": "video/mp4",
                     "X-Upload-Content-Length": str(request.video_path.stat().st_size),
                 },
@@ -214,21 +287,36 @@ class YouTubePublisher(BasePublisher):
                 self.invalidate_credentials(request.account_id)
                 token = self._token(request.account_id, force=True)
                 init = self.client.post(
-                    "https://www.googleapis.com/upload/youtube/v3/videos",
+                    YOUTUBE_UPLOAD_URL,
                     params={"uploadType": "resumable", "part": "snippet,status"},
                     json=meta,
                     headers={
                         "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=UTF-8",
                         "X-Upload-Content-Type": "video/mp4",
                         "X-Upload-Content-Length": str(request.video_path.stat().st_size),
                     },
                 )
-            init.raise_for_status()
-            location = init.headers["location"]
+            if init.status_code >= 400:
+                raise _google_error(init, "resumable upload initialization")
+            location = str(init.headers.get("location") or "").strip()
+            if not location:
+                raise PublisherError("YouTube did not return a resumable upload session URL")
             uploading = True
             with request.video_path.open("rb") as f:
-                upload = self.client.put(location, content=f, headers={"Content-Type": "video/mp4"})
-            upload.raise_for_status()
+                upload = self.client.put(
+                    location,
+                    content=f,
+                    headers={
+                        # Google requires the bearer credential on the upload request too; the
+                        # session URL alone is not an authorization substitute.
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "video/mp4",
+                        "Content-Length": str(request.video_path.stat().st_size),
+                    },
+                )
+            if upload.status_code >= 400:
+                raise _google_error(upload, "video upload")
             data = upload.json()
             vid = str(data.get("id") or "")
             if not vid:

@@ -2791,6 +2791,25 @@ def refresh_publisher_credentials(platform: str) -> dict:
     }
 
 
+@app.post("/api/publishers/{platform}/verify", tags=["publishing"])
+def verify_publisher_credentials(platform: str) -> dict:
+    """Verify a publisher's credentials without creating a post.
+
+    YouTube uses this to exchange the configured refresh token and validate the upload scope. It
+    never uploads a dummy clip and never stores the access token in the response.
+    """
+    manager = get_publish_manager()
+    publisher = manager.publishers.get(platform)
+    if publisher is None:
+        raise HTTPException(status_code=404, detail=f"Unknown platform {platform!r}")
+    result = publisher.verify_credentials()
+    return {
+        "platform": platform,
+        **result,
+        "status": publisher.status().to_dict(),
+    }
+
+
 @app.post("/api/publish-attempts/{attempt_id}/retry", tags=["publishing"])
 def retry_publish_attempt(attempt_id: str) -> dict:
     """Re-queue a failed (or still-in-review) attempt without changing its mode.

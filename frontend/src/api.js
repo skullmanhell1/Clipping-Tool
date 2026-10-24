@@ -285,6 +285,10 @@ export const api = {
     apiFetch(`/api/publishers/${encodeURIComponent(platform)}/refresh`, {
       method: "POST",
     }).then(jsonOrThrow),
+  verifyPublisherCredentials: (platform) =>
+    apiFetch(`/api/publishers/${encodeURIComponent(platform)}/verify`, {
+      method: "POST",
+    }).then(jsonOrThrow),
 
   // --- Phase 5: storage, profiles, updates ---
   storage: () => apiFetch("/api/storage").then(jsonOrThrow),
