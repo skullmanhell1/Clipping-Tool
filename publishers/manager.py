@@ -113,6 +113,7 @@ class PublishManager:
         mode: str = "auto",
         schedule_at: float | None = None,
         route_overrides: dict[str, dict[str, str]] | None = None,
+        public_only: bool = False,
     ):
         routes = {}
         campaign = self.history.campaign(campaign_id) if campaign_id else None
@@ -123,6 +124,7 @@ class PublishManager:
         due = schedule_at or time.time()
         ids = []
         for requested in selected:
+            requested_platform = (requested or "").strip().lower()
             # Aliases resolved before the lookup: `youtube_shorts` is a first-class name in the
             # scheduling and output-profile tables but has no publisher of its own, so it reached
             # the `continue` below and the platform silently did not happen.
@@ -169,19 +171,47 @@ class PublishManager:
                 # The campaign's X affiliate link is placed in the untruncated tail with mentions
                 # and hashtags, rather than in the description where platform fitting might cut it.
                 mentions.append(affiliate_url)
+            brief = None
+            try:
+                from publishers.brief_metadata import metadata_for_platform
+
+                campaign_record = self.history.campaign(campaign_id) if campaign_id else None
+                brief = getattr(campaign_record, "brief", None)
+                brief_values = metadata_for_platform(
+                    brief,
+                    requested_platform or platform,
+                    base={
+                        "description": clip.description,
+                        "cta": clip.cta,
+                        "hashtags": clip.hashtags,
+                        "mentions": mentions,
+                    },
+                )
+            except Exception:
+                brief_values = {
+                    "description": clip.description,
+                    "cta": clip.cta,
+                    "hashtags": clip.hashtags,
+                    "mentions": mentions,
+                }
             req = {
                 "video_path": str(video_path),
                 "title": clip.title,
-                "description": clip.description,
-                "hashtags": clip.hashtags,
+                "description": brief_values.get("description", clip.description),
+                "hashtags": brief_values.get("hashtags", clip.hashtags),
                 "hook_text": clip.hook_text,
-                "cta": clip.cta,
-                "mentions": mentions,
+                "cta": brief_values.get("cta", clip.cta),
+                "mentions": brief_values.get("mentions", mentions),
                 "account_id": route.get("account_id", ""),
                 "campaign_id": campaign_id,
                 "target_type": route.get("target_type", ""),
                 "target_id": route.get("target_id", ""),
                 "mode": mode,
+                "public_only": bool(public_only),
+                # Keep the requested product separate from the registered
+                # publisher. `youtube_shorts` routes through YouTube, but its
+                # preflight duration/aspect rules are stricter.
+                "preflight_platform": requested_platform or platform,
             }
             state = (
                 PublishState.SCHEDULED.value if due > time.time() + 1 else PublishState.QUEUED.value
@@ -243,6 +273,7 @@ class PublishManager:
             target_id=data.get("target_id", ""),
             mode=data.get("mode", "auto"),
         )
+        req.metadata["public_only"] = bool(data.get("public_only", False))
         if not req.video_path.exists():
             self.history.update_attempt(
                 item["id"],
@@ -256,7 +287,20 @@ class PublishManager:
         # refuse was discovered by uploading it - the user then read a rejection from
         # TikTok's API instead of a sentence saying their clip was too long. Warnings do not
         # block: a 4:5 clip going somewhere that prefers 9:16 is the user's call, not ours.
-        report = preflight.validate_clip(req.video_path, pub.name)
+        requested_platform = str(
+            (item.get("request_json") or {}).get("preflight_platform") or pub.name
+        )
+        report = preflight.validate_clip(req.video_path, requested_platform)
+        info = getattr(report, "info", None)
+        if info is not None:
+            req.metadata.update(
+                {
+                    "duration": info.duration,
+                    "width": info.width,
+                    "height": info.height,
+                    "requested_platform": requested_platform,
+                }
+            )
         if not report.ok:
             self.history.update_attempt(
                 item["id"],
@@ -271,7 +315,39 @@ class PublishManager:
         # `token_kind="static"` and are left alone, since retrying a dead static token cannot help.
         self._ensure_credentials(pub, req.account_id)
 
+        if req.metadata.get("public_only") and not pub.status(req.account_id).direct_publish:
+            self.history.update_attempt(
+                item["id"],
+                state=PublishState.FAILED.value,
+                error=(
+                    f"{pub.name} cannot satisfy the public-only campaign policy: "
+                    f"{pub.status(req.account_id).message}"
+                ),
+                completed_at=time.time(),
+            )
+            return
+
         result = pub.publish(req)
+        if req.metadata.get("public_only") and result.state is not PublishState.PUBLISHED:
+            state = (
+                PublishState.UNKNOWN.value
+                if getattr(result, "side_effect_possible", False)
+                else PublishState.FAILED.value
+            )
+            self.history.update_attempt(
+                item["id"],
+                state=state,
+                url=result.url,
+                external_id=result.external_id,
+                error=(
+                    result.error
+                    or f"{pub.name} returned {result.state.value}; public visibility is required"
+                ),
+                message=result.message,
+                result_json=result.to_dict(),
+                completed_at=time.time(),
+            )
+            return
         if not result.success and result.state == PublishState.FAILED:
             if self._schedule_retry(item, pub, result):
                 return

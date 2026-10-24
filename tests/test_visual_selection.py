@@ -59,12 +59,14 @@ def _clean_transcript(draw):
 
     Distinct, strictly-increasing segment starts and ends (with a positive gap
     between segments) make ``snap_to_sentences`` idempotent on those boundaries.
+    Each segment is at least the default ``auto`` clip minimum, so the property
+    exercises visual ranking rather than requesting an impossible one-second short.
     """
     n = draw(st.integers(min_value=1, max_value=6))
     specs = []
     cursor = 0.0
     for i in range(n):
-        seg_len = draw(st.floats(min_value=1.0, max_value=5.0))
+        seg_len = draw(st.floats(min_value=10.0, max_value=15.0))
         start = round(cursor, 3)
         end = round(start + seg_len, 3)
         specs.append((start, end, f"seg{i}"))

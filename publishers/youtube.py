@@ -154,10 +154,9 @@ class YouTubePublisher(BasePublisher):
     def _watch_url(self, video_id: str, request) -> str:
         """The URL that actually resolves to this upload.
 
-        A clip **known** to be longer than a Short gets the `watch?v=` form; everything else keeps
-        the `/shorts/` link. Only the known-long case was wrong — `preflight` deliberately permits
-        YouTube clips up to 900 s and 16:9 landscape, and those were being handed a Shorts URL that
-        does not resolve to what was posted.
+        A clip known to be longer than a Short or known to be landscape gets the
+        `watch?v=` form. A queued ``youtube_shorts`` product request is kept as
+        a Shorts URL because preflight has already enforced its geometry.
 
         Defaulting the *unknown* case to Shorts rather than to `watch?v=` is deliberate, even though
         `watch?v=` resolves for both. This tool produces short-form clips; Shorts is the honest
@@ -166,10 +165,17 @@ class YouTubePublisher(BasePublisher):
         so this cannot regress the links already stored on past attempts.
         """
         try:
-            duration = float((request.metadata or {}).get("duration") or 0.0)
+            metadata = request.metadata or {}
+            duration = float(metadata.get("duration") or 0.0)
         except (TypeError, ValueError):
             duration = 0.0
-        if duration > self.SHORTS_MAX_SECONDS:
+        try:
+            width = float((request.metadata or {}).get("width") or 0.0)
+            height = float((request.metadata or {}).get("height") or 0.0)
+        except (TypeError, ValueError):
+            width, height = 0.0, 0.0
+        known_landscape = width > height > 0.0
+        if duration > self.SHORTS_MAX_SECONDS or known_landscape:
             return f"https://www.youtube.com/watch?v={video_id}"
         return f"https://youtube.com/shorts/{video_id}"
 

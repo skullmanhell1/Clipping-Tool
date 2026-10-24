@@ -58,12 +58,71 @@ def _escape_vtt(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def speaker_for_interval(
+    start: float,
+    end: float,
+    speaker_turns: Sequence[Any],
+    *,
+    previous_label: str | None = None,
+) -> str | None:
+    """Return the speaker with the greatest overlap over ``[start, end)``.
+
+    Subtitle words and diarised turns do not always share exact boundaries:
+    Whisper can straddle a diariser hand-off, and a backend can report two
+    overlapping turns during crosstalk.  Choosing by overlap rather than by
+    the word's start keeps a word from being assigned to the speaker who has
+    already stopped talking.  An exact tie stays with ``previous_label`` when
+    possible, which prevents a one-word boundary jitter from breaking label
+    continuity.
+
+    ``speaker_turns`` is intentionally duck-typed so the exporter can consume
+    the existing :class:`worker.diarization.Speaker_Turn` objects without an
+    import cycle.  Malformed turn records are ignored.
+    """
+    try:
+        start = float(start)
+        end = float(end)
+    except (TypeError, ValueError):
+        return None
+    if end <= start or start != start or end != end:
+        return None
+
+    scores: dict[str, float] = {}
+    order: dict[str, int] = {}
+    for index, turn in enumerate(speaker_turns or []):
+        try:
+            turn_start = float(turn.start)
+            turn_end = float(turn.end)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if turn_end <= turn_start or turn_start != turn_start or turn_end != turn_end:
+            continue
+        overlap = max(0.0, min(end, turn_end) - max(start, turn_start))
+        if overlap <= 0.0:
+            continue
+        label = str(getattr(turn, "speaker_label", "") or "").strip()
+        if not label:
+            continue
+        scores[label] = scores.get(label, 0.0) + overlap
+        order.setdefault(label, index)
+
+    if not scores:
+        return None
+    best = max(scores.values())
+    candidates = [label for label, score in scores.items() if abs(score - best) <= 1e-9]
+    if previous_label in candidates:
+        return previous_label
+    return min(candidates, key=lambda label: order[label])
+
+
 def cues_from_words(
     words: Sequence[Any],
     *,
     max_words: int = 8,
     max_gap: float = 0.8,
     max_duration: float = 5.0,
+    speaker_turns: Sequence[Any] | None = None,
+    include_speaker_labels: bool | None = None,
 ) -> list[tuple[float, float, str]]:
     """Group ``words`` into ``(start, end, text)`` cues for a sidecar file.
 
@@ -73,25 +132,45 @@ def cues_from_words(
     once a second and are genuinely harder to follow. Two different jobs, two groupings.
 
     Cues break on a pause, on word count, and on elapsed time, so one long unbroken sentence
-    cannot become a ten-second cue that outstays the speech it describes.
+    cannot become a ten-second cue that outstays the speech it describes.  When ``speaker_turns``
+    is supplied, a cue also ends at a speaker change.  This is important for a subtitle editor:
+    otherwise a cue can contain the tail of one speaker's sentence and the start of another's, and
+    any later speaker-label assignment will attach the whole cue to whichever speaker wins a single
+    midpoint test.  ``include_speaker_labels`` optionally prefixes each cue as ``"S1: text"``;
+    when omitted, labels are included only for a genuine multi-speaker turn list.  A single-speaker
+    list therefore keeps the existing plain-subtitle output.
     """
     cues: list[tuple[float, float, str]] = []
     current: list[Any] = []
+    current_speaker: str | None = None
+    known_labels = {
+        str(getattr(turn, "speaker_label", "") or "").strip()
+        for turn in (speaker_turns or [])
+        if str(getattr(turn, "speaker_label", "") or "").strip()
+    }
+    render_speaker_labels = (
+        len(known_labels) > 1 if include_speaker_labels is None else bool(include_speaker_labels)
+    )
 
     def flush() -> None:
+        nonlocal current_speaker
         if not current:
             return
         texts = [str(getattr(w, "text", "") or "").strip() for w in current]
         text = " ".join(t for t in texts if t)
         if not text:
             current.clear()
+            current_speaker = None
             return
         start = float(getattr(current[0], "start", 0.0))
         end = float(getattr(current[-1], "end", start))
         if end <= start:
             end = start + 0.1
+        if render_speaker_labels and current_speaker:
+            text = f"{current_speaker}: {text}"
         cues.append((start, end, text))
         current.clear()
+        current_speaker = None
 
     previous_end: float | None = None
     for word in words:
@@ -102,12 +181,24 @@ def cues_from_words(
             continue
         if start != start or end != end:  # NaN
             continue
+        speaker = None
+        if speaker_turns is not None:
+            speaker = speaker_for_interval(
+                start,
+                end,
+                speaker_turns,
+                previous_label=current_speaker,
+            )
+            if current and speaker != current_speaker:
+                flush()
         if current:
             gap = start - (previous_end if previous_end is not None else start)
             span = end - float(getattr(current[0], "start", start))
             if len(current) >= max_words or gap > max_gap or span > max_duration:
                 flush()
         current.append(word)
+        if speaker_turns is not None:
+            current_speaker = speaker
         previous_end = end
     flush()
     return cues
@@ -200,6 +291,8 @@ def write_sidecars(
     *,
     formats: Iterable[str] = ("srt", "vtt"),
     language: str = "",
+    speaker_turns: Sequence[Any] | None = None,
+    include_speaker_labels: bool | None = None,
 ) -> list[Path]:
     """Write sidecar caption files next to a clip and return the paths written.
 
@@ -212,9 +305,16 @@ def write_sidecars(
 
     ``language`` tags the filename - ``clip_0.en.srt`` rather than ``clip_0.srt`` - which is what
     every player and upload form uses to tell two sidecars for the same video apart (T10). Left
-    empty for the single-track case so existing filenames are unchanged.
+    empty for the single-track case so existing filenames are unchanged.  ``speaker_turns`` keeps
+    multi-speaker cues from crossing a diarised hand-off.  Labels are rendered automatically for a
+    genuine multi-speaker list unless ``include_speaker_labels=False`` is supplied, while a
+    single-speaker list remains plain.
     """
-    cues = cues_from_words(words)
+    cues = cues_from_words(
+        words,
+        speaker_turns=speaker_turns,
+        include_speaker_labels=include_speaker_labels,
+    )
     if not cues:
         return []
 

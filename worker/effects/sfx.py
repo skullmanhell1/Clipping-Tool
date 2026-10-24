@@ -53,8 +53,8 @@ SFX_NAMES: dict[str, bool] = {
 #: Which sting each trigger uses.
 TRIGGER_SFX: dict[str, str] = {
     "emoji": "pop",
-    "emphasis": "pop",
     "transition": "whoosh",
+    "retention": "pop",
 }
 
 SOURCE_USER_FILE = "user_file"
@@ -171,42 +171,34 @@ def plan_hits(
     *,
     emoji_starts: Sequence[float] = (),
     transition_times: Sequence[float] = (),
-    emphasis_times: Sequence[float] = (),
-    enable_emphasis: bool = False,
+    retention_times: Sequence[float] = (),
     duration: float,
     mode: str = "",
     min_gap: float = 0.35,
 ) -> list[tuple[float, str]]:
     """The ``(time, trigger)`` moments that should carry a sting (AU9).
 
-    ``mode`` is ``off`` | ``emoji`` | ``transitions`` | ``both``. Retention
-    emphasis is opt-in through ``enable_emphasis`` so existing SFX settings
-    remain byte-compatible when the retention feature is off.
+    ``mode`` is ``off`` | ``emoji`` | ``transitions`` | ``both``. Explicit retention-plan cues are
+    independent of that setting: choosing aggressive retention editing is itself the request for
+    its bounded emphasis pops.
 
     Two stings within ``min_gap`` of each other read as a stutter rather than as two accents, so the
-    later one is dropped. Transitions win a contested slot because a cut is a structural moment and
-    an emoji is decoration - and an emoji is far more likely to have another one along shortly.
+    later one is dropped. Transitions win a contested slot because a cut is a structural moment;
+    retention beats outrank decorative emoji.
     """
     setting = str(mode or getattr(settings, "sfx_mode", "off") or "off").strip().lower()
-    # One table rather than a guard plus two membership tests. With the mode interpreted in three
-    # places, the guard was provably redundant - "off" also failed both membership tests - so
-    # removing it changed nothing, which means it was not protecting anything either. Here the
-    # lookup *is* the interpretation, and an unrecognised mode has exactly one meaning.
     sources = {
         "emoji": (("emoji", emoji_starts),),
         "transitions": (("transition", transition_times),),
         "both": (("transition", transition_times), ("emoji", emoji_starts)),
-    }.get(setting)
-    if sources is None:
-        sources = ()
-    if enable_emphasis:
-        sources = (*sources, ("emphasis", emphasis_times))
+    }.get(setting, ())
 
     candidates: list[tuple[float, str]] = [
         (float(at), trigger) for trigger, times in sources for at in times
     ]
+    candidates.extend((float(at), "retention") for at in retention_times)
 
-    priority = {"transition": 0, "emphasis": 1, "emoji": 2}
+    priority = {"transition": 0, "retention": 1, "emoji": 2}
     in_range = sorted(
         ((at, trigger) for at, trigger in candidates if 0.0 <= at < duration),
         key=lambda item: (item[0], priority.get(item[1], 9)),

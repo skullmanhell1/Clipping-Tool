@@ -25,7 +25,10 @@ Two decisions worth knowing about:
 
 from __future__ import annotations
 
+import hashlib
 import re
+import shutil
+import urllib.parse
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -118,7 +121,218 @@ def brand_from_options(options: Any) -> dict[str, Any]:
     logo = str(getattr(options, "brand_logo", "") or "").strip()
     if logo:
         kit["logo"] = logo
+    background = str(getattr(options, "brand_logo_background", "auto") or "auto").strip().lower()
+    if background in {"auto", "white", "black", "none"}:
+        kit["logo_background"] = background
     return kit
+
+
+def _safe_asset_suffix(value: str, allowed: tuple[str, ...]) -> str | None:
+    suffix = Path(urllib.parse.urlsplit(value).path).suffix.lower()
+    return suffix if suffix in allowed else None
+
+
+def detect_logo_background(path: str | Path) -> str:
+    """Best-effort detect a solid white/black logo matte using corner samples."""
+    try:
+        from PIL import Image
+
+        with Image.open(path).convert("RGB") as image:
+            points = [
+                image.getpixel((0, 0)),
+                image.getpixel((max(0, image.width - 1), 0)),
+                image.getpixel((0, max(0, image.height - 1))),
+                image.getpixel((max(0, image.width - 1), max(0, image.height - 1))),
+            ]
+        average = tuple(sum(point[index] for point in points) / len(points) for index in range(3))
+        if min(average) >= 235:
+            return "white"
+        if max(average) <= 20:
+            return "black"
+    except Exception:
+        pass
+    return "none"
+
+
+def materialize_font(asset: str, *, dest_dir: str | Path | None = None) -> Path | None:
+    """Make a local, validated font file available to libass' configured fonts directory.
+
+    ``asset`` may be an existing local file, an HTTPS URL, or a Google Drive URL. Downloads are
+    bounded and written to a content-addressed filename, so two campaigns cannot overwrite each
+    other's font and a repeated render is idempotent. Invalid/unavailable assets return ``None``;
+    the existing caption font fallback remains the source of truth.
+    """
+    from config import settings
+
+    raw = str(asset or "").strip()
+    suffix = _safe_asset_suffix(raw, (".ttf", ".otf"))
+    if not suffix and Path(raw).suffix.lower() in (".ttf", ".otf"):
+        suffix = Path(raw).suffix.lower()
+    if not suffix:
+        try:
+            from worker.google_drive import extract_file_id
+
+            if extract_file_id(raw):
+                suffix = ".ttf"
+        except Exception:
+            pass
+    if not suffix:
+        return None
+    destination = Path(dest_dir or getattr(settings, "font_assets_dir", None) or "assets/fonts")
+    source = Path(raw).expanduser()
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    target = destination / f"brand-{digest}{suffix}"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    if source.is_file():
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return target if target.stat().st_size > 0 else None
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme == "https" and parsed.hostname:
+        try:
+            import httpx
+
+            response = httpx.get(raw, follow_redirects=True, timeout=30.0)
+            response.raise_for_status()
+            if len(response.content) > 25 * 1024 * 1024:
+                return None
+            destination.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(response.content)
+            return target if target.stat().st_size > 0 else None
+        except Exception:
+            target.unlink(missing_ok=True)
+            return None
+    file_id = None
+    try:
+        from worker.google_drive import extract_file_id
+
+        file_id = extract_file_id(raw)
+    except Exception:
+        file_id = None
+    if file_id:
+        try:
+            from worker.google_drive import download_asset
+
+            downloaded = download_asset(file_id, destination, suffix=suffix)
+            if downloaded != target:
+                shutil.copyfile(downloaded, target)
+            return target if target.is_file() else None
+        except Exception:
+            return None
+    return None
+
+
+def materialize_logo(asset: str, *, dest_dir: str | Path | None = None) -> Path | None:
+    """Materialize a local/HTTPS/Drive logo into the temporary asset directory."""
+    from config import settings
+
+    raw = str(asset or "").strip()
+    source = Path(raw).expanduser()
+    suffix = source.suffix.lower() or Path(urllib.parse.urlsplit(raw).path).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        suffix = ".png"
+    destination = (
+        Path(dest_dir or getattr(settings, "temp_dir", None) or "storage/temp") / "brand-assets"
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    target = destination / f"brand-logo-{digest}{suffix}"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    if source.is_file():
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return target if target.stat().st_size > 0 else None
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme == "https" and parsed.hostname:
+        try:
+            import httpx
+
+            response = httpx.get(raw, follow_redirects=True, timeout=30.0)
+            response.raise_for_status()
+            if len(response.content) > 25 * 1024 * 1024:
+                return None
+            destination.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(response.content)
+            return target if target.stat().st_size > 0 else None
+        except Exception:
+            target.unlink(missing_ok=True)
+            return None
+    try:
+        from worker.google_drive import download_asset, extract_file_id
+
+        file_id = extract_file_id(raw)
+        if file_id:
+            downloaded = download_asset(file_id, destination, suffix=suffix)
+            if downloaded != target:
+                shutil.copyfile(downloaded, target)
+            return target if target.is_file() else None
+    except Exception:
+        pass
+    return None
+
+
+def materialize_video(asset: str, *, dest_dir: str | Path | None = None) -> Path | None:
+    """Materialize a short intro/outro video from local, HTTPS, or Drive storage."""
+    from config import settings
+
+    raw = str(asset or "").strip()
+    source = Path(raw).expanduser()
+    suffix = source.suffix.lower() or Path(urllib.parse.urlsplit(raw).path).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".mkv", ".webm"}:
+        suffix = ".mp4"
+    destination = (
+        Path(dest_dir or getattr(settings, "temp_dir", None) or "storage/temp") / "brand-assets"
+    )
+    # A local asset can be replaced in place while keeping the same path. Include its filesystem
+    # identity in the cache key so a new bumper is not silently shadowed by a previous render.
+    cache_key = raw
+    try:
+        if source.is_file():
+            stat = source.stat()
+            cache_key = f"{raw}\0{stat.st_size}\0{stat.st_mtime_ns}"
+    except OSError:
+        pass
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:16]
+    target = destination / f"brand-video-{digest}{suffix}"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    if source.is_file():
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return target if target.stat().st_size > 0 else None
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme == "https" and parsed.hostname:
+        try:
+            import httpx
+
+            response = httpx.get(raw, follow_redirects=True, timeout=60.0)
+            response.raise_for_status()
+            if len(response.content) > 100 * 1024 * 1024:
+                return None
+            destination.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(response.content)
+            return target if target.stat().st_size > 0 else None
+        except Exception:
+            target.unlink(missing_ok=True)
+            return None
+    try:
+        from worker.google_drive import download_asset, extract_file_id
+
+        file_id = extract_file_id(raw)
+        if file_id:
+            downloaded = download_asset(
+                file_id,
+                destination,
+                max_bytes=100 * 1024 * 1024,
+                suffix=suffix,
+            )
+            if downloaded != target:
+                shutil.copyfile(downloaded, target)
+            return target if target.is_file() else None
+    except Exception:
+        pass
+    return None
 
 
 def apply_brand(preset: CaptionPreset, options: Any) -> tuple[CaptionPreset, list[str]]:
@@ -160,6 +374,7 @@ def logo_filter(
     *,
     base_label: str = "vbase",
     out_label: str = "vbrand",
+    background: str = "auto",
 ) -> str | None:
     """A watermark graph segment for the brand logo, or ``None`` when there is none (U6).
 
@@ -207,10 +422,18 @@ def logo_filter(
     y = f"H-h-{margin}" if position.startswith("bottom") else str(margin)
 
     # `-1` height preserves the logo's aspect ratio; `format=rgba` before the alpha multiply is
-    # required because a JPEG logo has no alpha channel to scale.
+    # required because a JPEG logo has no alpha channel to scale. For flat white/black logo cards,
+    # chroma-key only the requested edge colour; transparent logos remain untouched.
+    mode = str(background or getattr(options, "brand_logo_background", "auto") or "auto").lower()
+    if mode == "auto":
+        mode = detect_logo_background(path)
+    cleanup = ""
+    if mode in {"white", "black"}:
+        colour = "0xffffff" if mode == "white" else "0x000000"
+        cleanup = f"chromakey={colour}:0.12:0.08,"
     return (
         f"movie=filename='{escape_filter_path(path)}',"
-        f"scale={logo_w}:-1,format=rgba,colorchannelmixer=aa={opacity:.3f}[brandlogo];"
+        f"scale={logo_w}:-1,format=rgba,{cleanup}colorchannelmixer=aa={opacity:.3f}[brandlogo];"
         f"[{base_label}][brandlogo]overlay={x}:{y}[{out_label}]"
     )
 

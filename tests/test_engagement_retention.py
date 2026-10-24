@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from worker.discourse import ending_payoff
 from worker.engagement import (
     ReactionEvent,
     parse_reactions,
     plan_edit,
+    quality_scores,
     rerank,
     score_features,
+    topic_relevance,
 )
 from worker.models import ClipResult
 
@@ -42,6 +45,32 @@ def test_score_features_treats_missing_optional_signals_as_neutral():
     assert score_features({}) == 0.5
 
 
+def test_payoff_signal_prefers_a_complete_conclusion_over_a_dangling_window():
+    complete = ending_payoff("Here is what changed, and that's why it worked.")
+    dangling = ending_payoff("Here is what changed, and that's why it worked because")
+    assert complete > dangling
+    assert (
+        quality_scores({"payoff_score": complete})["clarity"]
+        > quality_scores({"payoff_score": dangling})["clarity"]
+    )
+
+
+def test_terminal_payoff_lead_ins_are_not_treated_as_completed():
+    assert ending_payoff("The answer is") < 0.5
+    assert ending_payoff("The answer is.") < 0.5
+    assert ending_payoff("That's why") < 0.5
+    assert ending_payoff("Which means") < 0.5
+
+
+def test_topic_relevance_is_creator_controlled_and_neutral_when_unavailable():
+    assert topic_relevance("backup failures", "The backup failures happened overnight") > 0.9
+    assert topic_relevance("backup failures", "A recipe for pancakes") < 0.6
+    assert topic_relevance("AI", "AI changes video editing") > 0.9
+    assert topic_relevance("café", "A cafe business grew overnight") > 0.9
+    assert topic_relevance("日本語", "日本語の字幕") > 0.9
+    assert topic_relevance("", "Any transcript") == 0.5
+
+
 def test_balanced_plan_adds_hook_zoom_and_caption_cues():
     words = _words(
         (0.1, 0.5, "WHY"),
@@ -64,6 +93,7 @@ def test_balanced_plan_adds_hook_zoom_and_caption_cues():
     assert plan.zoom_beats == (0.35, 1.2)
     assert 0 in plan.emphasis_indices
     assert plan.pacing_cuts == ()
+    assert set(plan.quality_scores) == {"flow", "impact", "clarity", "relevance"}
     assert "front_loaded_hook" in plan.reasons
 
 
@@ -137,6 +167,13 @@ def test_retention_rerank_is_stable_and_uses_engagement_evidence():
     assert second.score > first.score
 
 
+def test_retention_rerank_does_not_blend_against_its_previous_output():
+    candidate = SimpleNamespace(start=0.0, score=80.0, features={"engagement_score": 0.2})
+    first = rerank([candidate], "balanced")[0].score
+    second = rerank([candidate], "balanced")[0].score
+    assert second == first
+
+
 def test_clip_result_persists_retention_fields():
     original = ClipResult(
         id="clip-1",
@@ -146,7 +183,9 @@ def test_clip_result_persists_retention_fields():
         duration=8.0,
         engagement_score=87.5,
         retention_plan={"mode": "balanced", "zoom_beats": [0.35]},
+        engagement_features={"hook_score": 0.9, "energy_onsets": [1.2]},
     )
     restored = ClipResult.from_dict(original.to_dict())
     assert restored.engagement_score == 87.5
     assert restored.retention_plan == {"mode": "balanced", "zoom_beats": [0.35]}
+    assert restored.engagement_features == {"hook_score": 0.9, "energy_onsets": [1.2]}
