@@ -54,12 +54,7 @@ function withToken(url) {
 async function jsonOrThrow(res) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = data.detail;
-    const message =
-      typeof detail === "string"
-        ? detail
-        : detail?.message || `Request failed (${res.status})`;
-    throw new Error(message);
+    throw new Error(data.detail || `Request failed (${res.status})`);
   }
   return data;
 }
@@ -74,34 +69,26 @@ export const api = {
       body: JSON.stringify({ url }),
     }).then(jsonOrThrow),
 
-  submitUrl: (url, options) => {
-    const { new_project: newProject = true, ...processingOptions } = options || {};
-    return apiFetch("/api/jobs/url", {
+  submitUrl: (url, options) =>
+    apiFetch("/api/jobs/url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, options: processingOptions, new_project: newProject }),
-    }).then(jsonOrThrow);
-  },
+      body: JSON.stringify({ url, options }),
+    }).then(jsonOrThrow),
 
-  submitBatch: (urls, options) => {
-    const { new_project: newProject = true, ...processingOptions } = options || {};
-    return apiFetch("/api/jobs/batch", {
+  submitBatch: (urls, options) =>
+    apiFetch("/api/jobs/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls, options: processingOptions, new_project: newProject }),
-    }).then(jsonOrThrow);
-  },
+      body: JSON.stringify({ urls, options }),
+    }).then(jsonOrThrow),
 
   upload: (files, options) => {
-    const { new_project: newProject = true, ...processingOptions } = options || {};
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
-    Object.entries(processingOptions).forEach(([k, v]) => {
-      if (v !== null && v !== undefined) {
-        fd.append(k, typeof v === "object" ? JSON.stringify(v) : v);
-      }
+    Object.entries(options).forEach(([k, v]) => {
+      if (v !== null && v !== undefined) fd.append(k, v);
     });
-    fd.append("new_project", String(newProject));
     return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
   },
 
@@ -155,24 +142,6 @@ export const api = {
   saveCampaign: (name, routes, id = "") =>
     apiFetch("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, routes, id }) }).then(jsonOrThrow),
-  parseCampaignPreset: (text, preset = {}) =>
-    apiFetch("/api/campaign-presets/parse", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, preset }),
-    }).then(jsonOrThrow),
-  parseCampaignPresetFromDrive: (url) =>
-    apiFetch("/api/campaign-presets/from-drive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    }).then(jsonOrThrow),
-  scheduleCampaignDay: (campaignId, payload) =>
-    apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/daily-schedule`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).then(jsonOrThrow),
   publishClip: (jobId, clipId, payload) =>
     apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),

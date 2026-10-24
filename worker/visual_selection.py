@@ -4,9 +4,8 @@ Augments the transcript-based :func:`worker.selection.select_moments` with two
 capabilities while preserving its exact output shape (``ClipCandidate``):
 
 * **Natural-language selection prompt** — a free-text ``selection_prompt`` biases
-  moment selection toward the moments the creator describes. The transcript
-  selector renders it directly, so it works whether visual selection is on or
-  off, while creator-topic relevance remains separate. Without an LLM the
+  moment selection toward the moments the creator describes, by folding the
+  prompt into the topic that reaches the LLM request. Without an LLM the
   deterministic segmentation still runs (Reqs 13.1–13.3).
 * **Visual/scene cue augmentation** — a bounded set of keyframes is sampled once
   per source (Req 17.4), cheap CPU-only brightness/motion proxies are derived,
@@ -33,7 +32,7 @@ from worker import candidate_ranking, engagement, intermediate_cache
 from worker import ffmpeg_utils as fu
 from worker import segmentation as seg
 from worker import selection as sel
-from worker.llm_client import BaseLLMClient
+from worker.llm_client import BaseLLMClient, llm_available
 from worker.selection import ClipCandidate
 from worker.transcribe import Transcript
 
@@ -229,13 +228,10 @@ def merge_scores(
         if inside:
             raw = sum(max(0.0, f.brightness) + max(0.0, f.motion) for f in inside)
             raw /= len(inside)
-            visual_score = max(0.0, min(1.0, raw / 2.0))  # brightness+motion -> [0,1]
-            combined = (1.0 - weight) * cand.score + weight * visual_score * 100.0
         else:
-            # No sampled frame is an unavailable visual measurement, not a
-            # negative visual signal. Keep the transcript score unchanged so a
-            # short/boundary candidate is not penalised for sampling coverage.
-            combined = cand.score
+            raw = 0.0
+        visual_score = max(0.0, min(1.0, raw / 2.0))  # brightness+motion -> [0,1]
+        combined = (1.0 - weight) * cand.score + weight * visual_score * 100.0
         merged.append(
             ClipCandidate(
                 start=cand.start,
@@ -249,9 +245,7 @@ def merge_scores(
                 # - and U1 made visual selection a default, so that was the normal path. The
                 # dict is copied rather than shared: two candidates aliasing one features dict
                 # would let a later annotation overwrite an earlier candidate's measurements.
-                features={**dict(cand.features), "visual_selection_used": True},
-                cuts=list(cand.cuts),
-                fallback_reason=cand.fallback_reason,
+                features=dict(cand.features),
             )
         )
     merged.sort(key=lambda c: c.score, reverse=True)
@@ -259,14 +253,21 @@ def merge_scores(
 
 
 def _bias_options(options, client: BaseLLMClient | None):
-    """Keep options unchanged; selection.py now renders the prompt directly.
+    """Fold ``selection_prompt`` into the topic when an LLM is available.
 
-    Earlier code folded the free-form selection request into ``topic``. That
-    made prompt words leak into deterministic topic-relevance scoring and meant
-    the request was ignored whenever visual selection was disabled. Keeping this
-    compatibility seam but returning the original options fixes both paths.
+    This is the simplest robust way to make the prompt text reach the transcript
+    LLM request (Req 13.2) while staying deterministic-friendly: with no prompt,
+    or when no LLM client is available, the original options are returned
+    unchanged so the deterministic fallback still produces clips (Req 13.3).
     """
-    return options
+    prompt = (getattr(options, "selection_prompt", "") or "").strip()
+    if not prompt:
+        return options
+    if client is None and not llm_available():
+        return options
+    topic = (getattr(options, "topic", "") or "").strip()
+    biased_topic = f"{topic} {prompt}".strip() if topic else prompt
+    return replace(options, topic=biased_topic)
 
 
 def _snap_candidates(
@@ -316,9 +317,7 @@ def _snap_candidates(
                 reason=c.reason,
                 title=c.title,
                 text=c.text,
-                features=dict(c.features),
-                cuts=list(c.cuts),
-                fallback_reason=c.fallback_reason,
+                features=dict(c.features),  # same silent-drop bug as merge_scores
             )
         )
     return out
@@ -418,9 +417,6 @@ def select_moments_visual(
     try:
         merged = merge_scores(transcript_candidates, frames)
         snapped = _snap_candidates(merged, transcript, total_duration)
-        for candidate in snapped:
-            candidate.text = sel.text_between(transcript.segments, candidate.start, candidate.end)
-        engagement.refresh_text_features(snapped, topic=getattr(options, "topic", ""))
         if getattr(options, "retention_mode", "off") != "off":
             # Visual blending happens after transcript selection. Reapply the
             # retention blend here so a bright/moving frame cannot silently undo

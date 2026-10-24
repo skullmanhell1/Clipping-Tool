@@ -90,9 +90,10 @@ class OutputProfile:
 
 #: Duration ceilings for profiles whose *product* is stricter than the platform's upload limit.
 #:
-#: `youtube_shorts` remains explicit even though it routes through the YouTube publisher. Shorts
-#: has a stricter duration product limit than ordinary YouTube uploads, so the encoder profile and
-#: publishing preflight must agree on the same three-minute ceiling.
+#: `youtube_shorts` is the case that forces this to exist. Preflight has no Shorts entry - and
+#: correctly so, because a Shorts upload *is* a YouTube upload and is validated as one - so
+#: reading the table gave the generic 3600 s fallback, i.e. a Shorts profile with a one-hour
+#: ceiling. Shorts itself caps at 3 minutes, and that is what a clip aimed at Shorts must respect.
 _DURATION_OVERRIDES: dict[str, float] = {
     "youtube_shorts": 180.0,
 }

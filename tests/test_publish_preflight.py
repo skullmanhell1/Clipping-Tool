@@ -77,18 +77,6 @@ def test_unknown_platforms_get_the_permissive_fallback():
     assert preflight.limits_for("  TikTok ").name == "tiktok"
 
 
-def test_youtube_shorts_has_its_own_three_minute_product_limit():
-    shorts = preflight.limits_for("youtube_shorts")
-    youtube = preflight.limits_for("youtube")
-    assert shorts.max_duration_s == 180.0
-    assert shorts.max_duration_s < youtube.max_duration_s
-    assert shorts.preferred_aspects == (preflight._VERTICAL, preflight._SQUARE)
-
-
-def test_tiktok_uses_the_current_content_posting_api_ceiling():
-    assert preflight.limits_for("tiktok").max_duration_s == 300.0
-
-
 def test_limits_are_internally_coherent():
     """A typo in the table would silently reject everything or nothing."""
     for name, limits in preflight.PLATFORM_LIMITS.items():
@@ -199,15 +187,6 @@ def test_an_unexpected_aspect_warns_rather_than_blocks(tmp_path):
     report = preflight.validate_clip(clip, "tiktok")
     assert report.ok, report.errors
     assert any("aspect" in warning for warning in report.warnings), report.warnings
-
-
-@requires_ffmpeg
-@pytest.mark.real_binary
-def test_youtube_shorts_rejects_landscape_video(tmp_path):
-    clip = _make_clip(tmp_path / "wide_short.mp4", seconds=4.0, w=1920, h=1080)
-    report = preflight.validate_clip(clip, "youtube_shorts")
-    assert not report.ok
-    assert any("square or vertical" in error for error in report.errors), report.errors
 
 
 def test_the_report_summarises_itself_for_a_failure_record():

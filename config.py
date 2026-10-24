@@ -427,8 +427,6 @@ class Settings(BaseSettings):
     # Runtime-mutable settings + saved profiles are persisted here.
     runtime_config_path: Path = Field(default=BASE_DIR / "storage" / "runtime_config.json")
     profiles_path: Path = Field(default=BASE_DIR / "storage" / "profiles.json")
-    brand_profiles_path: Path = Field(default=BASE_DIR / "storage" / "brand_profiles.json")
-    campaign_archive_dir: Path = Field(default=BASE_DIR / "storage" / "archive")
 
     # --------------------------------------------------------- updates -----
     # GitHub repo (owner/name) used by the "check for updates" feature.
@@ -796,29 +794,6 @@ class Settings(BaseSettings):
         default=8.0,
         description="Compression ratio for ducking music under speech (AU2). Higher ducks "
         "harder; 1.0 disables ducking and restores the flat mix.",
-    )
-    music_duck_attenuation: float = Field(
-        default=0.65,
-        description="Linear background-music reduction during transcript-timed speech ducking "
-        "(0..1; 0 disables the timed dip, 1 mutes the bed).",
-    )
-    music_duck_padding_s: float = Field(
-        default=0.08,
-        description="Seconds added before and after each speech interval before merging it for "
-        "music ducking. Protects consonants at word boundaries.",
-    )
-    music_duck_merge_gap_s: float = Field(
-        default=0.04,
-        description="Maximum silence gap in seconds to merge between padded speech intervals. "
-        "Keeps the bed from pumping between nearby words.",
-    )
-    music_duck_attack_s: float = Field(
-        default=0.05,
-        description="Seconds for the music duck to reach its attenuation after speech starts.",
-    )
-    music_duck_release_s: float = Field(
-        default=0.30,
-        description="Seconds for the music duck to recover after speech ends.",
     )
 
     # ------------------------------------------------------------ assets ---
@@ -1492,19 +1467,6 @@ class Settings(BaseSettings):
     # Durable job/clip records. Without this the job store is process memory only, so a
     # restart loses every job and the history UI lists clips whose download 404s.
     jobs_db: Path = Field(default=BASE_DIR / "storage" / "jobs.db")
-    # The in-process job manager is deliberately bounded. One worker preserves the existing
-    # sequential processing default; deployments with more CPU/GPU capacity can opt into a small
-    # pool, while the queue size still limits memory consumed by bursts of submissions.
-    job_max_workers: int = Field(
-        default=1,
-        ge=1,
-        description="Number of in-process job workers; 1 preserves sequential processing.",
-    )
-    job_queue_size: int = Field(
-        default=100,
-        ge=0,
-        description="Maximum pending in-process jobs beyond running workers; 0 disables waiting.",
-    )
     # Upper bound on retained job records, so a long-lived instance does not grow the
     # jobs table without limit. 0 disables pruning.
     max_persisted_jobs: int = Field(default=500)
@@ -1615,7 +1577,6 @@ class Settings(BaseSettings):
         "music_dir",
         "broll_dir",
         "broll_cache_dir",
-        "campaign_archive_dir",
     )
 
     def ensure_local_dirs(self) -> None:

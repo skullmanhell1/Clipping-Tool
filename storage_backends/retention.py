@@ -408,21 +408,7 @@ class RetentionSweeper:
         # Run one sweep shortly after startup, then on the configured interval.
         while not self._stop.wait(5):
             try:
-                # Archive expired brief campaigns before ordinary retention cleanup. The archive
-                # helper is optional and best-effort: a storage/history problem must not disable
-                # the existing retention sweep.
-                archive_result: dict[str, Any] = {}
-                try:
-                    from publishers.history import get_history
-                    from worker.campaign_archive import archive_expired_history_campaigns
-
-                    archive_result = archive_expired_history_campaigns(
-                        get_history(), settings.campaign_archive_dir
-                    )
-                except Exception:
-                    logger.exception("campaign archival sweep failed")
-                    archive_result = {"archive_error": "see log"}
-                self.last_result = {**cleanup_expired(), "campaign_archive": archive_result}
+                self.last_result = cleanup_expired()
             except Exception:
                 # Logged, not swallowed. A sweep that raises every cycle - an unmounted storage
                 # root, a permission change - meant retention silently never ran: the disk filled

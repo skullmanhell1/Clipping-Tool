@@ -322,185 +322,19 @@ def _word_boundaries(words: list) -> list[float]:
     bounds: set[float] = set()
     for w in words:
         try:
-            start = float(getattr(w, "start", 0.0))
-            end = float(getattr(w, "end", 0.0))
+            bounds.add(float(getattr(w, "start", 0.0)))
+            bounds.add(float(getattr(w, "end", 0.0)))
         except (TypeError, ValueError):
             continue
-        if start == start and start not in (float("inf"), float("-inf")):
-            bounds.add(start)
-        if end == end and end not in (float("inf"), float("-inf")):
-            bounds.add(end)
     return sorted(bounds)
 
 
-def _snap(t: float, boundaries: list[float], *, tie: str = "left") -> float:
-    """Snap ``t`` to the nearest Word_Timeline boundary.
-
-    ``tie`` only matters when a model boundary is exactly half way between two
-    transcript boundaries.  Starts prefer the boundary on the right and ends
-    prefer the one on the left, so a span does not grow into a neighbouring
-    word merely because the nearest-boundary implementation happened to choose
-    the other side.  The default keeps the old left-hand tie break for callers
-    that do not need a directional boundary.
-    """
+def _snap(t: float, boundaries: list[float]) -> float:
+    """Snap ``t`` to the nearest Word_Timeline boundary (or return it as-is when
+    there are no boundaries)."""
     if not boundaries:
         return t
-    distance = min(abs(b - t) for b in boundaries)
-    candidates = [b for b in boundaries if abs(abs(b - t) - distance) <= 1e-9]
-    return max(candidates) if tie == "right" else min(candidates)
-
-
-def _backend_spans(spans: list) -> list[tuple[str, float, float, int]]:
-    """Parse usable backend spans without discarding their source order.
-
-    The source index is retained for deterministic tie-breaking when two model
-    spans have equal evidence for one word.  Non-finite values are rejected
-    here rather than allowed to poison sorting or clipping later.
-    """
-    out: list[tuple[str, float, float, int]] = []
-    for index, span in enumerate(spans or []):
-        try:
-            label, start, end = span
-            start = float(start)
-            end = float(end)
-        except (TypeError, ValueError):
-            continue
-        if not (start == start and end == end):  # NaN
-            continue
-        if start == float("inf") or start == float("-inf"):
-            continue
-        if end == float("inf") or end == float("-inf"):
-            continue
-        if end < start:
-            start, end = end, start
-        if end <= start:
-            continue
-        # Keep the model's original values for word-overlap scoring.  Rounding
-        # a boundary before scoring can manufacture a tie (or erase a short
-        # overlap) and put the word on the wrong side of a hand-off.
-        out.append((str(label), start, end, index))
-    return out
-
-
-def _word_assignments(
-    words: list,
-    spans: list[tuple[str, float, float, int]],
-) -> list[tuple[float, float, str, int]]:
-    """Attribute transcript words to backend spans using overlap evidence.
-
-    A backend can legitimately report crosstalk as overlapping speaker spans.
-    The previous normaliser sorted those spans and let the first span swallow
-    the overlap, which made the later speaker disappear from subtitles and
-    from speaker-aware reframe.  Words are the common clock shared by ASR and
-    captions, so each word is assigned to the label with the greatest temporal
-    overlap.  Equal evidence stays with the preceding label, providing stable
-    continuity at a turn boundary instead of an arbitrary label flip.
-
-    The returned source-span index lets the caller preserve one backend turn
-    across ordinary transcript pauses while still splitting when the model
-    actually changed spans.
-    """
-    timeline: list[tuple[float, float, int]] = []
-    for index, word in enumerate(words):
-        try:
-            start = float(getattr(word, "start", 0.0))
-            end = float(getattr(word, "end", start))
-        except (TypeError, ValueError):
-            continue
-        if not (start == start and end == end):
-            continue
-        if end > start:
-            timeline.append((start, end, index))
-    timeline.sort(key=lambda item: (item[0], item[1], item[2]))
-
-    assignments: list[tuple[float, float, str, int]] = []
-    previous_label: str | None = None
-    for word_start, word_end, _word_index in timeline:
-        scores: dict[str, float] = {}
-        source_scores: dict[tuple[str, int], float] = {}
-        source_order: dict[str, int] = {}
-        for label, span_start, span_end, source_index in spans:
-            overlap = max(0.0, min(word_end, span_end) - max(word_start, span_start))
-            if overlap <= 0.0:
-                continue
-            scores[label] = scores.get(label, 0.0) + overlap
-            source_scores[(label, source_index)] = (
-                source_scores.get((label, source_index), 0.0) + overlap
-            )
-            source_order.setdefault(label, source_index)
-        if not scores:
-            continue
-
-        best = max(scores.values())
-        candidates = [label for label, score in scores.items() if abs(score - best) <= 1e-9]
-        if previous_label in candidates:
-            label = previous_label
-        else:
-            label = min(candidates, key=lambda candidate: source_order[candidate])
-        source_index = min(
-            (
-                source_index
-                for candidate, source_index in source_scores
-                if candidate == label
-                and abs(source_scores[(candidate, source_index)] - best) <= 1e-9
-            ),
-            default=source_order[label],
-        )
-        assignments.append((word_start, word_end, label, source_index))
-        previous_label = label
-    return assignments
-
-
-def _turns_from_word_assignments(
-    assignments: list[tuple[float, float, str, int]],
-) -> list[Speaker_Turn]:
-    """Build non-overlapping turns from word assignments.
-
-    Word timings can overlap in crosstalk too.  A ``Speaker_Turn`` is a single
-    canonical timeline, so two neighbouring labels are split at the midpoint
-    of their overlap rather than clipping the later speaker at the earlier
-    speaker's end.  That retains usable time for both labels and keeps every
-    downstream consumer (reframe, gain, and subtitles) on the same timeline.
-    """
-    assembled: list[tuple[Speaker_Turn, int]] = []
-    for start, end, label, source_index in assignments:
-        current_start = start
-        current_end = end
-        if not assembled:
-            assembled.append((Speaker_Turn(label, current_start, current_end), source_index))
-            continue
-
-        previous, previous_source = assembled[-1]
-        if label == previous.speaker_label:
-            if current_start <= previous.end + 1e-6:
-                assembled[-1] = (
-                    Speaker_Turn(label, previous.start, max(previous.end, current_end)),
-                    previous_source,
-                )
-            elif source_index == previous_source:
-                # A single backend span is authoritative over a transcript
-                # pause; keep that pause inside the same model turn.
-                assembled[-1] = (
-                    Speaker_Turn(label, previous.start, current_end),
-                    source_index,
-                )
-            else:
-                assembled.append((Speaker_Turn(label, current_start, current_end), source_index))
-            continue
-
-        if current_start < previous.end:
-            overlap_end = min(previous.end, current_end)
-            cut = current_start + max(0.0, overlap_end - current_start) / 2.0
-            if cut > previous.start:
-                assembled[-1] = (
-                    Speaker_Turn(previous.speaker_label, previous.start, cut),
-                    previous_source,
-                )
-                current_start = cut
-        if current_end > current_start:
-            assembled.append((Speaker_Turn(label, current_start, current_end), source_index))
-
-    return [turn for turn, _source_index in assembled if turn.end > turn.start]
+    return min(boundaries, key=lambda b: abs(b - t))
 
 
 def diarize_source(
@@ -550,22 +384,16 @@ def diarize_source(
             notes.append("diarization_degraded")
         return turns
 
-    parsed = _backend_spans(spans)
-    raw = _turns_from_word_assignments(_word_assignments(words, parsed))
-    if not raw:
-        # A backend may return a useful span when ASR produced no word inside
-        # it (for example, a name Whisper omitted).  Keep the old boundary-
-        # aligned behaviour for that case instead of turning a partial
-        # alignment failure into a missing speaker turn.
-        boundaries = _word_boundaries(words)
-        raw = [
-            Speaker_Turn(
-                label,
-                _snap(start, boundaries, tie="right"),
-                _snap(end, boundaries, tie="left"),
-            )
-            for label, start, end, _index in parsed
-        ]
+    boundaries = _word_boundaries(words)
+    raw: list[Speaker_Turn] = []
+    for span in spans or []:
+        try:
+            label, s, e = span
+            s = float(s)
+            e = float(e)
+        except (TypeError, ValueError):
+            continue
+        raw.append(Speaker_Turn(str(label), _snap(s, boundaries), _snap(e, boundaries)))
 
     turns = _normalize_turns(raw, duration, max_speakers)
     if notes is not None:

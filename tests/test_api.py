@@ -5,14 +5,12 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
 from config import settings
-from publishers.history import get_history
 from worker.jobs import get_manager
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 
@@ -239,98 +237,6 @@ def test_url_job_carries_new_fields_through(client):
     assert job.options.broll is True
     assert job.options.visual_selection is True
     assert job.options.selection_prompt == "find X"
-
-
-def test_new_url_submission_clears_past_project_state_but_reports_protected_active_jobs(client):
-    """A fresh start clears terminal dashboard state without deleting active work or sources."""
-    manager = get_manager()
-    old = Job(
-        input_type="file",
-        source=str(Path(settings.uploads_dir) / "old.mp4"),
-        options=ProcessingOptions(),
-    )
-    old.status = JobStatus.COMPLETED
-    assert manager.store.add(old)
-    source = Path(old.source)
-    source.write_bytes(b"keep")
-
-    clip = SimpleNamespace(
-        id="old-clip",
-        filename="old-clip.mp4",
-        title="old",
-        description="old",
-        hashtags=[],
-        score=0,
-    )
-    history = get_history()
-    history.record_clip(old.id, clip, Path(settings.clips_dir) / old.id / clip.filename)
-    history.create_attempt(
-        job_id=old.id,
-        clip_id=clip.id,
-        platform="youtube",
-        request={},
-        scheduled_at=0,
-        state="published",
-    )
-    clip_dir = Path(settings.clips_dir) / old.id
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    (clip_dir / clip.filename).write_bytes(b"old clip")
-
-    response = client.post(
-        "/api/jobs/url",
-        json={"url": "https://example.com/video", "new_project": True},
-    )
-
-    assert response.status_code == 200
-    cleanup = response.json()["project_cleanup"]
-    assert cleanup["performed"] is True
-    assert old.id in cleanup["removed_job_ids"]
-    assert manager.store.get(old.id) is None
-    assert not clip_dir.exists()
-    assert source.exists()
-    assert history.history()["clips"] == []
-    assert history.history()["publish_attempts"] == []
-
-
-def test_batch_and_upload_submissions_expose_the_fresh_project_cleanup(client, monkeypatch):
-    """The two other submission doors carry the same explicit fresh-start state."""
-    manager = get_manager()
-    calls = []
-
-    def fake_cleanup():
-        calls.append("cleanup")
-        return {"performed": True, "removed_jobs": 0, "sources_protected": True}
-
-    def fake_submit(input_type, source, options, batch_id=None, title=""):
-        job = Job(
-            input_type=input_type,
-            source=source,
-            options=options,
-            batch_id=batch_id,
-            title=title,
-        )
-        assert manager.store.add(job)
-        return job
-
-    monkeypatch.setattr(manager, "start_new_project", fake_cleanup)
-    monkeypatch.setattr(manager, "submit", fake_submit)
-
-    batch = client.post(
-        "/api/jobs/batch",
-        json={"urls": ["https://example.com/a", "https://example.com/b"], "new_project": True},
-    )
-    assert batch.status_code == 200
-    assert batch.json()["project_cleanup"]["performed"] is True
-    assert calls == ["cleanup"]
-
-    upload = client.post(
-        "/api/upload",
-        files={"files": ("source.mp4", b"video", "video/mp4")},
-        data={"new_project": "true"},
-    )
-    assert upload.status_code == 200
-    assert upload.json()["project_cleanup"]["performed"] is True
-    assert calls == ["cleanup", "cleanup"]
 
 
 # ---------------------------------------------------------------------------

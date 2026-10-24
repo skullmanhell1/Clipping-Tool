@@ -7,7 +7,7 @@ the selector instead of opening media files or making a second model request.
 The signals are complementary:
 
 * hook promptness, speech-rate shifts, energy and pitch variation describe delivery;
-* discourse features describe curiosity, emotion, standalone completeness and payoff shape;
+* discourse features describe curiosity, emotion and standalone completeness;
 * optional audience reaction events provide an external corroborating signal; and
 * timestamped energy/pitch/reaction events become bounded zoom and sound cues.
 
@@ -25,42 +25,17 @@ from __future__ import annotations
 
 import json
 import math
-import re
-import unicodedata
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from worker import audio_features, discourse
+from worker import audio_features
 from worker.effects import caption_presets
 
 VALID_MODES = ("off", "balanced", "aggressive")
 _HOOK_WINDOW_S = 3.0
 _MIN_CUT_S = 0.08
 _MAX_CUES = 12
-_TOPIC_WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
-_TOPIC_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "are",
-        "about",
-        "for",
-        "from",
-        "how",
-        "in",
-        "is",
-        "of",
-        "on",
-        "the",
-        "to",
-        "what",
-        "why",
-        "with",
-    }
-)
-_SHORT_TOPIC_TERMS = frozenset({"ai", "ml", "vr", "ux", "qa", "ui", "tv"})
 
 
 @dataclass(frozen=True)
@@ -83,11 +58,10 @@ class RetentionPlan:
     sfx_times: tuple[float, ...] = ()
     pacing_cuts: tuple[tuple[float, float], ...] = ()
     reasons: tuple[str, ...] = ()
-    quality_scores: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a stable JSON-friendly representation for the API and ClipResult."""
-        result = {
+        return {
             "mode": self.mode,
             "hook_score": round(self.hook_score, 3),
             "hook_window_s": round(self.hook_window_s, 3),
@@ -97,11 +71,6 @@ class RetentionPlan:
             "pacing_cuts": [[round(start, 3), round(end, 3)] for start, end in self.pacing_cuts],
             "reasons": list(self.reasons),
         }
-        if self.quality_scores:
-            result["quality_scores"] = {
-                key: round(value, 3) for key, value in self.quality_scores.items()
-            }
-        return result
 
 
 def _finite(value: Any) -> float | None:
@@ -162,50 +131,6 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
-def _topic_terms(value: Any) -> set[str]:
-    def normalise(raw: str) -> str:
-        decomposed = unicodedata.normalize("NFKD", raw.casefold())
-        return "".join(char for char in decomposed if not unicodedata.combining(char))
-
-    terms = (normalise(match) for match in _TOPIC_WORD_RE.findall(str(value or "")))
-    return {
-        token
-        for token in terms
-        if token not in _TOPIC_STOPWORDS
-        and (len(token) > 2 or token in _SHORT_TOPIC_TERMS or not token.isascii())
-    }
-
-
-def topic_relevance(topic: str, text: str) -> float:
-    """Return a conservative lexical topic match, or neutral when unmeasurable.
-
-    This is intentionally not semantic search. It only rewards meaningful words
-    explicitly supplied by the creator appearing in the candidate transcript;
-    empty topics and short/noisy text remain neutral rather than being scored as
-    irrelevant.
-    """
-    requested = _topic_terms(topic)
-    observed = _topic_terms(text)
-    if not requested or not observed:
-        return 0.5
-    matched = set(requested & observed)
-    # Scripts without whitespace, especially CJK, often arrive as one long
-    # transcript token. Treat a requested term as matched when it is contained
-    # in an observed non-ASCII token (or vice versa), while keeping ASCII
-    # matching exact to avoid rewarding accidental substrings.
-    for requested_term in requested - matched:
-        if requested_term.isascii():
-            continue
-        if any(
-            requested_term in observed_term or observed_term in requested_term
-            for observed_term in observed
-            if not observed_term.isascii()
-        ):
-            matched.add(requested_term)
-    overlap = len(matched) / len(requested)
-    return round(_clamp(0.35 + 0.65 * overlap), 4)
-
-
 def _reaction_score(
     reactions: Sequence[ReactionEvent], start: float, end: float
 ) -> tuple[float, float, int]:
@@ -236,7 +161,9 @@ def _energy_events(
     return [round(time - start, 3) for time in local if start <= time < end]
 
 
-def _pitch_events(track: Sequence[tuple[float, float]], start: float, end: float) -> list[float]:
+def _pitch_events(
+    track: Sequence[tuple[float, float]], start: float, end: float
+) -> list[float]:
     """Find expressive pitch jumps without claiming to perform emotion recognition."""
     timeline: list[tuple[float, float]] = []
     for raw_time, raw_hz in track:
@@ -258,7 +185,6 @@ def annotate_candidates(
     reactions: Sequence[ReactionEvent] = (),
     envelope: Sequence[tuple[float, float]] = (),
     pitch_track: Sequence[tuple[float, float]] = (),
-    topic: str = "",
 ) -> None:
     """Attach engagement features and timestamped event evidence in place."""
     for candidate in candidates:
@@ -273,8 +199,6 @@ def annotate_candidates(
         reaction, peak, count = _reaction_score(reactions, start, end)
         energy_events = _energy_events(envelope, start, end)
         pitch_events = _pitch_events(pitch_track, start, end)
-        text = str(getattr(candidate, "text", "") or "")
-        features.update(discourse.describe(text))
         features["reaction_score"] = round(reaction, 4)
         features["reaction_peak"] = round(peak, 3)
         features["reaction_count"] = float(count)
@@ -283,22 +207,7 @@ def annotate_candidates(
         # Event arrays are local to the candidate window. Keep the origin beside
         # them so a later silence trim can map them onto the delivered timeline.
         features["engagement_event_start"] = round(start, 3)
-        features["topic_relevance"] = topic_relevance(topic, text)
         features["engagement_score"] = round(score_features(features), 4)
-        features["quality_scores"] = quality_scores(features)
-
-
-def refresh_text_features(candidates: Iterable[Any], *, topic: str = "") -> None:
-    """Refresh transcript-derived features after a boundary-only edit."""
-    for candidate in candidates:
-        features = getattr(candidate, "features", None)
-        if features is None:
-            continue
-        text = str(getattr(candidate, "text", "") or "")
-        features.update(discourse.describe(text))
-        features["topic_relevance"] = topic_relevance(topic, text)
-        features["engagement_score"] = round(score_features(features), 4)
-        features["quality_scores"] = quality_scores(features)
 
 
 def score_features(features: dict[str, Any] | None) -> float:
@@ -309,8 +218,6 @@ def score_features(features: dict[str, Any] | None) -> float:
     evidence must not be treated as evidence that a moment is boring.
     """
     features = features or {}
-    if not features:
-        return 0.5
     hook = _clamp(_number(features, "hook_score"))
     if "relative_speech_rate" in features and _number(features, "reliable", 0.0) >= 1.0:
         pace = _clamp(abs(_number(features, "relative_speech_rate", 1.0) - 1.0) / 0.6)
@@ -322,60 +229,9 @@ def score_features(features: dict[str, Any] | None) -> float:
     structure = _clamp(_number(features, "structure_score"))
     standalone = _clamp(_number(features, "standalone_score"))
     intensity = _clamp(_number(features, "intensity_score"))
-    payoff = _clamp(_number(features, "payoff_score"))
-    relevance = _clamp(_number(features, "topic_relevance"))
-    values = (
-        hook,
-        pace,
-        energy,
-        pitch,
-        reaction,
-        structure,
-        standalone,
-        intensity,
-        payoff,
-        relevance,
-    )
-    weights = (0.21, 0.105, 0.125, 0.085, 0.125, 0.08, 0.105, 0.075, 0.05, 0.04)
+    values = (hook, pace, energy, pitch, reaction, structure, standalone, intensity)
+    weights = (0.24, 0.12, 0.14, 0.10, 0.14, 0.08, 0.12, 0.06)
     return _clamp(sum(value * weight for value, weight in zip(values, weights)))
-
-
-def quality_scores(features: dict[str, Any] | None) -> dict[str, float]:
-    """Return honest, inspectable quality axes for review cards.
-
-    The four axes mirror the useful dimensions exposed by established clipping
-    editors: flow, impact, clarity and relevance. Relevance remains neutral when
-    no topic-specific signal was measured; the tool must not invent relevance from
-    generic engagement evidence.
-    """
-    features = features or {}
-    hook = _clamp(_number(features, "hook_score"))
-    intensity = _clamp(_number(features, "intensity_score"))
-    energy = _clamp(0.5 + _number(features, "relative_energy_db", 0.0) / 12.0)
-    pitch = _clamp(_number(features, "pitch_variation"))
-    reaction = _clamp(_number(features, "reaction_score"))
-    structure = _clamp(_number(features, "structure_score"))
-    standalone = _clamp(_number(features, "standalone_score"))
-    payoff = _clamp(_number(features, "payoff_score"))
-
-    if _number(features, "reliable", 0.0) >= 1.0:
-        pace_flow = _clamp(1.0 - abs(_number(features, "relative_speech_rate", 1.0) - 1.0) / 0.8)
-    else:
-        pace_flow = 0.5
-    if _number(features, "energy_reliable", 0.0) >= 1.0:
-        quiet_flow = _clamp(1.0 - _number(features, "quiet_fraction", 0.0))
-    else:
-        quiet_flow = 0.5
-
-    return {
-        "flow": round(_clamp(0.55 * pace_flow + 0.25 * quiet_flow + 0.20 * payoff), 4),
-        "impact": round(
-            _clamp(0.32 * hook + 0.24 * intensity + 0.16 * energy + 0.10 * pitch + 0.18 * reaction),
-            4,
-        ),
-        "clarity": round(_clamp(0.35 * structure + 0.35 * standalone + 0.30 * payoff), 4),
-        "relevance": round(_clamp(_number(features, "topic_relevance", 0.5)), 4),
-    }
 
 
 def rerank(candidates: Sequence[Any], mode: str) -> list[Any]:
@@ -386,11 +242,10 @@ def rerank(candidates: Sequence[Any], mode: str) -> list[Any]:
         return items
     blend = 0.25 if resolved == "balanced" else 0.40
     for candidate in items:
-        features = getattr(candidate, "features", {}) or {}
-        if "retention_base_score" not in features:
-            features["retention_base_score"] = float(getattr(candidate, "score", 0.0) or 0.0)
-        base = _clamp(_number(features, "retention_base_score", 0.0) / 100.0)
-        engagement = _clamp(_number(features, "engagement_score"))
+        base = _clamp(_number(getattr(candidate, "features", {}) or {}, "base_score", 0.0) / 100.0)
+        if base == 0.0:
+            base = _clamp(float(getattr(candidate, "score", 0.0) or 0.0) / 100.0)
+        engagement = _clamp(_number(getattr(candidate, "features", {}) or {}, "engagement_score"))
         candidate.score = round(100.0 * ((1.0 - blend) * base + blend * engagement), 1)
         if getattr(candidate, "features", None) is not None:
             candidate.features["retention_rank_score"] = candidate.score
@@ -428,9 +283,7 @@ def _event_times(features: dict[str, Any], key: str, duration: float) -> list[fl
     return out
 
 
-def _unique_times(
-    values: Iterable[float], duration: float, min_gap: float = 0.28
-) -> tuple[float, ...]:
+def _unique_times(values: Iterable[float], duration: float, min_gap: float = 0.28) -> tuple[float, ...]:
     ordered = sorted(
         {round(float(value), 3) for value in values if 0.0 <= float(value) < max(0.0, duration)}
     )
@@ -524,7 +377,6 @@ def plan_edit(
 
     data = dict(features or {})
     hook_score = _clamp(_number(data, "hook_score", 0.5))
-    scores = quality_scores(data)
     hook_window = min(duration, _HOOK_WINDOW_S)
     local_reactions = _reaction_times_in_window(reactions, source_start, duration)
     event_origin = _number(data, "engagement_event_start", source_start)
@@ -560,7 +412,7 @@ def plan_edit(
     try:
         keyword_indices = tuple(
             int(index)
-            for index in caption_presets.plan_keywords(list(words), use_ai=False)
+            for index in caption_presets.plan_keywords(words, use_ai=False)
             if 0 <= int(index) < len(words)
         )
     except (AttributeError, TypeError, ValueError):
@@ -578,8 +430,6 @@ def plan_edit(
         reasons.append("audience_reactions")
     if cuts:
         reasons.append("dead_air_pacing")
-    if scores["clarity"] >= 0.75 and scores["flow"] >= 0.65:
-        reasons.append("clear_payoff")
 
     # Sound effects are deliberately more restrained than zooms. Balanced mode
     # gets visual accents only; aggressive mode gets at most four low-level pops.
@@ -597,11 +447,12 @@ def plan_edit(
         sfx_times=sfx_times[:4],
         pacing_cuts=cuts if resolved == "aggressive" else (),
         reasons=tuple(dict.fromkeys(reasons)),
-        quality_scores=scores,
     )
 
 
-def reaction_note(start: float, end: float, reactions: Sequence[ReactionEvent]) -> str:
+def reaction_note(
+    start: float, end: float, reactions: Sequence[ReactionEvent]
+) -> str:
     """Prompt-safe qualitative annotation for a transcript segment."""
     score, peak, count = _reaction_score(reactions, start, end)
     if count == 0:

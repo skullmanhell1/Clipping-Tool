@@ -193,9 +193,7 @@ retention plan containing:
 - bounded zoom accents at energy, pitch or reaction events;
 - deterministic caption emphasis indices;
 - optional pacing cuts over long dead-air gaps; and
-- up to four low-level emphasis sound effects in Aggressive mode;
-- review-card quality axes for **Flow**, **Impact**, **Clarity** and creator-topic
-  **Relevance**, plus an ending/payoff check to avoid clips that trail off.
+- up to four low-level emphasis sound effects in Aggressive mode.
 
 Reaction input is optional JSON such as
 `[{"time":42.5,"count":18},{"time":43.1,"count":7}]`, where timestamps
@@ -471,11 +469,6 @@ rebuilds:
 ```bash
 git pull && docker compose up --build
 ```
-
-Campaign preset parsing, storytelling plans, compliance checks, and the exactly-two-public-clips
-daily scheduler are documented in [`docs/CAMPAIGN_AUTOMATION.md`](docs/CAMPAIGN_AUTOMATION.md).
-After updating, keep `.env` and `storage/` intact, rebuild the image, and confirm that each
-platform reports direct-public approval before using the campaign scheduler.
 
 The app checks GitHub for newer releases and shows an **"update available"**
 banner in the UI (and on the **Settings** tab) when your `VERSION` is behind the

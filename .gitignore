@@ -50,10 +50,6 @@ storage/.cache/
 # Runtime state written by the app (user-tunable config + saved profiles)
 storage/runtime_config.json
 storage/profiles.json
-# Campaign/brand configuration and archived media are per-install user data.
-storage/brand_profiles.json
-storage/archive/*
-storage/campaign-briefs/*
 !storage/**/.gitkeep
 
 # `Settings.ensure_local_dirs()` proves a directory is writable by creating a file and removing

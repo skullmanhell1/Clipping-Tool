@@ -39,32 +39,8 @@ def test_drive_file_url_parser_only_accepts_direct_files():
         )
         == "1OnH2B5N-TaGyHqPdmT0uxdCeA-38FXry"
     )
-    assert (
-        google_drive.extract_file_id("https://docs.google.com/document/d/abcde12345/edit")
-        == "abcde12345"
-    )
-    assert (
-        google_drive.extract_file_id("https://docs.google.com/document/u/0/d/abcde12345/edit")
-        == "abcde12345"
-    )
     assert google_drive.extract_file_id("https://drive.google.com/drive/folders/abcd") is None
     assert google_drive.extract_file_id("https://example.com/file/d/abcd") is None
-    assert google_drive.extract_file_id("javascript://drive.google.com/file/d/abcde12345") is None
-    assert (
-        google_drive.extract_file_id("https://user:pass@drive.google.com/file/d/abcde12345") is None
-    )
-
-
-def test_drive_api_url_keeps_the_id_in_one_validated_path_segment():
-    file_id = "1OnH2B5N-TaGyHqPdmT0uxdCeA-38FXry"
-    assert google_drive._file_resource_url(file_id) == f"{google_drive.FILES_URL}/{file_id}"
-    assert (
-        google_drive._file_resource_url(file_id, export=True)
-        == f"{google_drive.FILES_URL}/{file_id}/export"
-    )
-    for invalid in ("https://attacker.test", "abc/../../attacker", "abc?x=1"):
-        with pytest.raises(google_drive.GoogleDriveError):
-            google_drive._file_resource_url(invalid)
 
 
 def test_drive_refresh_configuration_is_reported_without_returning_credentials(monkeypatch):

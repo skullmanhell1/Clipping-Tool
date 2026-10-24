@@ -79,20 +79,9 @@ Each rendered `ClipResult` exposes a JSON-safe `retention_plan`:
   "zoom_beats": [0.35, 1.22, 8.4],
   "sfx_times": [],
   "pacing_cuts": [],
-  "quality_scores": {
-    "flow": 0.78,
-    "impact": 0.86,
-    "clarity": 0.81,
-    "relevance": 0.5
-  },
   "reasons": ["front_loaded_hook", "energy_accents", "audience_reactions"]
 }
 ```
-
-The quality axes are review aids rather than promises of performance. `flow`,
-`impact` and `clarity` are measured from the transcript and media signals;
-`relevance` uses only the creator's topic/keyword field and stays neutral at
-`0.5` when that signal is unavailable.
 
 The indices refer to the clip's original word list, not caption text. This is
 important when the same word is spoken twice or ASR contains blank words. The
@@ -101,9 +90,6 @@ ASS captions, so a missing ASR word cannot move emphasis to a different word.
 
 The plan is recalculated after destructive timeline edits. That means exposed
 cue times describe the file the viewer receives, not the pre-trim candidate.
-The measured source signals are also persisted as `engagement_features` so a
-single-clip rerender or interrupted-job resume can rebuild retention cues
-without making a new selection request.
 
 ## Prompt instructions used by the selector
 
@@ -121,11 +107,6 @@ Metadata generation uses the same safety rules. The generated `hook_text` is a
 short transcript-faithful opening for the first three seconds, and the
 deterministic fallback uses the first transcript words rather than generic
 clickbait.
-
-The free-form selection prompt is rendered as a creator preference in the
-selection request whether visual keyframe selection is enabled or not. It is
-kept separate from the creator's topic/keyword field so prompt language does
-not inflate the measured Relevance axis.
 
 ## Technical workflow
 
@@ -149,7 +130,7 @@ build retention plan on the delivered timeline
 one compositor pass:
   captions + emphasis → zoom accents → b-roll → music → SFX → loudness
     ↓
-persist ClipResult, retention_plan, engagement_features, quality axes and provenance markers
+persist ClipResult, retention_plan and provenance markers
 ```
 
 The planner is pure Python and does not invoke ffmpeg, open sockets, use a

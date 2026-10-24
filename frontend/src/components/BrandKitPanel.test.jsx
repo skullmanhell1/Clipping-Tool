@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -97,57 +97,5 @@ describe("BrandKitPanel", () => {
     setup({ brand_logo: "./logo.png", brand_logo_scale: 0.2, brand_logo_opacity: 0.5 });
     expect(screen.getByText(/20% of width/i)).toBeInTheDocument();
     expect(screen.getByText(/50%/)).toBeInTheDocument();
-  });
-
-  it("offers background handling only when a logo is set", () => {
-    const { onChange, rerender } = setup();
-    const disabledSelect = screen.getByRole("combobox", { name: /logo background/i });
-    expect(disabledSelect).toBeDisabled();
-    expect([...disabledSelect.options].map((option) => option.value)).toEqual([
-      "auto",
-      "white",
-      "black",
-      "none",
-    ]);
-
-    rerender(
-      <BrandKitPanel
-        settings={{ brand_logo: "./logo.png" }}
-        onChange={onChange}
-        fonts={[{ name: "Anton" }, { name: "Bangers" }]}
-      />,
-    );
-    expect(screen.getByRole("combobox", { name: /logo background/i })).toBeEnabled();
-  });
-
-  it("sends a logo background choice without changing the other fields", async () => {
-    const { onChange } = setup({ brand_logo: "./logo.png" });
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /logo background/i }),
-      "white",
-    );
-    expect(onChange).toHaveBeenCalledWith({
-      brand_logo: "./logo.png",
-      brand_logo_background: "white",
-    });
-  });
-
-  it("sends optional intro and outro asset paths", () => {
-    const settings = { brand_logo: "./logo.png" };
-    const { onChange } = setup(settings);
-    fireEvent.change(screen.getByLabelText(/intro bumper/i), {
-      target: { value: "/app/assets/brand/intro.mp4" },
-    });
-    expect(onChange).toHaveBeenLastCalledWith({
-      ...settings,
-      brand_intro_asset: "/app/assets/brand/intro.mp4",
-    });
-    fireEvent.change(screen.getByLabelText(/outro bumper/i), {
-      target: { value: "/app/assets/brand/outro.mp4" },
-    });
-    expect(onChange).toHaveBeenLastCalledWith({
-      ...settings,
-      brand_outro_asset: "/app/assets/brand/outro.mp4",
-    });
   });
 });

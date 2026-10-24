@@ -267,22 +267,6 @@ class Job_Persistence:
         except Exception:  # pragma: no cover - defensive
             logger.exception("failed to delete job %s", job_id)
 
-    def delete_many(self, job_ids: list[str]) -> int:
-        """Remove several job records atomically, returning the deleted row count."""
-        if not job_ids:
-            return 0
-        try:
-            placeholders = ",".join("?" for _ in job_ids)
-            with self._lock, self._connect() as db:
-                cursor = db.execute(
-                    f"DELETE FROM jobs WHERE id IN ({placeholders})",  # noqa: S608 - placeholders are generated from job_ids
-                    tuple(job_ids),
-                )
-                return int(cursor.rowcount or 0)
-        except Exception:  # pragma: no cover - defensive
-            logger.exception("failed to delete project jobs")
-            return 0
-
     # -- reads -------------------------------------------------------------
 
     def load_all(self) -> list[Job]:

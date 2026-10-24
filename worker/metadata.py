@@ -229,63 +229,6 @@ MAX_MENTIONS = 5
 #: TikTok 24, YouTube 30), so this rejects nonsense without second-guessing a real limit.
 _MAX_HANDLE_LENGTH = 30
 
-_FALLBACK_HASHTAG_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "about",
-        "after",
-        "again",
-        "are",
-        "as",
-        "at",
-        "be",
-        "because",
-        "before",
-        "being",
-        "by",
-        "can",
-        "do",
-        "could",
-        "for",
-        "from",
-        "has",
-        "have",
-        "how",
-        "i",
-        "if",
-        "in",
-        "is",
-        "it",
-        "into",
-        "just",
-        "more",
-        "of",
-        "on",
-        "or",
-        "that",
-        "their",
-        "there",
-        "these",
-        "they",
-        "this",
-        "through",
-        "to",
-        "was",
-        "we",
-        "what",
-        "when",
-        "where",
-        "who",
-        "which",
-        "with",
-        "will",
-        "would",
-        "you",
-    }
-)
-
 
 def _norm_mentions(mentions: Any) -> list[str]:
     """Normalise, validate, de-duplicate and cap suggested @handles.
@@ -416,13 +359,7 @@ def generate_metadata(
     profile = get_profile(platform)
 
     if client is None and not llm_available():
-        return _fallback_metadata(
-            transcript_text,
-            profile,
-            "no_llm_configured",
-            topic=options.topic,
-            hashtag_count=hashtag_count,
-        )
+        return _fallback_metadata(transcript_text, profile, "no_llm_configured")
 
     # Construction is inside the `try`, not before it. `get_llm_client()` raises for a missing
     # SDK, an unimportable one, a malformed base URL and absent credentials — and with it outside,
@@ -440,13 +377,7 @@ def generate_metadata(
             raise LLMError("expected a JSON object from the model")
     except LLMError as exc:
         logger.warning("metadata generation fell back to a template: %s", exc)
-        return _fallback_metadata(
-            transcript_text,
-            profile,
-            _reason_code(exc),
-            topic=options.topic,
-            hashtag_count=hashtag_count,
-        )
+        return _fallback_metadata(transcript_text, profile, _reason_code(exc))
 
     return _parse_metadata(data, options, profile, hashtag_count)
 
@@ -467,12 +398,7 @@ def _reason_code(exc: Exception) -> str:
 
 
 def _fallback_metadata(
-    transcript_text: str,
-    profile: PlatformProfile,
-    reason: str = "no_llm_configured",
-    *,
-    topic: str = "",
-    hashtag_count: int = 0,
+    transcript_text: str, profile: PlatformProfile, reason: str = "no_llm_configured"
 ) -> ClipMetadata:
     """Deterministic metadata when no LLM is available.
 
@@ -485,21 +411,11 @@ def _fallback_metadata(
     # title when no provider is configured.  Keep it short and transcript-faithful;
     # the first phrase is safer than invented clickbait.
     hook = _clamp_text(" ".join(words[:6]), 40)
-    candidates = []
-    for source, value in (("topic", topic), ("transcript", transcript_text)):
-        for raw in str(value or "").split():
-            hashtag = _norm_hashtag(raw)
-            bare = hashtag[1:].lower() if hashtag else ""
-            acronym = raw.lstrip("#").isupper() and 2 <= len(raw.lstrip("#")) <= 4
-            minimum = 2 if source == "topic" or acronym else 3
-            if len(bare) < minimum or bare in _FALLBACK_HASHTAG_STOPWORDS:
-                continue
-            candidates.append(hashtag)
     return ClipMetadata(
         title=title,
         description=_clamp_text(transcript_text, profile.desc_max),
         hook_text=hook,
-        hashtags=_clamp_hashtags(candidates, hashtag_count, profile.hashtag_max),
+        hashtags=[],
         platform=profile.name,
         fallback_reason=reason,
     )

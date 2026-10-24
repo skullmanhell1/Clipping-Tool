@@ -1,9 +1,9 @@
 """In-process job store and background job manager.
 
-Phase 1 runs jobs in a background thread pool with one worker by default, so a
-batch of videos/links is processed **in line** (sequentially), matching the
-product requirement. The pool and its pending queue are bounded, while
-progress is tracked live in an in-memory, thread-safe store that the API polls.
+Phase 1 runs jobs in a background thread pool with a single worker, so a batch
+of videos/links is processed **in line** (sequentially), matching the product
+requirement. Progress is tracked live in an in-memory, thread-safe store that
+the API polls.
 
 This is the "in-process fallback" referenced by the config. A Redis + RQ backend
 can be swapped in later behind the same :class:`JobManager` interface without
@@ -25,7 +25,6 @@ from worker import cancellation, observability
 from worker import download as dl
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
-from worker.project_cleanup import _ACTIVE_STATUSES, PROJECT_CLEANUP_LOCK, cleanup_for_new_project
 
 logger = logging.getLogger(__name__)
 
@@ -48,37 +47,6 @@ JOB_STAGES: tuple[str, ...] = (
     "Writing copy",
     "Completed",
 )
-
-# A job is deliberately kept in-process for this deployment.  The executor gives us bounded
-# workers, while this separate capacity guard bounds the executor's otherwise-unbounded pending
-# work queue.  A finite queue is important here: accepting an unlimited number of video sources
-# would let a burst of submissions consume memory long before the UI could report useful progress.
-DEFAULT_QUEUE_SIZE = 100
-QUEUE_FULL_ERROR = "The local job queue is full; try again when a worker is available."
-SCHEDULE_ERROR_PREFIX = "The job could not be scheduled: "
-
-_ALLOWED_STATUS_TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
-    JobStatus.QUEUED: frozenset(
-        {
-            JobStatus.QUEUED,
-            JobStatus.PROCESSING,
-            JobStatus.COMPLETED,
-            JobStatus.FAILED,
-            JobStatus.CANCELLED,
-        }
-    ),
-    JobStatus.PROCESSING: frozenset(
-        {JobStatus.PROCESSING, JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
-    ),
-    # Resume is the only supported path out of a terminal failure/cancellation, and it always
-    # passes through queued first.  Keeping this rule here prevents a stale worker from reviving a
-    # failed job directly as processing.
-    JobStatus.FAILED: frozenset({JobStatus.QUEUED}),
-    JobStatus.CANCELLED: frozenset({JobStatus.QUEUED}),
-    # A terminal state is immutable.  User clip edits do not pass a status field and therefore
-    # remain allowed; a late worker completion/failure cannot overwrite the terminal result.
-    JobStatus.COMPLETED: frozenset(),
-}
 
 
 def _stage_label(stage: str) -> str:
@@ -173,32 +141,18 @@ class JobStore:
         if self._persistence is None or job is None:
             return
         try:
-            # Cleanup and persistence share this lock. Re-check membership after
-            # taking it: a mutation captured just before a reset must not
-            # resurrect its row after the reset deletes it.
-            with PROJECT_CLEANUP_LOCK:
-                with self._lock:
-                    if self._jobs.get(job.id) is not job:
-                        return
-                self._persistence.save(job, payload=payload)
+            self._persistence.save(job, payload=payload)
         except Exception:
             logger.exception("failed to persist job %s", getattr(job, "id", "?"))
 
-    def add(self, job: Job) -> bool:
-        """Add a job once, returning ``False`` rather than replacing a duplicate id."""
+    def add(self, job: Job) -> None:
         with self._lock:
-            if job.id in self._jobs:
-                # A short id collision must not replace a live job in memory or on disk.  The
-                # manager retries allocation; direct callers get an explicit rejection and can
-                # decide whether to retry or report it.
-                return False
             self._jobs[job.id] = job
             payload = job.to_dict()
         # Written outside the lock: SQLite has its own locking and holding both would
         # serialise every API poll behind a disk write. The *payload* is captured inside it,
         # so what gets written is a state that actually existed.
         self._persist(job, payload)
-        return True
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -252,50 +206,19 @@ class JobStore:
             )
             return [j.to_dict() for j in jobs]
 
-    def update(self, job_id: str, **fields) -> bool:
-        """Atomically update fields on a stored job.
-
-        Returns ``False`` when the requested status transition is stale or invalid.  Worker
-        callbacks and the cancellation endpoint run on different threads, so a plain assignment
-        allowed a late ``processing`` or ``completed`` write to undo a user's cancellation.  The
-        transition check makes terminal states last-writer-safe without changing the public job
-        representation.
-        """
+    def update(self, job_id: str, **fields) -> None:
+        """Atomically update fields on a stored job."""
         import time
 
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
-                return False
-
-            next_status: JobStatus | None = None
-            if "status" in fields:
-                try:
-                    next_status = (
-                        fields["status"]
-                        if isinstance(fields["status"], JobStatus)
-                        else JobStatus(fields["status"])
-                    )
-                except (TypeError, ValueError):
-                    return False
-                allowed = _ALLOWED_STATUS_TRANSITIONS.get(job.status, frozenset())
-                if next_status != job.status and next_status not in allowed:
-                    return False
-                # Once a job is completed or failed, a second worker must not be able to replace
-                # its result while reusing the same terminal status.  Cancellation is the one
-                # same-status update we allow: the worker's cancellation handler may still need to
-                # attach clips that finished just before the stop request.  Metadata edits
-                # intentionally omit ``status`` and are still accepted below.
-                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
-                    return False
-                fields = {**fields, "status": next_status}
-
+                return
             for key, value in fields.items():
                 setattr(job, key, value)
             job.updated_at = time.time()
             payload = job.to_dict()
         self._persist(job, payload)
-        return True
 
     def update_clip(self, job_id: str, clip_id: str, fields: dict) -> ClipResult | None:
         """Atomically update editable fields on one clip within a job.
@@ -339,204 +262,14 @@ class JobStore:
                 return None
             return next((c for c in job.clips if c.id == clip_id), None)
 
-    def clear_for_new_project(self, *, include_active: bool = False) -> dict[str, Any]:
-        """Remove old jobs, retaining queued/processing jobs unless explicitly requested."""
-        with PROJECT_CLEANUP_LOCK:
-            with self._lock:
-                protected = {
-                    job.id for job in self._jobs.values() if job.status in _ACTIVE_STATUSES
-                }
-                if include_active:
-                    protected.clear()
-                removed_ids = [job_id for job_id in self._jobs if job_id not in protected]
-                for job_id in removed_ids:
-                    del self._jobs[job_id]
-
-            persistence_removed = 0
-            if self._persistence is not None and removed_ids:
-                try:
-                    delete_many = getattr(self._persistence, "delete_many", None)
-                    if delete_many is not None:
-                        persistence_removed = int(delete_many(removed_ids) or 0)
-                    else:  # Compatibility with a small injected persistence fake.
-                        for job_id in removed_ids:
-                            self._persistence.delete(job_id)
-                            persistence_removed += 1
-                except Exception:  # pragma: no cover - defensive
-                    logger.exception("failed to clear previous project jobs")
-
-            return {
-                "removed_job_ids": removed_ids,
-                "protected_job_ids": sorted(protected),
-                "persistence_removed": persistence_removed,
-            }
-
 
 class JobManager:
-    """Owns the bounded worker pool and drives jobs through the pipeline.
+    """Owns the worker pool and drives jobs through the pipeline."""
 
-    ``ThreadPoolExecutor`` already keeps API requests off the render path, but its internal work
-    queue is unbounded.  ``max_queue_size`` adds a non-blocking capacity guard around it: callers
-    never wait for a slot, and a burst beyond capacity becomes a durable failed job that the UI can
-    display instead of a request timeout or an indefinitely spinning queued row.
-
-    The default remains one worker, preserving the original in-order behaviour for heavy ingest and
-    render work.  Deployments/tests may opt into a small number of workers explicitly; the semaphore
-    bounds both running and pending jobs in that case.
-    """
-
-    def __init__(
-        self,
-        store: JobStore | None = None,
-        max_workers: int = 1,
-        max_queue_size: int = DEFAULT_QUEUE_SIZE,
-    ) -> None:
+    def __init__(self, store: JobStore | None = None, max_workers: int = 1) -> None:
         self.store = store or JobStore()
-        if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
-            raise ValueError("max_workers must be a positive integer")
-        if max_queue_size is None:
-            max_queue_size = DEFAULT_QUEUE_SIZE
-        if (
-            isinstance(max_queue_size, bool)
-            or not isinstance(max_queue_size, int)
-            or max_queue_size < 0
-        ):
-            raise ValueError("max_queue_size must be a non-negative integer")
-
-        self.max_workers = max_workers
-        self.max_queue_size = max_queue_size
-        # The capacity includes running jobs.  ``acquire(False)`` below is what keeps submission
-        # non-blocking when all workers and queue slots are occupied.
-        self._capacity = threading.BoundedSemaphore(max_workers + max_queue_size)
-        self._schedule_lock = threading.Lock()
-        self._scheduled: set[str] = set()
-        # A single worker => batch items processed one after another, in order.  A caller that opts
-        # into >1 workers still gets a bounded executor with FIFO submission into its work queue.
-        self._executor = ThreadPoolExecutor(
-            max_workers=max_workers,
-            thread_name_prefix="clipper-job",
-        )
-
-    @property
-    def pending_count(self) -> int:
-        """Number of jobs currently reserved in the in-process queue or workers."""
-        with self._schedule_lock:
-            return len(self._scheduled)
-
-    def shutdown(self, *, wait: bool = True, cancel_futures: bool = False) -> None:
-        """Stop accepting work and release executor resources.
-
-        The API singleton lives for the process lifetime, but this small lifecycle seam is useful
-        for embedders and keeps offline queue tests from leaking worker threads.  It intentionally
-        mirrors :meth:`ThreadPoolExecutor.shutdown`; no public API route depends on it.
-        """
-        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
-
-    def start_new_project(self, *, include_active: bool = False) -> dict[str, Any]:
-        """Clear prior project state before a fresh submission.
-
-        Active jobs are protected by default because their workers may still be
-        writing files. ``include_active`` is reserved for an explicit operator
-        action that accepts clearing those jobs as well.
-        """
-        from publishers.history import get_history
-
-        return cleanup_for_new_project(
-            self.store,
-            get_history(),
-            include_active=include_active,
-        )
-
-    def _reserve_slot(self, job_id: str) -> bool:
-        """Reserve one bounded queue slot, rejecting duplicate scheduling attempts."""
-        with self._schedule_lock:
-            if job_id in self._scheduled:
-                return False
-            if not self._capacity.acquire(blocking=False):
-                return False
-            self._scheduled.add(job_id)
-            return True
-
-    def _release_slot(self, job_id: str) -> None:
-        """Release a reservation exactly once, including after executor submission errors."""
-        with self._schedule_lock:
-            if job_id not in self._scheduled:
-                return
-            self._scheduled.remove(job_id)
-            self._capacity.release()
-
-    def _mark_worker_error(self, job_id: str, exc: BaseException) -> None:
-        """Persist an unexpected worker failure without replacing a terminal state."""
-        self.store.update(
-            job_id,
-            status=JobStatus.FAILED,
-            error=str(exc) or type(exc).__name__,
-            stage="Failed",
-        )
-
-    def _worker_entry(self, job_id: str, resume: bool = False) -> None:
-        """Executor wrapper that contains failures and always frees queue capacity."""
-        try:
-            # Keep the original one-argument call shape for normal jobs.  Besides being a small
-            # compatibility courtesy for embedders that replace ``_run``, this makes the resume
-            # flag visible only on the path that needs it.
-            if resume:
-                self._run(job_id, True)
-            else:
-                self._run(job_id)
-        except BaseException as exc:
-            # ``_run``/``_execute`` already handle normal pipeline errors.  This outer guard is
-            # for failures in the worker harness itself (including an injected test worker): a
-            # Future exception must not leave the job queued forever or consume a slot forever.
-            # Release capacity before persisting FAILED so observers never see a terminal job
-            # while the queue still appears full.
-            cancellation.clear(job_id)
-            self._release_slot(job_id)
-            self._mark_worker_error(job_id, exc)
-            logger.exception("unexpected worker error for job %s", job_id)
-        finally:
-            cancellation.clear(job_id)
-            self._release_slot(job_id)
-
-    def _schedule(
-        self,
-        job_id: str,
-        *,
-        resume: bool = False,
-        prepare: Any = None,
-    ) -> bool:
-        """Submit one job without waiting for a worker or queue slot.
-
-        ``prepare`` is used by resume to perform its queued transition only after this job has
-        claimed a unique queue reservation.  This closes the double-resume race without changing
-        the API's boolean return contract.
-        """
-        job = self.store.get(job_id)
-        if job is None:
-            return False
-        if prepare is None and job.status is not JobStatus.QUEUED:
-            # A completed/failed/cancelled job is not a fresh submission.  In particular, do not
-            # let a duplicate callback re-run a completed job after its first reservation is
-            # released.
-            return False
-        if not self._reserve_slot(job_id):
-            return False
-
-        submitted = False
-        try:
-            if prepare is not None and not prepare():
-                return False
-            self._executor.submit(self._worker_entry, job_id, resume)
-            submitted = True
-            return True
-        except BaseException as exc:
-            # Executor shutdown and executor/test-double failures must become a visible terminal
-            # job state rather than an unobserved Future exception.
-            self._mark_worker_error(job_id, RuntimeError(f"{SCHEDULE_ERROR_PREFIX}{exc}"))
-            return False
-        finally:
-            if not submitted:
-                self._release_slot(job_id)
+        # A single worker => batch items processed one after another, in order.
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
     # -- submission --------------------------------------------------------
 
@@ -549,34 +282,19 @@ class JobManager:
         title: str = "",
     ) -> Job:
         """Create a job, store it as queued, and schedule it for processing."""
-        for _ in range(8):
-            job = Job(
-                input_type=input_type,
-                source=source,
-                options=options,
-                batch_id=batch_id,
-                title=title or (Path(source).name if input_type == "file" else source),
-            )
-            if self.store.add(job):
-                break
-        else:
-            raise RuntimeError("could not allocate a unique job id")
+        job = Job(
+            input_type=input_type,
+            source=source,
+            options=options,
+            batch_id=batch_id,
+            title=title or (Path(source).name if input_type == "file" else source),
+        )
+        self.store.add(job)
         # I4: clear any stale request under this id before the work is scheduled. Ids are short
         # hex and a collision is unlikely rather than impossible, and inheriting a previous
         # job's cancellation would stop a brand-new job before it started.
         cancellation.clear(job.id)
-        if not self._schedule(job.id):
-            # A full queue is a normal, actionable outcome rather than an exception.  Returning a
-            # failed job preserves the existing submission response shape and lets the frontend
-            # surface the reason through the normal status polling path.
-            current = self.store.get(job.id)
-            if current is not None and current.status is JobStatus.QUEUED:
-                self.store.update(
-                    job.id,
-                    status=JobStatus.FAILED,
-                    stage="Queue full",
-                    error=QUEUE_FULL_ERROR,
-                )
+        self._executor.submit(self._run, job.id)
         return job
 
     # -- cancellation (I4) -------------------------------------------------
@@ -600,20 +318,14 @@ class JobManager:
             JobStatus.CANCELLED,
         ):
             return False
-        previous_status = job.status
         cancellation.request_cancel(job_id)
-        updated = self.store.update(
+        self.store.update(
             job_id,
             status=JobStatus.CANCELLED,
             stage="Cancelled",
             error=None,
         )
-        if not updated:
-            # The worker won a race and reached a terminal state.  Do not leave a cancellation
-            # event behind for a later id reuse.
-            cancellation.clear(job_id)
-            return False
-        logger.info("job %s cancelled by request (was %s)", job_id, previous_status.value)
+        logger.info("job %s cancelled by request (was %s)", job_id, job.status.value)
         return True
 
     def submit_batch(self, items: list[dict], options: ProcessingOptions) -> str:
@@ -673,7 +385,7 @@ class JobManager:
             if current is None or current[0] != label:
                 close_stage()
                 open_stage[0] = (label, time.monotonic())
-            updated = self.store.update(
+            self.store.update(
                 job_id,
                 progress=fraction,
                 stage=stage,
@@ -683,11 +395,6 @@ class JobManager:
                 stage_total=len(JOB_STAGES),
                 stage_timings=metrics.to_list(),
             )
-            if not updated:
-                # A cancellation (or another terminal worker) won the race between the
-                # checkpoint above and this write.  Stop before the pipeline can perform more
-                # expensive work or publish a result for a job that is no longer processing.
-                raise cancellation.Job_Cancelled(job_id)
 
         with observability.job_context(job_id):
             self._execute(job, job_id, progress, close_stage, metrics, resume)
@@ -733,9 +440,6 @@ class JobManager:
                         end=end,
                         reason=str(window.get("reason") or ""),
                         score=float(window.get("score") or 0.0),
-                        features=dict(window.get("features") or {}),
-                        cuts=list(window.get("cuts") or []),
-                        fallback_reason=str(window.get("fallback_reason") or ""),
                     )
                 )
         return missing or None
@@ -758,19 +462,16 @@ class JobManager:
         if self._missing_windows(job) is None:
             return False
 
-        def prepare() -> bool:
-            transitioned = self.store.update(
-                job_id,
-                status=JobStatus.QUEUED,
-                stage="Queued (resuming)",
-                error=None,
-                progress=0.0,
-            )
-            if transitioned:
-                cancellation.clear(job_id)
-            return transitioned
-
-        return self._schedule(job_id, resume=True, prepare=prepare)
+        cancellation.clear(job_id)
+        self.store.update(
+            job_id,
+            status=JobStatus.QUEUED,
+            stage="Queued (resuming)",
+            error=None,
+            progress=0.0,
+        )
+        self._executor.submit(self._run, job_id, True)
+        return True
 
     def _execute(self, job, job_id, progress, close_stage, metrics, resume: bool = False) -> None:
         """The job body. Split out so ``_run`` is only the context and callback wiring."""
@@ -782,7 +483,7 @@ class JobManager:
             # I4: a queued job stops here, before any work begins - no worker has claimed it, so
             # there is nothing to wait for.
             cancellation.checkpoint(job_id)
-            started = self.store.update(
+            self.store.update(
                 job_id,
                 status=JobStatus.PROCESSING,
                 stage="Starting",
@@ -790,8 +491,6 @@ class JobManager:
                 stage_index=1,
                 stage_total=len(JOB_STAGES),
             )
-            if not started:
-                raise cancellation.Job_Cancelled(job_id)
 
             source_path = Path(job.source)
             start_progress = 0.0
@@ -871,9 +570,6 @@ class JobManager:
                             "end": float(getattr(c, "end", 0.0)),
                             "reason": str(getattr(c, "reason", "")),
                             "score": float(getattr(c, "score", 0.0)),
-                            "features": dict(getattr(c, "features", {}) or {}),
-                            "cuts": list(getattr(c, "cuts", []) or []),
-                            "fallback_reason": str(getattr(c, "fallback_reason", "") or ""),
                         }
                         for c in candidates
                     ],
@@ -923,7 +619,7 @@ class JobManager:
             # a job the user stopped could be reported as COMPLETED, and the UI flipped from
             # "Cancelled" back to "Completed". Two writers for one terminal field is the defect;
             # this makes the worker the only one that gets the last word.
-            completed = self.store.update(
+            self.store.update(
                 job_id,
                 clips=clips,
                 status=JobStatus.COMPLETED,
@@ -933,10 +629,6 @@ class JobManager:
                 stage_total=len(JOB_STAGES),
                 stage_timings=metrics.to_list(),
             )
-            if not completed:
-                # Cancellation/another worker already owns the terminal state.  In particular,
-                # never enter auto-publishing after a completion write was rejected.
-                return
             # M5: one line naming where the minutes went. Logged at completion rather than
             # sampled, because the only comparison worth making is between whole renders.
             logger.info("render timings - %s", metrics.summary())
@@ -1070,10 +762,5 @@ def get_manager() -> JobManager:
     global _manager
     with _manager_lock:
         if _manager is None:
-            # Keep the safe one-worker/100-pending defaults, while allowing a deployment to size
-            # the in-process pool and its bounded admission window for the available hardware.
-            _manager = JobManager(
-                max_workers=settings.job_max_workers,
-                max_queue_size=settings.job_queue_size,
-            )
+            _manager = JobManager()
         return _manager

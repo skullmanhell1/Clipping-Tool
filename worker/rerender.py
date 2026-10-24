@@ -63,9 +63,6 @@ PRESERVED_FIELDS: tuple[str, ...] = (
     "reason",
     "review_state",
     "review_note",
-    "needs_rerender",
-    "brief_revision",
-    "brief_content_hash",
 )
 
 
@@ -147,24 +144,10 @@ def rerender_clip(
     staging = clips_dir / f".rerender_{uuid.uuid4().hex[:8]}"
     staging.mkdir(parents=True, exist_ok=True)
 
-    retention_plan = dict(getattr(clip, "retention_plan", {}) or {})
-    features = dict(getattr(clip, "engagement_features", {}) or {})
-    if not features and retention_plan:
-        # Older persisted clips predate engagement_features. Preserve the
-        # strongest durable evidence they do have instead of rerendering with
-        # a completely neutral retention input.
-        features = {
-            "hook_score": retention_plan.get("hook_score", 0.5),
-            "engagement_score": float(getattr(clip, "engagement_score", 0.0) or 0.0) / 100.0,
-            "engagement_event_start": float(clip.start),
-        }
-
     window = ClipCandidate(
         start=float(clip.start),
         end=float(clip.end),
         reason=clip.reason,
-        score=clip.score,
-        features=features,
         cuts=list(cuts or []),
     )
     try:

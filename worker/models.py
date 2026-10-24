@@ -102,11 +102,6 @@ class ProcessingOptions:
     campaign_id: str = ""
     publish_mode: str = "review"  # auto | review
     schedule_at: float | None = None  # UTC epoch; None = now
-    # Campaign automation is opt-in.  A resolved Google-Doc preset is kept with the job so
-    # rerenders and publish preflight use the same policy even if the source document changes.
-    campaign_preset: dict = field(default_factory=dict)
-    storytelling_enabled: bool = False
-    public_visibility: str = "public"
 
     # --- Phase 4: visual effects (all individually toggleable) -----------
     #
@@ -271,8 +266,7 @@ class ProcessingOptions:
     # clip by the LLM so it varied run to run, and a logo could not be applied at all.
     #
     # All empty by default, and each is additive - an unset field leaves the preset's own value
-    # alone rather than overwriting it with a default. Bumper assets are materialized and appended
-    # after the main clip has been composited.
+    # alone rather than overwriting it with a default.
     brand_font: str = ""  # caption font, overriding the preset's
     brand_primary_color: str = ""  # "#RRGGBB"; converted to ASS internally
     brand_highlight_color: str = ""  # "#RRGGBB"
@@ -281,11 +275,6 @@ class ProcessingOptions:
     brand_logo_position: str = "top_right"  # top_left|top_right|bottom_left|bottom_right
     brand_logo_scale: float = 0.16  # fraction of frame width
     brand_logo_opacity: float = 0.85  # 0..1
-    brand_logo_background: str = "auto"  # auto | white | black | none
-    brand_intro_asset: str = ""
-    brand_outro_asset: str = ""
-    brand_profile_id: str = ""
-    brief_id: str = ""
 
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
@@ -387,7 +376,6 @@ class ProcessingOptions:
             "broll",
             "visual_selection",
             "permissibility_mode",
-            "storytelling_enabled",
             # v0.8.0 boolean flags
             "diarization",
             "speaker_reframe",
@@ -765,15 +753,6 @@ class ClipResult:
     # The dict is intentionally additive so older persisted ClipResult records
     # continue to load with an empty plan.
     retention_plan: dict = field(default_factory=dict)
-    # Raw measured selection signals are retained so an explicit rerender can
-    # rebuild the same retention cues without re-running model selection.
-    engagement_features: dict = field(default_factory=dict)
-    # Optional campaign automation outputs. Empty values preserve the legacy record shape while
-    # giving a resolved preset, storytelling recommendations, and mechanical compliance report a
-    # durable home for review and publish preflight.
-    storytelling_plan: dict = field(default_factory=dict)
-    campaign_preset: dict = field(default_factory=dict)
-    compliance_report: dict = field(default_factory=dict)
 
     # --- Phase 4: which visual effects were applied to this clip ----------
     # ``effects_applied`` holds free-form string markers describing which
@@ -866,11 +845,6 @@ class ClipResult:
     # about to produce - reads as unreviewed rather than silently approved.
     review_state: str = "pending"  # pending | approved | rejected
     review_note: str = ""
-    # Optional campaign-brief sync state. Empty/False preserves the pre-brief representation and
-    # means this clip has no pending brief-driven work.
-    needs_rerender: bool = False
-    brief_revision: str = ""
-    brief_content_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -909,8 +883,7 @@ class Job:
     # known only inside the job body and thrown away, which is why re-rendering one clip
     # previously meant re-downloading and re-running the whole job.
     source_path: str = ""
-    # I5: the windows selection chose, with retention evidence and edit metadata
-    # when available, as ``{"start", "end", "reason", "score", ...}`` dicts.
+    # I5: the windows selection chose, as ``{"start", "end", "reason", "score"}`` dicts.
     #
     # Recorded so an interrupted job can be resumed rather than restarted. Without it a resume
     # would have to re-run selection, which with an LLM in it is not deterministic - so the
