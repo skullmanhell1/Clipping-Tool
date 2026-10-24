@@ -758,7 +758,13 @@ export default function App() {
                 <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Plan your next posts</h2>
                 <p className="mt-2 max-w-2xl text-sm text-slate-400">See what is queued, find a good time, and adjust your publishing calendar in one place.</p>
               </div>
-              <ScheduleCalendar onError={setError} />
+              <ScheduleCalendar
+                onError={setError}
+                jobs={visibleJobs}
+                campaigns={campaigns}
+                publisherStatuses={publisherStatuses}
+                outputProfiles={outputProfiles}
+              />
             </section>
           )}
 

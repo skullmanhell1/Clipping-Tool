@@ -19,6 +19,7 @@ Watch folder
 Clips
     * ``GET  /clips/...``             -> static preview (mounted)
     * ``GET  /api/clips/{job}/{name}/download`` -> download with attachment
+    * ``GET  /api/jobs/{job}/download`` -> download selected clips as one archive
 
 System
     * ``GET /healthz``, ``GET /api/info``
@@ -1491,6 +1492,55 @@ def get_job(job_id: str) -> dict:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return snapshot
+
+
+@app.get("/api/jobs/{job_id}/download", tags=["clips"], dependencies=[Depends(rate_limit)])
+def download_job_bundle(job_id: str, clip_ids: str = "") -> StreamingResponse:
+    """Download selected clips from one job as a single streamed archive.
+
+    The UI deliberately sends explicit clip ids rather than making an empty request mean
+    "everything". A bulk export is an expensive, user-visible action, and a missing selection
+    should be a clear error rather than a surprise download of a whole project.
+    """
+    job = get_manager().store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    requested_ids = list(dict.fromkeys(item.strip() for item in clip_ids.split(",") if item.strip()))
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="Select at least one clip to download")
+
+    clips_by_id = {clip.id: clip for clip in job.clips}
+    missing = [clip_id for clip_id in requested_ids if clip_id not in clips_by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail="One or more selected clips were not found")
+
+    entries: list[tuple[Path, str, str]] = []
+    used_names: set[str] = set()
+    for clip_id in requested_ids:
+        clip = clips_by_id[clip_id]
+        path, safe_name = _resolve_clip_file(job_id, clip.filename)
+        base = Path(safe_name).stem
+        suffix = Path(safe_name).suffix
+        candidate = safe_name
+        serial = 2
+        while candidate in used_names or f"{Path(candidate).stem}_metadata.txt" in used_names:
+            candidate = f"{base}_{serial}{suffix}"
+            serial += 1
+        used_names.add(candidate)
+        used_names.add(f"{Path(candidate).stem}_metadata.txt")
+        entries.append((path, candidate, _clip_metadata_text(clip)))
+
+    archive_stem = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in (job.title or f"job_{job_id}")
+    ).strip("._")[:80] or f"job_{job_id}"
+    chunk_size = max(1, int(settings.upload_chunk_bytes))
+    return StreamingResponse(
+        _iter_clip_bundle(entries, chunk_size),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{archive_stem}_clips.zip"'},
+    )
 
 
 @app.post("/api/jobs/{job_id}/more", tags=["jobs"], dependencies=[Depends(rate_limit)])
@@ -3038,6 +3088,31 @@ def _iter_clip_package(path: Path, safe_name: str, metadata: str, chunk_size: in
                 if chunk := sink.drain():
                     yield chunk
     # The central directory is written by ZipFile.close, i.e. on leaving the `with`.
+    if chunk := sink.drain():
+        yield chunk
+
+
+def _iter_clip_bundle(entries: list[tuple[Path, str, str]], chunk_size: int):
+    """Yield several clip packages in one streamed ZIP archive.
+
+    Video members stay stored because MP4 is already compressed; the small metadata members are
+    deflated. The generator keeps the same bounded-memory behaviour as the single-clip route.
+    """
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w") as archive:
+        for path, safe_name, metadata in entries:
+            archive.writestr(
+                f"{Path(safe_name).stem}_metadata.txt", metadata, zipfile.ZIP_DEFLATED
+            )
+            if chunk := sink.drain():
+                yield chunk
+            info = zipfile.ZipInfo.from_file(path, arcname=safe_name)
+            info.compress_type = zipfile.ZIP_STORED
+            with archive.open(info, "w") as entry, path.open("rb") as source:
+                while block := source.read(chunk_size):
+                    entry.write(block)
+                    if chunk := sink.drain():
+                        yield chunk
     if chunk := sink.drain():
         yield chunk
 

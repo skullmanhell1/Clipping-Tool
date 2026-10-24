@@ -142,6 +142,10 @@ work is opt-in and adds render time).
   platform to the right account/target.
 - **Throttling + scheduling** — post now or pick a time; a background scheduler
   respects a minimum per-platform interval so you don't hit rate limits.
+- **Multi-platform direct scheduler** — the Schedule workspace can push one completed clip now or
+  queue it for TikTok, YouTube Shorts, and Instagram Reels together. Saved campaign routes are
+  reused, Shorts stays distinct from ordinary YouTube, and the picker surfaces each destination's
+  output size and duration ceiling before the request is queued.
 - **Download bundle** — the plain download is a **ZIP** with the video **plus a
   `.txt`** of that clip's title, caption, and hashtags (a video-only link is
   also available).

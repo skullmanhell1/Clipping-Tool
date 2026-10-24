@@ -86,6 +86,30 @@ describe("ReviewBar", () => {
     expect(screen.getByText("Batch review failed.")).toBeInTheDocument();
   });
 
+  it("offers selected and approved exports only when their URLs exist", () => {
+    setup({ selectedDownloadUrl: "/selected.zip", approvedDownloadUrl: "/approved.zip" });
+    expect(screen.getByRole("link", { name: "Download selected" })).toHaveAttribute(
+      "href",
+      "/selected.zip",
+    );
+    expect(screen.getByRole("link", { name: "Download approved" })).toHaveAttribute(
+      "href",
+      "/approved.zip",
+    );
+  });
+
+  it("disables exports when there is nothing to package", () => {
+    setup();
+    expect(screen.getByRole("link", { name: "Download selected" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("link", { name: "Download approved" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
   it("documents the keyboard shortcuts, since they are otherwise undiscoverable", () => {
     const { container } = setup();
     const keys = [...container.querySelectorAll("kbd")].map((node) => node.textContent);

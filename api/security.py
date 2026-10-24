@@ -51,12 +51,13 @@ _CLIPS_MOUNT_PREFIX = "/clips/"
 #: Paths where the secret may travel in the query string.
 #:
 #: The category is precise, and it is not "whatever is convenient": **read-only media retrieval
-#: that a browser reaches by navigation rather than by `fetch`.** Three places qualify, and all
-#: three are GET requests that return bytes and change nothing:
+#: that a browser reaches by navigation rather than by `fetch`.** Four places qualify, and all
+#: four are GET requests that return bytes and change nothing:
 #:
 #:   /clips/...                          <video src> and poster in ClipCard.jsx
 #:   /api/clips/{job}/{file}/video       an <a href> download link
 #:   /api/clips/{job}/{file}/download    an <a href> download link (zip + metadata)
+#:   /api/jobs/{job}/download             the selected-clips bundle link
 #:
 #: A browser cannot attach a header to any of those, so without this, enabling auth would break
 #: playback and downloads in the UI that ships with the app — and the symptom would look like
@@ -65,7 +66,9 @@ _CLIPS_MOUNT_PREFIX = "/clips/"
 #: Everything else is header-only, which is the part that matters: no token ever appears in the
 #: URL of a request that mutates state, so none reaches an access log, browser history or a
 #: `Referer` header for anything that writes.
-_QUERY_TOKEN_PATHS = re.compile(r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download|video)$)")
+_QUERY_TOKEN_PATHS = re.compile(
+    r"^(?:/clips/|/api/clips/[^/]+/[^/]+/(?:download|video)$|/api/jobs/[^/]+/download$)"
+)
 
 #: How a caller supplies the secret.
 _BEARER = "bearer "
@@ -100,9 +103,9 @@ def extract_token(request: Request) -> str | None:
     if direct:
         return direct
     if request.method in ("GET", "HEAD") and _QUERY_TOKEN_PATHS.match(request.url.path):
-        # Method-checked as well as path-checked. The two /api/clips routes are GET-only today,
-        # so this changes nothing now - but if a POST were ever added under one of those paths it
-        # would otherwise inherit the query-token allowance silently.
+        # Method-checked as well as path-checked. The media and selected-bundle routes are GET-only
+        # today, so this changes nothing now - but if a POST were ever added under one of those
+        # paths it would otherwise inherit the query-token allowance silently.
         return request.query_params.get("token")
     return None
 

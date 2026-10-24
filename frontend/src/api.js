@@ -107,6 +107,13 @@ export const api = {
 
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => apiFetch(`/api/jobs/${id}`).then(jsonOrThrow),
+  jobDownloadUrl: (jobId, clipIds = []) => {
+    const ids = Array.isArray(clipIds) ? clipIds.filter(Boolean) : [];
+    if (!ids.length) return "";
+    return withToken(
+      `/api/jobs/${jobId}/download?clip_ids=${encodeURIComponent(ids.join(","))}`,
+    );
+  },
   generateMore: (jobId, options = {}) =>
     apiFetch(`/api/jobs/${jobId}/more`, {
       method: "POST",

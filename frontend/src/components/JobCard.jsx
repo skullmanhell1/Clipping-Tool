@@ -120,6 +120,15 @@ export default function JobCard({
     return tally;
   }, [clips]);
 
+  const selectedClipIds = useMemo(
+    () => clips.filter((clip) => selectedClips.has(clip.id)).map((clip) => clip.id),
+    [clips, selectedClips],
+  );
+  const approvedClipIds = useMemo(
+    () => clips.filter((clip) => clip.review_state === "approved").map((clip) => clip.id),
+    [clips],
+  );
+
   // U11: keyboard shortcuts for review.
   //
   // Reviewing twenty clips is twenty rounds of aim-and-click at small controls. These are the
@@ -385,6 +394,8 @@ export default function JobCard({
               onApprove={() => applyBatch("approved")}
               onReject={() => applyBatch("rejected")}
               onReset={() => applyBatch("pending")}
+              selectedDownloadUrl={api.jobDownloadUrl(job.id, selectedClipIds)}
+              approvedDownloadUrl={api.jobDownloadUrl(job.id, approvedClipIds)}
             />
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {clips.map((clip, index) => (

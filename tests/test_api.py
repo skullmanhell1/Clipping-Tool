@@ -103,6 +103,26 @@ def test_video_only_download(client, seeded_job):
     assert resp.content == b"FAKEVIDEODATA"
 
 
+def test_selected_job_clips_download_as_one_zip(client, seeded_job):
+    job, clip = seeded_job
+
+    resp = client.get(f"/api/jobs/{job.id}/download?clip_ids={clip.id}")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert {"clipA.mp4", "clipA_metadata.txt"}.issubset(archive.namelist())
+
+
+def test_job_bundle_requires_an_explicit_selection(client, seeded_job):
+    job, _clip = seeded_job
+
+    resp = client.get(f"/api/jobs/{job.id}/download")
+
+    assert resp.status_code == 400
+    assert "select at least one clip" in resp.json()["detail"].lower()
+
+
 def test_generate_more_reuses_source_avoids_existing_windows_and_forces_review(
     client, tmp_path, monkeypatch
 ):
