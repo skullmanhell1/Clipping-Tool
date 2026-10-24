@@ -35,6 +35,7 @@ import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker import captions as cap
+from worker import output_profiles
 from worker.boxabl_campaign import (
     PROFILE_NAME as BOXABL_PROFILE_NAME,
 )
@@ -262,6 +264,7 @@ class OptionsModel(BaseModel):
     translate: bool = False
     clip_length: str = "auto"
     aspect: str = "9:16"
+    output_platform: str = ""
     num_clips: str = "auto"
     strategy: str = "ai"
     captions: bool = True
@@ -682,6 +685,16 @@ class BatchRequest(BaseModel):
     new_project: bool = True
 
 
+class GenerateMoreRequest(BaseModel):
+    """Ask the selector for fresh moments from an already-ingested source."""
+
+    selection_prompt: str = ""
+    num_clips: str = "3"
+    clip_length: str | None = None
+    topic: str | None = None
+    vibe: str | None = None
+
+
 class PreviewRequest(BaseModel):
     url: str
 
@@ -708,6 +721,10 @@ def info() -> dict[str, object]:
         "environment": settings.environment,
         "version": app.version,
         "aspect_ratios": ["9:16", "1:1", "16:9", "4:5"],
+        # O7: encode targets are advertised separately from metadata platforms. Selecting TikTok
+        # metadata must not silently reshape a YouTube-landscape render, and the UI needs the
+        # resolved dimensions/limits before it submits a job.
+        "output_profiles": output_profiles.available_profiles(),
         "clip_lengths": ["auto", "<30s", "30-60s", "60-90s", "90s-3min"],
         "clip_counts": ["auto", "1", "3", "5", "10", "max"],
         "platforms": list(PLATFORM_PROFILES.keys()),
@@ -1157,6 +1174,7 @@ async def upload(
     translate: bool = Form(False),
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
+    output_platform: str = Form(""),
     num_clips: str = Form("auto"),
     strategy: str = Form("ai"),
     captions: bool = Form(True),
@@ -1346,6 +1364,7 @@ async def upload(
             "translate": translate,
             "clip_length": clip_length,
             "aspect": aspect,
+            "output_platform": output_platform,
             "num_clips": num_clips,
             "strategy": strategy,
             "captions": captions,
@@ -1472,6 +1491,80 @@ def get_job(job_id: str) -> dict:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return snapshot
+
+
+@app.post("/api/jobs/{job_id}/more", tags=["jobs"], dependencies=[Depends(rate_limit)])
+def generate_more_clips(job_id: str, req: GenerateMoreRequest) -> dict:
+    """Start a fresh selection pass against a completed source (prompted clip discovery).
+
+    This is intentionally a new job rather than an in-place mutation. The original clips remain
+    reviewable, the new run gets its own progress and failure state, and publish settings are forced
+    back to review mode so asking for more moments can never duplicate an auto-publish campaign.
+    """
+    manager = get_manager()
+    parent = manager.store.get(job_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if parent.status.value in ("queued", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current render to finish before asking for more clips.",
+        )
+
+    source = Path(parent.source_path or (parent.source if parent.input_type == "file" else ""))
+    if not source.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail="The original source file is no longer available; upload it again to find more clips.",
+        )
+
+    avoid_windows = [
+        {"start": float(clip.start), "end": float(clip.end)}
+        for clip in (parent.clips or [])
+        if float(clip.end) > float(clip.start)
+    ]
+    creator_prompt = str(req.selection_prompt or "").strip()
+    if not creator_prompt:
+        creator_prompt = "Find fresh, self-contained moments from a different angle than the clips already delivered."
+    ranges = ", ".join(
+        f"{window['start']:.1f}-{window['end']:.1f}s" for window in avoid_windows
+    )
+    if ranges:
+        creator_prompt = (
+            f"{creator_prompt}\nDo not select moments overlapping these already delivered source ranges: {ranges}."
+        )
+
+    option_data = asdict(parent.options)
+    option_data.update(
+        {
+            "selection_prompt": creator_prompt,
+            "num_clips": req.num_clips or parent.options.num_clips,
+            "publish_to": [],
+            "publish_mode": "review",
+            "schedule_at": None,
+        }
+    )
+    if req.clip_length:
+        option_data["clip_length"] = req.clip_length
+    if req.topic is not None and req.topic.strip():
+        option_data["topic"] = req.topic.strip()
+    if req.vibe is not None and req.vibe.strip():
+        option_data["vibe"] = req.vibe.strip()
+    options = ProcessingOptions.from_dict(option_data)
+
+    job = manager.submit(
+        "file",
+        str(source),
+        options,
+        title=f"More clips · {parent.title or source.name}",
+        avoid_windows=avoid_windows,
+    )
+    snapshot = manager.store.snapshot(job.id) or job.to_dict()
+    return {
+        "job": snapshot,
+        "parent_job_id": job_id,
+        "avoided_windows": avoid_windows,
+    }
 
 
 @app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])

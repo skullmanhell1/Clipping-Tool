@@ -80,6 +80,10 @@ class ProcessingOptions:
     vocabulary: str = ""
     clip_length: str = "auto"  # auto | <30s | 30-60s | 60-90s | 90s-3min
     aspect: str = "9:16"  # 9:16 | 1:1 | 16:9 | 4:5
+    # O7: optional per-job encoder target. Empty preserves the environment-level output profile
+    # (and the historical behaviour); when set, the render path applies it through a ContextVar so
+    # concurrent jobs cannot change one another's resolution or bitrate.
+    output_platform: str = ""  # "" | tiktok | instagram | youtube_shorts | youtube | x | whop
     num_clips: str = "auto"  # auto | 1 | 3 | 5 | 10 | max
     strategy: str = "ai"  # ai | silence | fixed
     captions: bool = True  # burn captions
@@ -320,6 +324,7 @@ class ProcessingOptions:
     # for a tuple of two strings would drag the reframe module (and its config import) into
     # every one of them. A test pins the two lists against each other.
     _FACE_DETECTORS = ("haar", "mediapipe")
+    _OUTPUT_PLATFORMS = ("", "tiktok", "instagram", "youtube_shorts", "youtube", "x", "whop")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> ProcessingOptions:
@@ -369,6 +374,11 @@ class ProcessingOptions:
                 valid["hashtag_count"] = max(0, min(30, int(valid["hashtag_count"])))
             except (TypeError, ValueError):
                 valid["hashtag_count"] = 5
+        if "output_platform" in valid:
+            value = str(valid["output_platform"] or "").strip().lower()
+            valid["output_platform"] = (
+                value if value in cls._OUTPUT_PLATFORMS else ""
+            )
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in (
             "reframe",
@@ -917,6 +927,10 @@ class Job:
     # clips already on disk might not correspond to any window the second run chose, and the
     # user would get a mix of two different selections.
     planned_clips: list[dict] = field(default_factory=list)
+    # Prompted "find more" runs keep the already-delivered windows here so selection can avoid
+    # returning the same moments. It is job metadata rather than a ProcessingOptions field because
+    # it is about the relationship between this run and its parent, not a renderer preference.
+    avoid_windows: list[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
@@ -947,6 +961,7 @@ class Job:
             "source_path": self.source_path,
             # I5: the selected windows, so an interrupted job can resume the missing ones.
             "planned_clips": self.planned_clips,
+            "avoid_windows": self.avoid_windows,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
@@ -984,6 +999,7 @@ class Job:
             options=ProcessingOptions.from_dict(data.get("options")),
             source_path=str(data.get("source_path") or ""),
             planned_clips=list(data.get("planned_clips") or []),
+            avoid_windows=list(data.get("avoid_windows") or []),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,

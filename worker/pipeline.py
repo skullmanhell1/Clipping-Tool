@@ -206,6 +206,44 @@ def run_pipeline(
     start_progress: float = 0.0,
     llm_client: BaseLLMClient | None = None,
     explicit_candidates: list | None = None,
+    avoid_windows: list[dict] | None = None,
+    on_plan: Callable[[list], None] | None = None,
+) -> list[ClipResult]:
+    """Run one pipeline under the job's isolated output-profile context."""
+    from contextlib import nullcontext
+
+    from worker import output_profiles
+
+    profile_scope = (
+        output_profiles.use_profile(options.output_platform)
+        if options.output_platform
+        else nullcontext()
+    )
+    with profile_scope:
+        return _run_pipeline(
+            source,
+            options,
+            clips_dir,
+            temp_dir,
+            progress_cb=progress_cb,
+            start_progress=start_progress,
+            llm_client=llm_client,
+            explicit_candidates=explicit_candidates,
+            avoid_windows=avoid_windows,
+            on_plan=on_plan,
+        )
+
+
+def _run_pipeline(
+    source: str | Path,
+    options: ProcessingOptions,
+    clips_dir: str | Path,
+    temp_dir: str | Path,
+    progress_cb: ProgressCallback | None = None,
+    start_progress: float = 0.0,
+    llm_client: BaseLLMClient | None = None,
+    explicit_candidates: list | None = None,
+    avoid_windows: list[dict] | None = None,
     on_plan: Callable[[list], None] | None = None,
 ) -> list[ClipResult]:
     """Run the full pipeline on ``source`` and return the produced clips.
@@ -221,6 +259,8 @@ def run_pipeline(
             ``None`` the configured client is used (if any).
         explicit_candidates: Windows to render, skipping selection entirely (U7).
             ``None`` - the default and every pre-U7 caller - selects as before.
+        avoid_windows: Previously delivered source-relative windows to avoid when selecting fresh
+            moments. Used by the prompted "find more" flow; explicit rerenders ignore it.
 
     Returns:
         A list of :class:`ClipResult` ordered by virality score (best first).
@@ -452,6 +492,14 @@ def run_pipeline(
         candidate.text = sel.text_between(ranged.segments, candidate.start, candidate.end)
         bounded.append(candidate)
     candidates = bounded
+
+    # Prompted "find more" runs should not spend another render returning the same moment. The
+    # selector still sees the avoidance instruction (so an LLM can choose a genuinely different
+    # topic), while this deterministic final guard protects the result when the fallback path or a
+    # model ignores the request. Explicit rerenders must keep their one requested window even if
+    # the parent job carries avoidance metadata.
+    if not explicit_candidates and avoid_windows:
+        candidates = sel.filter_avoided_candidates(candidates, avoid_windows)
 
     # I5: publish the plan before any rendering starts. A job interrupted halfway can then be
     # resumed against the windows it actually chose, instead of re-running a selection that -

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 const fmt=t=>t?new Date(t*1000).toLocaleString():"—";
-const colors={published:"text-emerald-400",private:"text-blue-400",draft:"text-blue-400",failed:"text-rose-400",review_required:"text-amber-400",scheduled:"text-violet-400",queued:"text-slate-300",uploading:"text-cyan-400"};
+const colors={published:"text-emerald-400",private:"text-blue-400",draft:"text-blue-400",failed:"text-rose-400",review_required:"text-amber-400",unknown:"text-orange-300",scheduled:"text-violet-400",queued:"text-slate-300",uploading:"text-cyan-400"};
 
 // PB2: which actions an attempt in a given state can take.
 //
@@ -15,15 +15,17 @@ const colors={published:"text-emerald-400",private:"text-blue-400",draft:"text-b
 // it exactly as submitted, for transient trouble like an expired token or a missing file. A
 // single button would have to guess which the user meant, and guessing wrong publishes
 // something that was deliberately held back.
-const CAN_APPROVE = new Set(["review_required"]);
+const CAN_APPROVE = new Set(["review_required", "unknown"]);
 const CAN_RETRY = new Set(["review_required", "failed"]);
+const CAN_CANCEL = new Set(["unknown"]);
 
 function AttemptActions({ attempt, onDone }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const approvable = CAN_APPROVE.has(attempt.state);
   const retryable = CAN_RETRY.has(attempt.state);
-  if (!approvable && !retryable) return <span className="text-slate-600">—</span>;
+  const cancellable = CAN_CANCEL.has(attempt.state);
+  if (!approvable && !retryable && !cancellable) return <span className="text-slate-600">—</span>;
 
   const run = (action, call) => {
     setBusy(action);
@@ -61,6 +63,17 @@ function AttemptActions({ attempt, onDone }) {
             {busy === "retry" ? "Retrying…" : "Retry"}
           </button>
         )}
+        {cancellable && (
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => run("cancel", api.cancelPublishAttempt)}
+            title="Close this uncertain attempt after checking whether the platform already received it"
+            className="rounded border border-orange-700 px-2 py-1 text-xs text-orange-300 hover:bg-orange-950 disabled:opacity-50"
+          >
+            {busy === "cancel" ? "Cancelling…" : "Cancel"}
+          </button>
+        )}
       </div>
       {error && <span className="text-xs text-rose-400">{error}</span>}
     </div>
@@ -78,6 +91,7 @@ export default function HistoryView(){
  const load=useCallback(()=>api.history(filter).then(setData).catch(()=>{}),[filter]);
  useEffect(()=>{load();const i=setInterval(load,3000);return()=>clearInterval(i)},[load]);
 
- return <section className="space-y-6"><div className="flex items-center justify-between"><h2 className="text-xl font-semibold">History</h2><select value={filter} onChange={e=>setFilter(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm"><option value="">All platforms</option>{["whop","youtube","tiktok","instagram","x"].map(p=><option key={p}>{p}</option>)}</select></div>
- <div className="overflow-x-auto rounded-xl border border-slate-800"><table className="w-full text-left text-sm"><thead className="bg-slate-900 text-slate-400"><tr><th className="p-3">Time</th><th>Platform</th><th>Campaign / Account</th><th>Status</th><th>Message</th><th>Link</th><th>Actions</th></tr></thead><tbody>{data.publish_attempts.map(a=><tr key={a.id} className="border-t border-slate-800"><td className="p-3 text-slate-500">{fmt(a.created_at)}</td><td className="capitalize">{a.platform}</td><td>{a.campaign_id||"—"}<div className="text-xs text-slate-500">{a.account_id}</div></td><td className={colors[a.state]||""}>{a.state}</td><td className="max-w-xs text-slate-400">{a.error||a.message||"—"}</td><td>{a.url?<a className="text-brand-accent" href={a.url} target="_blank" rel="noreferrer">Open</a>:"—"}</td><td><AttemptActions attempt={a} onDone={load}/></td></tr>)}{!data.publish_attempts.length&&<tr><td colSpan="7" className="p-8 text-center text-slate-500">No publish attempts yet.</td></tr>}</tbody></table></div>
+  return <section className="space-y-6"><div className="flex items-center justify-between"><h2 className="text-xl font-semibold">History</h2><select value={filter} onChange={e=>setFilter(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm"><option value="">All platforms</option>{["whop","youtube","tiktok","instagram","x"].map(p=><option key={p}>{p}</option>)}</select></div>
+  {data.publish_attempts.some((attempt) => attempt.state === "unknown") && <div className="rounded-xl border border-orange-400/30 bg-orange-400/[0.08] p-3 text-sm text-orange-100"><b>Uncertain uploads need your decision.</b> Check the platform first, then use Approve to intentionally publish or Cancel to close the attempt without retrying it. These attempts are never retried automatically.</div>}
+  <div className="overflow-x-auto rounded-xl border border-slate-800"><table className="w-full text-left text-sm"><thead className="bg-slate-900 text-slate-400"><tr><th className="p-3">Time</th><th>Platform</th><th>Campaign / Account</th><th>Status</th><th>Message</th><th>Link</th><th>Actions</th></tr></thead><tbody>{data.publish_attempts.map(a=><tr key={a.id} className="border-t border-slate-800"><td className="p-3 text-slate-500">{fmt(a.created_at)}</td><td className="capitalize">{a.platform}</td><td>{a.campaign_id||"—"}<div className="text-xs text-slate-500">{a.account_id}</div></td><td className={colors[a.state]||""}>{a.state}</td><td className="max-w-xs text-slate-400">{a.error||a.message||"—"}</td><td>{a.url?<a className="text-brand-accent" href={a.url} target="_blank" rel="noreferrer">Open</a>:"—"}</td><td><AttemptActions attempt={a} onDone={load}/></td></tr>)}{!data.publish_attempts.length&&<tr><td colSpan="7" className="p-8 text-center text-slate-500">No publish attempts yet.</td></tr>}</tbody></table></div>
  <div><h3 className="mb-3 font-medium">Created clips ({data.clips.length})</h3><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data.clips.map(c=><div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3"><b>{c.title||c.filename}</b><div className="text-xs text-slate-500">{fmt(c.created_at)} · score {Math.round(c.score||0)}</div><div className="mt-1 text-xs text-slate-400">{(c.hashtags||[]).join(" ")}</div></div>)}</div></div></section>}

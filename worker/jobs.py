@@ -17,11 +17,12 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from config import settings
-from worker import cancellation, observability
+from worker import cancellation, observability, output_profiles
 from worker import download as dl
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 from worker.pipeline import run_pipeline
@@ -547,6 +548,7 @@ class JobManager:
         options: ProcessingOptions,
         batch_id: str | None = None,
         title: str = "",
+        avoid_windows: list[dict] | None = None,
     ) -> Job:
         """Create a job, store it as queued, and schedule it for processing."""
         for _ in range(8):
@@ -556,6 +558,7 @@ class JobManager:
                 options=options,
                 batch_id=batch_id,
                 title=title or (Path(source).name if input_type == "file" else source),
+                avoid_windows=list(avoid_windows or []),
             )
             if self.store.add(job):
                 break
@@ -879,18 +882,25 @@ class JobManager:
                     ],
                 )
 
-            clips = run_pipeline(
-                source_path,
-                job.options,
-                clips_dir=clips_dir,
-                temp_dir=temp_dir,
-                progress_cb=progress,
-                start_progress=start_progress,
-                explicit_candidates=resume_windows,
-                # Not recorded on a resume: the plan is already stored, and overwriting it with
-                # only the windows being retried would lose the ones already finished.
-                on_plan=None if resume else record_plan,
+            profile_scope = (
+                output_profiles.use_profile(job.options.output_platform)
+                if job.options.output_platform
+                else nullcontext()
             )
+            with profile_scope:
+                clips = run_pipeline(
+                    source_path,
+                    job.options,
+                    clips_dir=clips_dir,
+                    temp_dir=temp_dir,
+                    progress_cb=progress,
+                    start_progress=start_progress,
+                    explicit_candidates=resume_windows,
+                    avoid_windows=job.avoid_windows,
+                    # Not recorded on a resume: the plan is already stored, and overwriting it with
+                    # only the windows being retried would lose the ones already finished.
+                    on_plan=None if resume else record_plan,
+                )
             if resume:
                 clips = existing_clips + clips
 

@@ -35,6 +35,9 @@ What a profile controls, and what it does not:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from config import settings
@@ -133,6 +136,21 @@ _PLATFORM_SHAPES: dict[str, tuple[str, int]] = {
     "whop": ("9:16", 1080),
 }
 
+_PROFILE_LABELS: dict[str, str] = {
+    "tiktok": "TikTok",
+    "instagram": "Instagram Reels",
+    "youtube_shorts": "YouTube Shorts",
+    "youtube": "YouTube landscape",
+    "x": "X",
+    "whop": "Whop",
+}
+
+# The application historically read OUTPUT_PLATFORM from global settings.  A per-job profile
+# must not mutate that global value: concurrent workers and rerenders would otherwise race and
+# encode one job with another job's target.  A ContextVar gives every worker/render call its own
+# override while preserving the environment setting for legacy callers that do not select one.
+_PROFILE_OVERRIDE: ContextVar[str | None] = ContextVar("clipper_output_profile", default=None)
+
 
 def profile_for(platform: str) -> OutputProfile | None:
     """The output profile for ``platform``, or ``None`` when there is no entry.
@@ -156,9 +174,55 @@ def profile_for(platform: str) -> OutputProfile | None:
     )
 
 
+def available_profiles() -> list[dict]:
+    """Return output profiles in the shape the settings UI can render.
+
+    The empty entry is intentional: it preserves the pre-profile behaviour and lets the creator
+    keep choosing an aspect ratio without asking the encoder to target a specific destination.
+    """
+    profiles = [
+        {
+            "name": "",
+            "label": "Use selected aspect",
+            "description": "Keep the chosen aspect ratio and server defaults.",
+            "recommended_aspect": "",
+            "width": None,
+            "height": None,
+            "max_bitrate_kbps": None,
+            "max_duration_s": None,
+        }
+    ]
+    for name in _PLATFORM_SHAPES:
+        profile = profile_for(name)
+        if profile is None:
+            continue
+        data = profile.to_dict()
+        data["label"] = _PROFILE_LABELS.get(name, name.replace("_", " ").title())
+        data["description"] = f"{data['width']}×{data['height']} output"
+        data["recommended_aspect"] = profile.aspect
+        profiles.append(data)
+    return profiles
+
+
+@contextmanager
+def use_profile(platform: str) -> Iterator[None]:
+    """Apply a per-render output profile without mutating global configuration."""
+    token = _PROFILE_OVERRIDE.set(str(platform or "").strip().lower())
+    try:
+        yield
+    finally:
+        _PROFILE_OVERRIDE.reset(token)
+
+
 def active_profile() -> OutputProfile | None:
-    """The profile named by ``settings.output_platform``, or ``None`` when unset."""
-    return profile_for(str(getattr(settings, "output_platform", "") or ""))
+    """The active per-render profile, or the legacy environment profile when unset."""
+    override = _PROFILE_OVERRIDE.get()
+    platform = (
+        override
+        if override is not None
+        else str(getattr(settings, "output_platform", "") or "")
+    )
+    return profile_for(platform)
 
 
 def _is_untouched(field_name: str) -> bool:

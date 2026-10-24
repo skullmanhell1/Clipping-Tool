@@ -49,6 +49,16 @@ const PLATFORMS = [
   { value: "whop", label: "Whop" },
 ];
 
+const OUTPUT_PROFILES = [
+  { value: "", label: "Use selected aspect" },
+  { value: "tiktok", label: "TikTok" },
+  { value: "instagram", label: "Instagram Reels" },
+  { value: "youtube_shorts", label: "YouTube Shorts" },
+  { value: "youtube", label: "YouTube landscape" },
+  { value: "x", label: "X" },
+  { value: "whop", label: "Whop" },
+];
+
 const STRATEGIES = [
   { value: "ai", label: "AI highlights" },
   { value: "silence", label: "Silence-based" },
@@ -329,6 +339,7 @@ export default function SettingsPanel({
   effects,
   engines = [],
   capabilities = null,
+  outputProfiles = [],
 }) {
   // U5: the presets' real values, so the picker can preview them. Falls back to the name-only
   // dropdown when the server does not report them, which keeps an older backend working.
@@ -364,6 +375,19 @@ export default function SettingsPanel({
     effects?.retention_modes,
     RETENTION_MODE_LABELS,
     RETENTION_MODES
+  );
+  const outputProfileOptions =
+    Array.isArray(outputProfiles) && outputProfiles.length > 0
+      ? outputProfiles.map((profile) => ({
+          value: profile.name || "",
+          label:
+            profile.name && profile.width && profile.height
+              ? `${profile.label} (${profile.width}×${profile.height})`
+              : profile.label || "Use selected aspect",
+        }))
+      : OUTPUT_PROFILES;
+  const selectedOutputProfile = outputProfiles.find(
+    (profile) => (profile.name || "") === (settings.output_platform || ""),
   );
   const engineRows = Array.isArray(engines) ? engines : [];
   // Kinetic typography: the option domains ride in /api/info's `capabilities`
@@ -441,7 +465,19 @@ export default function SettingsPanel({
         <Dropdown label="Clip Length" value={settings.clip_length} onChange={set("clip_length")} options={CLIP_LENGTHS} />
         <Dropdown label="Aspect Ratio" value={settings.aspect} onChange={set("aspect")} options={ASPECTS} />
         <Dropdown label="Number of Clips" value={settings.num_clips} onChange={set("num_clips")} options={CLIP_COUNTS} />
+        <Dropdown
+          label="Encoding target"
+          value={settings.output_platform || ""}
+          onChange={set("output_platform")}
+          options={outputProfileOptions}
+        />
       </div>
+      {selectedOutputProfile?.recommended_aspect && (
+        <p className="mt-2 text-xs text-slate-500">
+          {selectedOutputProfile.label} recommends {selectedOutputProfile.recommended_aspect}; your
+          selected aspect remains unchanged unless you change it above.
+        </p>
+      )}
 
       <button
         type="button"

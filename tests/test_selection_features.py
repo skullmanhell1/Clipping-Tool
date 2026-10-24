@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pytest
 
+from worker import selection as sel
 from worker import selection_features as sf
 from worker.models import ProcessingOptions
 from worker.selection import ClipCandidate, select_moments
@@ -263,3 +264,13 @@ def test_features_default_to_empty_and_are_not_shared_between_candidates():
     assert first.features == {} and second.features == {}
     first.features["x"] = 1.0
     assert second.features == {}
+
+
+def test_find_more_filter_keeps_new_moments_and_drops_substantial_overlap():
+    candidates = [
+        ClipCandidate(0.0, 10.0),
+        ClipCandidate(8.0, 20.0),
+        ClipCandidate(30.0, 40.0),
+    ]
+    kept = sel.filter_avoided_candidates(candidates, [{"start": 5.0, "end": 15.0}])
+    assert [(item.start, item.end) for item in kept] == [(30.0, 40.0)]

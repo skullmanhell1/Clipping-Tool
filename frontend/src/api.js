@@ -107,6 +107,12 @@ export const api = {
 
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => apiFetch(`/api/jobs/${id}`).then(jsonOrThrow),
+  generateMore: (jobId, options = {}) =>
+    apiFetch(`/api/jobs/${jobId}/more`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    }).then(jsonOrThrow),
 
   // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
   // which jsonOrThrow surfaces as an error carrying the API's own explanation.

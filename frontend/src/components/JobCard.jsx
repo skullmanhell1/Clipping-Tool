@@ -43,6 +43,7 @@ export default function JobCard({
   publishAttempts,
   onClipUpdated,
   onPublished,
+  onJobsAdded,
   settings,
 }) {
   const [cancelling, setCancelling] = useState(false);
@@ -53,6 +54,10 @@ export default function JobCard({
   const [selectedClips, setSelectedClips] = useState(() => new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState("");
+  const [morePrompt, setMorePrompt] = useState("");
+  const [moreCount, setMoreCount] = useState("3");
+  const [moreBusy, setMoreBusy] = useState(false);
+  const [moreError, setMoreError] = useState("");
   // U11: which clip the keyboard is acting on.
   const [focusIndex, setFocusIndex] = useState(0);
   const playerRef = useRef(null);
@@ -204,6 +209,23 @@ export default function JobCard({
     }
   };
 
+  const generateMore = async () => {
+    setMoreBusy(true);
+    setMoreError("");
+    try {
+      const result = await api.generateMore(job.id, {
+        selection_prompt: morePrompt,
+        num_clips: moreCount,
+      });
+      if (result.job) onJobsAdded?.([result.job]);
+      setMorePrompt("");
+    } catch (error) {
+      setMoreError(error?.message || "Could not start a fresh selection pass.");
+    } finally {
+      setMoreBusy(false);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
       <div className="flex items-start justify-between gap-3">
@@ -291,6 +313,46 @@ export default function JobCard({
 
       {job.status === "completed" && (
         <div className="mt-4">
+          <div className="mb-4 rounded-xl border border-violet-400/20 bg-violet-400/[0.04] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-violet-100">Find more moments</div>
+                <p className="mt-1 text-xs text-slate-400">
+                  Ask for a different angle. Existing clip ranges are excluded automatically, and the
+                  new run stays in review mode.
+                </p>
+              </div>
+              <select
+                aria-label="More clips count"
+                value={moreCount}
+                onChange={(event) => setMoreCount(event.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200"
+              >
+                <option value="1">1 clip</option>
+                <option value="3">3 clips</option>
+                <option value="5">5 clips</option>
+                <option value="10">10 clips</option>
+              </select>
+            </div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                aria-label="More clips prompt"
+                value={morePrompt}
+                onChange={(event) => setMorePrompt(event.target.value)}
+                placeholder="e.g. Find the funniest disagreement or the clearest practical tip"
+                className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-brand-accent"
+              />
+              <button
+                type="button"
+                onClick={generateMore}
+                disabled={moreBusy}
+                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
+              >
+                {moreBusy ? "Finding…" : "Find more"}
+              </button>
+            </div>
+            {moreError && <p className="mt-2 text-xs text-rose-400">{moreError}</p>}
+          </div>
           {job.clips.length === 0 ? (
             // U10: an empty result is not an error, and it has specific likely causes. Saying
             // only "no clips" leaves the user with nothing to change.

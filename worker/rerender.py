@@ -31,11 +31,13 @@ from __future__ import annotations
 import logging
 import shutil
 import uuid
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 from config import settings
+from worker import output_profiles
 from worker.models import ClipResult, Job, ProcessingOptions
 from worker.pipeline import run_pipeline
 from worker.selection import ClipCandidate
@@ -168,14 +170,20 @@ def rerender_clip(
         cuts=list(cuts or []),
     )
     try:
-        produced = run_pipeline(
-            source,
-            options,
-            clips_dir=staging,
-            temp_dir=temp_dir,
-            progress_cb=progress_cb,
-            explicit_candidates=[window],
+        profile_scope = (
+            output_profiles.use_profile(options.output_platform)
+            if options.output_platform
+            else nullcontext()
         )
+        with profile_scope:
+            produced = run_pipeline(
+                source,
+                options,
+                clips_dir=staging,
+                temp_dir=temp_dir,
+                progress_cb=progress_cb,
+                explicit_candidates=[window],
+            )
         if not produced:
             raise RerenderError("The re-render produced no clip.")
         fresh = produced[0]

@@ -209,6 +209,7 @@ def test_preexisting_fields_keep_v060_defaults():
     """Validates: Requirements 22.1 — the v0.6.0 fields whose defaults U1 did not touch."""
     o = ProcessingOptions()
     assert o.aspect == "9:16"
+    assert o.output_platform == ""
     assert o.captions is True
     assert o.caption_template == "karaoke"
     assert o.caption_position == "bottom"
@@ -220,6 +221,11 @@ def test_preexisting_fields_keep_v060_defaults():
     assert o.num_clips == "auto"
     assert o.strategy == "ai"
     assert o.metadata is True
+
+
+def test_output_platform_accepts_known_targets_and_rejects_unknown_values():
+    assert ProcessingOptions.from_dict({"output_platform": "youtube_shorts"}).output_platform == "youtube_shorts"
+    assert ProcessingOptions.from_dict({"output_platform": "NOT_A_PLATFORM"}).output_platform == ""
 
 
 def test_all_off_helper_covers_every_effect():

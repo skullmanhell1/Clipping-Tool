@@ -221,3 +221,29 @@ describe("JobCard keyboard shortcuts (U11)", () => {
     expect(api.reviewClip).not.toHaveBeenCalled();
   });
 });
+
+describe("JobCard prompted clip discovery", () => {
+  it("starts a fresh selection pass with the creator prompt", async () => {
+    const onJobsAdded = vi.fn();
+    vi.spyOn(api, "generateMore").mockResolvedValue({
+      job: { id: "job-more", status: "queued", clips: [] },
+    });
+    setup([clip("a")], { onJobsAdded });
+
+    await userEvent.type(
+      screen.getByLabelText("More clips prompt"),
+      "Find the funniest disagreement",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Find more" }));
+
+    await waitFor(() =>
+      expect(api.generateMore).toHaveBeenCalledWith("job1", {
+        selection_prompt: "Find the funniest disagreement",
+        num_clips: "3",
+      }),
+    );
+    expect(onJobsAdded).toHaveBeenCalledWith([
+      { id: "job-more", status: "queued", clips: [] },
+    ]);
+  });
+});

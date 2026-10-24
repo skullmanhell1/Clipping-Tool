@@ -17,6 +17,7 @@ const ATTEMPT_COLORS = {
   draft: "text-blue-400",
   failed: "text-rose-400",
   review_required: "text-amber-400",
+  unknown: "text-orange-300",
   scheduled: "text-violet-400",
   queued: "text-slate-300",
   uploading: "text-cyan-400",

@@ -284,6 +284,16 @@ def test_builtin_profiles_are_discoverable_over_the_api():
         info = client.get("/api/info")
         assert info.status_code == 200
         assert info.json()["builtin_profiles"] == list(BUILTIN_PROFILES)
+        output_profiles = info.json()["output_profiles"]
+        assert output_profiles[0]["name"] == ""
+        assert {entry["name"] for entry in output_profiles[1:]} == {
+            "tiktok",
+            "instagram",
+            "youtube_shorts",
+            "youtube",
+            "x",
+            "whop",
+        }
 
 
 def test_the_builtin_endpoint_is_distinct_from_user_saved_profiles():

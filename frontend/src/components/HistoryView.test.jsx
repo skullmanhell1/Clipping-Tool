@@ -67,6 +67,16 @@ describe("publish attempt actions", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
+  it("offers approve and cancel, but never retry, for an uncertain upload", async () => {
+    mockHistory([attempt({ state: "unknown", message: "Upload outcome uncertain" })]);
+    render(<HistoryView />);
+
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByText(/uncertain uploads need your decision/i)).toBeInTheDocument();
+  });
+
   it("offers neither for an attempt that already published", async () => {
     // Re-posting a published clip creates a duplicate on someone's real account.
     mockHistory([attempt({ state: "published", url: "https://example.test/p/1" })]);
@@ -110,6 +120,16 @@ describe("publish attempt actions", () => {
 
     await waitFor(() => expect(retry).toHaveBeenCalledWith("att-1"));
     expect(approve).not.toHaveBeenCalled();
+  });
+
+  it("cancelling an uncertain upload calls the cancel endpoint", async () => {
+    mockHistory([attempt({ state: "unknown" })]);
+    const cancel = vi.spyOn(api, "cancelPublishAttempt").mockResolvedValue({ state: "failed" });
+
+    render(<HistoryView />);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("att-1"));
   });
 
   it("reloads from the server after acting", async () => {

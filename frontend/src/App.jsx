@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS = {
   language: "auto",
   clip_length: "auto",
   aspect: "9:16",
+  output_platform: "",
   num_clips: "auto",
   strategy: "ai",
   captions: true,
@@ -165,6 +166,7 @@ function toOptions(settings, publishing) {
     translate,
     clip_length: settings.clip_length,
     aspect: settings.aspect,
+    output_platform: settings.output_platform,
     num_clips: settings.num_clips,
     strategy: settings.strategy,
     captions: settings.captions,
@@ -245,7 +247,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "S",
     color: "text-red-300 bg-red-400/10",
-    values: { aspect: "9:16", platform: "youtube" },
+    values: { aspect: "9:16", platform: "youtube", output_platform: "youtube_shorts" },
   },
   {
     id: "tiktok",
@@ -253,7 +255,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "♪",
     color: "text-cyan-200 bg-cyan-400/10",
-    values: { aspect: "9:16", platform: "tiktok" },
+    values: { aspect: "9:16", platform: "tiktok", output_platform: "tiktok" },
   },
   {
     id: "reels",
@@ -261,7 +263,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "◎",
     color: "text-pink-200 bg-pink-400/10",
-    values: { aspect: "9:16", platform: "instagram" },
+    values: { aspect: "9:16", platform: "instagram", output_platform: "instagram" },
   },
   {
     id: "wide",
@@ -269,7 +271,7 @@ const FORMAT_PRESETS = [
     detail: "Widescreen · 16:9",
     glyph: "▰",
     color: "text-violet-200 bg-violet-400/10",
-    values: { aspect: "16:9", platform: "youtube" },
+    values: { aspect: "16:9", platform: "youtube", output_platform: "youtube" },
   },
 ];
 
@@ -322,6 +324,7 @@ export default function App() {
   const [llmAvailable, setLlmAvailable] = useState(false);
   const [version, setVersion] = useState("");
   const [effects, setEffects] = useState(null);
+  const [outputProfiles, setOutputProfiles] = useState([]);
   const [engines, setEngines] = useState([]);
   // /api/info's `capabilities` block: probe results keyed by `<kind>:<name>`
   // plus engine-specific option domains keyed by Engine_Id (e.g.
@@ -401,6 +404,7 @@ export default function App() {
         setLlmAvailable(!!info.llm_available);
         setVersion(info.version || "");
         setEffects(info.effects || null);
+        setOutputProfiles(Array.isArray(info.output_profiles) ? info.output_profiles : []);
         setEngines(Array.isArray(info.engines) ? info.engines : []);
         setCapabilities(info.capabilities || null);
         setDriveConfigured(!!info.google_drive?.configured);
@@ -635,6 +639,20 @@ export default function App() {
       ...previous.filter((item) => !(attempts || []).some((next) => next.id === item.id)),
     ]);
   };
+
+  const handleJobsAdded = useCallback((newJobs) => {
+    const validJobs = (newJobs || []).filter((job) => job?.id);
+    if (!validJobs.length) return;
+    setTrackedIds((previous) => {
+      const next = new Set(previous);
+      validJobs.forEach((job) => next.add(job.id));
+      return next;
+    });
+    setJobs((previous) => {
+      const ids = new Set(validJobs.map((job) => job.id));
+      return [...validJobs, ...previous.filter((job) => !ids.has(job.id))];
+    });
+  }, []);
 
   const visibleJobs = jobs.filter(
     (job) => trackedIds.has(job.id) || job.source?.includes("/watch/")
@@ -903,6 +921,7 @@ export default function App() {
                     effects={effects}
                     engines={engines}
                     capabilities={capabilities}
+                    outputProfiles={outputProfiles}
                   />
                 </section>
 
@@ -985,6 +1004,7 @@ export default function App() {
                         publishAttempts={publishAttempts}
                         onClipUpdated={handleClipUpdated}
                         onPublished={handlePublished}
+                        onJobsAdded={handleJobsAdded}
                         // U7: a re-render applies the settings selected above.
                         settings={toOptions(settings, publishing)}
                       />
