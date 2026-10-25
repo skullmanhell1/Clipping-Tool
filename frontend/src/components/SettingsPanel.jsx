@@ -18,6 +18,7 @@ const LANGUAGES = [
 
 const CLIP_LENGTHS = [
   { value: "auto", label: "Auto (< 90s)" },
+  { value: "20-60s", label: "20 - 60s (Campaign)" },
   { value: "<30s", label: "< 30s" },
   { value: "30-60s", label: "30 - 60s" },
   { value: "60-90s", label: "60 - 90s" },
@@ -99,15 +100,6 @@ const CAPTION_POSITIONS = [
   { value: "top", label: "Top" },
 ];
 
-const COLOR_PRESETS = [
-  { value: "", label: "None" },
-  { value: "vivid", label: "Vivid" },
-  { value: "warm", label: "Warm" },
-  { value: "cool", label: "Cool" },
-  { value: "cinematic", label: "Cinematic" },
-  { value: "bw", label: "Black & White" },
-];
-
 const MUSIC_MOODS = [
   { value: "", label: "No music" },
   { value: "upbeat", label: "Upbeat" },
@@ -151,42 +143,6 @@ const ASSET_SOURCING_MODES = [
   { value: "local_only", label: "Local only" },
   { value: "local_then_external", label: "Local, then external" },
 ];
-
-// --- Speaker diarisation & multi-speaker reframe option lists --------------
-// Known values used as fallbacks / friendly labels; the accepted values mirror
-// /api/info's effects.reframe_layouts / effects.reframe_intensities.
-const REFRAME_LAYOUTS = [
-  { value: "follow_active", label: "Follow active speaker" },
-  { value: "split_screen", label: "Split screen" },
-];
-
-const REFRAME_INTENSITIES = [
-  { value: "subtle", label: "Subtle" },
-  { value: "standard", label: "Standard" },
-  { value: "heavy", label: "Heavy" },
-];
-
-// Friendly labels applied to the raw values advertised by /api/info.
-const REFRAME_LAYOUT_LABELS = {
-  follow_active: "Follow active speaker",
-  split_screen: "Split screen",
-};
-const REFRAME_INTENSITY_LABELS = {
-  subtle: "Subtle",
-  standard: "Standard",
-  heavy: "Heavy",
-};
-
-// Which detector finds the faces the crop follows. `haar` is the shipped default, so the
-// picker opens on the behaviour an existing install already has.
-const FACE_DETECTORS = [
-  { value: "haar", label: "Haar cascade (default)" },
-  { value: "mediapipe", label: "MediaPipe BlazeFace" },
-];
-const FACE_DETECTOR_LABELS = {
-  haar: "Haar cascade (default)",
-  mediapipe: "MediaPipe BlazeFace",
-};
 
 // Build a labelled option list from a raw list of values advertised by
 // /api/info's effects object, falling back to the known values when the info
@@ -345,32 +301,6 @@ export default function SettingsPanel({
   // dropdown when the server does not report them, which keeps an older backend working.
   const presetDetails = effects?.caption_preset_details || [];
   const captionFonts = effects?.caption_fonts || [];
-  const reframeLayoutOptions = labelledOptions(
-    effects?.reframe_layouts,
-    REFRAME_LAYOUT_LABELS,
-    REFRAME_LAYOUTS
-  );
-  const reframeIntensityOptions = labelledOptions(
-    effects?.reframe_intensities,
-    REFRAME_INTENSITY_LABELS,
-    REFRAME_INTENSITIES
-  );
-  // /api/info advertises face detectors as `{name, available}` rather than bare strings,
-  // because "offered" and "usable here" are different facts: an image built without
-  // assets/models/ still offers `mediapipe` and cannot run it. Saying so in the label is the
-  // difference between a user choosing it and wondering why nothing changed, and a user
-  // knowing the model is missing.
-  const faceDetectorOptions = (
-    Array.isArray(effects?.face_detectors) && effects.face_detectors.length
-      ? effects.face_detectors
-      : FACE_DETECTORS.map((option) => ({ name: option.value, available: true }))
-  ).map((entry) => {
-    const base = FACE_DETECTOR_LABELS[entry.name] || entry.name;
-    return {
-      value: entry.name,
-      label: entry.available === false ? `${base} — unavailable` : base,
-    };
-  });
   const retentionModeOptions = labelledOptions(
     effects?.retention_modes,
     RETENTION_MODE_LABELS,
@@ -458,7 +388,7 @@ export default function SettingsPanel({
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
       <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">
-        Settings
+        Clip settings
       </h3>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Dropdown label="Language" value={settings.language} onChange={set("language")} options={LANGUAGES} />
@@ -482,13 +412,15 @@ export default function SettingsPanel({
       <button
         type="button"
         onClick={() => setShowAdvanced((v) => !v)}
+        aria-expanded={showAdvanced}
+        aria-controls="advanced-clip-settings"
         className="mt-4 flex items-center gap-2 text-sm font-medium text-brand-accent hover:underline"
       >
-        <span>{showAdvanced ? "▾" : "▸"}</span> Advanced settings
+        <span>{showAdvanced ? "▾" : "▸"}</span> More clip settings
       </button>
 
       {showAdvanced && (
-        <div className="mt-4 space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+        <div id="advanced-clip-settings" className="mt-4 space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Dropdown label="Selection" value={settings.strategy} onChange={set("strategy")} options={STRATEGIES} />
             <Dropdown label="Platform" value={settings.platform} onChange={set("platform")} options={PLATFORMS} />
@@ -629,13 +561,15 @@ export default function SettingsPanel({
       <button
         type="button"
         onClick={() => setShowEffects((v) => !v)}
+        aria-expanded={showEffects}
+        aria-controls="caption-and-effect-settings"
         className="mt-4 flex items-center gap-2 text-sm font-medium text-brand-accent hover:underline"
       >
-        <span>{showEffects ? "▾" : "▸"}</span> Visual effects
+        <span>{showEffects ? "▾" : "▸"}</span> Captions, style &amp; effects
       </button>
 
       {showEffects && (
-        <div className="mt-4 space-y-5 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+        <div id="caption-and-effect-settings" className="mt-4 space-y-5 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
           {/* Captions styling */}
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -911,8 +845,7 @@ export default function SettingsPanel({
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               Look &amp; sound
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Dropdown label="Color grade" value={settings.color} onChange={set("color")} options={COLOR_PRESETS} />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Dropdown label="Background music" value={settings.music} onChange={set("music")} options={MUSIC_MOODS} />
               <label className="flex flex-col gap-1.5 text-sm">
                 <span className="text-slate-400">
@@ -964,24 +897,6 @@ export default function SettingsPanel({
               Effects
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Toggle
-                label="Face-tracking reframe"
-                hint="Follows the speaker instead of a static crop (adds render time)"
-                checked={settings.reframe}
-                onChange={setFlag("reframe")}
-              />
-              <Toggle
-                label="Speaker-aware reframe"
-                hint="Reframes to the active speaker across multiple faces (adds render time)"
-                checked={settings.speaker_reframe}
-                onChange={setFlag("speaker_reframe")}
-              />
-              <Toggle
-                label="Diarisation"
-                hint="Detect who is speaking when; auto-enabled by speaker-aware reframe"
-                checked={settings.diarization}
-                onChange={setFlag("diarization")}
-              />
               <Toggle label="Zoom / Ken Burns" checked={settings.zoom} onChange={setFlag("zoom")} />
               <Toggle label="Punch-in intro" checked={settings.transitions} onChange={setFlag("transitions")} />
               <Toggle label="Hook title overlay" hint="Burns the AI hook text at the start" checked={settings.hook_title} onChange={setFlag("hook_title")} />
@@ -994,31 +909,13 @@ export default function SettingsPanel({
                 onChange={setFlag("filler_removal")}
               />
             </div>
-            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Dropdown
-                label="Reframe layout"
-                value={settings.reframe_layout}
-                onChange={set("reframe_layout")}
-                options={reframeLayoutOptions}
-              />
-              <Dropdown
-                label="Reframe intensity"
-                value={settings.reframe_intensity}
-                onChange={set("reframe_intensity")}
-                options={reframeIntensityOptions}
-              />
-              <Dropdown
-                label="Face detector"
-                value={settings.face_detector}
-                onChange={set("face_detector")}
-                options={faceDetectorOptions}
-              />
-            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Face tracking and speaker framing live in the separate “More video tools” section, so there is only one place to change them.
+            </p>
           </div>
 
           <p className="text-xs text-slate-500">
-            Frame-by-frame effects (reframe, zoom, emoji) are optional and add
-            render time. Everything here is applied per clip in a single pass.
+            Frame-by-frame effects (zoom, emoji) are optional and add render time. Everything here is applied per clip in a single pass.
           </p>
         </div>
       )}

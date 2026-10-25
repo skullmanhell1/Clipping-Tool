@@ -250,9 +250,10 @@ jobs:
       # a unit test of a pure function cannot tell whether anything calls it and
       # `test_config_documentation.py` proves a setting is documented rather than read.
       #
-      # A ratchet against a recorded baseline, not a clean-tree assertion: four modules and fourteen
-      # settings are already dead and listed in the script with the reason, so this gates *new* dead
-      # code from today while the backlog is worked down. `tests/test_check_wired.py` asserts every
+      # A ratchet against a recorded baseline, not a clean-tree assertion: the experimental
+      # `facial_tracking_upgrade` planner is intentionally isolated until it has end-to-end ffmpeg
+      # parity and a quality benchmark; `KNOWN_UNWIRED` records that debt. This gates *new* dead code
+      # from today while the backlog is worked down. `tests/test_check_wired.py` asserts every
       # baseline entry is still dead, so the list can only shrink.
       - name: No new dead code (unwired modules, unread settings)
         run: python scripts/check_wired.py --check
@@ -334,12 +335,24 @@ jobs:
           # something it is not actually measuring.
           suites = list(root.iter("testsuite")) if root.tag == "testsuites" else [root]
           bad = []
+          failures = []
           for suite in suites:
               for case in suite.iter("testcase"):
+                  name = f"{case.get('classname', '')}::{case.get('name', '')}"
                   for kind in ("skipped", "flaky"):
                       for node in case.findall(kind):
-                          name = f"{case.get('classname', '')}::{case.get('name', '')}"
                           bad.append(f"{kind}: {name} - {node.get('message', '') or node.get('type', '')}")
+                  for kind in ("failure", "error"):
+                      for node in case.findall(kind):
+                          detail = node.get("message", "") or node.get("type", "")
+                          detail = " ".join(detail.split())[:180]
+                          failures.append(f"{kind}: {name} - {detail}")
+          # The JUnit report is more useful than a generic failed `pytest` step when a runner's
+          # log archive is temporarily unavailable. Surface the test IDs as GitHub annotations.
+          for line in failures[:50]:
+              print(f"::error title=Pytest failure::{line}")
+          if len(failures) > 50:
+              print(f"::error title=Pytest failures::and {len(failures) - 50} more failure(s)")
           if bad:
               print("::error::A skipped test is not a passing test. A required dependency is "
                     "probably missing; see scripts/setup_dev_env.sh.")

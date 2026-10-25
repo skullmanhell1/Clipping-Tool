@@ -58,6 +58,40 @@ def test_x_route_carries_affiliate_url_in_the_preserved_mention_tail(
     assert fake_clip.mentions[0] in request["mentions"]
 
 
+def test_campaign_mentions_are_tailored_to_each_destination(tmp_path, fake_clip, video_file):
+    manager, store = _manager(
+        tmp_path,
+        {"youtube": FakePublisher("youtube"), "instagram": FakePublisher("instagram")},
+    )
+    fake_clip.mentions.extend(["@markmanson", "@iammarkmanson", "@creator"])
+    mentions_by_platform = {
+        "youtube_shorts": ["@solvedpodcast", "@solvedclips", "@iammarkmanson"],
+        "instagram": ["@solvedpodcast", "@markmanson"],
+    }
+
+    ids = manager.submit(
+        job_id="j",
+        clip=fake_clip,
+        video_path=video_file,
+        platforms=["youtube_shorts", "instagram"],
+        mode="review",
+        mentions_by_platform=mentions_by_platform,
+    )
+    requests = {
+        store.get_attempt(item)["platform"]: store.get_attempt(item)["request_json"] for item in ids
+    }
+
+    assert set(requests["youtube"]["mentions"]) == {
+        "@creator",
+        "@solvedpodcast",
+        "@solvedclips",
+        "@iammarkmanson",
+    }
+    assert set(requests["instagram"]["mentions"]) == {"@creator", "@solvedpodcast", "@markmanson"}
+    assert "@markmanson" not in requests["youtube"]["mentions"]
+    assert "@iammarkmanson" not in requests["instagram"]["mentions"]
+
+
 def test_submit_skips_unknown_platform(tmp_path, fake_clip, video_file):
     manager, store = _manager(tmp_path, {"youtube": FakePublisher("youtube")})
     ids = manager.submit(

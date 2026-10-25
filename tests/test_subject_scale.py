@@ -737,7 +737,7 @@ def test_the_magnify_filter_reaches_the_rendered_filter_chain(tmp_path, monkeypa
     src = make_video("v23_vf.mp4", duration=3.0, w=1280, h=720)
 
     # Two shots with different subject sizes, so a magnification is actually planned.
-    def fake_report(video, sample_fps=5.0, backend=None, detector=None):
+    def fake_report(video, sample_fps=5.0, backend=None, detector=None, *, min_score=None):
         samples = []
         detections = []
         for i in range(20):
@@ -780,7 +780,7 @@ def test_disabled_leaves_the_filter_chain_character_for_character_unchanged(
 
     src = make_video("v23_vf_off.mp4", duration=3.0, w=1280, h=720)
 
-    def fake_report(video, sample_fps=5.0, backend=None, detector=None):
+    def fake_report(video, sample_fps=5.0, backend=None, detector=None, *, min_score=None):
         samples = [rf.Center(round(i * 0.2, 3), 640.0, 360.0) for i in range(20)]
         detections = [
             (round(i * 0.2, 3), [_Det(160.0, 200.0 if i < 10 else 90.0)]) for i in range(20)

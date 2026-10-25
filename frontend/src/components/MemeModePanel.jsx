@@ -106,7 +106,7 @@ export default function MemeModePanel({ settings, onChange }) {
     if (approved.length) {
       commit([
         ...events,
-        ...approved.map(({ id, selected, ...item }) => ({
+        ...approved.map(({ id: _id, selected: _selected, ...item }) => ({
           ...item,
           id: uid(),
           duration: item.type === "effect" ? 1.2 : 0.6,

@@ -100,11 +100,11 @@ describe("ReviewBar", () => {
 
   it("disables exports when there is nothing to package", () => {
     setup();
-    expect(screen.getByRole("link", { name: "Download selected" })).toHaveAttribute(
+    expect(screen.getByText("Download selected").closest("a")).toHaveAttribute(
       "aria-disabled",
       "true",
     );
-    expect(screen.getByRole("link", { name: "Download approved" })).toHaveAttribute(
+    expect(screen.getByText("Download approved").closest("a")).toHaveAttribute(
       "aria-disabled",
       "true",
     );

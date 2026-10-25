@@ -412,13 +412,17 @@ fallback is a synthetic two-tone drone, not a commercial song, and is marked
 
 Campaign import is reviewable and deterministic:
 
-- Paste a brief in **Campaign automation**, or provide one direct Google Drive/
+- Paste a brief in **Campaigns → Campaign brief**, or provide one direct Google Drive/
   Google Docs file link. Folder links and general channel browsing are not
   supported.
 - A Drive import runs in the server process, not through the assistant's
-  connected Drive account. The server account needs Viewer access to the file.
-- The paste path remains available when Drive OAuth is not configured. Parsing a
-  brief does not create a publishing campaign or publish anything automatically.
+  connected Drive account. The importer tries OAuth first, then a public text
+  export for link-accessible files. Private files need Viewer access for the
+  server account; the paste path remains available when OAuth is not configured.
+- Review the parsed rules before applying a replacement brief. Exact supported
+  duration ranges—including **20–60 seconds**—update the clip-length setting.
+  Parsing or applying a brief does not create a publishing campaign or publish
+  anything automatically.
 - A changed brief keeps the last good snapshot if a later read fails. A successful
   change flags affected clips for re-render and human review; review the new
   render before publishing.

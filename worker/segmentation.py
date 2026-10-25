@@ -37,6 +37,7 @@ class Segment:
 # ``target`` drives fixed-length chunking; ``min``/``max`` bound silence splits.
 CLIP_LENGTH_PRESETS: dict[str, tuple[float, float, float]] = {
     "auto": (10.0, 90.0, 45.0),  # Auto (<90s)
+    "20-60s": (20.0, 60.0, 40.0),
     "<30s": (5.0, 30.0, 20.0),
     "30-60s": (30.0, 60.0, 45.0),
     "60-90s": (60.0, 90.0, 75.0),

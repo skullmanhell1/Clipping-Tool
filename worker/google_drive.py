@@ -70,7 +70,11 @@ class _DocsHTMLParser(HTMLParser):
                 self.lines.append(value)
             self.current = []
             self.in_row = False
-        elif tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"} and self.current and not self.in_row:
+        elif (
+            tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+            and self.current
+            and not self.in_row
+        ):
             value = "".join(self.current).strip()
             if value:
                 self.lines.append(value)
@@ -160,7 +164,12 @@ def extract_folder_id(url: str) -> str | None:
     folder_id = None
     if len(path_parts) >= 2 and path_parts[0] == "drive" and path_parts[1] == "folders":
         folder_id = path_parts[2] if len(path_parts) >= 3 else None
-    elif len(path_parts) >= 5 and path_parts[0] == "drive" and path_parts[1] == "u" and path_parts[3] == "folders":
+    elif (
+        len(path_parts) >= 5
+        and path_parts[0] == "drive"
+        and path_parts[1] == "u"
+        and path_parts[3] == "folders"
+    ):
         folder_id = path_parts[4]
     elif path_parts and path_parts[0] in {"open", "uc"}:
         folder_id = parse_qs(parts.query).get("id", [None])[0]
@@ -199,7 +208,11 @@ def configured_scopes() -> list[str]:
 
     raw = str(getattr(settings, "google_drive_scopes", "") or "")
     values = [item.strip() for item in re.split(r"[,\s]+", raw) if item.strip()]
-    return [item for item in values if item.endswith("/drive.readonly") or item.endswith("/drive.metadata.readonly")]
+    return [
+        item
+        for item in values
+        if item.endswith("/drive.readonly") or item.endswith("/drive.metadata.readonly")
+    ]
 
 
 def _access_token() -> str:
@@ -304,7 +317,7 @@ def list_folder_files(folder_id: str, *, page_size: int = 100) -> list[dict]:
     token = ""
     try:
         for _ in range(100):
-            params = {
+            params: dict[str, str | int] = {
                 "q": f"'{folder_id}' in parents and trashed = false",
                 "pageSize": max(1, min(int(page_size), 1000)),
                 "orderBy": "name",
@@ -314,7 +327,9 @@ def list_folder_files(folder_id: str, *, page_size: int = 100) -> list[dict]:
                 params["pageToken"] = token
             response = httpx.get(FILES_URL, params=params, headers=headers, timeout=20.0)
             if response.status_code in {401, 403}:
-                raise GoogleDriveError("Google Drive folder access was denied. Confirm Viewer access.")
+                raise GoogleDriveError(
+                    "Google Drive folder access was denied. Confirm Viewer access."
+                )
             if response.status_code == 429:
                 raise GoogleDriveError("Google Drive rate limit reached. Retry the import later.")
             response.raise_for_status()
@@ -337,7 +352,9 @@ def list_folder_files(folder_id: str, *, page_size: int = 100) -> list[dict]:
     return rows
 
 
-def download_public_text_file(file_id: str, *, source_type: str = "google_drive") -> tuple[str, dict]:
+def download_public_text_file(
+    file_id: str, *, source_type: str = "google_drive"
+) -> tuple[str, dict]:
     """Read a publicly shared Google Doc/text file without OAuth credentials."""
     import httpx
 
@@ -347,7 +364,7 @@ def download_public_text_file(file_id: str, *, source_type: str = "google_drive"
         url = f"https://docs.google.com/document/d/{quote(file_id, safe='')}/export"
         params = {"format": "html"}
     else:
-        url = f"https://drive.google.com/uc"
+        url = "https://drive.google.com/uc"
         params = {"export": "download", "id": file_id}
     try:
         response = httpx.get(url, params=params, follow_redirects=True, timeout=30.0)
@@ -366,7 +383,9 @@ def download_public_text_file(file_id: str, *, source_type: str = "google_drive"
     if not content.strip():
         raise GoogleDriveError("The public Google document is empty or unreadable.")
     if content.lstrip().lower().startswith(("<!doctype html", "<html", "<head")):
-        raise GoogleDriveError("The Google link is private or did not return a supported text document.")
+        raise GoogleDriveError(
+            "The Google link is private or did not return a supported text document."
+        )
     return content, {"id": file_id, "mimeType": "text/plain", "modifiedTime": "", "version": ""}
 
 

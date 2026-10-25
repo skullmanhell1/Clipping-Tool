@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date as date_type
 from datetime import datetime, time, tzinfo
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _MISSING = object()
@@ -31,7 +33,7 @@ _ALIASES = {
 }
 
 
-def _unique(values: Sequence[str]) -> list[str]:
+def _unique(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -194,6 +196,11 @@ class CampaignPreset:
     pattern_interrupter_interval: int = 0
     hook_settings: HookSettings = field(default_factory=HookSettings)
     cliffhanger_settings: CliffhangerSettings = field(default_factory=CliffhangerSettings)
+    # Extra requirements extracted from natural-language briefs. Keeping campaign-specific rules
+    # in this namespaced mapping lets new briefs add requirements without dropping them during the
+    # ProcessingOptions/API round-trip. Known keys are validated and applied where possible; all
+    # other extracted guidance stays visible for human review.
+    brief_rules: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.name = str(self.name or "").strip()
@@ -218,6 +225,9 @@ class CampaignPreset:
         self.public_visibility_required = bool(self.public_visibility_required)
         self.require_public_visibility = self.public_visibility_required
         self.pattern_interrupter_interval = max(0, int(self.pattern_interrupter_interval or 0))
+        self.brief_rules = (
+            deepcopy(dict(self.brief_rules or {})) if isinstance(self.brief_rules, Mapping) else {}
+        )
 
     @property
     def brand(self) -> Branding:
@@ -263,6 +273,42 @@ class CampaignPreset:
     def cliffhanger(self) -> CliffhangerSettings:
         return self.cliffhanger_settings
 
+    def required_mentions_for(self, platform: str) -> list[str]:
+        """Return required tags for one destination, with common tags as a fallback."""
+        rule = self.brief_rules.get("required_mentions", {})
+        if not isinstance(rule, Mapping):
+            return []
+        by_platform = rule.get("by_platform", {})
+        if not isinstance(by_platform, Mapping):
+            by_platform = {}
+        key = _platform(platform)
+        aliases = [key]
+        if key == "youtube":
+            aliases.append("youtube_shorts")
+        elif key == "youtube_shorts":
+            aliases.append("youtube")
+        elif key == "instagram_reels":
+            aliases.append("instagram")
+        elif key == "instagram":
+            aliases.append("instagram_reels")
+        for alias in aliases:
+            values = by_platform.get(alias)
+            if isinstance(values, str):
+                values = _split(values)
+            if isinstance(values, (list, tuple, set)) and values:
+                return _unique([str(item).strip() for item in values if str(item).strip()])
+        common = rule.get("common", [])
+        return _unique([str(item).strip() for item in _split(common) if str(item).strip()])
+
+    def required_mentions_by_platform(self) -> dict[str, list[str]]:
+        """Return required mentions keyed by all permitted platform spellings."""
+        rule = self.brief_rules.get("required_mentions", {})
+        by_platform = rule.get("by_platform", {}) if isinstance(rule, Mapping) else {}
+        platforms = self.allowed_platforms or (
+            list(by_platform) if isinstance(by_platform, Mapping) else []
+        )
+        return {platform: self.required_mentions_for(platform) for platform in platforms}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -282,6 +328,7 @@ class CampaignPreset:
             "pattern_interrupter_interval": self.pattern_interrupter_interval,
             "hook_settings": self.hook_settings.__dict__.copy(),
             "cliffhanger_settings": self.cliffhanger_settings.__dict__.copy(),
+            "brief_rules": deepcopy(self.brief_rules),
         }
 
     @classmethod
@@ -328,6 +375,9 @@ class CampaignPreset:
                 if isinstance(cliffhanger, CliffhangerSettings)
                 else CliffhangerSettings(**dict(cliffhanger or {}))
             ),
+            brief_rules=deepcopy(data.get("brief_rules", {}))
+            if isinstance(data.get("brief_rules", {}), Mapping)
+            else {},
         )
 
 
@@ -509,13 +559,574 @@ def _setting(value: str, default_duration: float) -> tuple[bool, float, str]:
     return enabled, duration, style.strip(" ,;:/-")
 
 
+_BRIEF_URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_BARE_SOCIAL_URL_RE = re.compile(
+    r"(?<![\w@])(?:www\.)?(?:instagram\.com|youtube\.com|youtu\.be)/[A-Za-z0-9_?=&./%-]+",
+    re.IGNORECASE,
+)
+_BRIEF_MENTION_RE = re.compile(r"(?<![\w@])@[A-Za-z0-9_](?:[A-Za-z0-9_.]{0,62}[A-Za-z0-9_])?")
+_BRIEF_BARE_YT_HANDLE_RE = re.compile(
+    r"(?<![\w@])@?([A-Za-z0-9_.]{2,64})\s+on\s+(?:yt|youtube)\b", re.IGNORECASE
+)
+_BRIEF_DURATION_RANGE_RE = re.compile(
+    r"(?<!\d)(\d{1,4}(?:\.\d{1,2})?)\s*(?:-|–|—|to)\s*"
+    r"(\d{1,4}(?:\.\d{1,2})?)\s*(seconds?|secs?|s)\b",
+    re.IGNORECASE,
+)
+_BRIEF_CURRENCY_RE = re.compile(r"\$\s*(\d{1,12}(?:,\d{3}){0,3}(?:\.\d{1,2})?)")
+_BRIEF_PERCENT_RE = re.compile(r"(?<![\d.])(\d{1,4}(?:\.\d{1,2})?)\s*%")
+
+
+def _brief_lines(text: str) -> list[str]:
+    """Flatten pasted/Docs-exported briefs into safe, non-empty display lines."""
+    result: list[str] = []
+    for raw in str(text or "").replace("\v", "\n").splitlines():
+        line = raw.strip().replace("\u00a0", " ")
+        for prefix in ("- ", "* ", "• ", "✓ ", "✗ ", "⚠ "):
+            if line.startswith(prefix):
+                line = line[len(prefix) :].strip()
+                break
+        line = re.sub(r"^\d+[.)]\s+", "", line)
+        if line:
+            result.append(line)
+    return result
+
+
+def _brief_norm(value: str) -> str:
+    text = str(value or "").strip()
+    while text.startswith("#"):
+        text = text[1:].lstrip()
+    text = text.strip("*_` ").casefold()
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _brief_label_values(lines: list[str], labels: set[str]) -> list[str]:
+    """Read both ``Label: value`` and Google-Doc quick-fact ``Label / value`` rows."""
+    values: list[str] = []
+    for index, line in enumerate(lines):
+        parts = _line_parts(line)
+        if parts is None or _brief_norm(parts[0]) not in labels:
+            continue
+        value = str(parts[1] or "").strip()
+        if not value:
+            for candidate in lines[index + 1 : index + 3]:
+                normalized = _brief_norm(candidate)
+                if normalized in labels or normalized in {
+                    "quick facts",
+                    "what to do",
+                    "where to get the clips",
+                    "what to clip",
+                    "where to post",
+                    "the rules",
+                    "caption required",
+                    "on screen text required",
+                    "your audience required",
+                    "how to submit required",
+                }:
+                    break
+                value = candidate.strip()
+                if value:
+                    break
+        if value:
+            values.append(value)
+    return values
+
+
+def _brief_platforms(value: str) -> list[str]:
+    text = str(value or "").casefold()
+    found: list[str] = []
+    for pattern, platform in (
+        (r"\byoutube\s+shorts?\b|\bshorts\b", "youtube_shorts"),
+        (r"\binstagram\s+reels?\b|\breels\b", "instagram"),
+        (r"\btiktok\b", "tiktok"),
+        (r"\bfacebook\s+reels?\b", "facebook_reels"),
+        (r"\bwhop\b", "whop"),
+        (r"\bx\s*\(twitter\)\b|\btwitter\b", "x"),
+    ):
+        if re.search(pattern, text, re.IGNORECASE):
+            found.append(platform)
+    return _unique(found)
+
+
+def _brief_section(lines: list[str], starts: set[str], stops: set[str]) -> list[str]:
+    active = False
+    result: list[str] = []
+    for line in lines:
+        normalized = _brief_norm(line)
+        if normalized in starts:
+            active = True
+            continue
+        if active and normalized in stops:
+            active = False
+        if active:
+            result.append(line)
+    return result
+
+
+def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, Any]]:
+    """Extract common natural-language campaign rules without requiring a fixed template.
+
+    The parser is intentionally deterministic: campaign requirements are reviewable, stored with
+    each job, and do not depend on an LLM guessing a rule from private source material.
+    """
+    lines = _brief_lines(text)
+    full_text = "\n".join(lines)
+    folded = full_text.casefold()
+    title = ""
+    for line in lines:
+        parts = _line_parts(line)
+        if (
+            parts
+            and _brief_norm(parts[0]) in {"campaign", "campaign name", "name", "title"}
+            and parts[1]
+        ):
+            title = parts[1]
+            break
+    if not title:
+        for line in lines[:8]:
+            candidate = line.lstrip("# ").strip("*_` ")
+            if not candidate or _brief_norm(candidate) in {
+                "quick facts",
+                "the goal",
+                "what to do",
+                "where to get the clips",
+                "where to post",
+                "what to clip",
+                "the rules",
+            }:
+                continue
+            if ":" in candidate and len(candidate.split(":", 1)[0]) < 25:
+                continue
+            title = re.sub(r"(?i)^clipfarm\s*[×·|:-]\s*", "", candidate).strip()
+            if title.isupper():
+                title = title.title()
+            break
+
+    platform_lines = _brief_label_values(
+        lines, {"platform", "platforms", "allowed platforms", "publish to"}
+    )
+    platform_lines.extend(
+        _brief_section(
+            lines,
+            {"where to post", "platforms", "match the topic to the platform"},
+            {
+                "caption",
+                "caption required",
+                "on screen text required",
+                "your audience required",
+                "how to submit required",
+                "the rules",
+            },
+        )
+    )
+    platforms = _unique(
+        platform for value in platform_lines for platform in _brief_platforms(value)
+    )
+
+    # Content-by-platform guidance usually appears as one platform name followed by a short list
+    # of topics. Keep only the first line after each platform heading so unrelated later sections
+    # cannot accidentally become campaign topics.
+    platform_topics: dict[str, list[str]] = {}
+    topic_section = _brief_section(
+        lines,
+        {"match the topic to the platform"},
+        {"where to post", "caption", "caption required", "on screen text required", "the rules"},
+    )
+    current_platform = ""
+    for line in topic_section:
+        candidates = _brief_platforms(line)
+        if candidates:
+            current_platform = candidates[0]
+            continue
+        if current_platform and line.strip():
+            platform_topics.setdefault(current_platform, []).append(line.strip())
+            current_platform = ""
+
+    aspect_values = _brief_label_values(
+        lines,
+        {"aspect", "aspect ratio", "aspect ratios", "target aspect ratios", "format", "formats"},
+    )
+    inferred_ratios = _unique(
+        _ratio(value) for item in aspect_values for value in _split(item) if _ratio(value)
+    )
+    if (
+        not inferred_ratios
+        and platforms
+        and set(platforms).issubset({"youtube_shorts", "instagram", "tiktok", "facebook_reels"})
+    ):
+        inferred_ratios = ["9:16"]
+
+    rules: dict[str, Any] = {
+        "daily_clip_target_explicit": bool(
+            _brief_label_values(
+                lines, {"daily clip target", "daily clips", "clips per day", "daily target"}
+            )
+        )
+    }
+    if inferred_ratios:
+        rules["inferred_aspect_ratios"] = inferred_ratios
+    duration_match = _BRIEF_DURATION_RANGE_RE.search(full_text)
+    if duration_match:
+        rules["clip_duration_seconds"] = {
+            "min": float(duration_match.group(1)),
+            "max": float(duration_match.group(2)),
+        }
+
+    required_subtitles = any(
+        phrase in folded
+        for phrase in (
+            "subtitles on the whole clip",
+            "captions on the whole clip",
+            "subtitles throughout",
+            "captions throughout",
+            "subtitles for the entire clip",
+            "captions for the entire clip",
+        )
+    ) or ("subtitle" in folded and "required" in folded and "whole clip" in folded)
+    if required_subtitles:
+        rules["subtitles_required"] = True
+
+    guidance_lines = []
+    for line in lines:
+        lower = line.casefold()
+        if any(
+            token in lower
+            for token in (
+                "write your own",
+                "lead with",
+                "not a summary",
+                "no clickbait",
+                "misleading caption",
+                "subtitles on",
+                "big, readable",
+                "accurate",
+                "keep the original meaning",
+            )
+        ):
+            if line not in guidance_lines:
+                guidance_lines.append(line)
+    if guidance_lines:
+        rules["caption_guidance"] = " ".join(guidance_lines[:8])[:1000]
+
+    font_match = re.search(
+        r"(?:official\s+font\s+is|suggested\s+font\s*:)\s*[‘'\"“]?([A-Za-z0-9 _-]{2,40})",
+        full_text,
+        re.IGNORECASE,
+    )
+    if font_match:
+        suggested_font = font_match.group(1).strip(" ‘'\"“”’.,;:-")
+        if suggested_font:
+            rules["suggested_caption_font"] = suggested_font
+
+    mention_lines = [
+        line
+        for line in lines
+        if _BRIEF_MENTION_RE.search(line)
+        and any(token in line.casefold() for token in ("tag", "mention", "caption", "tagging"))
+    ]
+    common_mentions: list[str] = []
+    youtube_mentions: list[str] = []
+    instagram_mentions: list[str] = []
+    for line in mention_lines:
+        handles = _BRIEF_MENTION_RE.findall(line)
+        if "on yt" in line.casefold() or "on youtube" in line.casefold():
+            groups = re.findall(r"\(([^)]{0,200})\)", line)
+            special = [handle for group in groups for handle in _BRIEF_MENTION_RE.findall(group)]
+            special.extend(
+                "@" + match.group(1).lstrip("@")
+                for match in _BRIEF_BARE_YT_HANDLE_RE.finditer(line)
+            )
+            youtube_mentions.extend(special)
+            common_mentions.extend(handle for handle in handles if handle not in special)
+        elif "on instagram" in line.casefold() or "on reels" in line.casefold():
+            instagram_mentions.extend(handles)
+        else:
+            common_mentions.extend(handles)
+    common_mentions = _unique(common_mentions)
+    youtube_mentions = _unique(youtube_mentions)
+    instagram_mentions = _unique(instagram_mentions)
+    if common_mentions or youtube_mentions or instagram_mentions:
+        by_platform: dict[str, list[str]] = {}
+        if youtube_mentions:
+            # A YouTube handle may be an alternate spelling of the Instagram/public handle
+            # (e.g. @iammarkmanson vs @markmanson); keep the common campaign account but do not
+            # require both variants on the same destination.
+            youtube_base = [
+                handle
+                for handle in common_mentions
+                if not any(
+                    handle.lstrip("@").casefold() in candidate.lstrip("@").casefold()
+                    or candidate.lstrip("@").casefold() in handle.lstrip("@").casefold()
+                    for candidate in youtube_mentions
+                )
+            ]
+            by_platform["youtube_shorts"] = _unique([*youtube_base, *youtube_mentions])
+        if instagram_mentions:
+            by_platform["instagram"] = _unique(instagram_mentions)
+        rules["required_mentions"] = {
+            "common": common_mentions,
+            "by_platform": by_platform,
+        }
+
+    # Explicitly labeled source blocks in Docs exports are easier to read than paragraphs scattered
+    # through a template. Treat the Instagram reference as styling guidance, not an approved footage source.
+    source_lines = _brief_section(
+        lines,
+        {"where to get the clips", "approved sources", "source rules", "where to get clips"},
+        {
+            "do not use these parts",
+            "what to clip",
+            "match the topic to the platform",
+            "where to post",
+            "caption",
+            "caption required",
+            "the rules",
+        },
+    )
+    source_lines.extend(
+        line
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in (
+                "do not use any clip from outside",
+                "clip only from",
+                "outside clips get rejected",
+                "other podcasts from mark",
+                "official episodes only",
+            )
+        )
+    )
+    approved_sources: list[str] = []
+    style_references: list[str] = []
+    for line in source_lines:
+        urls = [match.group(0).rstrip('.,;:!?)"') for match in _BRIEF_URL_RE.finditer(line)]
+        urls.extend(
+            match.group(0).rstrip('.,;:!?)"') for match in _BARE_SOCIAL_URL_RE.finditer(line)
+        )
+        normalized_urls = _unique(
+            url if url.casefold().startswith("http") else "https://" + url for url in urls
+        )
+        if "style reference" in line.casefold() or "own reels" in line.casefold():
+            style_references.extend(normalized_urls)
+        elif any(
+            token in line.casefold()
+            for token in ("official", "use only", "only the files", "source")
+        ):
+            approved_sources.extend(normalized_urls)
+    prohibited_sources = [
+        line.strip()
+        for line in source_lines
+        if any(
+            token in line.casefold()
+            for token in ("do not use", "outside", "other podcasts", "not be accepted")
+        )
+    ]
+    if approved_sources or style_references or prohibited_sources:
+        rules["source_policy"] = {
+            "approved_sources": _unique(approved_sources),
+            "approved_channel_handles": _unique(
+                [
+                    path.split("/", 2)[1]
+                    for url in approved_sources
+                    if (path := urlsplit(url).path).startswith("/@")
+                ]
+            ),
+            "style_references": _unique(style_references),
+            "allow_only_approved_sources": any(
+                token in " ".join(source_lines).casefold() for token in ("only", "outside")
+            ),
+            "prohibited_sources": _unique(prohibited_sources),
+        }
+
+    prohibited_content = [
+        line.strip()
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in (
+                "ad reads",
+                "sponsor segments",
+                "misrepresents",
+                "mid-sentence",
+                "mid-thought",
+                "nsfw",
+                "violent",
+                "off-topic",
+                "hidden likes",
+                "fake views",
+                "bots",
+                "paid ads",
+                "boost and promote",
+                "same video pushed",
+                "stealing or reposting",
+            )
+        )
+    ]
+    if prohibited_content:
+        rules["prohibited_content"] = _unique(prohibited_content)
+
+    face_match = re.search(
+        r"face.{0,60}first\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b",
+        full_text,
+        re.IGNORECASE,
+    ) or re.search(
+        r"first\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b.{0,60}face",
+        full_text,
+        re.IGNORECASE,
+    )
+    if face_match:
+        rules["face_visible_within_seconds"] = float(face_match.group(1))
+        face_context = next(
+            (
+                line
+                for line in lines
+                if "face" in line.casefold() and re.search(r"\bfirst\s+\d", line, re.IGNORECASE)
+            ),
+            full_text,
+        )
+        subject_match = (
+            re.search(
+                r"\b(?:(?i:show|keep|ensure|put|have|make\s+sure)\s+(?:the\s+)?)"
+                r"([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
+                face_context,
+            )
+            or re.search(
+                r"\b([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
+                face_context,
+            )
+            or re.search(
+                r"\bface\s+of\s+(?:the\s+)?([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})",
+                face_context,
+            )
+        )
+        if subject_match:
+            rules["face_subject"] = subject_match.group(1).strip()
+
+    audience_values = _brief_label_values(
+        lines, {"audience", "your audience", "audience requirement"}
+    )
+    audience_lines = _brief_section(
+        lines,
+        {"your audience", "your audience required", "audience"},
+        {
+            "how to submit",
+            "how to submit required",
+            "the rules",
+            "you must",
+            "you will not get paid if",
+        },
+    )
+    audience_text = " ".join([*audience_values, *audience_lines])
+    audience_match = _BRIEF_PERCENT_RE.search(audience_text)
+    regions = []
+    for pattern, region in (
+        (r"\b(?:us|u\.s\.|united states)\b", "US"),
+        (r"\b(?:uk|u\.k\.|united kingdom)\b", "UK"),
+        (r"\b(?:ca|canada)\b", "CA"),
+        (r"\b(?:aus|australia)\b", "AU"),
+    ):
+        if re.search(pattern, audience_text, re.IGNORECASE):
+            regions.append(region)
+    if audience_match or regions:
+        audience_rule: dict[str, Any] = {"regions": _unique(regions)}
+        if audience_match:
+            audience_rule["minimum_percent"] = float(audience_match.group(1))
+        rules["audience_requirement"] = audience_rule
+
+    engagement_line = next(
+        (line for line in lines if "engagement" in line.casefold() and "%" in line), ""
+    )
+    engagement_match = _BRIEF_PERCENT_RE.search(engagement_line)
+    if engagement_match:
+        rules["minimum_engagement_percent"] = float(engagement_match.group(1))
+    post_line = next(
+        (line for line in lines if "post" in line.casefold() and "day" in line.casefold()), ""
+    )
+    if post_line and any(
+        token in post_line.casefold() for token in ("keep", "at least", "minimum")
+    ):
+        days = re.search(r"(\d{1,4})\s+days?\b", post_line, re.IGNORECASE)
+        if days:
+            rules["minimum_post_days"] = int(days.group(1))
+    if "likes are visible" in folded or "hidden likes" in folded:
+        rules["likes_must_be_visible"] = True
+
+    quick_fact_values = {
+        "cpm": _brief_label_values(lines, {"cpm", "payout rate"}),
+        "maximum_per_clip": _brief_label_values(
+            lines, {"max per clip", "maximum per clip", "clip maximum"}
+        ),
+        "minimum_payout": _brief_label_values(lines, {"min payout", "minimum payout"}),
+    }
+    payout: dict[str, Any] = {}
+    cpm_text = " ".join(quick_fact_values["cpm"])
+    currency = _BRIEF_CURRENCY_RE.search(cpm_text)
+    if currency:
+        payout["cpm_usd"] = float(currency.group(1).replace(",", ""))
+    elif cpm_text:
+        number = re.search(r"(\d+(?:\.\d+)?)", cpm_text)
+        if number:
+            payout["cpm_usd"] = float(number.group(1))
+    for key, label in (
+        ("maximum_per_clip_usd", "maximum_per_clip"),
+        ("minimum_payout_usd", "minimum_payout"),
+    ):
+        match = _BRIEF_CURRENCY_RE.search(" ".join(quick_fact_values[label]))
+        if match:
+            payout[key] = float(match.group(1).replace(",", ""))
+    if payout:
+        rules["payout"] = payout
+
+    clip_formats = []
+    in_clip_section = False
+    for line in lines:
+        normalized = _brief_norm(line)
+        if normalized == "what to clip":
+            in_clip_section = True
+            continue
+        if in_clip_section and normalized in {
+            "where to post",
+            "the rules",
+            "caption",
+            "caption required",
+        }:
+            in_clip_section = False
+        if in_clip_section and "|" in line:
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if (
+                len(cells) >= 2
+                and cells[0]
+                and cells[1]
+                and _brief_norm(cells[0]) not in {"what", "what it looks like"}
+            ):
+                clip_formats.append({"name": cells[0], "guidance": " | ".join(cells[1:])})
+    if clip_formats:
+        rules["clip_formats"] = clip_formats
+
+    selection_lines = [
+        line.strip()
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in ("focus on the latest episodes", "latest episodes first", "the goal:")
+        )
+    ]
+    if selection_lines:
+        rules["selection_guidance"] = " ".join(selection_lines[:3])
+    if platform_topics:
+        rules["platform_topic_guidance"] = platform_topics
+
+    return title, platforms, rules
+
+
 def parse_campaign_preset(text: str) -> CampaignPreset:
     """Parse a human-authored Google-Doc-style brief deterministically."""
 
-    name = ""
+    name, detected_platforms, brief_rules = _extract_campaign_brief_rules(text)
     brand = Branding()
     caption = ""
-    ratios: list[str] = []
+    ratios: list[str] = list(brief_rules.get("inferred_aspect_ratios", []))
     tags: list[str] = []
     cta = ""
     platforms: list[str] = []
@@ -611,6 +1222,7 @@ def parse_campaign_preset(text: str) -> CampaignPreset:
                 enabled, duration, value if label == "cliffhanger style" else style
             )
 
+    platforms.extend(detected_platforms)
     return CampaignPreset(
         name=name,
         branding=brand,
@@ -624,6 +1236,7 @@ def parse_campaign_preset(text: str) -> CampaignPreset:
         pattern_interrupter_interval=interval,
         hook_settings=hook,
         cliffhanger_settings=cliffhanger,
+        brief_rules=brief_rules,
     )
 
 
@@ -665,6 +1278,7 @@ def merge_presets(
             if second.cliffhanger_settings != CliffhangerSettings()
             else first.cliffhanger_settings
         ),
+        brief_rules=deepcopy(second.brief_rules or first.brief_rules),
     )
 
 
@@ -815,6 +1429,315 @@ def _actual_colors(value: Any) -> dict[str, str]:
     if isinstance(value, Mapping):
         return {str(key).casefold(): _color(item) for key, item in value.items()}
     return _colors(str(value or ""))
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    text = str(value or "").strip().casefold()
+    if text in {"1", "true", "yes", "y", "on", "enabled", "required", "public"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled", "optional", "private"}:
+        return False
+    return None
+
+
+def _url_host(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text if "://" in text else f"//{text}")
+        return (parsed.hostname or "").casefold().removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _same_host(actual: str, approved: str) -> bool:
+    actual = actual.casefold().removeprefix("www.")
+    approved = approved.casefold().removeprefix("www.")
+    if actual == approved or actual.endswith("." + approved) or approved.endswith("." + actual):
+        return True
+    youtube_hosts = {"youtube.com", "youtu.be", "m.youtube.com", "music.youtube.com"}
+    return actual in youtube_hosts and approved in youtube_hosts
+
+
+def _brief_review_results(
+    policy: CampaignPreset, facts: Any, metadata: Any
+) -> list[ComplianceResult]:
+    """Check mechanically provable brief rules and flag the rest for a person to review."""
+    rules = policy.brief_rules
+    results: list[ComplianceResult] = []
+
+    duration_rule = rules.get("clip_duration_seconds")
+    if isinstance(duration_rule, Mapping):
+        duration = _first(facts, metadata, "duration_seconds", "clip_duration_seconds", "duration")
+        minimum = duration_rule.get("min")
+        maximum = duration_rule.get("max")
+        range_invalid = False
+        try:
+            minimum_value = float(minimum) if minimum is not None else None
+            maximum_value = float(maximum) if maximum is not None else None
+        except (TypeError, ValueError):
+            minimum_value = maximum_value = None
+            range_invalid = True
+            results.append(
+                _result(
+                    "clip_duration",
+                    ComplianceStatus.UNKNOWN,
+                    "campaign duration range is not numeric",
+                )
+            )
+        if duration is _MISSING or duration is None or str(duration).strip() == "":
+            results.append(
+                _result("clip_duration", ComplianceStatus.UNKNOWN, "clip duration was not provided")
+            )
+        elif not range_invalid:
+            actual = _number(duration, -1.0)
+            if actual < 0:
+                results.append(
+                    _result(
+                        "clip_duration", ComplianceStatus.UNKNOWN, "clip duration is not numeric"
+                    )
+                )
+            elif (minimum_value is not None and actual < minimum_value) or (
+                maximum_value is not None and actual > maximum_value
+            ):
+                lower_text = f"{minimum_value:g}" if minimum_value is not None else "any"
+                upper_text = f"{maximum_value:g}" if maximum_value is not None else "any"
+                results.append(
+                    _result(
+                        "clip_duration",
+                        ComplianceStatus.FAIL,
+                        f"duration {actual:g}s is outside {lower_text}–{upper_text}s",
+                    )
+                )
+            else:
+                results.append(
+                    _result(
+                        "clip_duration",
+                        ComplianceStatus.PASS,
+                        f"duration {actual:g}s is within the campaign range",
+                    )
+                )
+
+    if rules.get("subtitles_required"):
+        captions = _first(
+            facts, metadata, "subtitles_enabled", "captions_enabled", "captions", "subtitles"
+        )
+        enabled = _optional_bool(captions) if captions is not _MISSING else None
+        results.append(
+            _result("subtitles", ComplianceStatus.UNKNOWN, "subtitle setting was not provided")
+            if enabled is None
+            else _result(
+                "subtitles",
+                ComplianceStatus.PASS if enabled else ComplianceStatus.FAIL,
+                "subtitle setting is enabled; wording accuracy still needs review"
+                if enabled
+                else "subtitles are required but disabled",
+            )
+        )
+
+    required_mentions = policy.required_mentions_for(
+        str(_first(facts, metadata, "platform", "target_platform") or "")
+    )
+    if required_mentions:
+        mention_values: list[str] = []
+        has_evidence = False
+        for source in (facts, metadata):
+            for key in ("mentions", "caption_mentions", "caption", "description"):
+                value = _get(source, key)
+                if value is _MISSING or value is None:
+                    continue
+                if isinstance(value, (list, tuple, set)):
+                    if value:
+                        has_evidence = True
+                        mention_values.extend(str(item) for item in value)
+                elif str(value).strip():
+                    has_evidence = True
+                    mention_values.append(str(value))
+        actual_mentions = {
+            handle.casefold()
+            for text in mention_values
+            for handle in _BRIEF_MENTION_RE.findall(text)
+        }
+        if not has_evidence:
+            results.append(
+                _result(
+                    "required_mentions",
+                    ComplianceStatus.UNKNOWN,
+                    "caption mentions were not provided",
+                )
+            )
+        else:
+            missing_mentions = [
+                handle for handle in required_mentions if handle.casefold() not in actual_mentions
+            ]
+            results.append(
+                _result(
+                    "required_mentions",
+                    ComplianceStatus.FAIL if missing_mentions else ComplianceStatus.PASS,
+                    f"missing required mentions: {', '.join(missing_mentions)}"
+                    if missing_mentions
+                    else "required campaign mentions are present",
+                )
+            )
+
+    source_rule = rules.get("source_policy")
+    if isinstance(source_rule, Mapping) and (
+        source_rule.get("allow_only_approved_sources") or source_rule.get("approved_sources")
+    ):
+        approved_sources = source_rule.get("approved_sources", [])
+        approved_hosts = {host for host in (_url_host(item) for item in approved_sources) if host}
+        source_host_value = _first(facts, metadata, "source_host")
+        source_value = _first(facts, metadata, "source_url", "source_uri", "source")
+        actual_host = _url_host(source_host_value) if source_host_value is not _MISSING else ""
+        if not actual_host and source_value is not _MISSING:
+            actual_host = _url_host(source_value)
+        if not actual_host:
+            results.append(
+                _result(
+                    "source_host",
+                    ComplianceStatus.UNKNOWN,
+                    "source host is not available; verify the official source",
+                )
+            )
+        elif not approved_hosts:
+            results.append(
+                _result(
+                    "source_host",
+                    ComplianceStatus.UNKNOWN,
+                    "approved source hosts could not be extracted",
+                )
+            )
+        elif any(_same_host(actual_host, host) for host in approved_hosts):
+            results.append(
+                _result(
+                    "source_host", ComplianceStatus.PASS, f"source host {actual_host} is approved"
+                )
+            )
+        else:
+            results.append(
+                _result(
+                    "source_host",
+                    ComplianceStatus.FAIL,
+                    f"source host {actual_host} is not approved",
+                )
+            )
+
+        channel_handles = [str(item) for item in source_rule.get("approved_channel_handles", [])]
+        if channel_handles:
+            channel_value = _first(
+                facts, metadata, "source_channel_handle", "source_channel", "channel", "uploader"
+            )
+            channel_text = "" if channel_value is _MISSING else str(channel_value).strip()
+            source_text = "" if source_value is _MISSING else str(source_value).strip()
+            evidence = channel_text or source_text
+            if not evidence:
+                results.append(
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.UNKNOWN,
+                        "official channel provenance needs human review",
+                    )
+                )
+            elif any(
+                handle.casefold() in evidence.casefold()
+                or re.sub(r"[^a-z0-9]", "", handle.casefold().lstrip("@"))
+                == re.sub(r"[^a-z0-9]", "", channel_text.casefold())
+                for handle in channel_handles
+            ):
+                results.append(
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.PASS,
+                        "source channel matches the approved channel",
+                    )
+                )
+            else:
+                results.append(
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.UNKNOWN,
+                        "source channel cannot be confirmed from the available metadata",
+                    )
+                )
+
+    if "face_visible_within_seconds" in rules:
+        limit = float(rules["face_visible_within_seconds"])
+        subject = str(rules.get("face_subject") or "the featured person's").strip()
+        subject_possessive = subject if subject.endswith(("'s", "’s")) else f"{subject}'s"
+        first_face = _first(
+            facts,
+            metadata,
+            "face_first_appearance_seconds",
+            "face_visible_at_seconds",
+            "face_first_seen_seconds",
+        )
+        if first_face is _MISSING or first_face is None or str(first_face).strip() == "":
+            results.append(
+                _result(
+                    "face_visibility",
+                    ComplianceStatus.UNKNOWN,
+                    f"human review needed: verify {subject_possessive} face appears within {limit:g}s",
+                )
+            )
+        else:
+            actual = _number(first_face, -1)
+            results.append(
+                _result(
+                    "face_visibility",
+                    ComplianceStatus.PASS if 0 <= actual <= limit else ComplianceStatus.FAIL,
+                    f"first face appears at {actual:g}s (limit {limit:g}s)"
+                    if actual >= 0
+                    else "face timing is invalid",
+                )
+            )
+
+    if isinstance(rules.get("audience_requirement"), Mapping):
+        requirement = rules["audience_requirement"]
+        results.append(
+            _result(
+                "audience_requirement",
+                ComplianceStatus.UNKNOWN,
+                f"human review needed: verify at least {requirement.get('minimum_percent', 'the required')}% of views are from {', '.join(requirement.get('regions', []))}",
+            )
+        )
+    if "minimum_post_days" in rules:
+        results.append(
+            _result(
+                "post_lifetime",
+                ComplianceStatus.UNKNOWN,
+                f"human review needed: keep the post live for at least {rules['minimum_post_days']} days",
+            )
+        )
+    if "minimum_engagement_percent" in rules:
+        results.append(
+            _result(
+                "minimum_engagement",
+                ComplianceStatus.UNKNOWN,
+                f"human review needed: verify engagement reaches {rules['minimum_engagement_percent']:g}%",
+            )
+        )
+    if rules.get("likes_must_be_visible"):
+        results.append(
+            _result(
+                "likes_visibility",
+                ComplianceStatus.UNKNOWN,
+                "human review needed: confirm likes are visible",
+            )
+        )
+    if rules.get("prohibited_content"):
+        results.append(
+            _result(
+                "content_safety",
+                ComplianceStatus.UNKNOWN,
+                "human review needed: review the clip against the brief's exclusions",
+            )
+        )
+    return results
 
 
 def _branding_result(facts: Any, metadata: Any, preset: CampaignPreset) -> ComplianceResult:
@@ -990,6 +1913,7 @@ def validate_clip_against_preset(
             results.append(_result(name, ComplianceStatus.FAIL, f"{name} is missing"))
         else:
             results.append(_result(name, ComplianceStatus.PASS, f"{name} is present"))
+    results.extend(_brief_review_results(policy, facts, meta))
     return ComplianceReport(tuple(results))
 
 

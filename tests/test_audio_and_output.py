@@ -375,9 +375,14 @@ def test_o7_the_profile_caps_clip_length(monkeypatch):
     assert target <= max_len
 
 
+def test_campaign_clip_length_range_is_twenty_to_sixty_seconds(monkeypatch):
+    monkeypatch.setattr(app_settings, "output_platform", "", raising=False)
+    assert resolve_length_range("20-60s") == (20.0, 60.0, 40.0)
+
+
 def test_o7_the_cap_never_raises_the_floor_or_exceeds_itself(monkeypatch):
     monkeypatch.setattr(app_settings, "output_platform", "x", raising=False)
-    for option in ("auto", "<30s", "30-60s", "60-90s", "90s-3min"):
+    for option in ("auto", "20-60s", "<30s", "30-60s", "60-90s", "90s-3min"):
         min_len, max_len, target = resolve_length_range(option)
         assert min_len <= max_len
         assert min_len <= target <= max_len

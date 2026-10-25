@@ -78,7 +78,13 @@ ALLOWED: dict[str, str] = {
 #: be broken, which is worse than no baseline because it reads as current.
 #:
 #: Each of these is a shipped, tested feature with no effect on output. That is the point of the file.
-KNOWN_UNWIRED: dict[str, str] = {}
+KNOWN_UNWIRED: dict[str, str] = {
+    "worker.facial_tracking_upgrade": (
+        "the planner is intentionally isolated behind its opt-in settings until its proposed "
+        "filter path has end-to-end ffmpeg parity and a quality benchmark; the existing reframe "
+        "path remains authoritative"
+    ),
+}
 
 #: ``Settings`` fields nothing reads, same ratchet, same enforcement.
 #:

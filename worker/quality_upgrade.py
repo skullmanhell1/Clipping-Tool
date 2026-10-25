@@ -167,9 +167,11 @@ def video_enhancement_plan(
     Unknown strengths are treated as ``standard`` only when a caller explicitly supplied a
     non-off value. A missing filter produces a ``quality_degraded:*`` marker and an empty step.
     """
-    requested_denoise = str(
-        getattr(settings, "quality_denoise", "off") if denoise is None else denoise
-    ).strip().lower()
+    requested_denoise = (
+        str(getattr(settings, "quality_denoise", "off") if denoise is None else denoise)
+        .strip()
+        .lower()
+    )
     try:
         requested_sharpen = float(
             getattr(settings, "quality_sharpen", 0.0) if sharpen is None else sharpen
@@ -244,7 +246,11 @@ def smart_scale_crop_filter(
         source_ratio = sw / float(sh)
         target_ratio = tw / float(th)
         # A 3% aspect mismatch is usually container rounding or a camera pixel-aspect quirk.
-        selected = "fit" if abs(source_ratio - target_ratio) / max(source_ratio, target_ratio) <= 0.03 else "crop"
+        selected = (
+            "fit"
+            if abs(source_ratio - target_ratio) / max(source_ratio, target_ratio) <= 0.03
+            else "crop"
+        )
 
     if selected == "fit":
         scale = f"scale={tw}:{th}:flags={flags}:force_original_aspect_ratio=decrease"
@@ -281,7 +287,9 @@ def build_frame_delivery_plan(
     prober: CapabilityProber | None = None,
 ) -> Frame_Delivery_Plan:
     """Combine the existing CFR/VFR policy with opt-in interpolation."""
-    configured = int(target_fps or getattr(settings, "quality_target_fps", 0) or settings.output_fps)
+    configured = int(
+        target_fps or getattr(settings, "quality_target_fps", 0) or settings.output_fps
+    )
     if configured not in (30, 60):
         configured = int(settings.output_fps)
     if ceiling_fps is None:
@@ -290,11 +298,16 @@ def build_frame_delivery_plan(
             ceiling_fps = profile.max_fps if profile is not None else None
         except Exception:
             ceiling_fps = None
-    always = str(
-        getattr(settings, "frame_rate_policy", "auto")
-        if frame_rate_policy is None
-        else frame_rate_policy
-    ).strip().lower() == "always"
+    always = (
+        str(
+            getattr(settings, "frame_rate_policy", "auto")
+            if frame_rate_policy is None
+            else frame_rate_policy
+        )
+        .strip()
+        .lower()
+        == "always"
+    )
     rate = frame_rate.plan_frame_rate(
         avg_fps=float(avg_fps),
         base_fps=float(base_fps),
@@ -389,7 +402,9 @@ def build_audio_upgrade_plan(
                 filters.append(audio.true_peak_limit_filter())
             else:
                 markers.append("quality_degraded:ffmpeg_filter:alimiter")
-    return Audio_Upgrade_Plan(tuple(filters), tuple(markers), want_loudness and loudness_stats is None)
+    return Audio_Upgrade_Plan(
+        tuple(filters), tuple(markers), want_loudness and loudness_stats is None
+    )
 
 
 @dataclass(frozen=True)
@@ -431,11 +446,15 @@ def build_platform_encoding_plan(
         else configured_audio
     )
     max_fps = profile.max_fps if profile is not None else 60
-    requested = str(
-        requested_encoder
-        if requested_encoder is not None
-        else getattr(settings, "video_encoder", "libx264") or "libx264"
-    ).strip().lower()
+    requested = (
+        str(
+            requested_encoder
+            if requested_encoder is not None
+            else getattr(settings, "video_encoder", "libx264") or "libx264"
+        )
+        .strip()
+        .lower()
+    )
     markers: list[str] = []
     if chosen.marker:
         markers.append(chosen.marker)
@@ -530,7 +549,9 @@ class Quality_Plan:
 
     @property
     def enabled(self) -> bool:
-        return self.preset.enabled or bool(self.video_filters or self.audio_filters or self.scale_filter)
+        return self.preset.enabled or bool(
+            self.video_filters or self.audio_filters or self.scale_filter
+        )
 
     @property
     def video_chain(self) -> str:
@@ -640,14 +661,12 @@ def build_quality_plan(
     if progress_sink is None and not bool(getattr(settings, "quality_progress_metadata", False)):
         progress_sink = None
     try:
-        sharpen_enabled = float(
-            getattr(settings, "quality_sharpen", 0.0) if sharpen is None else sharpen
-        ) > 0
+        sharpen_enabled = (
+            float(getattr(settings, "quality_sharpen", 0.0) if sharpen is None else sharpen) > 0
+        )
     except (TypeError, ValueError):
         sharpen_enabled = False
-    requested_denoise = (
-        getattr(settings, "quality_denoise", "off") if denoise is None else denoise
-    )
+    requested_denoise = getattr(settings, "quality_denoise", "off") if denoise is None else denoise
     requested_audio_denoise = (
         getattr(settings, "quality_audio_denoise", "off")
         if audio_denoise is None
@@ -678,21 +697,29 @@ def build_quality_plan(
         if interpolation is None
         else bool(interpolation)
     )
-    requested_frame_policy = str(
-        getattr(settings, "frame_rate_policy", "auto")
-        if frame_rate_policy is None
-        else frame_rate_policy
-    ).strip().lower()
-    requested_scaler_flags = str(
-        getattr(settings, "scaler_flags", "bicubic")
-        if scaler_flags is None
-        else scaler_flags
-    ).strip().lower()
-    requested_encoder_value = str(
-        getattr(settings, "video_encoder", "libx264")
-        if requested_encoder is None
-        else requested_encoder
-    ).strip().lower()
+    requested_frame_policy = (
+        str(
+            getattr(settings, "frame_rate_policy", "auto")
+            if frame_rate_policy is None
+            else frame_rate_policy
+        )
+        .strip()
+        .lower()
+    )
+    requested_scaler_flags = (
+        str(getattr(settings, "scaler_flags", "bicubic") if scaler_flags is None else scaler_flags)
+        .strip()
+        .lower()
+    )
+    requested_encoder_value = (
+        str(
+            getattr(settings, "video_encoder", "libx264")
+            if requested_encoder is None
+            else requested_encoder
+        )
+        .strip()
+        .lower()
+    )
     encoder_requested = requested_encoder_value not in {"", "libx264"}
     if not selected.enabled and not any(
         (
@@ -762,7 +789,9 @@ def build_quality_plan(
     frame_target = (
         requested_target_fps
         if requested_target_fps in (30, 60)
-        else selected.target_fps if selected.enabled and selected.target_fps else None
+        else selected.target_fps
+        if selected.enabled and selected.target_fps
+        else None
     )
     frame_plan = build_frame_delivery_plan(
         avg_fps=avg_fps,

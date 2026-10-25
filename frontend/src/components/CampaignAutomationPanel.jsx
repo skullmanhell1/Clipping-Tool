@@ -37,6 +37,8 @@ export default function CampaignAutomationPanel({
     const source = usePasteFallback ? pasteText : driveUrl;
     if (!source.trim()) return;
     setBusy("parse");
+    setPreset(null);
+    setProvenance(null);
     setError("");
     setMessage("");
     try {
@@ -45,12 +47,25 @@ export default function CampaignAutomationPanel({
         : await api.parseCampaignPresetFromDrive(driveUrl);
       setPreset(result.preset);
       setProvenance(result);
-      setMessage("Preset loaded for review. Applying it will update job options only.");
+      setMessage("New brief loaded for review. Applying it replaces the previous campaign preset.");
     } catch (parseError) {
       setError(parseError.message || "Could not load the campaign brief.");
+      if (!usePasteFallback && parseError.detail?.fall_back_to_paste) {
+        setUsePasteFallback(true);
+        setMessage("The link could not be read. Paste the brief text here to load it without Drive access.");
+      }
     } finally {
       setBusy("");
     }
+  };
+
+  const clearBrief = () => {
+    setPreset(null);
+    setProvenance(null);
+    setDriveUrl("");
+    setPasteText("");
+    setError("");
+    setMessage("");
   };
 
   const applyPreset = () => {
@@ -100,16 +115,78 @@ export default function CampaignAutomationPanel({
 
   const sourceLabel = provenance?.provenance?.source_type === "paste" ? "Pasted brief" : "Google Drive";
   const syncStatus = provenance?.sync?.status || provenance?.sync_status;
+  const briefRules = preset?.brief_rules || {};
+  const requiredMentionRule = briefRules.required_mentions || {};
+  const mentionRows = [
+    ...(requiredMentionRule.common?.length
+      ? [["Shared tags", requiredMentionRule.common.join(" ")]]
+      : []),
+    ...Object.entries(requiredMentionRule.by_platform || {}).map(([platform, tags]) => [
+      ({ youtube_shorts: "YouTube Shorts", instagram: "Instagram Reels", tiktok: "TikTok" })[platform] || platform,
+      Array.isArray(tags) ? tags.join(" ") : String(tags || ""),
+    ]),
+  ];
+  const durationRule = briefRules.clip_duration_seconds;
+  const sourceRule = briefRules.source_policy || {};
+  const audienceRule = briefRules.audience_requirement || {};
+  const payoutRule = briefRules.payout || {};
+  const ruleItems = [];
+  if (durationRule?.min !== undefined || durationRule?.max !== undefined) {
+    ruleItems.push(`Clip length: ${durationRule.min ?? "?"}–${durationRule.max ?? "?"} seconds`);
+  }
+  if (briefRules.subtitles_required) ruleItems.push("Subtitles: on for the whole clip (check accuracy)");
+  if (mentionRows.length) {
+    mentionRows.forEach(([platform, tags]) => ruleItems.push(`${platform}: ${tags}`));
+  }
+  if (sourceRule.allow_only_approved_sources || sourceRule.approved_sources?.length) {
+    ruleItems.push(`Source: only use ${sourceRule.approved_sources?.join(", ") || "the approved source"}`);
+  }
+  if (briefRules.face_visible_within_seconds !== undefined) {
+    const faceSubject = briefRules.face_subject || "the featured person";
+    ruleItems.push(`Human check: ${faceSubject}'s face appears in the first ${briefRules.face_visible_within_seconds} seconds`);
+  }
+  if (audienceRule.minimum_percent !== undefined) {
+    ruleItems.push(`After posting: ${audienceRule.minimum_percent}% of views from ${(audienceRule.regions || []).join(", ")}`);
+  }
+  if (briefRules.minimum_post_days !== undefined) {
+    ruleItems.push(`After posting: keep each post up for ${briefRules.minimum_post_days} days`);
+  }
+  if (briefRules.minimum_engagement_percent !== undefined) {
+    ruleItems.push(`Human check: at least ${briefRules.minimum_engagement_percent}% engagement`);
+  }
+  const payoutFacts = [];
+  if (payoutRule.cpm_usd !== undefined) payoutFacts.push(`$${payoutRule.cpm_usd} per 1,000 views`);
+  if (payoutRule.maximum_per_clip_usd !== undefined) payoutFacts.push(`up to $${payoutRule.maximum_per_clip_usd} per clip`);
+  if (payoutRule.minimum_payout_usd !== undefined) payoutFacts.push(`$${payoutRule.minimum_payout_usd} minimum payout`);
+  if (payoutFacts.length) ruleItems.push(`Payout facts: ${payoutFacts.join("; ")}`);
+  if (briefRules.selection_guidance) ruleItems.push(`Choose clips: ${briefRules.selection_guidance}`);
+  Object.entries(briefRules.platform_topic_guidance || {}).forEach(([platform, topics]) => {
+    const label = ({ youtube_shorts: "YouTube Shorts", instagram: "Instagram Reels", tiktok: "TikTok" })[platform] || platform;
+    const text = Array.isArray(topics) ? topics.join("; ") : String(topics || "");
+    if (text) ruleItems.push(`${label} topic fit: ${text}`);
+  });
+  if (Array.isArray(briefRules.clip_formats)) {
+    briefRules.clip_formats.forEach((format) => {
+      if (format?.name && format?.guidance) ruleItems.push(`${format.name}: ${format.guidance}`);
+    });
+  }
+  if (briefRules.suggested_caption_font) ruleItems.push(`Suggested caption font: ${briefRules.suggested_caption_font}`);
+  if (briefRules.likes_must_be_visible) ruleItems.push("Human check: likes stay visible");
+  if (briefRules.caption_guidance) ruleItems.push(`Caption: ${briefRules.caption_guidance}`);
+  if (briefRules.prohibited_content?.length) {
+    ruleItems.push(`Do not use: ${briefRules.prohibited_content.join(" ")}`);
+  }
+  if (!ruleItems.length && preset) ruleItems.push("No extra rules were picked up. Check the brief before applying.");
 
   return (
     <section className="rounded-2xl border border-violet-400/20 bg-violet-400/[0.04] p-4 shadow-lg shadow-violet-950/10">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-300">Campaign automation</p>
-          <h2 className="mt-1 text-lg font-semibold text-white">Brief → preset → public schedule</h2>
+          <h2 className="mt-1 text-lg font-semibold text-white">Campaign brief</h2>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
-            Link a Google Doc to create a reviewable preset for brand, captions, formats, hashtags and hooks.
-            Scheduling refuses drafts/private posts and queues exactly two clips at distinct peak-time slots.
+            Load a Google Doc/Drive brief or paste its text. Check the rules, then apply the new brief to your job.
+            The separate public scheduler stays below when you are ready to post.
           </p>
         </div>
         <span className="rounded-full border border-emerald-400/20 bg-emerald-400/[0.08] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
@@ -120,26 +197,32 @@ export default function CampaignAutomationPanel({
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-300" htmlFor="campaign-brief-url">
-            Google Doc link
+            Google Doc or Drive link
           </label>
           <input
             id="campaign-brief-url"
             type="url"
             value={driveUrl}
-            onChange={(event) => setDriveUrl(event.target.value)}
+            onChange={(event) => {
+              setDriveUrl(event.target.value);
+              setPreset(null);
+              setProvenance(null);
+            }}
             className="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-sm text-slate-100 outline-none focus:border-violet-300"
-            placeholder="https://docs.google.com/document/d/..."
+            placeholder="https://docs.google.com/document/d/... or drive.google.com/file/d/..."
             disabled={usePasteFallback}
           />
           <p className="text-[11px] leading-5 text-slate-500">
             {driveConfigured
-              ? "Drive OAuth is configured on the server. The document is read there; credentials never enter the browser."
-              : "Drive OAuth is not configured on the server yet. You can still use the paste fallback below."}
+              ? "The server tries Drive OAuth first, then a public link export. Private files need Viewer access for the server account; credentials never enter the browser."
+              : "Public Google links can be read without OAuth. Private files need server-side Drive OAuth, or paste the brief text below."}
           </p>
           <button
             type="button"
             onClick={() => {
               setUsePasteFallback((current) => !current);
+              setPreset(null);
+              setProvenance(null);
               setError("");
               setMessage("");
             }}
@@ -152,9 +235,13 @@ export default function CampaignAutomationPanel({
               id="campaign-brief-paste"
               aria-label="Pasted campaign brief fallback"
               value={pasteText}
-              onChange={(event) => setPasteText(event.target.value)}
+              onChange={(event) => {
+                setPasteText(event.target.value);
+                setPreset(null);
+                setProvenance(null);
+              }}
               className="h-36 w-full resize-y rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-sm text-slate-100 outline-none focus:border-violet-300"
-              placeholder={'Campaign: Creator Growth\nAspect ratios: 9:16\nHashtags: #brand #podcast\nDaily clips: 2\nPublic visibility: required'}
+              placeholder={'Paste the full brief here\nExample: use official clips only; keep clips 20–60 seconds; add the required account tags.'}
             />
           ) : null}
           <button
@@ -163,7 +250,7 @@ export default function CampaignAutomationPanel({
             disabled={busy === "parse" || !(usePasteFallback ? pasteText : driveUrl).trim()}
             className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:opacity-40"
           >
-            {busy === "parse" ? "Loading…" : usePasteFallback ? "Parse pasted brief" : "Fetch and review preset"}
+            {busy === "parse" ? "Loading…" : usePasteFallback ? "Parse pasted brief" : "Load and review brief"}
           </button>
           {preset ? (
             <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-xs text-slate-300">
@@ -179,14 +266,26 @@ export default function CampaignAutomationPanel({
                 {sourceLabel}{syncStatus ? ` · ${syncStatus}` : ""}
                 {provenance?.provenance?.file_id ? ` · file ${provenance.provenance.file_id}` : ""}
               </p>
+              <div aria-label="Parsed brief rules" className="mt-3 rounded-lg border border-violet-300/15 bg-violet-300/[0.04] p-3">
+                <p className="text-xs font-semibold text-violet-100">Rules found — check before applying</p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-5 text-slate-300">
+                  {ruleItems.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                {sourceRule.style_references?.length ? (
+                  <p className="mt-2 text-[10px] text-slate-500">Style reference only: {sourceRule.style_references.join(", ")}</p>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={applyPreset}
                 className="mt-3 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20"
               >
-                Apply preset to job options
+                Apply / replace campaign preset
               </button>
-              <p className="mt-2 text-[11px] text-slate-500">Review first. This does not create or save a publish campaign.</p>
+              <button type="button" onClick={clearBrief} className="ml-3 mt-3 text-xs font-semibold text-slate-400 hover:text-white hover:underline">
+                Load a different brief
+              </button>
+              <p className="mt-2 text-[11px] text-slate-500">This replaces old brief-derived settings only. It does not create or save a publish campaign.</p>
             </div>
           ) : null}
         </div>

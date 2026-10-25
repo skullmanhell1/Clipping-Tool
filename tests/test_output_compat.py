@@ -134,23 +134,35 @@ def test_every_encode_site_uses_the_shared_builder():
     flags came to be missing from all seven. A new site that hand-rolls them would silently
     reintroduce that.
     """
+    import ast
     import pathlib
-    import re
 
     root = pathlib.Path(__file__).resolve().parents[1]
     # The two modules that *are* the builder. `video_encoders` was split out for O8 because
     # choosing an encoder needs a probe, a per-encoder quality mapping and a fallback - too much
-    # to sit inside `h264_args` - so "libx264" legitimately appears there as the software default
-    # and the fallback target. Exempted by name rather than by pattern, so a third module cannot
-    # join the list by accident.
+    # to sit inside `h264_args` - so direct encoder arguments legitimately live there.
     builder_modules = {"ffmpeg_utils.py", "video_encoders.py"}
     offenders: list[str] = []
     for path in sorted((root / "worker").rglob("*.py")):
         if path.name in builder_modules:
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r'["\']libx264["\']', line) and not line.lstrip().startswith("#"):
-                offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.List, ast.Tuple)):
+                values = {
+                    item.value
+                    for item in node.elts
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                }
+                if "libx264" in values and values.intersection({"-c:v", "-vcodec", "-codec:v"}):
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}: direct x264 argv")
+            elif (
+                isinstance(node, ast.keyword)
+                and node.arg == "vcodec"
+                and isinstance(node.value, ast.Constant)
+                and node.value.value == "libx264"
+            ):
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}: direct vcodec keyword")
     assert not offenders, (
         "these encodes name libx264 directly instead of calling h264_args(), so they do "
         "not get the compatibility flags:\n" + "\n".join(offenders)

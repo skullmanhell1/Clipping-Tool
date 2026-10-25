@@ -64,7 +64,7 @@ def _captured_filter(monkeypatch, tmp_path, make_video, **kwargs) -> str:
     """Run `apply_reframe` with a stubbed encoder and return the `-vf` string it built."""
     src = make_video("stab_src.mp4", duration=1.0, w=1280, h=720)
 
-    def fake_track(video, sample_fps=5.0, backend=None, detector=None):
+    def fake_track(video, sample_fps=5.0, backend=None, detector=None, *, min_score=None):
         centres = [rf.Center(0.0, 640, 360), rf.Center(1.0, 640, 360)]
         return centres, rf.synthetic_report([[(0, 0, 10, 10)]] * 2, "injected", sample_fps)
 

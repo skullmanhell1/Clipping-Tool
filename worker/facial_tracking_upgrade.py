@@ -12,7 +12,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from config import settings
 from worker.effects import reframe
@@ -31,7 +31,7 @@ class Facial_Tracking_Config:
     command_fps: float = 24.0
 
     @classmethod
-    def from_settings(cls) -> "Facial_Tracking_Config":
+    def from_settings(cls) -> Facial_Tracking_Config:
         return cls(
             enabled=bool(getattr(settings, "facial_tracking_upgrade", False)),
             confidence_threshold=_clamp01(
@@ -82,7 +82,7 @@ class Facial_Tracking_Plan:
 
 def _clamp01(value: object) -> float:
     try:
-        parsed = float(value)
+        parsed = float(cast(Any, value))
     except (TypeError, ValueError):
         return 0.0
     if not math.isfinite(parsed):
@@ -102,15 +102,16 @@ def _coerce_face_box(item: object, *, time: float = 0.0) -> reframe.FaceBox | No
         return reframe.FaceBox(time, item.x, item.y, item.w, item.h, item.score)
     try:
         if all(hasattr(item, attr) for attr in ("x", "y", "w", "h")):
+            face = cast(Any, item)
             return reframe.FaceBox(
-                float(getattr(item, "t", time)),
-                int(getattr(item, "x")),
-                int(getattr(item, "y")),
-                int(getattr(item, "w")),
-                int(getattr(item, "h")),
-                getattr(item, "score", None),
+                float(getattr(face, "t", time)),
+                int(face.x),
+                int(face.y),
+                int(face.w),
+                int(face.h),
+                getattr(face, "score", None),
             )
-        x, y, w, h = item  # type: ignore[misc]
+        x, y, w, h = cast(Any, item)
         return reframe.FaceBox(time, int(x), int(y), int(w), int(h), None)
     except (TypeError, ValueError):
         return None
@@ -190,7 +191,9 @@ def select_active_face_track(
         scored = [
             (
                 sum(
-                    track.presence(float(getattr(turn, "start", 0.0)), float(getattr(turn, "end", 0.0)))
+                    track.presence(
+                        float(getattr(turn, "start", 0.0)), float(getattr(turn, "end", 0.0))
+                    )
                     for turn in speaker_turns
                 ),
                 index,
@@ -199,12 +202,19 @@ def select_active_face_track(
             for index, track in enumerate(usable)
         ]
     else:
-        scored = [(_track_score(track, float(start), float(end)), index, track) for index, track in enumerate(usable)]
+        scored = [
+            (_track_score(track, float(start), float(end)), index, track)
+            for index, track in enumerate(usable)
+        ]
     return max(scored, key=lambda item: (item[0], -item[1]))[2]
 
 
 def rank_face_tracks(
-    tracks: Sequence[reframe.Face_Track], *, start: float = 0.0, end: float | None = None, limit: int = 2
+    tracks: Sequence[reframe.Face_Track],
+    *,
+    start: float = 0.0,
+    end: float | None = None,
+    limit: int = 2,
 ) -> list[reframe.Face_Track]:
     """Return stable multi-face ranking for split-screen or active-speaker callers."""
     if end is None:
@@ -229,7 +239,9 @@ def track_centers(
     if not samples:
         return []
     smoothed = reframe.smooth_centers(samples, alpha=_clamp01(smoothing), zero_phase=True)
-    return reframe.resample_centers(smoothed, max(1.0, float(command_fps)), max(0.0, float(duration)))
+    return reframe.resample_centers(
+        smoothed, max(1.0, float(command_fps)), max(0.0, float(duration))
+    )
 
 
 def _fallback_plan(
@@ -292,9 +304,7 @@ def plan_face_tracking(
     if not tracks:
         return _fallback_plan(cfg, "no_detections", enabled=True, coverage=coverage)
     if coverage < cfg.coverage_floor:
-        return _fallback_plan(
-            cfg, "low_confidence", enabled=True, coverage=coverage, tracks=tracks
-        )
+        return _fallback_plan(cfg, "low_confidence", enabled=True, coverage=coverage, tracks=tracks)
 
     selected = select_active_face_track(
         tracks,
@@ -311,7 +321,9 @@ def plan_face_tracking(
         smoothing=cfg.smoothing,
     )
     if not centers:
-        return _fallback_plan(cfg, "unsmoothed_path_empty", enabled=True, coverage=coverage, tracks=tracks)
+        return _fallback_plan(
+            cfg, "unsmoothed_path_empty", enabled=True, coverage=coverage, tracks=tracks
+        )
 
     ranked = rank_face_tracks(tracks, end=duration, limit=2 if cfg.multiple_faces else 1)
     markers = [

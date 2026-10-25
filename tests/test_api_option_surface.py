@@ -249,6 +249,10 @@ _UI_ENCODINGS = {
     # coercion happens in ProcessingOptions.from_dict.
     "range_start",
     "range_end",
+    # Friendly UI enums encode numeric/boolean options; App.jsx maps "off" to 0/False before
+    # forwarding the job request.
+    "quality_sharpen",
+    "quality_interpolation",
 }
 
 

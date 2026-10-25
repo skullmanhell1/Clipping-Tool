@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from config import settings
 
@@ -182,7 +183,10 @@ def _manifest(directory: Path) -> dict[str, dict[str, Any]]:
             return {}
         records = raw.get("assets", raw) if isinstance(raw, Mapping) else raw
         if isinstance(records, Mapping):
-            records = [dict(value, id=key) if isinstance(value, Mapping) else {"id": key} for key, value in records.items()]
+            records = [
+                dict(value, id=key) if isinstance(value, Mapping) else {"id": key}
+                for key, value in records.items()
+            ]
         if not isinstance(records, list):
             return {}
         result: dict[str, dict[str, Any]] = {}
@@ -226,7 +230,13 @@ def discover_assets(directory: str | Path | None, *, kind: str = "") -> list[Mem
         if not path.is_file() or path.name.startswith("."):
             continue
         suffix = path.suffix.lower()
-        detected_kind = "sfx" if suffix in AUDIO_EXTENSIONS else "overlay" if suffix in OVERLAY_EXTENSIONS else ""
+        detected_kind = (
+            "sfx"
+            if suffix in AUDIO_EXTENSIONS
+            else "overlay"
+            if suffix in OVERLAY_EXTENSIONS
+            else ""
+        )
         if not detected_kind or (kind and detected_kind != kind):
             continue
         record = dict(manifest.get(path.name) or manifest.get(path.stem) or {})
@@ -268,13 +278,20 @@ class MemeAssetLibrary:
         key = _safe_text(name).lower()
         if key:
             for asset in self.assets:
-                if asset.id.lower() == key or asset.name.lower() == key or asset.path.stem.lower() == key:
+                if (
+                    asset.id.lower() == key
+                    or asset.name.lower() == key
+                    or asset.path.stem.lower() == key
+                ):
                     return asset
         wanted = {item.lower() for item in tags if item}
         if wanted:
             ranked = [asset for asset in self.assets if wanted.intersection(asset.tags)]
             if ranked:
-                return sorted(ranked, key=lambda asset: (-len(wanted.intersection(asset.tags)), str(asset.path)))[0]
+                return sorted(
+                    ranked,
+                    key=lambda asset: (-len(wanted.intersection(asset.tags)), str(asset.path)),
+                )[0]
         return self.assets[0] if self.assets and not name and not wanted else None
 
 
