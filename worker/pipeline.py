@@ -28,6 +28,7 @@ from pathlib import Path
 from config import settings
 from worker import (
     assembly,
+    audio_features,
     brand_bumpers,
     branding,
     colour,
@@ -37,7 +38,10 @@ from worker import (
     engagement,
     frame_rate,
     intermediate_cache,
+    meme_mode,
+    quality_upgrade,
     segmentation,
+    scene_detect,
     stabilise,
     storytelling,
     subtitle_export,
@@ -127,6 +131,16 @@ def _background_style() -> str:
     """
     style = str(getattr(settings, "background_style", "blur") or "blur").strip().lower()
     return style if style in fu.BACKGROUND_STYLES else "blur"
+
+
+def _tracking_fallback(options) -> tuple[str, str, str]:
+    """Resolve the explicit face-tracking fallback into a real reformat mode."""
+    choice = str(getattr(options, "facial_fallback", "static_crop_blur") or "static_crop_blur")
+    if choice == "static_crop":
+        return "crop", _background_style(), "static_crop"
+    if choice == "none":
+        return "pad", "black", "none"
+    return "crop_blur", _background_style(), "static_crop_blur"
 
 
 def _caption_face_boxes(clip: Path, options) -> tuple:
@@ -219,7 +233,16 @@ def run_pipeline(
         if options.output_platform
         else nullcontext()
     )
-    with profile_scope:
+    # An explicit quality/output resolution is scoped to this job. Platform profiles remain the
+    # default when quality is off and the request leaves the historical 1080 setting untouched.
+    requested_short_side = getattr(options, "output_short_side", 1080)
+    quality_requested = str(getattr(options, "quality_preset", "off") or "off").lower() != "off"
+    short_side_scope = (
+        output_profiles.use_short_side(requested_short_side)
+        if quality_requested or requested_short_side != 1080
+        else nullcontext()
+    )
+    with profile_scope, short_side_scope:
         return _run_pipeline(
             source,
             options,
@@ -335,8 +358,14 @@ def _run_pipeline(
     _rate_plan = frame_rate.plan_frame_rate(
         avg_fps=info.fps,
         base_fps=getattr(info, "base_fps", 0.0) or info.fps,
-        configured_fps=int(settings.output_fps),
-        always_normalise=str(settings.frame_rate_policy).lower() == "always",
+        configured_fps=int(
+            getattr(options, "quality_target_fps", 0)
+            or getattr(settings, "output_fps", 30)
+        ),
+        always_normalise=str(
+            getattr(options, "frame_rate_policy", getattr(settings, "frame_rate_policy", "auto"))
+        ).lower()
+        == "always",
         ceiling_fps=None,
     )
     delivered_fps = _rate_plan.delivered_fps
@@ -449,10 +478,44 @@ def _run_pipeline(
 
     # O8: resolved once per job, not per clip - the probe runs a real one-frame encode, and the
     # answer cannot change between two clips of the same source.
-    encoder_choice = video_encoders.resolve_encoder()
+    encoder_choice = video_encoders.resolve_encoder(
+        getattr(options, "video_encoder", "") or None
+    )
     encoder_marker = encoder_choice.marker
     if encoder_choice.encoder.hardware:
         encoder_marker = encoder_marker or f"encoder:{encoder_choice.encoder.name}"
+
+    # Quality is planned once per source and consumed by the geometry/compositor stages below.
+    # The plan is opt-in; an untouched request returns an inert plan and the legacy render path is
+    # preserved. Explicit options win over environment defaults so queued jobs remain reproducible.
+    quality_plan = quality_upgrade.build_quality_plan(
+        aspect=options.aspect,
+        source_width=info.width,
+        source_height=info.height,
+        avg_fps=info.fps,
+        base_fps=getattr(info, "base_fps", 0.0) or info.fps,
+        platform=options.output_platform or options.platform,
+        preset=getattr(options, "quality_preset", "off"),
+        smart_scale=getattr(options, "quality_smart_scale", False),
+        crop_mode=getattr(options, "quality_crop_mode", "crop"),
+        denoise=getattr(options, "quality_denoise", "off"),
+        sharpen=getattr(options, "quality_sharpen", 0.0),
+        colour_correction=getattr(options, "quality_colour_correction", False),
+        target_fps=getattr(options, "quality_target_fps", 0),
+        interpolation=getattr(options, "quality_interpolation", False),
+        audio_denoise=getattr(options, "quality_audio_denoise", "off"),
+        audio_loudness=getattr(options, "quality_audio_loudness", False),
+        voice_clarity=getattr(options, "quality_voice_clarity", False),
+        requested_encoder=getattr(options, "video_encoder", "") or None,
+        frame_rate_policy=getattr(options, "frame_rate_policy", None),
+        scaler_flags=getattr(options, "scaler_flags", None),
+        progress=lambda event: report(
+            _P_TRANSCRIBE_END + (_P_SELECT_END - _P_TRANSCRIBE_END) * event.fraction,
+            event.message,
+        ),
+    )
+    if quality_plan.frame_plan is not None:
+        delivered_fps = quality_plan.frame_plan.rate.delivered_fps
 
     report(_P_TRANSCRIBE_END, "Finding the best moments")
 
@@ -585,6 +648,33 @@ def _run_pipeline(
         except (fu.FFmpegError, OSError):
             source_silences = []
 
+    # Meme auto-suggestions reuse source-level acoustic/scene measurements where available. They
+    # are strictly opt-in and best-effort: a missing optional analysis signal simply leaves manual
+    # events and preset events usable.
+    meme_energy: list[tuple[float, float]] = []
+    meme_scene_cuts: list[float] = []
+    if options.meme_mode and options.meme_auto_suggest:
+        try:
+            meme_energy = list(
+                intermediate_cache.memoise(
+                    "meme_energy",
+                    source,
+                    lambda: [list(pair) for pair in audio_features.energy_envelope(source)],
+                )
+            )
+        except Exception:
+            meme_energy = []
+        try:
+            meme_scene_cuts = list(
+                intermediate_cache.memoise(
+                    "meme_scene_cuts",
+                    source,
+                    lambda: list(scene_detect.scan_cuts(source)),
+                )
+            )
+        except Exception:
+            meme_scene_cuts = []
+
     for idx, c in enumerate(candidates):
         base = _P_SELECT_END + clip_span * (idx / n)
         report(base, f"Rendering clip {idx + 1} of {n}")
@@ -600,6 +690,7 @@ def _run_pipeline(
         # Recorded per clip for exactly the reason the translation marker below is: the clip record
         # is the only thing a caller sees.
         applied.extend(normalisation_notes)
+        applied.extend(marker for marker in quality_plan.markers if marker not in applied)
         # T10: why a requested translated track is not on this clip. Recorded per clip even
         # though the reason is a property of the source, because the clip record is the only
         # thing a caller sees - an absent track with no explanation is indistinguishable from
@@ -617,6 +708,8 @@ def _run_pipeline(
         if encoder_marker:
             applied.append(encoder_marker)
         broll_assets: list[dict] = []
+        meme_events: list[dict] = []
+        meme_assets: list[dict] = []
         # Filler keep-plan for this clip (None unless filler removal tightened
         # the timeline). Used to rebase speaker turns onto the same tightened
         # timeline the rebased words already use (Reqs 13.4, 13.5).
@@ -722,6 +815,58 @@ def _run_pipeline(
         if is_boxabl_campaign:
             normalize_boxabl_words(words)
             normalize_boxabl_words(translated_words)
+
+        # Resolve meme events only on the clip-relative delivered timeline. Manual entries retain
+        # their exact requested times; preset/heuristic entries are clamped and carry stable ids.
+        if options.meme_mode:
+            requested_meme_events = list(getattr(options, "meme_events", []) or [])
+            preset_meme_events = meme_mode.preset_events(options.meme_preset, clip_duration)
+            requested_meme_events.extend(event.to_dict() for event in preset_meme_events)
+            if preset_meme_events:
+                applied.append(f"meme:preset:{options.meme_preset}")
+            if options.meme_auto_suggest:
+                relative_energy = [
+                    (float(at) - float(c.start), float(level))
+                    for at, level in meme_energy
+                    if float(c.start) <= float(at) < float(c.end)
+                ]
+                relative_silences = [
+                    (max(0.0, float(start) - float(c.start)), max(0.0, float(end) - float(c.start)))
+                    for start, end in source_silences
+                    if float(end) > float(c.start) and float(start) < float(c.end)
+                ]
+                relative_cuts = [
+                    float(at) - float(c.start)
+                    for at in meme_scene_cuts
+                    if float(c.start) < float(at) < float(c.end)
+                ]
+                requested_meme_events.extend(
+                    event.to_dict()
+                    for event in meme_mode.suggest_events(
+                        words,
+                        duration=clip_duration,
+                        transcript_text=clip_text,
+                        energy=relative_energy,
+                        silences=relative_silences,
+                        scene_cuts=relative_cuts,
+                    )
+                )
+                applied.append("meme:auto_suggestions")
+            if options.permissibility_mode:
+                had_meme_audio = any(
+                    isinstance(event, dict)
+                    and str(event.get("kind", "")).lower() in {"sfx", "audio"}
+                    for event in requested_meme_events
+                )
+                requested_meme_events = [
+                    event
+                    for event in requested_meme_events
+                    if not isinstance(event, dict)
+                    or str(event.get("kind", "")).lower() not in {"sfx", "audio"}
+                ]
+                if had_meme_audio:
+                    applied.append("meme_audio_suppressed:permissibility")
+            meme_events = [event.to_dict() for event in meme_mode.normalize_events(requested_meme_events, clip_duration)]
 
         # Retention plan is built from the actual clip-relative words. Its event
         # evidence remains source-relative, so a silence-trimmed boundary can be
@@ -841,6 +986,11 @@ def _run_pipeline(
                     translated_words = _rebase(translated_words, pending)
                 keep_plan = pending
                 clip_duration = sum(k.duration for k in pending)
+                if meme_events:
+                    meme_events = [
+                        event.to_dict()
+                        for event in meme_mode.rebase_events(meme_events, pending, clip_duration)
+                    ]
                 applied.extend(pending_markers)
             except fu.FFmpegError as exc:
                 # Keep the untrimmed clip -- but *say so*. This was a bare `pass`, and `pending`
@@ -1060,8 +1210,10 @@ def _run_pipeline(
                     detector=FACE_DETECTOR,
                     sampler=FRAME_SAMPLER,
                     backend=options.face_detector,
+                    min_score=getattr(options, "face_detector_min_score", None),
                     notes=applied,
                     colour_tags=clip_colour.tags,
+                    max_regions=getattr(options, "split_screen_max_regions", 2),
                 )
                 # Record the applied-layout marker (Req 14.5) and attach the
                 # per-source diarisation provenance notes (Reqs 4.2/4.4/16.5).
@@ -1077,24 +1229,29 @@ def _run_pipeline(
                         geo,
                         aspect=options.aspect,
                         backend=options.face_detector,
+                        min_score=getattr(options, "face_detector_min_score", None),
                         detector=FACE_DETECTOR,
                         notes=applied,
                         colour_tags=clip_colour.tags,
+                        zero_phase=getattr(options, "reframe_zero_phase", None),
+                        reset_on_cut=getattr(options, "reframe_reset_on_cut", None),
                         # The speaker path degraded to this one, but it is still a real
                         # `apply_reframe` render, so V23 applies here on the same terms.
                         normalise_scale=normalise_scale,
                     )
                     applied.append("reframe")
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
+                    fallback_mode, fallback_background, fallback_marker = _tracking_fallback(options)
                     fu.reformat_aspect(
                         raw,
                         geo,
                         aspect=options.aspect,
-                        mode="crop_blur",
+                        mode=fallback_mode,
                         colour_tags=clip_colour.tags,
-                        background=_background_style(),
+                        background=fallback_background,
                         background_color=str(getattr(settings, "background_color", "0x0F172A")),
                     )
+                    applied.append(f"face_tracking_fallback:{fallback_marker}")
         elif options.reframe:
             try:
                 reframe.apply_reframe(
@@ -1102,9 +1259,12 @@ def _run_pipeline(
                     geo,
                     aspect=options.aspect,
                     backend=options.face_detector,
+                    min_score=getattr(options, "face_detector_min_score", None),
                     detector=FACE_DETECTOR,
                     notes=applied,
                     colour_tags=clip_colour.tags,
+                    zero_phase=getattr(options, "reframe_zero_phase", None),
+                    reset_on_cut=getattr(options, "reframe_reset_on_cut", None),
                     stabilise_margin=stab_margin,
                     prefilter=stab_prefilter,
                     normalise_scale=normalise_scale,
@@ -1115,15 +1275,17 @@ def _run_pipeline(
                 # at all. Recording it earlier would put `stabilise:0.60` on an unstabilised clip.
                 applied.extend(m for m in stab_plan.markers if m not in applied)
             except (reframe.ReframeUnavailable, fu.FFmpegError):
+                fallback_mode, fallback_background, fallback_marker = _tracking_fallback(options)
                 fu.reformat_aspect(
                     raw,
                     geo,
                     aspect=options.aspect,
-                    mode="crop_blur",
+                    mode=fallback_mode,
                     colour_tags=clip_colour.tags,
-                    background=_background_style(),
+                    background=fallback_background,
                     background_color=str(getattr(settings, "background_color", "0x0F172A")),
                 )
+                applied.append(f"face_tracking_fallback:{fallback_marker}")
         else:
             fu.reformat_aspect(
                 raw,
@@ -1267,6 +1429,12 @@ def _run_pipeline(
                 retention_beats=retention_plan.zoom_beats,
                 retention_sfx_times=retention_plan.sfx_times,
                 retention_emphasis_indices=retention_plan.emphasis_indices,
+                quality_plan=quality_plan,
+                meme_events=meme_events,
+                meme_asset_library=(getattr(options, "meme_asset_library", "") or getattr(settings, "meme_asset_library", "") or ""),
+                meme_sfx_library=(getattr(options, "meme_sfx_library", "") or getattr(settings, "meme_sfx_library", "") or ""),
+                meme_default_volume=float(getattr(options, "meme_default_volume", 0.35) or 0.35),
+                meme_default_duck=float(getattr(options, "meme_default_duck", 0.0) or 0.0),
                 # Markers reach `applied` even when the compositor decides nothing needs rendering.
                 # Without this, a degradation recorded inside `render_clip` was discarded along with
                 # the `None` it returns when no effect ended up changing the frame — which is
@@ -1291,6 +1459,8 @@ def _run_pipeline(
             applied.extend(rendered.effects_applied)
             if rendered.broll_records:
                 broll_assets = rendered.broll_records
+            if rendered.meme_records:
+                meme_assets = rendered.meme_records
         else:
             # `final` and `geo` are in different trees, and the destination's parent can be
             # gone by now: the retention sweeper used to remove any empty directory it saw,
@@ -1452,6 +1622,17 @@ def _run_pipeline(
             # so a failed remux costs a convenience, not the clip.
             logger.warning("O12/T10: could not mux subtitle tracks into %s: %s", final, exc)
 
+        quality_record = quality_plan.to_dict()
+        try:
+            quality_record["before_after"] = quality_upgrade.before_after_quality_metadata(
+                info,
+                fu.probe(final),
+                preset=quality_plan.preset.name,
+                markers=quality_plan.markers,
+            )
+        except Exception:
+            quality_record["before_after"] = {"status": "unavailable"}
+
         # 6b. POST-stage engines see the finished clip, then this clip's engine
         #     lifecycle is closed: durable artifacts are persisted BEFORE the
         #     workspaces are deleted, and a persistence failure only adds an
@@ -1557,6 +1738,9 @@ def _run_pipeline(
                 compliance_report=compliance_report,
                 effects_applied=applied,
                 broll_assets=broll_assets,
+                meme_events=meme_events,
+                meme_assets=meme_assets,
+                quality_plan=quality_record,
             )
         )
 

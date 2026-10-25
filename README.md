@@ -103,7 +103,8 @@ work is opt-in and adds render time).
 - **Hook title:** burns the AI hook text on screen at the start (via libass).
 - **Background music:** mood-selectable (upbeat / chill / dramatic / corporate /
   suspense). Bring your own licensed track as `assets/music/<mood>.mp3`, or the
-  tool synthesises a soft, **copyright-free** bed and mixes it under the speech.
+  tool synthesises a soft two-tone fallback (not a commercial song) and mixes it
+  under the speech.
 - **Face-tracking auto-reframe:** detects and follows the main speaker so the
   vertical crop glides with them (replaces the static crop); falls back to the
   blurred-background reformat when no face is found.
@@ -114,10 +115,40 @@ work is opt-in and adds render time).
 - **Caption Template & Position:** karaoke / boxed / minimal, at bottom / center
   / top.
 
-> Auto-emoji downloads Twemoji PNGs from a CDN on first use (cached under
-> `assets/emoji`); set `EMOJI_ALLOW_DOWNLOAD=false` to use only local assets.
+> A selected non-vendored emoji style can download PNGs from its configured CDN
+> on first use (cached under `assets/emoji`); set `EMOJI_ALLOW_DOWNLOAD=false`
+> to use only local assets. Noto is vendored by default.
 > Burned-in text uses libass — the Docker image installs `fonts-liberation` so a
 > font is always available.
+
+## Meme mode, campaign profiles, and quality delivery
+
+The creator workflow now includes an opt-in **Meme mode** panel. It stores a clip-relative timeline
+of SFX, visual beats, caption emphasis, and image/GIF/video/text overlays. Presets (`Chaotic`,
+`Subtle`, and `Gaming Rage`) expand into reviewable events; auto-suggestions can use transcript
+keywords, energy peaks, silence boundaries, and scene cuts. Each event has a stable ID, exact start
+and duration, volume, and ducking amount, so it can be edited, removed, or undone without changing
+neighboring events. Built-in tones are generated locally; uploaded files are stored through
+`POST /api/meme-assets/upload` and are marked `user_supplied`/`license: unknown` until the operator
+records provenance.
+
+Campaign profiles can import multiple Google Docs or Drive folder/file links through
+`/api/campaign-profiles/import`, cache revisions, traverse authorized folders, preserve headings,
+bullets, and table rows, expose ambiguities for human correction, save/select profiles, generate
+campaign copy, and run multi-profile compliance checks before export. Private sources require
+server-side read-only Drive OAuth; public links use a constrained fallback. Credentials never enter
+the browser bundle or Git.
+
+Quality delivery is per job and remains opt-in: 720p/1080p/1440p/4K targets, smart crop/fit, denoise,
+subtle sharpening, mild correction, 30/60 fps policy, optional interpolation, platform-aware
+bitrate/codec selection, hardware-encoder probing with CPU fallback, and a before/after quality
+record on each clip. Upscaling only resizes or filters existing pixels; it cannot recreate detail
+that was never captured. Enhanced face tracking adds confidence filtering, zero-phase smoothing,
+shot-cut resets, active-speaker association, bounded split-screen, and safe static/blur fallbacks.
+
+All new behavior is backward-compatible and opt-in. Use only owned, commissioned, public-domain,
+or individually licensed assets; see [`docs/ASSET_PROVENANCE.md`](docs/ASSET_PROVENANCE.md) before
+adding sounds, reaction media, logos, or fonts to a campaign.
 
 ## Phase 3 — auto-publishing
 
@@ -319,6 +350,144 @@ The Docker image builds the React UI and serves it together with the API, so
 `./storage/clips` on your host (the `storage/` directory is bind-mounted), and
 dropping a video into `./storage/watch` (a fixed path, not configurable) triggers watch-folder processing when
 that mode is enabled.
+
+## Safe setup checklist
+
+The default install is intentionally local-first. Start with a local upload, keep
+external asset downloading disabled, and add credentials only for the feature you
+are ready to use.
+
+1. Copy `.env.example` to `.env`. Keep secrets in `.env` or your deployment
+   secret manager; never put them in source, a campaign brief, browser fields, or
+   a pull request.
+2. Leave `BROLL_ALLOW_DOWNLOAD=false`, `EMOJI_ALLOW_DOWNLOAD=false`, and
+   `SFX_MODE=off` unless you have reviewed the provider and asset terms.
+3. For a fully local run, set `permissibility_mode` in the UI. It suppresses
+   added music and forces b-roll sourcing to `local_only`.
+4. Add only footage and assets you own, commissioned, or have a documented
+   license to use. Record each asset in
+   [`assets/asset-manifest.example.json`](assets/asset-manifest.example.json),
+   following [`docs/ASSET_PROVENANCE.md`](docs/ASSET_PROVENANCE.md).
+
+The app does not ship or fetch ripped Vine/Bruh clips, TV/movie audio, or
+unlicensed meme templates. Meme suggestions are plans for review, not a claim
+that media was sourced. If an optional asset, model, provider, or encoder is
+unavailable, the clip continues through the documented fallback path and the
+sidecar records a degradation marker where applicable.
+
+## Meme mode and licensing-safe assets
+
+Campaign storytelling can produce deterministic `meme_overlays` suggestions
+such as a plot-twist or overwhelmed reaction. These suggestions contain a time
+window, concept, prompt, and `asset_required` status; they do **not** download,
+embed, or imply ownership of a reaction image, screenshot, movie still, or
+sound. Review the plan, then supply a user-owned or licensed asset yourself.
+
+For a safe local workflow:
+
+```text
+assets/
+├── broll/                 # operator-supplied b-roll or meme templates
+├── music/                 # operator-supplied licensed tracks
+├── sfx/                   # operator-supplied whoosh/swipe/etc.
+└── asset-manifest.json    # provenance record (copy the example template)
+```
+
+Use `BROLL_DIR=./assets/broll`, `asset_sourcing_mode=local_only`, and a
+`tags.json` file when you want deterministic local matching. External b-roll is
+opt-in only: it requires a provider, its API key/base URL, and
+`BROLL_ALLOW_DOWNLOAD=true`; unknown-license or failed assets are skipped.
+The clip record's `broll_assets` list contains provenance only for assets that
+were actually composited. See [Asset provenance and safe sourcing](docs/ASSET_PROVENANCE.md)
+for the manifest fields, review steps, and compatible-license guidance.
+
+Sound effects follow the same rule. `pop` and `click` are generated locally and
+are safe defaults when requested. `whoosh` and `swipe` are not faked: provide a
+licensed file in `SFX_DIR` or the sting is skipped with `sfx_missing:<name>`.
+Background music uses a user-supplied track first; otherwise the optional
+fallback is a synthetic two-tone drone, not a commercial song, and is marked
+`music_degraded:synthesised`. `permissibility_mode` removes added audio.
+
+## Campaign brief import and publishing credentials
+
+Campaign import is reviewable and deterministic:
+
+- Paste a brief in **Campaign automation**, or provide one direct Google Drive/
+  Google Docs file link. Folder links and general channel browsing are not
+  supported.
+- A Drive import runs in the server process, not through the assistant's
+  connected Drive account. The server account needs Viewer access to the file.
+- The paste path remains available when Drive OAuth is not configured. Parsing a
+  brief does not create a publishing campaign or publish anything automatically.
+- A changed brief keeps the last good snapshot if a later read fails. A successful
+  change flags affected clips for re-render and human review; review the new
+  render before publishing.
+
+Use the least-privilege credentials needed by the connector:
+
+| Feature | Required configuration | Minimum guidance |
+| --- | --- | --- |
+| Private Drive video/brief import | `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN` | Use the read-only `https://www.googleapis.com/auth/drive.readonly` scope and grant the OAuth account Viewer access only to required files. |
+| YouTube upload/Shorts | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | Use offline OAuth with `https://www.googleapis.com/auth/youtube.upload`; an API key cannot upload. A channel ID is optional. |
+| TikTok | `TIKTOK_ACCESS_TOKEN`, `TIKTOK_OPEN_ID` | Request only the approved Content Posting/upload permission shown for your app; Direct Post approval is separate and is off until `TIKTOK_DIRECT_POST_APPROVED=true`. |
+| Instagram Reels | `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_ACCOUNT_ID` | Use a Professional account and the `instagram_content_publish` permission. App review/approval is separate from configuring the token. |
+| X | `X_ACCESS_TOKEN`, `X_ACCOUNT_ID` | Use the narrowest approved user-context media/posting permission for the app's access tier; direct posting remains off until explicitly approved. |
+
+OAuth refresh tokens and access tokens are credentials. Put them only in the
+ignored `.env` file or a deployment secret store, rotate exposed credentials,
+and use the publisher preflight/status screen before queuing a real upload.
+Platforms may accept only draft/private/review submissions until app approval;
+the UI reports that state rather than treating it as public success.
+
+## Quality, output resolution, and upscaling limits
+
+The pipeline can target a short side of **720, 1080, 1440, or 2160** with
+`OUTPUT_SHORT_SIDE` (default `1080`). Higher output is useful only when the
+source contains enough detail; it increases decode/encode time, disk usage,
+upload size, and platform re-encoding cost. A 720p source enlarged to 1080p or
+2160p is an upscale, not a recovery of lost detail: it cannot restore focus,
+compression detail, or a source frame that was never captured. There is no
+AI/super-resolution pass in the shipped pipeline.
+
+For the software encoder, lower `X264_CRF` means better quality and larger
+files; `18–23` is the practical range. `X264_PRESET` trades render time against
+compression efficiency. `SCALER_FLAGS` applies one resampling policy to every
+scale operation; `bicubic` is the shipped default, while measured downscale
+results did not justify changing it to `lanczos`. `OUTPUT_MAX_BITRATE_KBPS`
+caps busy final clips so a quality target does not create an upload-rejected
+file. `OUTPUT_PLATFORM` can fill a platform profile's resolution, bitrate, and
+duration ceiling, but it renders one variant, not one file per platform.
+
+`VIDEO_ENCODER=auto` may use a working hardware encoder, but availability is
+checked with a real frame encode and unusable hardware falls back to
+`libx264`. Hardware encoders are not pixel-comparable to x264 at the same
+nominal number. Final output remains the compatibility-oriented 8-bit H.264 /
+`yuv420p` contract described in `.env.example`; source quality, color, motion,
+captions, and platform processing still limit what viewers see.
+
+## Facial tracking, diarisation, and privacy
+
+Face-tracking reframe samples frames locally and follows face geometry; it is
+not face recognition and does not identify a person. Haar is the default CPU
+detector. `FACE_DETECTOR_BACKEND=mediapipe` uses the vendored BlazeFace model
+under `assets/models` and can help with profile or distant faces. The optional
+speaker-aware path uses offline transcript timing as a speaker proxy, capped at
+two speakers by default; it is not an identity system.
+
+Treat source video and sampled frames as personal data. Process only footage
+where you have the necessary consent/authority, restrict access to `storage/`,
+and set `INTERMEDIATE_CACHE_ENABLED=false` when persistent sampled-frame caches
+are not needed. Temporary files follow `AUTO_DELETE_TEMP`; source videos are
+never auto-deleted. Do not publish a crop that reveals a private person or
+unexpected bystander merely because a detector found a face.
+
+The fallback ladder is deliberately safe: MediaPipe/model/runtime failure falls
+back to Haar, no usable face falls back to the static blurred/background
+reformat, and speaker-aware failure falls back to single-speaker reframe and
+then the static crop. The clip is still produced and its sidecar/effects
+markers identify meaningful degradation. Higher sampling (`REFRAME_SAMPLE_FPS`,
+`REFRAME_SAMPLE_CAP`) improves responsiveness at a real CPU/decode cost; lower
+sampling is faster but can miss fast motion.
 
 ## Testing
 

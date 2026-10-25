@@ -425,6 +425,22 @@ export default function ClipCard({
           </div>
         )}
 
+        {clip.quality_plan?.before_after && clip.quality_plan.before_after.before && clip.quality_plan.before_after.after ? (
+          <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/[0.04] p-3 text-[10px] text-slate-300">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold uppercase tracking-wide text-cyan-200">Quality report</span>
+              <span className="text-slate-500">before → after</span>
+            </div>
+            <p className="mt-1">
+              {clip.quality_plan.before_after.before.width}×{clip.quality_plan.before_after.before.height}
+              {" → "}
+              {clip.quality_plan.before_after.after.width}×{clip.quality_plan.before_after.after.height}
+              {clip.quality_plan.preset && clip.quality_plan.preset !== "off" ? ` · ${clip.quality_plan.preset}` : ""}
+            </p>
+            <p className="mt-1 text-slate-500">Resolution changes do not restore detail absent from the source.</p>
+          </div>
+        ) : null}
+
         {clip.storytelling_plan && Object.keys(clip.storytelling_plan).length > 0 && (
           <div className="rounded-lg border border-violet-400/20 bg-violet-400/[0.04] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

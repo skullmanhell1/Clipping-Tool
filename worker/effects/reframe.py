@@ -618,6 +618,8 @@ class FaceBox:
     y: int
     w: int
     h: int
+    #: Optional detector confidence. Haar has no calibrated score, so ``None`` is meaningful.
+    score: float | None = None
 
     @property
     def center(self) -> tuple[float, float]:
@@ -758,6 +760,7 @@ def smooth_bounding_boxes(boxes: Sequence[FaceBox], *, alpha: float = 0.35) -> l
             int(round(cy - box.h / 2.0)),
             box.w,
             box.h,
+            box.score,
         )
         for box, cx, cy in zip(source, smoothed_x, smoothed_y)
     ]
@@ -1462,6 +1465,7 @@ def detect_faces_report(
     max_samples: int | None = None,
     detector: Callable | None = None,
     backend: str | None = None,
+    min_score: float | None = None,
 ) -> tuple[list[list[FaceBox]], Sample_Report]:
     """All face boxes per sampled frame, **and** what was learned finding them.
 
@@ -1480,10 +1484,13 @@ def detect_faces_report(
         max_samples=max_samples,
         detector=detector,
         backend=backend,
+        min_score=min_score,
     )
     result: list[list[FaceBox]] = []
     for t, boxes in report.samples:
-        result.append([FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h) for d in boxes])
+        result.append(
+            [FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h, d.score) for d in boxes]
+        )
     return result, report
 
 
@@ -1569,6 +1576,7 @@ def track_faces_report(
     backend: str | None = None,
     detector: Callable | None = None,
     max_samples: int | None = None,
+    min_score: float | None = None,
 ) -> tuple[list[Center], Sample_Report]:
     """The main-face centre path **and** what was learned finding it.
 
@@ -1583,6 +1591,7 @@ def track_faces_report(
         max_samples=max_samples,
         detector=detector,
         backend=backend,
+        min_score=min_score,
     )
     samples: list[Center] = []
     last_center: tuple[float, float] | None = None
@@ -1665,12 +1674,15 @@ def apply_reframe(
     smoothing: float = 0.35,
     *,
     backend: str | None = None,
+    min_score: float | None = None,
     detector: Callable | None = None,
     notes: list[str] | None = None,
     colour_tags: Sequence[str] = (),
     stabilise_margin: tuple[int, int] = (0, 0),
     prefilter: str = "",
     normalise_scale: bool = False,
+    zero_phase: bool | None = None,
+    reset_on_cut: bool | None = None,
 ) -> Path:
     """Reframe ``video`` to ``aspect`` following the main face; write ``dest``.
 
@@ -1722,7 +1734,11 @@ def apply_reframe(
         raise ReframeUnavailable("target aspect is not narrower than source")
 
     samples, sample_report = track_faces_report(
-        video, sample_fps=sample_fps, backend=backend, detector=detector
+        video,
+        sample_fps=sample_fps,
+        backend=backend,
+        detector=detector,
+        min_score=min_score,
     )
     if not samples:
         raise ReframeUnavailable("no faces detected")
@@ -1732,10 +1748,14 @@ def apply_reframe(
     # running - which has itself just decoded the clip to find faces, so this is not the pass
     # that makes reframe expensive.
     cuts: list[float] = []
-    if getattr(settings, "reframe_reset_on_cut", True):
+    if (
+        bool(getattr(settings, "reframe_reset_on_cut", True))
+        if reset_on_cut is None
+        else bool(reset_on_cut)
+    ):
         cuts = scene_detect.scan_cuts(video)
 
-    smoothed = smooth_centers(samples, alpha=smoothing, cuts=cuts)
+    smoothed = smooth_centers(samples, alpha=smoothing, cuts=cuts, zero_phase=zero_phase)
     dense = resample_centers(smoothed, command_fps, info.duration)
     # V22/R1.6: only ever biased when a face was actually detected. Reaching here means `samples`
     # came from detections -- `apply_reframe` raises `ReframeUnavailable` otherwise -- so the bias is
@@ -2475,8 +2495,10 @@ def apply_speaker_reframe(
     detector: Callable | None = None,
     sampler: Callable | None = None,
     backend: str | None = None,
+    min_score: float | None = None,
     notes: list[str] | None = None,
     colour_tags: Sequence[str] = (),
+    max_regions: int | None = None,
 ) -> Path:
     """Orchestrate speaker-aware reframe in a single ffmpeg pass; write ``dest``.
 
@@ -2525,7 +2547,12 @@ def apply_speaker_reframe(
         # sampler produced, so this path reports in the same vocabulary as the other.
         sample_report = synthetic_report(per_frame, "injected", float(settings.reframe_sample_fps))
     else:
-        per_frame, sample_report = detect_faces_report(video, detector=detector, backend=backend)
+        per_frame, sample_report = detect_faces_report(
+            video,
+            detector=detector,
+            backend=backend,
+            min_score=min_score,
+        )
 
     tracks = build_face_tracks(per_frame)
     if not tracks:
@@ -2547,10 +2574,13 @@ def apply_speaker_reframe(
             target_h=th,
             src_w=info.width,
             src_h=info.height,
+            max_regions=max_regions,
             # V5: give each tile a centre path over the clip instead of one fixed crop.
             duration=info.duration,
             intensity=intensity,
         )
+        if max_regions is not None and len(regions or []) > max(1, int(max_regions)):
+            regions = (regions or [])[: max(1, int(max_regions))]
         if not regions:
             # Fewer than two associated tracks -> follow_active substitution.
             layout = "follow_active"

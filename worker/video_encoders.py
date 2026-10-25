@@ -333,25 +333,69 @@ def resolve_encoder(requested: str | None = None) -> EncoderChoice:
         # a degradation for the ordinary case would make the marker meaningless.
         return EncoderChoice(software, requested="auto")
 
-    encoder = KNOWN_ENCODERS.get(name)
+    lookup = name.lower()
+    encoder = KNOWN_ENCODERS.get(name) or KNOWN_ENCODERS.get(lookup)
     if encoder is None:
         return EncoderChoice(
             software,
-            requested=name,
-            marker=f"encoder_unknown:{name}",
+            requested=lookup,
+            marker=f"encoder_unknown:{lookup}",
         )
     if not encoder.supported:
         return EncoderChoice(
             software,
-            requested=name,
-            marker=f"encoder_unsupported:{name}",
+            requested=encoder.name,
+            marker=f"encoder_unsupported:{encoder.name}",
         )
     if encoder.name == SOFTWARE_ENCODER:
-        return EncoderChoice(software, requested=name)
+        return EncoderChoice(software, requested=encoder.name)
     if not encoder_available(encoder.name):
         return EncoderChoice(
             software,
-            requested=name,
-            marker=f"encoder_unavailable:{name}",
+            requested=encoder.name,
+            marker=f"encoder_unavailable:{encoder.name}",
         )
-    return EncoderChoice(encoder, requested=name)
+    return EncoderChoice(encoder, requested=encoder.name)
+
+
+def encoder_status(requested: str | None = None) -> dict[str, object]:
+    """Return an honest, JSON-safe encoder resolution report.
+
+    This is an additive diagnostics hook for the quality planner. It reuses the real one-frame
+    availability probe and reports CPU fallback explicitly, while leaving the long-standing
+    :func:`resolve_encoder` return type and default behaviour untouched.
+    """
+    choice = resolve_encoder(requested)
+    return {
+        "requested": choice.requested,
+        "resolved": choice.encoder.name,
+        "kind": choice.encoder.kind,
+        "hardware": choice.encoder.hardware,
+        "degraded": choice.degraded,
+        "marker": choice.marker,
+    }
+
+
+def hardware_encoder_report(names: tuple[str, ...] | None = None) -> list[dict[str, object]]:
+    """Probe known hardware encoders and return their usable state.
+
+    The probe is deliberately opt-in because each candidate performs a real one-frame ffmpeg
+    encode. Missing drivers, devices and optional binaries become ``available=False`` entries;
+    callers can choose CPU without turning a diagnostic failure into a render failure.
+    """
+    candidates = names or AUTO_ORDER
+    report: list[dict[str, object]] = []
+    for name in candidates:
+        encoder = KNOWN_ENCODERS.get(name)
+        if encoder is None or not encoder.hardware:
+            continue
+        report.append(
+            {
+                "name": name,
+                "kind": encoder.kind,
+                "available": encoder_available(name),
+                "supported": encoder.supported,
+                "unsupported_reason": encoder.unsupported_reason,
+            }
+        )
+    return report

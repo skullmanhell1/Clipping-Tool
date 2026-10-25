@@ -68,6 +68,8 @@ PRESERVED_FIELDS: tuple[str, ...] = (
     "needs_rerender",
     "brief_revision",
     "brief_content_hash",
+    "meme_events",
+    "meme_assets",
 )
 
 
