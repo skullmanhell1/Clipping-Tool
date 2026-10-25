@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import MultiPlatformScheduler from "./MultiPlatformScheduler.jsx";
 
 /**
  * PB7: a month calendar of scheduled posts, with rescheduling and best-time suggestions.
@@ -63,7 +64,13 @@ const toLocalInput = (epoch) => {
   );
 };
 
-export default function ScheduleCalendar({ onError }) {
+export default function ScheduleCalendar({
+  onError,
+  jobs = [],
+  campaigns = [],
+  publisherStatuses = {},
+  outputProfiles = [],
+}) {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [attempts, setAttempts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -161,6 +168,16 @@ export default function ScheduleCalendar({ onError }) {
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+      <MultiPlatformScheduler
+        jobs={jobs}
+        campaigns={campaigns}
+        publisherStatuses={publisherStatuses}
+        outputProfiles={outputProfiles}
+        onError={onError}
+        onPublished={load}
+      />
+
+      <div className="mt-5 border-t border-slate-800 pt-4">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -345,6 +362,7 @@ export default function ScheduleCalendar({ onError }) {
           ) : null}
         </div>
       ) : null}
+      </div>
     </section>
   );
 }

@@ -197,6 +197,10 @@ def h264_args(
     delivered_fps: int | None = None,
     keyframe_seconds: float | None = None,
     colour_tags: Sequence[str] = (),
+    encoder_name: str | None = None,
+    crf: int | None = None,
+    preset: str | None = None,
+    max_bitrate_kbps: int | None = None,
 ) -> list[str]:
     """The standard libx264 arguments for an encode.
 
@@ -224,6 +228,9 @@ def h264_args(
     machine - so the return value is always a working argv, and the quality flag always matches
     the encoder rather than being ``-crf`` regardless.
 
+    ``encoder_name``, ``crf``, ``preset`` and ``max_bitrate_kbps`` are additive overrides used by
+    the opt-in quality planner. When omitted, the existing settings-driven behaviour is exact.
+
     ``colour_tags`` (O14) appends ``-colorspace``/``-color_primaries``/``-color_trc``/
     ``-color_range`` describing what is being delivered. Built by
     :func:`worker.colour.colour_tag_args` and passed in rather than computed here, because this
@@ -243,7 +250,11 @@ def h264_args(
     # libx264 whenever the request cannot be honoured, so this returns a working argv either way.
     from worker import video_encoders
 
-    choice = video_encoders.resolve_encoder()
+    choice = (
+        video_encoders.resolve_encoder(encoder_name)
+        if encoder_name is not None
+        else video_encoders.resolve_encoder()
+    )
     encoder = choice.encoder
 
     # O17: uniform resampling for every `scale=` in this invocation. Placed here rather than at
@@ -252,10 +263,10 @@ def h264_args(
     # encoder flags after a missing `-pix_fmt` reached seven of eight sites.
     args = scaler_args()
     args += ["-c:v", encoder.name]
-    args += encoder.preset_args(str(settings.x264_preset))
+    args += encoder.preset_args(str(settings.x264_preset if preset is None else preset))
     # Not `-crf`: every other encoder spells constant quality differently, and three of them use a
     # different scale. See worker/video_encoders.py for the table.
-    args += encoder.quality_args(int(settings.x264_crf))
+    args += encoder.quality_args(int(settings.x264_crf if crf is None else crf))
     args += _compat_args(encoder)
     if normalise_fps:
         # O18: the delivered rate, which is not always the configured one any more.
@@ -284,7 +295,11 @@ def h264_args(
         # O7: the platform profile's ceiling when one is active, else the configured value.
         from worker import output_profiles
 
-        maxrate = output_profiles.resolve_max_bitrate_kbps()
+        maxrate = (
+            int(max_bitrate_kbps)
+            if max_bitrate_kbps is not None
+            else output_profiles.resolve_max_bitrate_kbps()
+        )
         # A two-second buffer, the usual pairing: large enough that a brief complex passage
         # is not visibly starved, small enough that the cap still means something.
         args += ["-maxrate", f"{maxrate}k", "-bufsize", f"{maxrate * 2}k"]
@@ -867,6 +882,7 @@ def reformat_aspect(
 
     Two strategies are supported:
 
+    * ``crop``: the source is cover-scaled and centre-cropped to fill the target.
     * ``crop_blur`` (default): the source is centre-cropped to fill the target
       frame; where the crop would leave empty bars, a scaled + blurred copy of
       the source is used as the background so the frame is always filled
@@ -877,7 +893,7 @@ def reformat_aspect(
         source: Input clip path.
         dest: Output path.
         aspect: One of :data:`ASPECT_PRESETS` keys (e.g. ``"9:16"``).
-        mode: ``"crop_blur"`` or ``"pad"``.
+        mode: ``"crop"``, ``"crop_blur"`` or ``"pad"``.
 
     Returns:
         The ``dest`` path.
@@ -893,6 +909,11 @@ def reformat_aspect(
             f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
             f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
         )
+    elif mode == "crop":
+        vf = (
+            f"scale={tw}:{th}:force_original_aspect_ratio=increase,"
+            f"crop={tw}:{th}:(iw-ow)/2:(ih-oh)/2,setsar=1"
+        )
     elif mode == "crop_blur":
         # Background per V11; foreground scaled to fit fully inside and overlaid centred.
         vf = (
@@ -904,7 +925,7 @@ def reformat_aspect(
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
         )
     else:
-        raise ValueError(f"Unknown mode '{mode}'. Valid: 'crop_blur', 'pad'.")
+        raise ValueError(f"Unknown mode '{mode}'. Valid: 'crop', 'crop_blur', 'pad'.")
 
     cmd = [
         settings.ffmpeg_binary,

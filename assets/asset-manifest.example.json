@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "_comment": "Copy to asset-manifest.json and replace the example entry before using local media. This file is documentation/evidence for operators; the renderer does not currently enforce it.",
+  "assets": [
+    {
+      "id": "replace-with-stable-id",
+      "path": "broll/reviewed-asset.mp4",
+      "kind": "overlay",
+      "source_url": "https://example.invalid/item-or-permission-reference",
+      "source_title": "Replace with item title",
+      "creator": "Replace with creator or rights holder",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "attribution": "",
+      "commercial_use": true,
+      "derivatives": true,
+      "redistribution": true,
+      "retrieved_at": "YYYY-MM-DD",
+      "sha256": "replace-with-sha256-of-exact-file",
+      "notes": "Record model-release, trademark, privacy, expiry, or campaign restrictions here."
+    }
+  ]
+}

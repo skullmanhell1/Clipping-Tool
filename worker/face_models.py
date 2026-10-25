@@ -133,3 +133,42 @@ def resolve_model(backend: str, directory: Path | None = None) -> Path | None:
     except OSError:
         return None
     return path
+
+
+def model_status(backend: str, directory: Path | None = None) -> dict[str, object]:
+    """Return a JSON-safe local model health report without touching the network.
+
+    Facial tracking uses this as a preflight hook. A missing or wrong-sized model is reported as a
+    normal unavailable capability so callers can fall back to Haar/static crop instead of failing
+    after a render has started. The existing ``resolve_model`` contract remains unchanged.
+    """
+    entry = entry_for_backend((backend or "").strip().lower())
+    root = Path(directory) if directory is not None else models_dir()
+    if entry is None:
+        return {
+            "backend": str(backend or ""),
+            "available": False,
+            "path": None,
+            "reason": "unknown_backend",
+        }
+    path = root / entry.filename
+    try:
+        present = path.is_file()
+        size = path.stat().st_size if present else 0
+    except OSError:
+        present, size = False, 0
+    if not present:
+        reason = "missing"
+    elif size != entry.size_bytes:
+        reason = "wrong_size"
+    else:
+        reason = "ok"
+    return {
+        "backend": entry.backend,
+        "available": reason == "ok",
+        "path": str(path) if present else None,
+        "reason": reason,
+        "size_bytes": size,
+        "expected_size_bytes": entry.size_bytes,
+        "licence": entry.licence,
+    }

@@ -4,10 +4,14 @@ import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
 import CampaignAutomationPanel from "./components/CampaignAutomationPanel.jsx";
+import CampaignImportPanel from "./components/CampaignImportPanel.jsx";
+import FacialTrackingPanel from "./components/FacialTrackingPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
+import MemeModePanel from "./components/MemeModePanel.jsx";
 import PreviewCard from "./components/PreviewCard.jsx";
 import ProfilesBar from "./components/ProfilesBar.jsx";
 import PublishingPanel from "./components/PublishingPanel.jsx";
+import QualitySettingsPanel from "./components/QualitySettingsPanel.jsx";
 import ScheduleCalendar from "./components/ScheduleCalendar.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import StorageSettings from "./components/StorageSettings.jsx";
@@ -64,6 +68,7 @@ const DEFAULT_SETTINGS = {
   language: "auto",
   clip_length: "auto",
   aspect: "9:16",
+  output_platform: "",
   num_clips: "auto",
   strategy: "ai",
   captions: true,
@@ -133,6 +138,48 @@ const DEFAULT_SETTINGS = {
   reframe_layout: "follow_active",
   reframe_intensity: "standard",
   face_detector: "haar",
+  // New opt-in editing controls. They are kept in the opaque settings/profile blob so
+  // an older backend can still round-trip a profile without changing legacy renders.
+  meme_mode_enabled: false,
+  meme_pack: "reaction",
+  meme_sfx_name: "pop",
+  meme_sfx_volume: 0.35,
+  meme_ducking: 0.65,
+  meme_intensity_value: 0.55,
+  meme_timeline_events: [],
+  meme_mode: false,
+  meme_preset: "",
+  meme_events: [],
+  meme_auto_suggest: false,
+  meme_asset_library: "",
+  meme_sfx_library: "",
+  meme_default_volume: 0.35,
+  meme_default_duck: 0.65,
+  output_short_side: 1080,
+  quality_enabled: false,
+  quality_preset: "off",
+  quality_smart_scale: false,
+  quality_crop_mode: "crop",
+  quality_denoise: "off",
+  quality_colour_correction: false,
+  quality_target_fps: 0,
+  quality_audio_denoise: "off",
+  quality_audio_loudness: false,
+  quality_voice_clarity: false,
+  quality_progress_metadata: false,
+  quality_upscale: "off",
+  quality_sharpen: "off",
+  quality_interpolation: "off",
+  speech_denoise: "off",
+  scaler_flags: "bicubic",
+  frame_rate_policy: "auto",
+  x264_crf: 20,
+  video_encoder: "libx264",
+  face_detector_min_score: 0.5,
+  reframe_zero_phase: true,
+  facial_fallback: "static_crop_blur",
+  split_screen_max_regions: 2,
+  reframe_reset_on_cut: true,
   profile: "",
   // Advanced AV engines — every flag/option default, forwarded generically
   ...DEFAULT_ENGINE_SETTINGS,
@@ -160,11 +207,29 @@ const scheduleToEpoch = (value) => {
 
 function toOptions(settings, publishing) {
   const { language, translate } = resolveLanguage(settings.language);
+  const memeEnabled = Boolean(settings.meme_mode || settings.meme_mode_enabled);
+  const qualityEnabled = Boolean(settings.quality_enabled);
+  const presetAliases = { reaction: "chaotic", classic: "subtle", gaming: "gaming_rage" };
+  const memePreset =
+    settings.meme_preset || presetAliases[settings.meme_pack] || settings.meme_pack || "";
+  const memeEvents = settings.meme_events || settings.meme_timeline_events || [];
+  const sharpenValue = qualityEnabled ?
+    typeof settings.quality_sharpen === "number"
+      ? settings.quality_sharpen
+      : { subtle: 0.25, standard: 0.5 }[settings.quality_sharpen] || 0
+    : 0;
+  const qualityPreset =
+    settings.quality_enabled && settings.quality_preset && settings.quality_preset !== "off"
+      ? settings.quality_preset
+      : settings.quality_enabled
+        ? ({ 720: "720p", 1080: "1080p", 1440: "1440p", 2160: "4k" }[Number(settings.output_short_side)] || "off")
+        : "off";
   return {
     language,
     translate,
     clip_length: settings.clip_length,
     aspect: settings.aspect,
+    output_platform: settings.output_platform,
     num_clips: settings.num_clips,
     strategy: settings.strategy,
     captions: settings.captions,
@@ -196,6 +261,9 @@ function toOptions(settings, publishing) {
     color: settings.color,
     music: settings.music,
     music_volume: Number(settings.music_volume) || 0,
+    // The current backend contract exposes ducking as a boolean. Meme mode keeps the
+    // requested amount in profile state, while this preserves a useful on/off fallback.
+    music_duck: memeEnabled ? Number(settings.meme_default_duck ?? settings.meme_ducking) > 0 : true,
     emoji: settings.emoji,
     emoji_mode: settings.emoji_mode,
     emoji_animate: settings.emoji_animate,
@@ -232,6 +300,38 @@ function toOptions(settings, publishing) {
     reframe_layout: settings.reframe_layout,
     reframe_intensity: settings.reframe_intensity,
     face_detector: settings.face_detector,
+    // Quality/facial/meme settings are forwarded when the server accepts their fields. Older
+    // OptionsModel versions ignore unknown keys safely; the panels call this out where needed.
+    output_short_side: qualityEnabled ? Number(settings.output_short_side) || 1080 : 1080,
+    quality_preset: qualityPreset,
+    quality_smart_scale: qualityEnabled && (!!settings.quality_smart_scale || (!!settings.quality_upscale && settings.quality_upscale !== "off")),
+    quality_crop_mode: qualityEnabled ? settings.quality_crop_mode || "crop" : "crop",
+    quality_denoise: qualityEnabled ? settings.quality_denoise || settings.speech_denoise || "off" : "off",
+    quality_sharpen: sharpenValue,
+    quality_colour_correction: qualityEnabled && !!settings.quality_colour_correction,
+    quality_target_fps: qualityEnabled ? Number(settings.quality_target_fps) || 0 : 0,
+    quality_interpolation: qualityEnabled && ["blend", "motion", true].includes(settings.quality_interpolation),
+    quality_audio_denoise: qualityEnabled ? settings.quality_audio_denoise || settings.speech_denoise || "off" : "off",
+    quality_audio_loudness: qualityEnabled && !!settings.quality_audio_loudness,
+    quality_voice_clarity: qualityEnabled && !!settings.quality_voice_clarity,
+    quality_progress_metadata: qualityEnabled && !!settings.quality_progress_metadata,
+    scaler_flags: qualityEnabled ? settings.scaler_flags : "bicubic",
+    frame_rate_policy: qualityEnabled ? settings.frame_rate_policy : "auto",
+    x264_crf: qualityEnabled ? Number(settings.x264_crf) || 20 : 20,
+    video_encoder: qualityEnabled ? settings.video_encoder : "libx264",
+    face_detector_min_score: Number(settings.face_detector_min_score) || 0.5,
+    reframe_zero_phase: settings.reframe_zero_phase,
+    facial_fallback: settings.facial_fallback,
+    split_screen_max_regions: Number(settings.split_screen_max_regions) || 2,
+    reframe_reset_on_cut: settings.reframe_reset_on_cut,
+    meme_mode: !!memeEnabled,
+    meme_preset: memePreset,
+    meme_events: memeEnabled ? memeEvents : [],
+    meme_auto_suggest: !!settings.meme_auto_suggest,
+    meme_asset_library: settings.meme_asset_library || "",
+    meme_sfx_library: settings.meme_sfx_library || "",
+    meme_default_volume: Number(settings.meme_default_volume ?? settings.meme_sfx_volume) || 0,
+    meme_default_duck: Number(settings.meme_default_duck ?? settings.meme_ducking) || 0,
     profile: settings.profile,
     // Advanced AV engines — forwarded generically from DEFAULT_ENGINE_SETTINGS
     ...engineOptions(settings),
@@ -245,7 +345,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "S",
     color: "text-red-300 bg-red-400/10",
-    values: { aspect: "9:16", platform: "youtube" },
+    values: { aspect: "9:16", platform: "youtube", output_platform: "youtube_shorts" },
   },
   {
     id: "tiktok",
@@ -253,7 +353,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "♪",
     color: "text-cyan-200 bg-cyan-400/10",
-    values: { aspect: "9:16", platform: "tiktok" },
+    values: { aspect: "9:16", platform: "tiktok", output_platform: "tiktok" },
   },
   {
     id: "reels",
@@ -261,7 +361,7 @@ const FORMAT_PRESETS = [
     detail: "Vertical · 9:16",
     glyph: "◎",
     color: "text-pink-200 bg-pink-400/10",
-    values: { aspect: "9:16", platform: "instagram" },
+    values: { aspect: "9:16", platform: "instagram", output_platform: "instagram" },
   },
   {
     id: "wide",
@@ -269,7 +369,7 @@ const FORMAT_PRESETS = [
     detail: "Widescreen · 16:9",
     glyph: "▰",
     color: "text-violet-200 bg-violet-400/10",
-    values: { aspect: "16:9", platform: "youtube" },
+    values: { aspect: "16:9", platform: "youtube", output_platform: "youtube" },
   },
 ];
 
@@ -322,6 +422,7 @@ export default function App() {
   const [llmAvailable, setLlmAvailable] = useState(false);
   const [version, setVersion] = useState("");
   const [effects, setEffects] = useState(null);
+  const [outputProfiles, setOutputProfiles] = useState([]);
   const [engines, setEngines] = useState([]);
   // /api/info's `capabilities` block: probe results keyed by `<kind>:<name>`
   // plus engine-specific option domains keyed by Engine_Id (e.g.
@@ -401,6 +502,7 @@ export default function App() {
         setLlmAvailable(!!info.llm_available);
         setVersion(info.version || "");
         setEffects(info.effects || null);
+        setOutputProfiles(Array.isArray(info.output_profiles) ? info.output_profiles : []);
         setEngines(Array.isArray(info.engines) ? info.engines : []);
         setCapabilities(info.capabilities || null);
         setDriveConfigured(!!info.google_drive?.configured);
@@ -636,6 +738,20 @@ export default function App() {
     ]);
   };
 
+  const handleJobsAdded = useCallback((newJobs) => {
+    const validJobs = (newJobs || []).filter((job) => job?.id);
+    if (!validJobs.length) return;
+    setTrackedIds((previous) => {
+      const next = new Set(previous);
+      validJobs.forEach((job) => next.add(job.id));
+      return next;
+    });
+    setJobs((previous) => {
+      const ids = new Set(validJobs.map((job) => job.id));
+      return [...validJobs, ...previous.filter((job) => !ids.has(job.id))];
+    });
+  }, []);
+
   const visibleJobs = jobs.filter(
     (job) => trackedIds.has(job.id) || job.source?.includes("/watch/")
   );
@@ -740,7 +856,13 @@ export default function App() {
                 <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Plan your next posts</h2>
                 <p className="mt-2 max-w-2xl text-sm text-slate-400">See what is queued, find a good time, and adjust your publishing calendar in one place.</p>
               </div>
-              <ScheduleCalendar onError={setError} />
+              <ScheduleCalendar
+                onError={setError}
+                jobs={visibleJobs}
+                campaigns={campaigns}
+                publisherStatuses={publisherStatuses}
+                outputProfiles={outputProfiles}
+              />
             </section>
           )}
 
@@ -839,6 +961,7 @@ export default function App() {
                   onPresetApplied={handlePresetApplied}
                   onScheduled={loadPublishingData}
                 />
+                <CampaignImportPanel onPresetApplied={handlePresetApplied} />
                 <ProfilesBar
                   profiles={profiles}
                   defaultId={defaultProfileId}
@@ -903,7 +1026,13 @@ export default function App() {
                     effects={effects}
                     engines={engines}
                     capabilities={capabilities}
+                    outputProfiles={outputProfiles}
                   />
+                  <div className="mt-4 space-y-4">
+                    <MemeModePanel settings={settings} onChange={setSettings} />
+                    <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} />
+                    <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} />
+                  </div>
                 </section>
 
                 <section>
@@ -985,6 +1114,7 @@ export default function App() {
                         publishAttempts={publishAttempts}
                         onClipUpdated={handleClipUpdated}
                         onPublished={handlePublished}
+                        onJobsAdded={handleJobsAdded}
                         // U7: a re-render applies the settings selected above.
                         settings={toOptions(settings, publishing)}
                       />

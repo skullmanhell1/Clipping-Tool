@@ -35,6 +35,9 @@ What a profile controls, and what it does not:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from config import settings
@@ -67,6 +70,14 @@ class OutputProfile:
     max_bitrate_kbps: int
     #: Longest clip this destination should be given, in seconds, or ``None`` for no opinion.
     max_duration_s: float | None
+    #: Delivery codec family. The existing pipeline emits H.264/AAC; these fields make that
+    #: contract explicit for opt-in quality planning without changing legacy argv.
+    video_codec: str = "h264"
+    audio_codec: str = "aac"
+    #: Audio ceiling in kbps for destination-aware planning.
+    max_audio_bitrate_kbps: int = 192
+    #: Highest preferred delivery rate for the destination.
+    max_fps: int = 60
 
     @property
     def size(self) -> tuple[int, int]:
@@ -85,6 +96,10 @@ class OutputProfile:
             "height": height,
             "max_bitrate_kbps": self.max_bitrate_kbps,
             "max_duration_s": self.max_duration_s,
+            "video_codec": self.video_codec,
+            "audio_codec": self.audio_codec,
+            "max_audio_bitrate_kbps": self.max_audio_bitrate_kbps,
+            "max_fps": self.max_fps,
         }
 
 
@@ -133,6 +148,35 @@ _PLATFORM_SHAPES: dict[str, tuple[str, int]] = {
     "whop": ("9:16", 1080),
 }
 
+# Destination constraints used by the opt-in quality planner. H.264/AAC remains the broadly
+# compatible baseline; the table exists so callers can make an explicit, inspectable choice rather
+# than silently changing codecs inside a generic encode helper.
+_PLATFORM_ENCODING: dict[str, tuple[str, str, int, int]] = {
+    # video codec, audio codec, max audio kbps, max fps
+    "tiktok": ("h264", "aac", 128, 60),
+    "instagram": ("h264", "aac", 128, 60),
+    "youtube_shorts": ("h264", "aac", 192, 60),
+    "youtube": ("h264", "aac", 192, 60),
+    "x": ("h264", "aac", 128, 60),
+    "whop": ("h264", "aac", 192, 60),
+}
+
+_PROFILE_LABELS: dict[str, str] = {
+    "tiktok": "TikTok",
+    "instagram": "Instagram Reels",
+    "youtube_shorts": "YouTube Shorts",
+    "youtube": "YouTube landscape",
+    "x": "X",
+    "whop": "Whop",
+}
+
+# The application historically read OUTPUT_PLATFORM from global settings.  A per-job profile
+# must not mutate that global value: concurrent workers and rerenders would otherwise race and
+# encode one job with another job's target.  A ContextVar gives every worker/render call its own
+# override while preserving the environment setting for legacy callers that do not select one.
+_PROFILE_OVERRIDE: ContextVar[str | None] = ContextVar("clipper_output_profile", default=None)
+_SHORT_SIDE_OVERRIDE: ContextVar[int | None] = ContextVar("clipper_output_short_side", default=None)
+
 
 def profile_for(platform: str) -> OutputProfile | None:
     """The output profile for ``platform``, or ``None`` when there is no entry.
@@ -145,6 +189,9 @@ def profile_for(platform: str) -> OutputProfile | None:
     if shape is None:
         return None
     aspect, short_side = shape
+    video_codec, audio_codec, max_audio_kbps, max_fps = _PLATFORM_ENCODING.get(
+        key, ("h264", "aac", 192, 60)
+    )
     return OutputProfile(
         name=key,
         aspect=aspect,
@@ -153,12 +200,79 @@ def profile_for(platform: str) -> OutputProfile | None:
             short_side, int(settings.output_max_bitrate_kbps)
         ),
         max_duration_s=_duration_ceiling(key),
+        video_codec=video_codec,
+        audio_codec=audio_codec,
+        max_audio_bitrate_kbps=max_audio_kbps,
+        max_fps=max_fps,
     )
 
 
+def available_profiles() -> list[dict]:
+    """Return output profiles in the shape the settings UI can render.
+
+    The empty entry is intentional: it preserves the pre-profile behaviour and lets the creator
+    keep choosing an aspect ratio without asking the encoder to target a specific destination.
+    """
+    profiles = [
+        {
+            "name": "",
+            "label": "Use selected aspect",
+            "description": "Keep the chosen aspect ratio and server defaults.",
+            "recommended_aspect": "",
+            "width": None,
+            "height": None,
+            "max_bitrate_kbps": None,
+            "max_duration_s": None,
+        }
+    ]
+    for name in _PLATFORM_SHAPES:
+        profile = profile_for(name)
+        if profile is None:
+            continue
+        data = profile.to_dict()
+        data["label"] = _PROFILE_LABELS.get(name, name.replace("_", " ").title())
+        data["description"] = f"{data['width']}×{data['height']} output"
+        data["recommended_aspect"] = profile.aspect
+        profiles.append(data)
+    return profiles
+
+
+@contextmanager
+def use_profile(platform: str) -> Iterator[None]:
+    """Apply a per-render output profile without mutating global configuration."""
+    token = _PROFILE_OVERRIDE.set(str(platform or "").strip().lower())
+    try:
+        yield
+    finally:
+        _PROFILE_OVERRIDE.reset(token)
+
+
+@contextmanager
+def use_short_side(short_side: int | None) -> Iterator[None]:
+    """Apply a per-job output resolution without mutating global settings."""
+    value = None
+    try:
+        candidate = int(short_side) if short_side is not None else 0
+        if candidate in OUTPUT_SHORT_SIDES:
+            value = candidate
+    except (TypeError, ValueError):
+        value = None
+    token = _SHORT_SIDE_OVERRIDE.set(value)
+    try:
+        yield
+    finally:
+        _SHORT_SIDE_OVERRIDE.reset(token)
+
+
 def active_profile() -> OutputProfile | None:
-    """The profile named by ``settings.output_platform``, or ``None`` when unset."""
-    return profile_for(str(getattr(settings, "output_platform", "") or ""))
+    """The active per-render profile, or the legacy environment profile when unset."""
+    override = _PROFILE_OVERRIDE.get()
+    platform = (
+        override
+        if override is not None
+        else str(getattr(settings, "output_platform", "") or "")
+    )
+    return profile_for(platform)
 
 
 def _is_untouched(field_name: str) -> bool:
@@ -181,6 +295,9 @@ def _is_untouched(field_name: str) -> bool:
 def resolve_short_side() -> int:
     """The output short side: the profile's, unless the operator set one explicitly."""
     configured = int(getattr(settings, "output_short_side", 1080) or 1080)
+    override = _SHORT_SIDE_OVERRIDE.get()
+    if override in OUTPUT_SHORT_SIDES:
+        return int(override)
     profile = active_profile()
     if profile is None or not _is_untouched("output_short_side"):
         return configured
@@ -217,6 +334,27 @@ def resolve_audio_bitrate_kbps() -> int:
     if ceiling:
         return min(configured, int(ceiling))
     return configured
+
+
+def resolve_video_codec() -> str:
+    """Return the active profile's compatible codec family, or the legacy H.264 default."""
+    profile = active_profile()
+    return profile.video_codec if profile is not None else "h264"
+
+
+def resolve_audio_codec() -> str:
+    """Return the active profile's audio codec, or the legacy AAC default."""
+    profile = active_profile()
+    return profile.audio_codec if profile is not None else "aac"
+
+
+def resolve_max_fps() -> int:
+    """Return the active profile's frame-rate ceiling, or the legacy configured rate."""
+    configured = int(getattr(settings, "output_fps", 30) or 30)
+    profile = active_profile()
+    if profile is None:
+        return configured
+    return int(profile.max_fps)
 
 
 def duration_ceiling_s() -> float | None:

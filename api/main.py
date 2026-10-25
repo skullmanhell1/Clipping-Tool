@@ -19,6 +19,7 @@ Watch folder
 Clips
     * ``GET  /clips/...``             -> static preview (mounted)
     * ``GET  /api/clips/{job}/{name}/download`` -> download with attachment
+    * ``GET  /api/jobs/{job}/download`` -> download selected clips as one archive
 
 System
     * ``GET /healthz``, ``GET /api/info``
@@ -35,6 +36,7 @@ import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,7 @@ from runtime_config import RETENTION_CHOICES, get_runtime_store
 from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_temp, disk_usage
 from updates import get_update_checker
 from worker import captions as cap
+from worker import output_profiles
 from worker.boxabl_campaign import (
     PROFILE_NAME as BOXABL_PROFILE_NAME,
 )
@@ -66,6 +69,12 @@ from worker.boxabl_campaign import (
 from worker.brand_profiles import BrandProfileStore
 from worker.campaign_brief import parse_campaign_brief
 from worker.campaign_brief_sync import CampaignBriefSyncService
+from worker.campaign_compliance import (
+    check_clip_against_profiles,
+)
+from worker.campaign_import import CampaignImportError, CampaignImportService
+from worker.campaign_profile import CampaignProfile
+from worker.campaign_profile_store import get_campaign_profile_store
 from worker.campaign_preset import (
     CampaignPreset,
     parse_campaign_preset,
@@ -262,6 +271,7 @@ class OptionsModel(BaseModel):
     translate: bool = False
     clip_length: str = "auto"
     aspect: str = "9:16"
+    output_platform: str = ""
     num_clips: str = "auto"
     strategy: str = "ai"
     captions: bool = True
@@ -327,6 +337,40 @@ class OptionsModel(BaseModel):
     reframe_intensity: str = "standard"
     # Default from FACE_DETECTOR_BACKEND, which documents itself as exactly this.
     face_detector: str = _settings_face_detector()
+    # Per-job quality and tracking controls. These are intentionally explicit so JSON submissions
+    # cannot silently lose the values that the settings panels expose.
+    output_short_side: int = 1080
+    quality_preset: str = "off"
+    quality_smart_scale: bool = False
+    quality_crop_mode: str = "crop"
+    quality_denoise: str = "off"
+    quality_sharpen: float = 0.0
+    quality_colour_correction: bool = False
+    quality_target_fps: int = 0
+    quality_interpolation: bool = False
+    quality_audio_denoise: str = "off"
+    quality_audio_loudness: bool = False
+    quality_voice_clarity: bool = False
+    quality_progress_metadata: bool = False
+    x264_crf: int = 20
+    video_encoder: str = "libx264"
+    scaler_flags: str = "bicubic"
+    frame_rate_policy: str = "auto"
+    face_detector_min_score: float = 0.5
+    reframe_zero_phase: bool = True
+    reframe_reset_on_cut: bool = True
+    split_screen_max_regions: int = 2
+    facial_fallback: str = "static_crop_blur"
+    # Meme mode uses the canonical worker names. The frontend retains legacy aliases when loading
+    # older saved profiles, but submissions always send this stable contract.
+    meme_mode: bool = False
+    meme_preset: str = ""
+    meme_events: list[dict] = []
+    meme_auto_suggest: bool = False
+    meme_asset_library: str = ""
+    meme_sfx_library: str = ""
+    meme_default_volume: float = 0.35
+    meme_default_duck: float = 0.0
     # Kinetic typography engine (default OFF). Same fields and same defaults as
     # ``ProcessingOptions``; unrecognised *choice* values are not rejected here
     # but coerced by the engine's ``resolve_options`` (Reqs 17.4, 17.7).
@@ -579,6 +623,8 @@ class PublishClipRequest(BaseModel):
     routes: dict[str, dict[str, str]] = Field(default_factory=dict)
     campaign_checks: dict[str, bool] = Field(default_factory=dict)
     affiliate_url: str = ""
+    campaign_profile_ids: list[str] = Field(default_factory=list)
+    campaign_profile_id: str = ""
 
 
 class CampaignPresetRequest(BaseModel):
@@ -594,6 +640,51 @@ class CampaignPresetDriveRequest(BaseModel):
 
     url: str = ""
     source_url: str = ""
+
+
+class CampaignImportRequest(BaseModel):
+    """Import one or more Google Docs/files/folders into an editable campaign profile."""
+
+    urls: list[str] = Field(default_factory=list)
+    links: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    force: bool = False
+    download_assets: bool = False
+    save: bool = False
+    select: bool = False
+
+
+class CampaignProfileModel(BaseModel):
+    """Editable campaign-profile payload; unknown fields remain outside the policy model."""
+
+    id: str = ""
+    name: str = "Untitled campaign"
+    length: dict = Field(default_factory=dict)
+    aspect_resolution: dict = Field(default_factory=dict)
+    platforms: list[str] = Field(default_factory=list)
+    captions_language: dict = Field(default_factory=dict)
+    copy_rules: dict = Field(default_factory=dict)
+    watermark_end_cards: dict = Field(default_factory=dict)
+    banned_words_topics: dict = Field(default_factory=dict)
+    source_rules: dict = Field(default_factory=dict)
+    audio_rules: dict = Field(default_factory=dict)
+    meme_policy: dict = Field(default_factory=dict)
+    payout_deadlines: dict = Field(default_factory=dict)
+    ambiguities: list[dict] = Field(default_factory=list)
+    uncertainties: list[dict] = Field(default_factory=list)
+    provenance: list[dict] = Field(default_factory=list)
+    raw_text_hash: str = ""
+    parser: str = "deterministic"
+    editable: bool = True
+
+
+class CampaignProfileComplianceRequest(BaseModel):
+    profile_ids: list[str] = Field(default_factory=list)
+    profile_id: str = ""
+    clip: dict = Field(default_factory=dict)
+    job_id: str = ""
+    clip_id: str = ""
+    visibility: str | None = None
 
 
 class DailyScheduleRequest(BaseModel):
@@ -682,6 +773,16 @@ class BatchRequest(BaseModel):
     new_project: bool = True
 
 
+class GenerateMoreRequest(BaseModel):
+    """Ask the selector for fresh moments from an already-ingested source."""
+
+    selection_prompt: str = ""
+    num_clips: str = "3"
+    clip_length: str | None = None
+    topic: str | None = None
+    vibe: str | None = None
+
+
 class PreviewRequest(BaseModel):
     url: str
 
@@ -708,6 +809,10 @@ def info() -> dict[str, object]:
         "environment": settings.environment,
         "version": app.version,
         "aspect_ratios": ["9:16", "1:1", "16:9", "4:5"],
+        # O7: encode targets are advertised separately from metadata platforms. Selecting TikTok
+        # metadata must not silently reshape a YouTube-landscape render, and the UI needs the
+        # resolved dimensions/limits before it submits a job.
+        "output_profiles": output_profiles.available_profiles(),
         "clip_lengths": ["auto", "<30s", "30-60s", "60-90s", "90s-3min"],
         "clip_counts": ["auto", "1", "3", "5", "10", "max"],
         "platforms": list(PLATFORM_PROFILES.keys()),
@@ -723,6 +828,14 @@ def info() -> dict[str, object]:
         },
         "campaign_automation": {
             "preset_parser": "deterministic_google_doc",
+            "campaign_profile_import": {
+                "multiple_links": True,
+                "folder_traversal": True,
+                "manual_resync": True,
+                "public_link_fallback": True,
+                "cache": True,
+                "minimum_drive_scope": "drive.readonly",
+            },
             "daily_clip_target": 2,
             "public_visibility_required": True,
             "storytelling_planner": True,
@@ -1157,6 +1270,7 @@ async def upload(
     translate: bool = Form(False),
     clip_length: str = Form("auto"),
     aspect: str = Form("9:16"),
+    output_platform: str = Form(""),
     num_clips: str = Form("auto"),
     strategy: str = Form("ai"),
     captions: bool = Form(True),
@@ -1219,6 +1333,36 @@ async def upload(
     # unrecognised value falls back to the documented default in ProcessingOptions.from_dict
     # rather than 422-ing an upload that is otherwise fine.
     face_detector: str = Form(_settings_face_detector()),
+    output_short_side: str | None = Form(None),
+    quality_preset: str | None = Form(None),
+    quality_smart_scale: str | None = Form(None),
+    quality_crop_mode: str | None = Form(None),
+    quality_denoise: str | None = Form(None),
+    quality_sharpen: str | None = Form(None),
+    quality_colour_correction: str | None = Form(None),
+    quality_target_fps: str | None = Form(None),
+    quality_interpolation: str | None = Form(None),
+    quality_audio_denoise: str | None = Form(None),
+    quality_audio_loudness: str | None = Form(None),
+    quality_voice_clarity: str | None = Form(None),
+    quality_progress_metadata: str | None = Form(None),
+    x264_crf: str | None = Form(None),
+    video_encoder: str | None = Form(None),
+    scaler_flags: str | None = Form(None),
+    frame_rate_policy: str | None = Form(None),
+    face_detector_min_score: str | None = Form(None),
+    reframe_zero_phase: str | None = Form(None),
+    reframe_reset_on_cut: str | None = Form(None),
+    split_screen_max_regions: str | None = Form(None),
+    facial_fallback: str | None = Form(None),
+    meme_mode: str | None = Form(None),
+    meme_preset: str | None = Form(None),
+    meme_events: str | None = Form(None),
+    meme_auto_suggest: str | None = Form(None),
+    meme_asset_library: str | None = Form(None),
+    meme_sfx_library: str | None = Form(None),
+    meme_default_volume: str | None = Form(None),
+    meme_default_duck: str | None = Form(None),
     # Kinetic typography engine (default OFF; Reqs 17.4, 17.7).
     #
     # Declared as loose optional strings on purpose: form values arrive as text,
@@ -1346,6 +1490,7 @@ async def upload(
             "translate": translate,
             "clip_length": clip_length,
             "aspect": aspect,
+            "output_platform": output_platform,
             "num_clips": num_clips,
             "strategy": strategy,
             "captions": captions,
@@ -1395,7 +1540,37 @@ async def upload(
             "speaker_reframe": speaker_reframe,
             "reframe_layout": reframe_layout,
             "reframe_intensity": reframe_intensity,
-            "face_detector": face_detector,
+        "face_detector": face_detector,
+        "output_short_side": output_short_side,
+        "quality_preset": quality_preset,
+        "quality_smart_scale": quality_smart_scale,
+        "quality_crop_mode": quality_crop_mode,
+        "quality_denoise": quality_denoise,
+        "quality_sharpen": quality_sharpen,
+        "quality_colour_correction": quality_colour_correction,
+        "quality_target_fps": quality_target_fps,
+        "quality_interpolation": quality_interpolation,
+        "quality_audio_denoise": quality_audio_denoise,
+        "quality_audio_loudness": quality_audio_loudness,
+        "quality_voice_clarity": quality_voice_clarity,
+        "quality_progress_metadata": quality_progress_metadata,
+        "x264_crf": x264_crf,
+        "video_encoder": video_encoder,
+        "scaler_flags": scaler_flags,
+        "frame_rate_policy": frame_rate_policy,
+        "face_detector_min_score": face_detector_min_score,
+        "reframe_zero_phase": reframe_zero_phase,
+        "reframe_reset_on_cut": reframe_reset_on_cut,
+        "split_screen_max_regions": split_screen_max_regions,
+        "facial_fallback": facial_fallback,
+        "meme_mode": meme_mode,
+        "meme_preset": meme_preset,
+        "meme_events": meme_events,
+        "meme_auto_suggest": meme_auto_suggest,
+        "meme_asset_library": meme_asset_library,
+        "meme_sfx_library": meme_sfx_library,
+        "meme_default_volume": meme_default_volume,
+        "meme_default_duck": meme_default_duck,
             **{key: value for key, value in optional_form.items() if value is not None},
         }
     )
@@ -1455,6 +1630,59 @@ async def upload(
     return response
 
 
+@app.post("/api/meme-assets/upload", tags=["meme"], dependencies=[Depends(rate_limit)])
+async def upload_meme_assets(
+    files: list[UploadFile] = File(...),
+    kind: str = Form("sfx"),
+) -> dict:
+    """Store creator-supplied meme assets in the local library.
+
+    This endpoint never fetches a URL or assigns a license. The creator owns the files and should
+    keep the matching manifest/sidecar provenance record beside them. The normal upload-size cap
+    applies to every file so an accidental asset drop cannot exhaust the storage volume.
+    """
+    normalized_kind = str(kind or "sfx").strip().lower()
+    if normalized_kind not in {"sfx", "overlay"}:
+        raise HTTPException(status_code=400, detail="kind must be sfx or overlay")
+    allowed = (
+        {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"}
+        if normalized_kind == "sfx"
+        else {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".m4v", ".webm"}
+    )
+    root = Path(settings.sfx_dir if normalized_kind == "sfx" else settings.broll_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    limit = int(settings.max_upload_bytes)
+    saved: list[dict[str, Any]] = []
+    chunk_size = max(1, int(settings.upload_chunk_bytes))
+    try:
+        for upload_file in files:
+            original = Path(upload_file.filename or "asset").name
+            suffix = Path(original).suffix.lower()
+            if suffix not in allowed:
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported {normalized_kind} file {original!r}; allowed: {', '.join(sorted(allowed))}",
+                )
+            destination = root / f"{uuid.uuid4().hex[:10]}_{original}"
+            written = 0
+            try:
+                with destination.open("wb") as output:
+                    while chunk := await upload_file.read(chunk_size):
+                        written += len(chunk)
+                        if limit > 0 and written > limit:
+                            raise HTTPException(status_code=413, detail=f"{original!r} exceeds the upload limit")
+                        output.write(chunk)
+            except BaseException:
+                destination.unlink(missing_ok=True)
+                raise
+            saved.append({"id": destination.stem, "name": original, "path": str(destination), "kind": normalized_kind, "license": "unknown", "provenance": "user_supplied"})
+    except BaseException:
+        for item in saved:
+            Path(item["path"]).unlink(missing_ok=True)
+        raise
+    return {"assets": saved, "directory": str(root), "kind": normalized_kind}
+
+
 # ---------------------------------------------------------------------------
 # Job status
 # ---------------------------------------------------------------------------
@@ -1472,6 +1700,165 @@ def get_job(job_id: str) -> dict:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return snapshot
+
+
+@app.get("/api/jobs/{job_id}/download", tags=["clips"], dependencies=[Depends(rate_limit)])
+def download_job_bundle(
+    job_id: str, clip_ids: str = "", campaign_profile_ids: str = ""
+) -> StreamingResponse:
+    """Download selected clips from one job as a single streamed archive.
+
+    The UI deliberately sends explicit clip ids rather than making an empty request mean
+    "everything". A bulk export is an expensive, user-visible action, and a missing selection
+    should be a clear error rather than a surprise download of a whole project.
+    """
+    job = get_manager().store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    requested_ids = list(dict.fromkeys(item.strip() for item in clip_ids.split(",") if item.strip()))
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="Select at least one clip to download")
+
+    clips_by_id = {clip.id: clip for clip in job.clips}
+    missing = [clip_id for clip_id in requested_ids if clip_id not in clips_by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail="One or more selected clips were not found")
+
+    profile_store = get_campaign_profile_store()
+    requested_profiles = [item.strip() for item in campaign_profile_ids.split(",") if item.strip()]
+    if not requested_profiles:
+        selected_profile = profile_store.selected()
+        if selected_profile is not None:
+            requested_profiles = [selected_profile.id]
+    if requested_profiles:
+        profiles = []
+        for profile_id in dict.fromkeys(requested_profiles):
+            profile = profile_store.get(profile_id)
+            if profile is None:
+                raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
+            profiles.append(profile)
+        reports = []
+        for clip in (clips_by_id[clip_id] for clip_id in requested_ids):
+            facts = clip.to_dict()
+            facts.update(
+                {
+                    "aspect_ratio": getattr(job.options, "aspect", ""),
+                    "source_url": getattr(job, "source", ""),
+                    "platform": getattr(job.options, "platform", ""),
+                    "duration": getattr(clip, "duration", None),
+                    "captions": bool(getattr(job.options, "captions", False)),
+                    "watermark": getattr(job.options, "brand_logo", ""),
+                    "end_card": getattr(job.options, "brand_outro_asset", ""),
+                }
+            )
+            reports.append({"clip_id": clip.id, **check_clip_against_profiles(profiles, facts, visibility="public")})
+        if any(item["status"] != "pass" for item in reports):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Campaign profile compliance requires review before export", "reports": reports},
+            )
+
+    entries: list[tuple[Path, str, str]] = []
+    used_names: set[str] = set()
+    for clip_id in requested_ids:
+        clip = clips_by_id[clip_id]
+        path, safe_name = _resolve_clip_file(job_id, clip.filename)
+        base = Path(safe_name).stem
+        suffix = Path(safe_name).suffix
+        candidate = safe_name
+        serial = 2
+        while candidate in used_names or f"{Path(candidate).stem}_metadata.txt" in used_names:
+            candidate = f"{base}_{serial}{suffix}"
+            serial += 1
+        used_names.add(candidate)
+        used_names.add(f"{Path(candidate).stem}_metadata.txt")
+        entries.append((path, candidate, _clip_metadata_text(clip)))
+
+    archive_stem = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in (job.title or f"job_{job_id}")
+    ).strip("._")[:80] or f"job_{job_id}"
+    chunk_size = max(1, int(settings.upload_chunk_bytes))
+    return StreamingResponse(
+        _iter_clip_bundle(entries, chunk_size),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{archive_stem}_clips.zip"'},
+    )
+
+
+@app.post("/api/jobs/{job_id}/more", tags=["jobs"], dependencies=[Depends(rate_limit)])
+def generate_more_clips(job_id: str, req: GenerateMoreRequest) -> dict:
+    """Start a fresh selection pass against a completed source (prompted clip discovery).
+
+    This is intentionally a new job rather than an in-place mutation. The original clips remain
+    reviewable, the new run gets its own progress and failure state, and publish settings are forced
+    back to review mode so asking for more moments can never duplicate an auto-publish campaign.
+    """
+    manager = get_manager()
+    parent = manager.store.get(job_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if parent.status.value in ("queued", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current render to finish before asking for more clips.",
+        )
+
+    source = Path(parent.source_path or (parent.source if parent.input_type == "file" else ""))
+    if not source.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail="The original source file is no longer available; upload it again to find more clips.",
+        )
+
+    avoid_windows = [
+        {"start": float(clip.start), "end": float(clip.end)}
+        for clip in (parent.clips or [])
+        if float(clip.end) > float(clip.start)
+    ]
+    creator_prompt = str(req.selection_prompt or "").strip()
+    if not creator_prompt:
+        creator_prompt = "Find fresh, self-contained moments from a different angle than the clips already delivered."
+    ranges = ", ".join(
+        f"{window['start']:.1f}-{window['end']:.1f}s" for window in avoid_windows
+    )
+    if ranges:
+        creator_prompt = (
+            f"{creator_prompt}\nDo not select moments overlapping these already delivered source ranges: {ranges}."
+        )
+
+    option_data = asdict(parent.options)
+    option_data.update(
+        {
+            "selection_prompt": creator_prompt,
+            "num_clips": req.num_clips or parent.options.num_clips,
+            "publish_to": [],
+            "publish_mode": "review",
+            "schedule_at": None,
+        }
+    )
+    if req.clip_length:
+        option_data["clip_length"] = req.clip_length
+    if req.topic is not None and req.topic.strip():
+        option_data["topic"] = req.topic.strip()
+    if req.vibe is not None and req.vibe.strip():
+        option_data["vibe"] = req.vibe.strip()
+    options = ProcessingOptions.from_dict(option_data)
+
+    job = manager.submit(
+        "file",
+        str(source),
+        options,
+        title=f"More clips · {parent.title or source.name}",
+        avoid_windows=avoid_windows,
+    )
+    snapshot = manager.store.snapshot(job.id) or job.to_dict()
+    return {
+        "job": snapshot,
+        "parent_job_id": job_id,
+        "avoided_windows": avoid_windows,
+    }
 
 
 @app.post("/api/jobs/{job_id}/cancel", tags=["jobs"])
@@ -2102,6 +2489,117 @@ def import_campaign_preset_from_drive(req: CampaignPresetDriveRequest) -> dict:
     return _import_campaign_preset_from_drive(req.url.strip() or req.source_url.strip())
 
 
+def _campaign_import_error(exc: CampaignImportError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.http_status,
+        detail={
+            "message": str(exc),
+            "code": exc.code,
+            "fall_back_to_paste": exc.code in {"private_no_access", "unreadable_format", "invalid_url"},
+        },
+    )
+
+
+def _campaign_profile_payload(req: CampaignProfileModel) -> CampaignProfile:
+    data = req.model_dump()
+    return CampaignProfile.from_dict(data)
+
+
+@app.post("/api/campaign-profiles/import", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def import_campaign_profiles(req: CampaignImportRequest) -> dict:
+    """Import multiple Docs/files/folders with cache-aware manual re-sync."""
+    urls = [*req.urls, *req.links, *req.source_urls]
+    try:
+        result = CampaignImportService().import_urls(
+            urls, force=req.force, download_assets=req.download_assets
+        )
+    except CampaignImportError as exc:
+        raise _campaign_import_error(exc) from exc
+    body = result.to_dict()
+    if req.save or req.select:
+        profile = get_campaign_profile_store().save(result.profile)
+        if req.select:
+            get_campaign_profile_store().select(profile.id)
+        body["profile"] = profile.to_dict()
+        body["selected_id"] = profile.id if req.select else get_campaign_profile_store().selected().id if get_campaign_profile_store().selected() else None
+    return body
+
+
+@app.post("/api/campaign-profiles/sync", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def sync_campaign_profiles(req: CampaignImportRequest) -> dict:
+    """Force a fresh Drive read, bypassing the source cache."""
+    req.force = True
+    return import_campaign_profiles(req)
+
+
+@app.get("/api/campaign-profiles", tags=["campaigns"])
+def list_campaign_profiles() -> dict:
+    store = get_campaign_profile_store()
+    selected = store.selected()
+    return {"profiles": [profile.to_dict() for profile in store.list()], "selected_id": selected.id if selected else None}
+
+
+@app.post("/api/campaign-profiles", tags=["campaigns"])
+def save_campaign_profile(req: CampaignProfileModel) -> dict:
+    profile = _campaign_profile_payload(req)
+    saved = get_campaign_profile_store().save(profile, profile_id=req.id)
+    return saved.to_dict()
+
+
+@app.get("/api/campaign-profiles/{profile_id}", tags=["campaigns"])
+def get_campaign_profile(profile_id: str) -> dict:
+    profile = get_campaign_profile_store().get(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign profile not found")
+    return profile.to_dict()
+
+
+@app.post("/api/campaign-profiles/{profile_id}/select", tags=["campaigns"])
+def select_campaign_profile(profile_id: str) -> dict:
+    profile = get_campaign_profile_store().select(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign profile not found")
+    return {"selected_id": profile.id, "profile": profile.to_dict()}
+
+
+@app.delete("/api/campaign-profiles/{profile_id}", tags=["campaigns"])
+def delete_campaign_profile(profile_id: str) -> dict:
+    if not get_campaign_profile_store().delete(profile_id):
+        raise HTTPException(status_code=404, detail="Campaign profile not found")
+    return {"deleted": True, "id": profile_id}
+
+
+@app.post("/api/campaign-profiles/compliance", tags=["campaigns"])
+def campaign_profiles_compliance(req: CampaignProfileComplianceRequest) -> dict:
+    store = get_campaign_profile_store()
+    ids = [*req.profile_ids]
+    if req.profile_id:
+        ids.append(req.profile_id)
+    if not ids:
+        selected = store.selected()
+        if selected:
+            ids.append(selected.id)
+    profiles = []
+    for profile_id in dict.fromkeys(ids):
+        profile = store.get(profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
+        profiles.append(profile)
+    if not profiles:
+        raise HTTPException(status_code=400, detail="Provide profile_ids or select a campaign profile first")
+    clip = req.clip
+    if req.job_id or req.clip_id:
+        if not req.job_id or not req.clip_id:
+            raise HTTPException(status_code=400, detail="job_id and clip_id must be provided together")
+        clip_item = get_manager().store.get_clip(req.job_id, req.clip_id)
+        job = get_manager().store.get(req.job_id)
+        if clip_item is None or job is None:
+            raise HTTPException(status_code=404, detail="Job or clip not found")
+        clip = clip_item.to_dict()
+        clip.update({"aspect_ratio": getattr(job.options, "aspect", ""), "source_url": getattr(job, "source", "")})
+    return check_clip_against_profiles(profiles, clip, visibility=req.visibility)
+
+
 def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -> dict[str, Any]:
     """Project a rendered clip into the pure campaign-policy vocabulary."""
 
@@ -2381,6 +2879,47 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                     "report": report.to_dict(),
                 },
             )
+    campaign_profile_ids = list(req.campaign_profile_ids)
+    if req.campaign_profile_id:
+        campaign_profile_ids.append(req.campaign_profile_id)
+    if not campaign_profile_ids:
+        selected_profile = get_campaign_profile_store().selected()
+        if selected_profile is not None:
+            campaign_profile_ids.append(selected_profile.id)
+    if campaign_profile_ids:
+        profile_store = get_campaign_profile_store()
+        profiles = []
+        for profile_id in dict.fromkeys(campaign_profile_ids):
+            profile = profile_store.get(profile_id)
+            if profile is None:
+                raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
+            profiles.append(profile)
+        profile_facts = clip.to_dict()
+        profile_facts.update(
+            {
+                "platform": req.platforms[0] if req.platforms else clip.platform,
+                "aspect_ratio": getattr(job.options, "aspect", ""),
+                "visibility": "public" if public_only else "private",
+                "duration": getattr(clip, "duration", None),
+                "captions": bool(getattr(job.options, "captions", False)),
+                "language": getattr(job.options, "language", "") or "",
+                "caption_language": getattr(job.options, "language", "") or "",
+                "watermark": getattr(job.options, "brand_logo", ""),
+                "end_card": getattr(job.options, "brand_outro_asset", "")
+                or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
+                "source_url": getattr(job, "source", ""),
+                "audio_source": getattr(job.options, "music", "") or "",
+                "meme": any("meme" in str(marker).casefold() for marker in (getattr(clip, "effects_applied", []) or [])),
+            }
+        )
+        profile_report = check_clip_against_profiles(
+            profiles, profile_facts, visibility=profile_facts["visibility"]
+        )
+        if profile_report["status"] != "pass":
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Campaign profile compliance failed", "report": profile_report},
+            )
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,
@@ -2644,6 +3183,25 @@ def refresh_publisher_credentials(platform: str) -> dict:
     return {
         "platform": platform,
         "refreshed": refreshed,
+        "status": publisher.status().to_dict(),
+    }
+
+
+@app.post("/api/publishers/{platform}/verify", tags=["publishing"])
+def verify_publisher_credentials(platform: str) -> dict:
+    """Verify a publisher's credentials without creating a post.
+
+    YouTube uses this to exchange the configured refresh token and validate the upload scope. It
+    never uploads a dummy clip and never stores the access token in the response.
+    """
+    manager = get_publish_manager()
+    publisher = manager.publishers.get(platform)
+    if publisher is None:
+        raise HTTPException(status_code=404, detail=f"Unknown platform {platform!r}")
+    result = publisher.verify_credentials()
+    return {
+        "platform": platform,
+        **result,
         "status": publisher.status().to_dict(),
     }
 
@@ -2945,6 +3503,31 @@ def _iter_clip_package(path: Path, safe_name: str, metadata: str, chunk_size: in
                 if chunk := sink.drain():
                     yield chunk
     # The central directory is written by ZipFile.close, i.e. on leaving the `with`.
+    if chunk := sink.drain():
+        yield chunk
+
+
+def _iter_clip_bundle(entries: list[tuple[Path, str, str]], chunk_size: int):
+    """Yield several clip packages in one streamed ZIP archive.
+
+    Video members stay stored because MP4 is already compressed; the small metadata members are
+    deflated. The generator keeps the same bounded-memory behaviour as the single-clip route.
+    """
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w") as archive:
+        for path, safe_name, metadata in entries:
+            archive.writestr(
+                f"{Path(safe_name).stem}_metadata.txt", metadata, zipfile.ZIP_DEFLATED
+            )
+            if chunk := sink.drain():
+                yield chunk
+            info = zipfile.ZipInfo.from_file(path, arcname=safe_name)
+            info.compress_type = zipfile.ZIP_STORED
+            with archive.open(info, "w") as entry, path.open("rb") as source:
+                while block := source.read(chunk_size):
+                    entry.write(block)
+                    if chunk := sink.drain():
+                        yield chunk
     if chunk := sink.drain():
         yield chunk
 

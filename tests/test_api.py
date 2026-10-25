@@ -103,6 +103,83 @@ def test_video_only_download(client, seeded_job):
     assert resp.content == b"FAKEVIDEODATA"
 
 
+def test_selected_job_clips_download_as_one_zip(client, seeded_job):
+    job, clip = seeded_job
+
+    resp = client.get(f"/api/jobs/{job.id}/download?clip_ids={clip.id}")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert {"clipA.mp4", "clipA_metadata.txt"}.issubset(archive.namelist())
+
+
+def test_job_bundle_requires_an_explicit_selection(client, seeded_job):
+    job, _clip = seeded_job
+
+    resp = client.get(f"/api/jobs/{job.id}/download")
+
+    assert resp.status_code == 400
+    assert "select at least one clip" in resp.json()["detail"].lower()
+
+
+def test_generate_more_reuses_source_avoids_existing_windows_and_forces_review(
+    client, tmp_path, monkeypatch
+):
+    manager = get_manager()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    parent = Job(
+        input_type="file",
+        source=str(source),
+        source_path=str(source),
+        options=ProcessingOptions(
+            publish_mode="auto",
+            publish_to=["youtube"],
+            selection_prompt="old request",
+        ),
+        status=JobStatus.COMPLETED,
+    )
+    parent.clips = [
+        ClipResult(
+            id="existing",
+            filename="existing.mp4",
+            start=12.0,
+            end=25.0,
+            duration=13.0,
+        )
+    ]
+    manager.store.add(parent)
+    captured = {}
+
+    def fake_submit(input_type, source_arg, options, **kwargs):
+        captured.update(
+            {
+                "input_type": input_type,
+                "source": source_arg,
+                "options": options,
+                "avoid_windows": kwargs.get("avoid_windows"),
+            }
+        )
+        return Job(input_type=input_type, source=source_arg, options=options)
+
+    monkeypatch.setattr(manager, "submit", fake_submit)
+    response = client.post(
+        f"/api/jobs/{parent.id}/more",
+        json={"selection_prompt": "Find the funniest disagreement", "num_clips": "5"},
+    )
+
+    assert response.status_code == 200
+    assert captured["input_type"] == "file"
+    assert captured["source"] == str(source)
+    assert captured["avoid_windows"] == [{"start": 12.0, "end": 25.0}]
+    assert captured["options"].publish_mode == "review"
+    assert captured["options"].publish_to == []
+    assert captured["options"].num_clips == "5"
+    assert "Find the funniest disagreement" in captured["options"].selection_prompt
+    assert "12.0-25.0s" in captured["options"].selection_prompt
+
+
 def test_publish_clip_creates_attempts(client, seeded_job):
     # No platform credentials are set, so the background scheduler fails the
     # attempt fast (not configured) without any network call — we only assert

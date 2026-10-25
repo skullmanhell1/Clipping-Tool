@@ -24,6 +24,8 @@ export default function PublishingPanel({
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [verifyingYouTube, setVerifyingYouTube] = useState(false);
+  const [youtubeVerification, setYouTubeVerification] = useState(null);
 
   const toggle = (platform) => {
     const platforms = value.platforms.includes(platform)
@@ -68,6 +70,22 @@ export default function PublishingPanel({
     }
   };
 
+  const verifyYouTube = async () => {
+    setVerifyingYouTube(true);
+    setYouTubeVerification(null);
+    setError("");
+    try {
+      setYouTubeVerification(await api.verifyPublisherCredentials("youtube"));
+    } catch (verificationError) {
+      setYouTubeVerification({
+        verified: false,
+        message: verificationError.message || "YouTube credential verification failed.",
+      });
+    } finally {
+      setVerifyingYouTube(false);
+    }
+  };
+
   const statusEntries = Object.entries(statuses || {});
   const isBoxablCampaign = campaignProfile === "boxabl_campaign";
 
@@ -95,7 +113,7 @@ export default function PublishingPanel({
             ) : (
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                 {statusEntries.map(([platform, status]) => (
-                  <label
+                  <div
                     key={platform}
                     className={`rounded-lg border p-2 text-xs ${
                       status.configured
@@ -103,7 +121,7 @@ export default function PublishingPanel({
                         : "border-slate-800 opacity-60"
                     }`}
                   >
-                    <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
                         checked={value.platforms.includes(platform)}
@@ -111,7 +129,7 @@ export default function PublishingPanel({
                         disabled={!status.configured}
                       />
                       <b>{LABELS[platform] || platform}</b>
-                    </div>
+                    </label>
                     <div
                       className={
                         status.configured ? "text-emerald-400" : "text-amber-400"
@@ -124,7 +142,28 @@ export default function PublishingPanel({
                         : "Not configured"}
                     </div>
                     <div className="mt-1 text-slate-500">{status.message}</div>
-                  </label>
+                    {platform === "youtube" ? (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={verifyYouTube}
+                          disabled={verifyingYouTube || !status.configured}
+                          className="rounded border border-red-400/30 px-2 py-1 text-[10px] text-red-200 hover:bg-red-400/10 disabled:opacity-40"
+                        >
+                          {verifyingYouTube ? "Verifying…" : "Verify YouTube OAuth"}
+                        </button>
+                        {youtubeVerification ? (
+                          <p
+                            className={`mt-1 text-[10px] ${
+                              youtubeVerification.verified ? "text-emerald-300" : "text-rose-300"
+                            }`}
+                          >
+                            {youtubeVerification.message}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             )}

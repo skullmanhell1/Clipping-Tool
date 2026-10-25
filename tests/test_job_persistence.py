@@ -122,6 +122,20 @@ def test_processing_options_round_trip(store, db_path):
     assert restored.options.publish_to == ["youtube", "tiktok"]
 
 
+def test_find_more_avoid_windows_survive_a_restart(store, db_path):
+    """The relationship metadata must persist so an inspected child job remains explainable."""
+    job = _completed_job(
+        avoid_windows=[{"start": 12.0, "end": 25.0}, {"start": 44.5, "end": 58.0}]
+    )
+    store.add(job)
+
+    restored = _restart(db_path).get(job.id)
+    assert restored.avoid_windows == [
+        {"start": 12.0, "end": 25.0},
+        {"start": 44.5, "end": 58.0},
+    ]
+
+
 def test_updates_are_written_through_not_just_held_in_memory(store, db_path):
     """A crash gives no chance to flush, so each mutation must already be durable."""
     job = _completed_job(status=JobStatus.QUEUED)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -30,6 +31,72 @@ MIME_EXTENSIONS = {
 
 class GoogleDriveError(RuntimeError):
     """A safe, user-actionable Google Drive authentication or transfer failure."""
+
+
+class _DocsHTMLParser(HTMLParser):
+    """Flatten Google Docs export HTML while preserving headings, lists, and table rows."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lines: list[str] = []
+        self.current: list[str] = []
+        self.in_cell = False
+        self.in_row = False
+        self.list_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = tag.lower()
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.current.append("#" * int(tag[1]) + " ")
+        elif tag in {"ul", "ol"}:
+            self.list_depth += 1
+        elif tag == "li":
+            self.current.append("- ")
+        elif tag in {"td", "th"}:
+            self.in_cell = True
+            if self.in_row and self.current and not self.current[-1].endswith("|"):
+                self.current.append(" | ")
+        elif tag == "tr":
+            self.in_row = True
+            self.current = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"td", "th"}:
+            self.in_cell = False
+        elif tag == "tr":
+            value = "".join(self.current).strip()
+            if value:
+                self.lines.append(value)
+            self.current = []
+            self.in_row = False
+        elif tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"} and self.current and not self.in_row:
+            value = "".join(self.current).strip()
+            if value:
+                self.lines.append(value)
+            self.current = []
+        elif tag in {"ul", "ol"}:
+            self.list_depth = max(0, self.list_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        text = re.sub(r"\s+", " ", data or " ")
+        if text.strip() or self.in_cell:
+            self.current.append(text)
+
+    def text(self) -> str:
+        if self.current:
+            value = "".join(self.current).strip()
+            if value:
+                self.lines.append(value)
+        return "\n".join(line for line in self.lines if line.strip())
+
+
+def _docs_export_text(content: str) -> str:
+    if not content.lstrip().lower().startswith(("<!doctype", "<html", "<head")):
+        return content
+    parser = _DocsHTMLParser()
+    parser.feed(content)
+    return parser.text()
 
 
 def extract_file_id(url: str) -> str | None:
@@ -79,6 +146,27 @@ def extract_file_id(url: str) -> str | None:
     return file_id if file_id and _FILE_ID_RE.fullmatch(file_id) else None
 
 
+def extract_folder_id(url: str) -> str | None:
+    """Extract a Google Drive folder id without accepting arbitrary Google URLs."""
+    try:
+        parts = urlsplit(str(url or "").strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in {"http", "https"} or parts.username or parts.password:
+        return None
+    if (parts.hostname or "").lower() not in {"drive.google.com", "www.drive.google.com"}:
+        return None
+    path_parts = [part for part in parts.path.split("/") if part]
+    folder_id = None
+    if len(path_parts) >= 2 and path_parts[0] == "drive" and path_parts[1] == "folders":
+        folder_id = path_parts[2] if len(path_parts) >= 3 else None
+    elif len(path_parts) >= 5 and path_parts[0] == "drive" and path_parts[1] == "u" and path_parts[3] == "folders":
+        folder_id = path_parts[4]
+    elif path_parts and path_parts[0] in {"open", "uc"}:
+        folder_id = parse_qs(parts.query).get("id", [None])[0]
+    return folder_id if folder_id and _FILE_ID_RE.fullmatch(folder_id) else None
+
+
 def _file_resource_url(file_id: str, *, export: bool = False) -> str:
     """Build a fixed-host Drive URL with the ID encoded as exactly one path segment."""
     value = str(file_id or "")
@@ -102,7 +190,16 @@ def configured() -> bool:
             "google_drive_client_secret",
             "google_drive_refresh_token",
         )
-    )
+    ) and bool(configured_scopes())
+
+
+def configured_scopes() -> list[str]:
+    """Return configured OAuth scopes, retaining only read-only Drive scopes."""
+    from config import settings
+
+    raw = str(getattr(settings, "google_drive_scopes", "") or "")
+    values = [item.strip() for item in re.split(r"[,\s]+", raw) if item.strip()]
+    return [item for item in values if item.endswith("/drive.readonly") or item.endswith("/drive.metadata.readonly")]
 
 
 def _access_token() -> str:
@@ -127,6 +224,7 @@ def _access_token() -> str:
                 "client_secret": client_secret,
                 "refresh_token": refresh_token,
                 "grant_type": "refresh_token",
+                "scope": " ".join(configured_scopes()),
             },
             timeout=20.0,
         )
@@ -169,6 +267,10 @@ def _get_file_metadata(
             headers=headers,
             timeout=20.0,
         )
+        if response.status_code in {401, 403}:
+            raise GoogleDriveError("Google Drive file access was denied. Confirm Viewer access.")
+        if response.status_code == 429:
+            raise GoogleDriveError("Google Drive rate limit reached. Retry the import later.")
         response.raise_for_status()
         data = response.json()
     except GoogleDriveError:
@@ -191,6 +293,83 @@ def get_file_metadata(file_id: str, *, require_video: bool = True) -> dict:
     return _get_file_metadata(file_id, _headers(), require_video=require_video)
 
 
+def list_folder_files(folder_id: str, *, page_size: int = 100) -> list[dict]:
+    """List files directly in a folder using the authenticated read-only Drive API."""
+    import httpx
+
+    if not _FILE_ID_RE.fullmatch(str(folder_id or "")):
+        raise GoogleDriveError("That Google Drive folder ID is not valid.")
+    headers = _headers()
+    rows: list[dict] = []
+    token = ""
+    try:
+        for _ in range(100):
+            params = {
+                "q": f"'{folder_id}' in parents and trashed = false",
+                "pageSize": max(1, min(int(page_size), 1000)),
+                "orderBy": "name",
+                "fields": "nextPageToken,files(id,name,mimeType,size,modifiedTime,version,headRevisionId,md5Checksum)",
+            }
+            if token:
+                params["pageToken"] = token
+            response = httpx.get(FILES_URL, params=params, headers=headers, timeout=20.0)
+            if response.status_code in {401, 403}:
+                raise GoogleDriveError("Google Drive folder access was denied. Confirm Viewer access.")
+            if response.status_code == 429:
+                raise GoogleDriveError("Google Drive rate limit reached. Retry the import later.")
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise GoogleDriveError("Google Drive returned invalid folder metadata.")
+            files = data.get("files", [])
+            if not isinstance(files, list):
+                raise GoogleDriveError("Google Drive returned invalid folder contents.")
+            rows.extend(item for item in files if isinstance(item, dict))
+            token = str(data.get("nextPageToken") or "")
+            if not token:
+                break
+    except GoogleDriveError:
+        raise
+    except Exception as exc:
+        raise GoogleDriveError(
+            "Could not read that Google Drive folder. Confirm the OAuth account has Viewer access."
+        ) from exc
+    return rows
+
+
+def download_public_text_file(file_id: str, *, source_type: str = "google_drive") -> tuple[str, dict]:
+    """Read a publicly shared Google Doc/text file without OAuth credentials."""
+    import httpx
+
+    if not _FILE_ID_RE.fullmatch(str(file_id or "")):
+        raise GoogleDriveError("That Google Drive file ID is not valid.")
+    if source_type == "google_docs":
+        url = f"https://docs.google.com/document/d/{quote(file_id, safe='')}/export"
+        params = {"format": "html"}
+    else:
+        url = f"https://drive.google.com/uc"
+        params = {"export": "download", "id": file_id}
+    try:
+        response = httpx.get(url, params=params, follow_redirects=True, timeout=30.0)
+        if response.status_code in {401, 403}:
+            raise GoogleDriveError("The Google link is private or access was denied.")
+        if response.status_code == 429:
+            raise GoogleDriveError("Google Drive rate limit reached. Retry the import later.")
+        response.raise_for_status()
+        content = _docs_export_text(response.content.decode("utf-8-sig"))
+    except GoogleDriveError:
+        raise
+    except Exception as exc:
+        raise GoogleDriveError(
+            "The public Google link could not be read. Confirm link sharing is enabled and the file is a supported text document."
+        ) from exc
+    if not content.strip():
+        raise GoogleDriveError("The public Google document is empty or unreadable.")
+    if content.lstrip().lower().startswith(("<!doctype html", "<html", "<head")):
+        raise GoogleDriveError("The Google link is private or did not return a supported text document.")
+    return content, {"id": file_id, "mimeType": "text/plain", "modifiedTime": "", "version": ""}
+
+
 def download_text_file(file_id: str, *, mime_type: str = "") -> tuple[str, dict]:
     """Download a Google Doc or text file as UTF-8 text and return its metadata.
 
@@ -205,7 +384,7 @@ def download_text_file(file_id: str, *, mime_type: str = "") -> tuple[str, dict]
     source_mime = str(mime_type or metadata.get("mimeType") or "")
     if source_mime == "application/vnd.google-apps.document":
         url = _file_resource_url(file_id, export=True)
-        params = {"mimeType": "text/plain"}
+        params = {"mimeType": "text/html"}
     elif source_mime.startswith("text/") or source_mime == "application/json":
         url = _file_resource_url(file_id)
         params = {"alt": "media"}
@@ -215,8 +394,12 @@ def download_text_file(file_id: str, *, mime_type: str = "") -> tuple[str, dict]
         )
     try:
         response = httpx.get(url, params=params, headers=headers, timeout=30.0)
+        if response.status_code in {401, 403}:
+            raise GoogleDriveError("Google Drive file access was denied. Confirm Viewer access.")
+        if response.status_code == 429:
+            raise GoogleDriveError("Google Drive rate limit reached. Retry the import later.")
         response.raise_for_status()
-        content = response.content.decode("utf-8-sig")
+        content = _docs_export_text(response.content.decode("utf-8-sig"))
     except GoogleDriveError:
         raise
     except Exception as exc:

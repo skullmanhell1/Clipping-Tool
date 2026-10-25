@@ -104,9 +104,28 @@ export const api = {
     fd.append("new_project", String(newProject));
     return apiFetch("/api/upload", { method: "POST", body: fd }).then(jsonOrThrow);
   },
+  uploadMemeAssets: (files, kind = "sfx") => {
+    const fd = new FormData();
+    files.forEach((file) => fd.append("files", file));
+    fd.append("kind", kind);
+    return apiFetch("/api/meme-assets/upload", { method: "POST", body: fd }).then(jsonOrThrow);
+  },
 
   listJobs: () => apiFetch("/api/jobs").then(jsonOrThrow),
   getJob: (id) => apiFetch(`/api/jobs/${id}`).then(jsonOrThrow),
+  jobDownloadUrl: (jobId, clipIds = []) => {
+    const ids = Array.isArray(clipIds) ? clipIds.filter(Boolean) : [];
+    if (!ids.length) return "";
+    return withToken(
+      `/api/jobs/${jobId}/download?clip_ids=${encodeURIComponent(ids.join(","))}`,
+    );
+  },
+  generateMore: (jobId, options = {}) =>
+    apiFetch(`/api/jobs/${jobId}/more`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    }).then(jsonOrThrow),
 
   // I4: ask a queued or running job to stop. Answers 409 when the job has already finished,
   // which jsonOrThrow surfaces as an error carrying the API's own explanation.
@@ -167,6 +186,67 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     }).then(jsonOrThrow),
+  importCampaignProfiles: (urls, options = {}) =>
+    apiFetch("/api/campaign-profiles/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls, ...options }),
+    }).then(jsonOrThrow),
+  syncCampaignProfiles: (urls, options = {}) =>
+    apiFetch("/api/campaign-profiles/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls, ...options, force: true }),
+    }).then(jsonOrThrow),
+  campaignProfiles: () => apiFetch("/api/campaign-profiles").then(jsonOrThrow),
+  saveCampaignProfile: (profile) =>
+    apiFetch("/api/campaign-profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profile),
+    }).then(jsonOrThrow),
+  selectCampaignProfile: (profileId) =>
+    apiFetch(`/api/campaign-profiles/${encodeURIComponent(profileId)}/select`, { method: "POST" }).then(jsonOrThrow),
+  campaignProfilesCompliance: (payload) =>
+    apiFetch("/api/campaign-profiles/compliance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(jsonOrThrow),
+  parseBrief: (rawText, payload = {}) =>
+    apiFetch("/api/briefs/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_text: rawText, ...payload }),
+    }).then(jsonOrThrow),
+  getBrief: (campaignId) =>
+    apiFetch(`/api/briefs/${encodeURIComponent(campaignId)}`).then(jsonOrThrow),
+  syncBrief: (campaignId, payload) =>
+    apiFetch(`/api/briefs/${encodeURIComponent(campaignId)}/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign_id: campaignId, ...payload }),
+    }).then(jsonOrThrow),
+  checkBriefCompliance: (text, forbiddenWords = [], requiredWords = []) =>
+    apiFetch("/api/briefs/compliance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        forbidden_words: forbiddenWords,
+        required_words: requiredWords,
+      }),
+    }).then(jsonOrThrow),
+  captionPreview: async (payload = {}) => {
+    const response = await apiFetch("/api/captions/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) return jsonOrThrow(response);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  },
   scheduleCampaignDay: (campaignId, payload) =>
     apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/daily-schedule`, {
       method: "POST",
@@ -270,6 +350,10 @@ export const api = {
 
   refreshPublisherCredentials: (platform) =>
     apiFetch(`/api/publishers/${encodeURIComponent(platform)}/refresh`, {
+      method: "POST",
+    }).then(jsonOrThrow),
+  verifyPublisherCredentials: (platform) =>
+    apiFetch(`/api/publishers/${encodeURIComponent(platform)}/verify`, {
       method: "POST",
     }).then(jsonOrThrow),
 

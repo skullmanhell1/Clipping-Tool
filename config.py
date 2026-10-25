@@ -1170,6 +1170,37 @@ class Settings(BaseSettings):
         "crop path. Off restores the causal EMA, which trails the subject.",
     )
 
+    # Isolated facial-tracking upgrade controls. Existing reframe settings remain authoritative
+    # until a caller explicitly asks ``worker.facial_tracking_upgrade`` for a plan.
+    facial_tracking_upgrade: bool = Field(
+        default=False,
+        description="Enable the opt-in facial-tracking upgrade planner; off preserves the "
+        "existing tracked/static reframe path.",
+    )
+    facial_tracking_confidence_threshold: float = Field(
+        default=0.5,
+        description="Minimum known face confidence for the upgrade planner (0..1). Scoreless "
+        "Haar detections remain eligible.",
+    )
+    facial_tracking_smoothing: float = Field(
+        default=0.35,
+        description="Face-path smoothing amount for the upgrade planner (0..1).",
+    )
+    facial_tracking_multiple_faces: bool = Field(
+        default=False,
+        description="Allow multiple-face track selection in the upgrade planner.",
+    )
+    facial_tracking_active_speaker: bool = Field(
+        default=False,
+        description="Prefer the face associated with the active speaker when speaker turns are "
+        "provided to the upgrade planner.",
+    )
+    facial_tracking_fallback: str = Field(
+        default="static_crop_blur",
+        description="Safe fallback for unavailable tracking: static_crop_blur | static_crop | "
+        "none. Invalid values resolve to static_crop_blur.",
+    )
+
     # ------------------------------------------- output geometry (O5, O9) --
     # Resolution was fixed at the 1080-class values in ffmpeg_utils.ASPECT_PRESETS with no way
     # to ask for anything else, so a 4K source was always downscaled and a low-powered host had
@@ -1179,6 +1210,62 @@ class Settings(BaseSettings):
         default=1080,
         description="Output short side in pixels (O9): 720, 1080, 1440 or 2160. 1080 is the "
         "short-form consensus. An unrecognised value falls back to 1080.",
+    )
+
+    # Optional quality upgrade controls. ``quality_preset=off`` keeps the existing render graph
+    # untouched, while callers can opt into the isolated planner in ``worker.quality_upgrade``.
+    quality_preset: str = Field(
+        default="off",
+        description="Opt-in quality preset: off | 720p | 1080p | 1440p | 4k. Off preserves the "
+        "existing resolution, bitrate and filters.",
+    )
+    quality_smart_scale: bool = Field(
+        default=False,
+        description="Use smart aspect-aware scale/crop planning for the quality preset.",
+    )
+    quality_crop_mode: str = Field(
+        default="crop",
+        description="Quality preset geometry: crop | fit | smart. Invalid values fall back "
+        "to crop without failing a render.",
+    )
+    quality_denoise: str = Field(
+        default="off",
+        description="Opt-in video denoise strength: off | light | standard | strong.",
+    )
+    quality_sharpen: float = Field(
+        default=0.0,
+        description="Opt-in mild video sharpening amount (0 disables; capped by the planner).",
+    )
+    quality_colour_correction: bool = Field(
+        default=False,
+        description="Apply a conservative SDR contrast/saturation correction when enabled.",
+    )
+    quality_target_fps: int = Field(
+        default=0,
+        description="Optional delivered frame-rate override for quality presets (30 or 60; "
+        "0 uses the existing frame-rate policy).",
+    )
+    quality_interpolation: bool = Field(
+        default=False,
+        description="Use optional motion-compensated frame interpolation when raising frame rate. "
+        "Unsupported ffmpeg builds degrade with a marker.",
+    )
+    quality_audio_denoise: str = Field(
+        default="off",
+        description="Opt-in speech denoise strength for the quality planner: off | light | "
+        "standard | strong.",
+    )
+    quality_audio_loudness: bool = Field(
+        default=False,
+        description="Opt into the quality planner's measured loudness pass.",
+    )
+    quality_voice_clarity: bool = Field(
+        default=False,
+        description="Opt into conservative speech presence and dynamic control.",
+    )
+    quality_progress_metadata: bool = Field(
+        default=False,
+        description="Emit progress metadata for slow quality-analysis steps.",
     )
 
     # ----------------------------------------------- look details (V11, V13) --
@@ -1489,6 +1576,21 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------- publishers --
     history_db: Path = Field(default=BASE_DIR / "storage" / "history.db")
+    # Editable campaign-profile import state. These are JSON/cache files rather than campaign
+    # publish history so a re-sync never changes routes or attempts.
+    campaign_profiles_path: Path = Field(default=BASE_DIR / "storage" / "campaign_profiles.json")
+    campaign_import_cache_dir: Path = Field(
+        default=BASE_DIR / "storage" / "campaign_import_cache"
+    )
+    # Meme-mode local libraries. Empty keeps the existing SFX/b-roll directories as fallbacks.
+    meme_asset_library: Path | None = Field(
+        default=None,
+        description="Optional local meme overlay/sticker/GIF/video library with manifest metadata.",
+    )
+    meme_sfx_library: Path | None = Field(
+        default=None,
+        description="Optional local meme SFX library with manifest metadata; no downloads are performed.",
+    )
     # Durable job/clip records. Without this the job store is process memory only, so a
     # restart loses every job and the history UI lists clips whose download 404s.
     jobs_db: Path = Field(default=BASE_DIR / "storage" / "jobs.db")
@@ -1570,6 +1672,10 @@ class Settings(BaseSettings):
     google_drive_client_id: str | None = Field(default=None)
     google_drive_client_secret: str | None = Field(default=None)
     google_drive_refresh_token: str | None = Field(default=None)
+    google_drive_scopes: str = Field(
+        default="https://www.googleapis.com/auth/drive.readonly",
+        description="Space/comma-separated read-only Google OAuth scopes used by campaign import.",
+    )
     # YouTube OAuth; uploads require a refresh token, not an API key.
     youtube_client_id: str | None = Field(default=None)
     youtube_client_secret: str | None = Field(default=None)
@@ -1601,6 +1707,7 @@ class Settings(BaseSettings):
         "temp_dir",
         "clips_dir",
         "transcript_cache_dir",
+        "campaign_import_cache_dir",
     )
 
     #: Directories only optional features write to. A failure here is warned about, not fatal.

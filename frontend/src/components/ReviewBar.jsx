@@ -24,6 +24,8 @@ export default function ReviewBar({
   onApprove,
   onReject,
   onReset,
+  selectedDownloadUrl = "",
+  approvedDownloadUrl = "",
 }) {
   const hasSelection = selectedCount > 0;
 
@@ -92,6 +94,32 @@ export default function ReviewBar({
             Reset
           </button>
         </span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
+        <span className="text-[10px] uppercase tracking-wide text-slate-600">Export</span>
+        <a
+          href={selectedDownloadUrl || undefined}
+          aria-disabled={!selectedDownloadUrl}
+          className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
+            selectedDownloadUrl
+              ? "border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/10"
+              : "pointer-events-none border-slate-800 text-slate-700"
+          }`}
+        >
+          Download selected
+        </a>
+        <a
+          href={approvedDownloadUrl || undefined}
+          aria-disabled={!approvedDownloadUrl}
+          className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
+            approvedDownloadUrl
+              ? "border-violet-500/50 text-violet-300 hover:bg-violet-500/10"
+              : "pointer-events-none border-slate-800 text-slate-700"
+          }`}
+        >
+          Download approved
+        </a>
       </div>
 
       <p className="mt-1 text-[10px] text-slate-600">

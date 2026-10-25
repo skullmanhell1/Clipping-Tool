@@ -451,6 +451,31 @@ def test_o7_describe_reports_what_is_actually_in_force(monkeypatch):
     assert op.describe()["effective_short_side"] == 1440
 
 
+def test_o7_a_job_profile_overrides_environment_without_mutating_it(monkeypatch):
+    monkeypatch.setattr(app_settings, "output_platform", "youtube", raising=False)
+    assert op.active_profile().name == "youtube"
+
+    with op.use_profile("tiktok"):
+        assert op.active_profile().name == "tiktok"
+        assert op.resolve_short_side() == 1080
+        assert op.resolve_max_bitrate_kbps() == 10_000
+
+    assert op.active_profile().name == "youtube"
+
+
+def test_o7_api_profile_catalog_includes_a_no_override_entry():
+    profiles = op.available_profiles()
+    assert profiles[0]["name"] == ""
+    assert {entry["name"] for entry in profiles[1:]} == {
+        "tiktok",
+        "instagram",
+        "youtube_shorts",
+        "youtube",
+        "x",
+        "whop",
+    }
+
+
 def test_o7_profile_bitrates_scale_with_resolution():
     sides = sorted(op._BITRATE_BY_SHORT_SIDE)
     rates = [op._BITRATE_BY_SHORT_SIDE[s] for s in sides]

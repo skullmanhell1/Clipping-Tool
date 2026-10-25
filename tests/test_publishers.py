@@ -61,6 +61,67 @@ def test_youtube_public_upload(monkeypatch, video_file):
     assert "shorts/vid123" in result.url
 
 
+def test_youtube_resumable_put_carries_auth_and_content_length(monkeypatch, video_file):
+    monkeypatch.setattr(settings, "youtube_client_id", "cid")
+    monkeypatch.setattr(settings, "youtube_client_secret", "secret")
+    monkeypatch.setattr(settings, "youtube_refresh_token", "refresh")
+    seen = {"init": {}}
+
+    def handler(method, url, kwargs):
+        if "oauth2" in url:
+            return FakeResponse(json_data={"access_token": "tok"})
+        if url.endswith("/videos"):
+            seen["init"] = kwargs["headers"]
+            return FakeResponse(headers={"location": "https://upload/here"})
+        seen.update(kwargs["headers"])
+        return FakeResponse(json_data={"id": "vid-auth"})
+
+    pub = YouTubePublisher(client=FakeHTTPClient(handler))
+    result = pub.publish(_request(video_file, mode="auto"))
+
+    assert result.success
+    assert seen["init"]["Content-Type"] == "application/json; charset=UTF-8"
+    assert seen["init"]["X-Upload-Content-Length"] == str(video_file.stat().st_size)
+    assert seen["Authorization"] == "Bearer tok"
+    assert seen["Content-Length"] == str(video_file.stat().st_size)
+
+
+def test_youtube_credential_verification_checks_the_upload_scope(monkeypatch):
+    from publishers.youtube import YOUTUBE_UPLOAD_SCOPE
+
+    monkeypatch.setattr(settings, "youtube_client_id", "cid")
+    monkeypatch.setattr(settings, "youtube_client_secret", "secret")
+    monkeypatch.setattr(settings, "youtube_refresh_token", "refresh")
+
+    def handler(method, url, kwargs):
+        return FakeResponse(
+            json_data={
+                "access_token": "tok",
+                "expires_in": 3600,
+                "scope": f"openid {YOUTUBE_UPLOAD_SCOPE}",
+            }
+        )
+
+    result = YouTubePublisher(client=FakeHTTPClient(handler)).verify_credentials()
+
+    assert result["verified"] is True
+    assert YOUTUBE_UPLOAD_SCOPE in result["scopes"]
+
+
+def test_youtube_credential_verification_rejects_a_token_without_upload_scope(monkeypatch):
+    monkeypatch.setattr(settings, "youtube_client_id", "cid")
+    monkeypatch.setattr(settings, "youtube_client_secret", "secret")
+    monkeypatch.setattr(settings, "youtube_refresh_token", "refresh")
+
+    def handler(method, url, kwargs):
+        return FakeResponse(json_data={"access_token": "tok", "scope": "openid"})
+
+    result = YouTubePublisher(client=FakeHTTPClient(handler)).verify_credentials()
+
+    assert result["verified"] is False
+    assert "youtube.upload" in result["message"]
+
+
 def test_youtube_review_is_private(monkeypatch, video_file):
     monkeypatch.setattr(settings, "youtube_client_id", "cid")
     monkeypatch.setattr(settings, "youtube_client_secret", "secret")

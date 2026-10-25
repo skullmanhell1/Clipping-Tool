@@ -108,6 +108,38 @@ class ClipCandidate:
         return self.end - self.start
 
 
+def filter_avoided_candidates(candidates: Sequence[ClipCandidate], avoid_windows: Sequence[dict]) -> list[ClipCandidate]:
+    """Drop candidates that substantially overlap previously delivered windows.
+
+    The overlap threshold is relative to the shorter window, matching the project's existing
+    duplicate policy. A tiny boundary touch is allowed; a candidate sharing more than a quarter
+    of either clip is not a genuinely new moment.
+    """
+    if not avoid_windows:
+        return list(candidates)
+    kept: list[ClipCandidate] = []
+    for candidate in candidates:
+        duration = max(0.001, float(candidate.end) - float(candidate.start))
+        duplicate = False
+        for window in avoid_windows:
+            try:
+                old_start = float(window.get("start"))
+                old_end = float(window.get("end"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            old_duration = max(0.001, old_end - old_start)
+            overlap = max(
+                0.0,
+                min(float(candidate.end), old_end) - max(float(candidate.start), old_start),
+            )
+            if overlap / min(duration, old_duration) > 0.25:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(candidate)
+    return kept
+
+
 _SYSTEM = (
     "You are an expert short-form video editor who finds the most viral moments "
     "in long videos for TikTok, Reels, and YouTube Shorts. You pick moments that "

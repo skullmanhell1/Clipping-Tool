@@ -6,6 +6,7 @@ can import them without creating an import cycle.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
@@ -40,6 +41,29 @@ def _default_music_volume() -> float:
 def _default_face_detector() -> str:
     value = str(getattr(_settings, "face_detector_backend", "haar") or "haar").strip().lower()
     return value if value in ("haar", "mediapipe") else "haar"
+
+
+def _default_string_setting(name: str, default: str) -> str:
+    value = str(getattr(_settings, name, default) or default).strip()
+    return value or default
+
+
+def _default_bool_setting(name: str, default: bool) -> bool:
+    return _as_bool(getattr(_settings, name, default))
+
+
+def _default_int_setting(name: str, default: int) -> int:
+    try:
+        return int(getattr(_settings, name, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _default_float_setting(name: str, default: float) -> float:
+    try:
+        return float(getattr(_settings, name, default) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _as_bool(value: Any) -> bool:
@@ -80,6 +104,10 @@ class ProcessingOptions:
     vocabulary: str = ""
     clip_length: str = "auto"  # auto | <30s | 30-60s | 60-90s | 90s-3min
     aspect: str = "9:16"  # 9:16 | 1:1 | 16:9 | 4:5
+    # O7: optional per-job encoder target. Empty preserves the environment-level output profile
+    # (and the historical behaviour); when set, the render path applies it through a ContextVar so
+    # concurrent jobs cannot change one another's resolution or bitrate.
+    output_platform: str = ""  # "" | tiktok | instagram | youtube_shorts | youtube | x | whop
     num_clips: str = "auto"  # auto | 1 | 3 | 5 | 10 | max
     strategy: str = "ai"  # ai | silence | fixed
     captions: bool = True  # burn captions
@@ -217,6 +245,33 @@ class ProcessingOptions:
     # called with the per-job option, so the documented default was unreachable.
     face_detector: str = field(default_factory=_default_face_detector)  # haar | mediapipe
 
+    # --- Per-job quality and tracking overrides ----------------------------
+    # These mirror the environment settings but live on the job so a queued render cannot change
+    # when another request changes the process-wide defaults. Empty/legacy values keep the existing
+    # output path unchanged.
+    output_short_side: int = field(default_factory=lambda: _default_int_setting("output_short_side", 1080))  # 720 | 1080 | 1440 | 2160
+    quality_preset: str = field(default_factory=lambda: _default_string_setting("quality_preset", "off"))  # off | 720p | 1080p | 1440p | 4k
+    quality_smart_scale: bool = field(default_factory=lambda: _default_bool_setting("quality_smart_scale", False))
+    quality_crop_mode: str = field(default_factory=lambda: _default_string_setting("quality_crop_mode", "crop"))  # crop | fit | smart
+    quality_denoise: str = field(default_factory=lambda: _default_string_setting("quality_denoise", "off"))
+    quality_sharpen: float = field(default_factory=lambda: _default_float_setting("quality_sharpen", 0.0))
+    quality_colour_correction: bool = field(default_factory=lambda: _default_bool_setting("quality_colour_correction", False))
+    quality_target_fps: int = field(default_factory=lambda: _default_int_setting("quality_target_fps", 0))  # 0 | 30 | 60
+    quality_interpolation: bool = field(default_factory=lambda: _default_bool_setting("quality_interpolation", False))
+    quality_audio_denoise: str = field(default_factory=lambda: _default_string_setting("quality_audio_denoise", "off"))
+    quality_audio_loudness: bool = field(default_factory=lambda: _default_bool_setting("quality_audio_loudness", False))
+    quality_voice_clarity: bool = field(default_factory=lambda: _default_bool_setting("quality_voice_clarity", False))
+    quality_progress_metadata: bool = field(default_factory=lambda: _default_bool_setting("quality_progress_metadata", False))
+    x264_crf: int = field(default_factory=lambda: _default_int_setting("x264_crf", 20))
+    video_encoder: str = field(default_factory=lambda: _default_string_setting("video_encoder", "libx264"))
+    scaler_flags: str = field(default_factory=lambda: _default_string_setting("scaler_flags", "bicubic"))
+    frame_rate_policy: str = field(default_factory=lambda: _default_string_setting("frame_rate_policy", "auto"))
+    face_detector_min_score: float = field(default_factory=lambda: _default_float_setting("face_detector_min_score", 0.5))
+    reframe_zero_phase: bool = field(default_factory=lambda: _default_bool_setting("reframe_zero_phase", True))
+    reframe_reset_on_cut: bool = field(default_factory=lambda: _default_bool_setting("reframe_reset_on_cut", True))
+    split_screen_max_regions: int = field(default_factory=lambda: _default_int_setting("split_screen_max_regions", 2))
+    facial_fallback: str = "static_crop_blur"  # static_crop_blur | static_crop | none
+
     # --- Kinetic typography engine (default OFF) --------------------------
     # ``kinetic_typography_enabled`` is the Feature_Flag the engine's inherited
     # ``flag_field()`` resolves to, so an all-off run still reproduces v0.8.0
@@ -287,6 +342,17 @@ class ProcessingOptions:
     brand_profile_id: str = ""
     brief_id: str = ""
 
+    # --- Meme mode (opt-in) -----------------------------------------------
+    # Plain JSON timeline records keep options durable and compatible with rerender option merges.
+    meme_mode: bool = False
+    meme_preset: str = ""  # chaotic | subtle | gaming_rage
+    meme_events: list[dict] = field(default_factory=list)
+    meme_auto_suggest: bool = False
+    meme_asset_library: str = ""  # local overlay/sticker/GIF/video directory
+    meme_sfx_library: str = ""  # local SFX directory; falls back to settings.sfx_dir
+    meme_default_volume: float = 0.35
+    meme_default_duck: float = 0.0
+
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
     # ``from_dict`` has already expanded the bundle into the individual fields by the time
@@ -320,6 +386,7 @@ class ProcessingOptions:
     # for a tuple of two strings would drag the reframe module (and its config import) into
     # every one of them. A test pins the two lists against each other.
     _FACE_DETECTORS = ("haar", "mediapipe")
+    _OUTPUT_PLATFORMS = ("", "tiktok", "instagram", "youtube_shorts", "youtube", "x", "whop")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> ProcessingOptions:
@@ -333,7 +400,49 @@ class ProcessingOptions:
         instance cannot express that distinction - a field holding its default is
         indistinguishable from a field nobody mentioned.
         """
-        data = data or {}
+        data = dict(data or {})
+        # Multipart upload fields are deliberately optional strings. Do not let an omitted field
+        # arrive as ``None`` and overwrite the environment-backed dataclass default.
+        for field_name in (
+            "output_short_side",
+            "quality_preset",
+            "quality_smart_scale",
+            "quality_crop_mode",
+            "quality_denoise",
+            "quality_sharpen",
+            "quality_colour_correction",
+            "quality_target_fps",
+            "quality_interpolation",
+            "quality_audio_denoise",
+            "quality_audio_loudness",
+            "quality_voice_clarity",
+            "quality_progress_metadata",
+            "x264_crf",
+            "video_encoder",
+            "scaler_flags",
+            "frame_rate_policy",
+            "face_detector_min_score",
+            "reframe_zero_phase",
+            "reframe_reset_on_cut",
+            "split_screen_max_regions",
+            "facial_fallback",
+            "meme_mode",
+            "meme_preset",
+            "meme_events",
+            "meme_auto_suggest",
+            "meme_asset_library",
+            "meme_sfx_library",
+            "meme_default_volume",
+            "meme_default_duck",
+        ):
+            if data.get(field_name, object()) is None:
+                data.pop(field_name, None)
+        # Accept the temporary browser-only aliases used by the first meme-mode UI revision. This
+        # keeps old saved profiles renderable while the persisted worker contract stays canonical.
+        if "meme_mode" not in data and "meme_mode_enabled" in data:
+            data["meme_mode"] = data["meme_mode_enabled"]
+        if "meme_events" not in data and "meme_timeline_events" in data:
+            data["meme_events"] = data["meme_timeline_events"]
         valid = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
 
         profile_name = str(data.get("profile", "") or "").strip().lower()
@@ -369,6 +478,11 @@ class ProcessingOptions:
                 valid["hashtag_count"] = max(0, min(30, int(valid["hashtag_count"])))
             except (TypeError, ValueError):
                 valid["hashtag_count"] = 5
+        if "output_platform" in valid:
+            value = str(valid["output_platform"] or "").strip().lower()
+            valid["output_platform"] = (
+                value if value in cls._OUTPUT_PLATFORMS else ""
+            )
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in (
             "reframe",
@@ -391,6 +505,14 @@ class ProcessingOptions:
             # v0.8.0 boolean flags
             "diarization",
             "speaker_reframe",
+            "quality_smart_scale",
+            "quality_colour_correction",
+            "quality_interpolation",
+            "quality_audio_loudness",
+            "quality_voice_clarity",
+            "quality_progress_metadata",
+            "reframe_zero_phase",
+            "reframe_reset_on_cut",
             # Kinetic typography Feature_Flag: normalised here so
             # a string payload ("false", "0") cannot read as
             # enabled, and so the flag survives both
@@ -405,6 +527,8 @@ class ProcessingOptions:
             "stem_inpainting_enabled",
             "stem_declick",
             "stem_retain_stems",
+            "meme_mode",
+            "meme_auto_suggest",
         ):
             if bool_field in valid:
                 valid[bool_field] = _as_bool(valid[bool_field])
@@ -413,6 +537,72 @@ class ProcessingOptions:
                 valid["music_volume"] = max(0.0, min(1.0, float(valid["music_volume"])))
             except (TypeError, ValueError):
                 valid["music_volume"] = _default_music_volume()
+        for field_name in ("meme_default_volume", "meme_default_duck"):
+            if field_name in valid:
+                try:
+                    valid[field_name] = max(0.0, min(1.0, float(valid[field_name])))
+                except (TypeError, ValueError):
+                    valid[field_name] = 0.35 if field_name == "meme_default_volume" else 0.0
+        if "meme_events" in valid and isinstance(valid["meme_events"], str):
+            try:
+                decoded = json.loads(valid["meme_events"])
+            except (TypeError, ValueError):
+                decoded = []
+            valid["meme_events"] = decoded if isinstance(decoded, list) else []
+        if "meme_events" in valid and not isinstance(valid["meme_events"], list):
+            valid["meme_events"] = []
+        if "meme_preset" in valid:
+            preset = str(valid["meme_preset"] or "").strip().lower().replace("-", "_").replace(" ", "_")
+            valid["meme_preset"] = preset if preset in ("", "chaotic", "subtle", "gaming_rage") else ""
+        if "output_short_side" in valid:
+            try:
+                short_side = int(valid["output_short_side"])
+            except (TypeError, ValueError):
+                short_side = 1080
+            valid["output_short_side"] = short_side if short_side in (720, 1080, 1440, 2160) else 1080
+        if "quality_preset" in valid:
+            preset = str(valid["quality_preset"] or "off").strip().lower().replace(" ", "")
+            valid["quality_preset"] = {
+                "720": "720p",
+                "1080": "1080p",
+                "1440": "1440p",
+                "2160": "4k",
+                "uhd": "4k",
+            }.get(
+                preset,
+                preset if preset in ("off", "720p", "1080p", "1440p", "4k") else "off",
+            )
+        if "quality_crop_mode" in valid:
+            crop_mode = str(valid["quality_crop_mode"] or "crop").strip().lower()
+            valid["quality_crop_mode"] = crop_mode if crop_mode in ("crop", "fit", "smart") else "crop"
+        for field_name in ("quality_sharpen", "face_detector_min_score"):
+            if field_name in valid:
+                try:
+                    value = float(valid[field_name])
+                except (TypeError, ValueError):
+                    value = 0.0 if field_name == "quality_sharpen" else 0.5
+                valid[field_name] = max(0.0, min(1.0, value))
+        for field_name in ("quality_target_fps", "x264_crf", "split_screen_max_regions"):
+            if field_name in valid:
+                try:
+                    value = int(valid[field_name])
+                except (TypeError, ValueError):
+                    value = 0
+                if field_name == "quality_target_fps":
+                    valid[field_name] = value if value in (0, 30, 60) else 0
+                elif field_name == "x264_crf":
+                    valid[field_name] = max(0, min(51, value))
+                else:
+                    valid[field_name] = max(2, min(4, value or 2))
+        for field_name, default in (
+            ("quality_denoise", "off"),
+            ("quality_audio_denoise", "off"),
+            ("video_encoder", "libx264"),
+            ("scaler_flags", "bicubic"),
+            ("frame_rate_policy", "auto"),
+        ):
+            if field_name in valid:
+                valid[field_name] = str(valid[field_name] or default).strip().lower()
         # Validate Phase 6 / Tier 1 enum-like string fields against their known
         # value sets, falling back to the documented default on unknown or
         # malformed values (never raising).
@@ -425,6 +615,11 @@ class ProcessingOptions:
             ("reframe_layout", cls._REFRAME_LAYOUTS, "follow_active"),
             ("reframe_intensity", cls._REFRAME_INTENSITIES, "standard"),
             ("face_detector", cls._FACE_DETECTORS, _default_face_detector()),
+            (
+                "facial_fallback",
+                ("static_crop_blur", "static_crop", "none"),
+                "static_crop_blur",
+            ),
         ):
             if enum_field in valid:
                 v = valid[enum_field]
@@ -855,6 +1050,12 @@ class ClipResult:
     # ``to_dict`` via ``asdict``.
     broll_assets: list[dict] = field(default_factory=list)
 
+    # Resolved meme timeline and local/synthetic asset provenance. Additive fields keep older
+    # persisted ClipResult records loadable with empty lists.
+    meme_events: list[dict] = field(default_factory=list)
+    meme_assets: list[dict] = field(default_factory=list)
+    quality_plan: dict = field(default_factory=dict)
+
     # --- U9: batch review ------------------------------------------------
     #
     # A job produces up to ten clips and every one of them had to be judged, edited and
@@ -917,6 +1118,10 @@ class Job:
     # clips already on disk might not correspond to any window the second run chose, and the
     # user would get a mix of two different selections.
     planned_clips: list[dict] = field(default_factory=list)
+    # Prompted "find more" runs keep the already-delivered windows here so selection can avoid
+    # returning the same moments. It is job metadata rather than a ProcessingOptions field because
+    # it is about the relationship between this run and its parent, not a renderer preference.
+    avoid_windows: list[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     batch_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
@@ -947,6 +1152,7 @@ class Job:
             "source_path": self.source_path,
             # I5: the selected windows, so an interrupted job can resume the missing ones.
             "planned_clips": self.planned_clips,
+            "avoid_windows": self.avoid_windows,
             "status": self.status.value,
             "progress": round(self.progress, 3),
             "stage": self.stage,
@@ -984,6 +1190,7 @@ class Job:
             options=ProcessingOptions.from_dict(data.get("options")),
             source_path=str(data.get("source_path") or ""),
             planned_clips=list(data.get("planned_clips") or []),
+            avoid_windows=list(data.get("avoid_windows") or []),
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             batch_id=data.get("batch_id"),
             status=status,

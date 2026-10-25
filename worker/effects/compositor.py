@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from config import settings
-from worker import branding, caption_contrast, turn_gain
+from worker import branding, caption_contrast, meme_mode, meme_render, turn_gain
 from worker import captions as cap
 from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
 from worker.effects import audio, broll, caption_presets, emoji, overlays, sfx
@@ -46,6 +46,8 @@ class RenderResult:
     # unless b-roll cues were actually composited; the pipeline surfaces these
     # onto ``ClipResult.broll_assets`` (Reqs 9.4, 12.1, 12.2).
     broll_records: list[dict] = field(default_factory=list)
+    # Provenance for local/synthetic meme assets actually placed in the graph.
+    meme_records: list[dict] = field(default_factory=list)
 
 
 #: Req 3.2 — the engine whose Compose_Contribution takes over the Subtitle_Slot.
@@ -273,6 +275,12 @@ def render_clip(
     retention_beats: Sequence[float] = (),
     retention_sfx_times: Sequence[float] = (),
     retention_emphasis_indices: Sequence[int] = (),
+    meme_events: Sequence[dict[str, Any] | meme_mode.MemeEvent] = (),
+    meme_asset_library: str | Path = "",
+    meme_sfx_library: str | Path = "",
+    meme_default_volume: float = 0.35,
+    meme_default_duck: float = 0.0,
+    quality_plan: Any | None = None,
 ) -> RenderResult | None:
     """Apply enabled effects to ``base_clip`` -> ``dest`` in one ffmpeg pass.
 
@@ -319,6 +327,17 @@ def render_clip(
     fps = info.fps or 30.0
     duration = info.duration
     applied: list[str] = []
+
+    # Meme mode is opt-in. Its visual plan is built before the existing look chain so zoom/shake/
+    # flash/VHS treatment composes with colour, captions, b-roll, and the output profile in one pass.
+    meme_video_plan = meme_render.build_video_plan(
+        meme_events,
+        duration=duration,
+        fps=fps,
+        width=width,
+        height=height,
+    )
+    applied.extend(marker for marker in meme_video_plan.markers if marker not in applied)
 
     # --- captions + hook title (single combined ASS) ---------------------
     subtitles_filter: str | None = None
@@ -695,7 +714,7 @@ def render_clip(
     broll_notes: list[str] = []
     broll_records: list[dict] = []
     if broll_cues:
-        broll_base = "vlook" if look_chain else "0:v"
+        broll_base = "vlook" if (meme_video_plan.filters or look_chain) else meme_video_plan.output_label
         try:
             broll_input_args, broll_graph, broll_notes = broll.build_broll_overlay(
                 broll_cues,
@@ -735,12 +754,27 @@ def render_clip(
     # contributed an input), then music / b-roll / emoji below.
     inputs: list[str] = ["-i", str(base_clip), *engine_input_args]
     graph_parts: list[str] = []
-    video_label = "0:v"
+    video_label = meme_video_plan.output_label
+    if meme_video_plan.graph:
+        graph_parts.append(meme_video_plan.graph)
+    quality_video_filters: list[str] = []
+    if quality_plan is not None:
+        scale_filter = str(getattr(quality_plan, "scale_filter", "") or "")
+        if scale_filter:
+            quality_video_filters.append(scale_filter)
+        quality_video_filters.extend(getattr(quality_plan, "video_filters", ()) or ())
+        frame_plan = getattr(quality_plan, "frame_plan", None)
+        if frame_plan is not None:
+            quality_video_filters.extend(getattr(frame_plan, "filters", ()) or ())
+        applied.extend(
+            marker for marker in (getattr(quality_plan, "markers", ()) or ()) if marker not in applied
+        )
+    look_with_meme = quality_video_filters + meme_video_plan.filters + look_chain
 
     if broll_graph:
         # Split so b-roll sits below the caption layer.
-        if look_chain:
-            graph_parts.append(f"[0:v]{','.join(look_chain)}[vlook]")
+        if look_with_meme:
+            graph_parts.append(f"[{meme_video_plan.output_label}]{','.join(look_with_meme)}[vlook]")
         graph_parts.append(broll_graph)
         video_label = "vbroll"
         if caption_chain:
@@ -749,9 +783,9 @@ def render_clip(
     else:
         # No b-roll: rebuild the single combined look+caption chain exactly as
         # the compositor always has.
-        full_chain = look_chain + caption_chain
+        full_chain = look_with_meme + caption_chain
         if full_chain:
-            graph_parts.append(f"[0:v]{','.join(full_chain)}[vbase]")
+            graph_parts.append(f"[{meme_video_plan.output_label}]{','.join(full_chain)}[vbase]")
             video_label = "vbase"
 
     # Emoji overlays sit on top of the caption layer.
@@ -813,6 +847,27 @@ def render_clip(
     missing_emoji = len(emoji_cues) - len(emoji_composited)
     if emoji_cues and missing_emoji > 0:
         applied.append(f"emoji_unavailable:{missing_emoji}")
+
+    # Meme image/GIF/video/text overlays sit above captions and emoji, but below the brand logo.
+    # Their input block is kept contiguous so the later SFX block retains stable absolute indices.
+    meme_overlay_offset = emoji_offset + emoji_inputs.count("-i")
+    meme_overlay_plan = (
+        meme_render.build_overlay_plan(
+            meme_events,
+            duration=duration,
+            width=width,
+            height=height,
+            input_offset=meme_overlay_offset,
+            base_label=video_out,
+            asset_library=meme_asset_library,
+        )
+        if meme_events
+        else meme_render.MemeOverlayPlan(output_label=video_out)
+    )
+    applied.extend(marker for marker in meme_overlay_plan.markers if marker not in applied)
+    if meme_overlay_plan.graph:
+        graph_parts.append(meme_overlay_plan.graph)
+        video_out = meme_overlay_plan.output_label
 
     # U6: the brand logo, on top of everything - captions and emoji included. A watermark that
     # an emoji overlay could cover is not a watermark.
@@ -926,6 +981,15 @@ def render_clip(
         applied.extend(m for m in turn_plan.markers if m not in applied)
 
     speech_label = audio_out
+    quality_audio_filters = list(getattr(quality_plan, "audio_filters", ()) or ()) if quality_plan else []
+    if quality_audio_filters and info.has_audio:
+        graph_parts.append(f"[{audio_out}]{','.join(quality_audio_filters)}[aquality]")
+        audio_out = "aquality"
+        speech_label = audio_out
+        audio_changed = True
+        applied.extend(
+            marker for marker in (getattr(quality_plan, "markers", ()) or ()) if marker not in applied
+        )
     if music_path is not None:
         # Music follows the engine block and precedes the b-roll/emoji inputs, so
         # its index is 1 on every run without an engine contribution (i.e. the
@@ -982,6 +1046,24 @@ def render_clip(
         audio_out = "aeng"
         audio_changed = True
 
+    # Meme SFX are mixed after music/engine audio and before the legacy AU9 stings.  This keeps
+    # their absolute input indices stable and lets each event carry its own volume/duck amount.
+    meme_audio_plan = meme_render.build_audio_plan(
+        meme_events,
+        duration=duration,
+        temp_dir=temp_dir,
+        input_offset=meme_overlay_offset + meme_overlay_plan.input_args.count("-i"),
+        speech_label=audio_out,
+        sfx_library=meme_sfx_library,
+        default_volume=meme_default_volume,
+        default_duck=meme_default_duck,
+    ) if info.has_audio else meme_render.MemeAudioPlan(output_label=audio_out)
+    applied.extend(marker for marker in meme_audio_plan.markers if marker not in applied)
+    if meme_audio_plan.graph:
+        graph_parts.append(meme_audio_plan.graph)
+        audio_out = meme_audio_plan.output_label
+        audio_changed = audio_changed or meme_audio_plan.changed
+
     # --- A15: sound-effect stings -----------------------------------------
     #
     # Placed after everything that builds the mix and before `loudnorm`, which is the only ordering
@@ -999,7 +1081,11 @@ def render_clip(
     # base -> engines -> music -> b-roll -> emoji -> sfx (Req 10.3). Appending them here instead
     # would silently renumber every emoji input.
     sfx_input_args: list[str] = []
-    sfx_offset = emoji_offset + emoji_inputs.count("-i")
+    sfx_offset = (
+        meme_overlay_offset
+        + meme_overlay_plan.input_args.count("-i")
+        + meme_audio_plan.input_args.count("-i")
+    )
     if info.has_audio:
         # Only emoji that actually composited. A cue whose asset failed to resolve is not on screen,
         # so a sting for it would be an accent on nothing -- the same discipline `broll_duck_windows`
@@ -1077,14 +1163,20 @@ def render_clip(
     # fixed and knowable before any engine ran.
     inputs += broll_input_args
     inputs += emoji_inputs
+    inputs += meme_overlay_plan.input_args
+    inputs += meme_audio_plan.input_args
     # A15 last, matching `sfx_offset` above. Order here *is* the index contract.
     inputs += sfx_input_args
 
     video_changed = (
-        bool(look_chain)
+        bool(quality_video_filters)
+        or bool(meme_video_plan.graph)
+        or bool(meme_video_plan.filters)
+        or bool(look_chain)
         or bool(caption_chain)
         or bool(broll_graph)
         or bool(emoji_graph)
+        or bool(meme_overlay_plan.graph)
         or bool(logo_graph)
     )
     if not video_changed and not audio_changed:
@@ -1126,6 +1218,24 @@ def render_clip(
             delivered_fps=delivered_fps,
             keyframe_seconds=keyframe_seconds,
             colour_tags=colour_tags,
+            encoder_name=(
+                getattr(getattr(quality_plan, "encoding", None), "encoder", None)
+                if quality_plan is not None
+                and getattr(getattr(quality_plan, "preset", None), "enabled", False)
+                else getattr(options, "video_encoder", None)
+            ),
+            crf=(
+                getattr(getattr(quality_plan, "preset", None), "crf", None)
+                if quality_plan is not None
+                and getattr(getattr(quality_plan, "preset", None), "enabled", False)
+                else getattr(options, "x264_crf", None)
+            ),
+            max_bitrate_kbps=(
+                getattr(getattr(quality_plan, "encoding", None), "video_bitrate_kbps", None)
+                if quality_plan is not None
+                and getattr(getattr(quality_plan, "preset", None), "enabled", False)
+                else None
+            ),
         )
     else:
         cmd += ["-c:v", "copy"]
@@ -1137,4 +1247,4 @@ def render_clip(
 
     cmd += ["-movflags", "+faststart", str(dest)]
     _run(cmd)
-    return RenderResult(dest, applied, broll_records)
+    return RenderResult(dest, applied, broll_records, meme_overlay_plan.assets + meme_audio_plan.assets)

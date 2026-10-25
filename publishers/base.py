@@ -228,6 +228,13 @@ class BasePublisher(ABC):
         """Discard any cached token so the next publish obtains a new one."""
         return None
 
+    def verify_credentials(self, account_id: str = "") -> dict[str, Any]:
+        """Run a provider-specific credential preflight when one exists."""
+        return {
+            "verified": False,
+            "message": f"{self.name} does not expose a credential verification flow",
+        }
+
     @staticmethod
     def now() -> datetime:
         return datetime.now(UTC)
