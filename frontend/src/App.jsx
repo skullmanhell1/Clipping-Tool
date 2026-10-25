@@ -3,8 +3,7 @@ import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
-import CampaignAutomationPanel from "./components/CampaignAutomationPanel.jsx";
-import CampaignImportPanel from "./components/CampaignImportPanel.jsx";
+import CampaignWorkspacePanel from "./components/CampaignWorkspacePanel.jsx";
 import FacialTrackingPanel from "./components/FacialTrackingPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
 import MemeModePanel from "./components/MemeModePanel.jsx";
@@ -410,6 +409,7 @@ export default function App() {
   const [campaigns, setCampaigns] = useState([]);
   const [publishAttempts, setPublishAttempts] = useState([]);
   const [input, setInput] = useState({ urls: [], files: [] });
+  const [campaignSourceUrls, setCampaignSourceUrls] = useState([]);
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [jobs, setJobs] = useState([]);
@@ -712,17 +712,43 @@ export default function App() {
   };
 
   const handlePresetApplied = (preset) => {
+    const profile = preset.campaign_profile || {};
+    const length = profile.length || {};
+    const maxSeconds = Number(length.max_seconds);
+    const clipLength = Number.isFinite(maxSeconds)
+      ? maxSeconds <= 30
+        ? "<30s"
+        : maxSeconds <= 60
+          ? "30-60s"
+          : maxSeconds <= 90
+            ? "60-90s"
+            : "90s-3min"
+      : undefined;
+    const profileBranding = profile.branding || preset.branding || {};
+    const profileColors = profileBranding.colors || {};
+    const profileAspect = profile.aspect_resolution?.aspect_ratios?.[0] || preset.aspect_ratios?.[0];
+    const profilePlatform = profile.platforms?.[0] || preset.allowed_platforms?.[0];
+    const captions = profile.captions_language?.required;
     setSettings((previous) => ({
       ...previous,
       campaign_preset: preset,
       storytelling_enabled: true,
-      aspect: preset.aspect_ratios?.[0] || previous.aspect,
-      brand_logo: preset.branding?.logo || previous.brand_logo,
-      brand_font: preset.branding?.font || previous.brand_font,
-      brand_primary_color: preset.branding?.colors?.primary || previous.brand_primary_color,
-      brand_highlight_color: preset.branding?.colors?.accent || previous.brand_highlight_color,
-      brand_cta: preset.cta || previous.brand_cta,
-      caption_preset: preset.caption_style || previous.caption_preset,
+      aspect: profileAspect || previous.aspect,
+      clip_length: clipLength || previous.clip_length,
+      platform: profilePlatform || previous.platform,
+      captions: captions === null || captions === undefined ? previous.captions : captions,
+      brand_logo: profileBranding.logo || profile.watermark_end_cards?.watermark || previous.brand_logo,
+      brand_font: profileBranding.font || previous.brand_font,
+      brand_primary_color: profileColors.primary || previous.brand_primary_color,
+      brand_highlight_color: profileColors.accent || previous.brand_highlight_color,
+      brand_cta: preset.cta || profile.copy_rules?.cta || previous.brand_cta,
+      caption_preset: preset.caption_style || profile.captions_language?.style || previous.caption_preset,
+      topic: profile.source_rules?.allowed?.join(", ") || previous.topic,
+      vocabulary: profile.copy_rules?.required_copy?.join(", ") || previous.vocabulary,
+      selection_prompt: [
+        ...(profile.banned_words_topics?.topics || []).map((item) => `Avoid topic: ${item}`),
+        ...(profile.banned_words_topics?.words || []).map((item) => `Avoid word: ${item}`),
+      ].join("; ") || previous.selection_prompt,
     }));
     setPublishing((previous) => ({
       ...previous,
@@ -730,6 +756,13 @@ export default function App() {
       mode: "review",
     }));
   };
+
+  const handleCampaignSources = useCallback((urls = []) => {
+    const unique = [...new Set(urls.filter(Boolean))];
+    if (!unique.length) return;
+    setCampaignSourceUrls((current) => [...new Set([...current, ...unique])]);
+    setInput((current) => ({ ...current, urls: [...new Set([...(current.urls || []), ...unique])] }));
+  }, []);
 
   const handlePublished = (attempts) => {
     setPublishAttempts((previous) => [
@@ -953,15 +986,14 @@ export default function App() {
                   profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
                   onApply={applyBoxablCampaign}
                 />
-                <CampaignAutomationPanel
+                <CampaignWorkspacePanel
                   campaigns={campaigns}
                   publisherStatuses={publisherStatuses}
                   jobs={jobs}
-                  driveConfigured={driveConfigured}
                   onPresetApplied={handlePresetApplied}
+                  onSourcesExtracted={handleCampaignSources}
                   onScheduled={loadPublishingData}
                 />
-                <CampaignImportPanel onPresetApplied={handlePresetApplied} />
                 <ProfilesBar
                   profiles={profiles}
                   defaultId={defaultProfileId}
@@ -978,7 +1010,7 @@ export default function App() {
                     title="Choose your source"
                     description="Paste a link, upload a file, or combine several videos in one batch."
                   />
-                  <InputBar onChange={setInput} onPreview={handlePreview} />
+                  <InputBar onChange={setInput} onPreview={handlePreview} prefillUrls={campaignSourceUrls} />
                   {input.urls.length === 1 && (
                     <div className="mt-4">
                       <PreviewCard preview={preview} loading={previewLoading} />

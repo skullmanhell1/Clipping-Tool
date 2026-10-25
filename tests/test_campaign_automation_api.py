@@ -43,6 +43,28 @@ def test_info_advertises_campaign_automation():
     assert body["campaign_automation"]["public_visibility_required"] is True
 
 
+def test_campaign_profile_parse_endpoint_returns_full_import_profile():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/campaign-profiles/parse",
+            json={
+                "raw_text": (
+                    "Campaign: Whop launch\n"
+                    "Font: Inter Bold\n"
+                    "Primary colour: #7c3aed\n"
+                    "Approved video: https://youtu.be/abc123\n"
+                    "Public visibility: required\n"
+                )
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["profile"]["branding"]["font"] == "Inter Bold"
+    assert body["profile"]["branding"]["colors"]["primary"] == "#7c3aed"
+    assert body["profile"]["video_links"] == ["https://youtu.be/abc123"]
+    assert body["profile"]["watermark_end_cards"]["public_visibility_required"] is True
+
+
 def test_daily_schedule_rejects_anything_other_than_two_clips():
     with TestClient(app) as client:
         response = client.post(

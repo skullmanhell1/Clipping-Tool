@@ -73,7 +73,7 @@ from worker.campaign_compliance import (
     check_clip_against_profiles,
 )
 from worker.campaign_import import CampaignImportError, CampaignImportService
-from worker.campaign_profile import CampaignProfile
+from worker.campaign_profile import CampaignProfile, parse_campaign_profile
 from worker.campaign_profile_store import get_campaign_profile_store
 from worker.campaign_preset import (
     CampaignPreset,
@@ -652,6 +652,13 @@ class CampaignImportRequest(BaseModel):
     download_assets: bool = False
     save: bool = False
     select: bool = False
+
+
+class CampaignProfileTextRequest(BaseModel):
+    """Parse a pasted brief with the same profile vocabulary as Drive imports."""
+
+    raw_text: str = ""
+    source_url: str = ""
 
 
 class CampaignProfileModel(BaseModel):
@@ -2523,6 +2530,31 @@ def import_campaign_profiles(req: CampaignImportRequest) -> dict:
         body["profile"] = profile.to_dict()
         body["selected_id"] = profile.id if req.select else get_campaign_profile_store().selected().id if get_campaign_profile_store().selected() else None
     return body
+
+
+@app.post("/api/campaign-profiles/parse", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def parse_campaign_profile_text(req: CampaignProfileTextRequest) -> dict:
+    """Parse pasted brief text without requiring Drive access or saving a profile."""
+
+    if not req.raw_text.strip():
+        raise HTTPException(status_code=400, detail="Paste campaign brief text first.")
+    profile = parse_campaign_profile(
+        req.raw_text,
+        provenance=[
+            {
+                "source_type": "paste",
+                "source_url": req.source_url.strip(),
+                "status": "offline_paste",
+            }
+        ],
+    )
+    return {
+        "profile": profile.to_dict(),
+        "sources": [],
+        "provenance": profile.provenance,
+        "requires_review": bool(profile.ambiguities or profile.uncertainties),
+        "status": "offline_paste",
+    }
 
 
 @app.post("/api/campaign-profiles/sync", tags=["campaigns"], dependencies=[Depends(rate_limit)])

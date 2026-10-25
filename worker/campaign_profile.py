@@ -12,14 +12,35 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from worker.campaign_preset import _platform, _ratio, _split, _unique
 
 _TAG_RE = re.compile(r"(?<![\w])#[\w][\w-]*", re.UNICODE)
 _MENTION_RE = re.compile(r"(?<![\w])@[\w][\w.-]*", re.UNICODE)
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 _RESOLUTION_RE = re.compile(r"(?<!\d)(\d{2,5})\s*[x×]\s*(\d{2,5})(?!\d)", re.I)
 _RANGE_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds|min|mins|minutes)?", re.I)
+_VIDEO_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+    "drive.google.com",
+    "www.drive.google.com",
+    "vimeo.com",
+    "www.vimeo.com",
+    "tiktok.com",
+    "www.tiktok.com",
+    "instagram.com",
+    "www.instagram.com",
+    "facebook.com",
+    "www.facebook.com",
+    "x.com",
+    "www.x.com",
+    "twitter.com",
+    "www.twitter.com",
+}
 
 
 def _clean(value: Any) -> str:
@@ -46,6 +67,26 @@ def _mentions(value: Any) -> list[str]:
     return _unique([item for item in _values(text) if item.startswith("@")])
 
 
+def _video_links(text: str) -> list[str]:
+    """Keep source links that can identify an approved video, not the brief itself."""
+
+    result: list[str] = []
+    for match in _URL_RE.finditer(str(text or "")):
+        url = match.group(0).rstrip(".,;:)]}")
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            continue
+        host = (parts.hostname or "").casefold()
+        path = parts.path.casefold()
+        is_drive_file = host in {"drive.google.com", "www.drive.google.com"} and "/file/" in path
+        is_direct_video = bool(re.search(r"\.(?:mp4|mov|m4v|webm|mkv)(?:$|[?#])", path))
+        if (host in _VIDEO_HOSTS and (host not in {"drive.google.com", "www.drive.google.com"} or is_drive_file)) or is_direct_video:
+            if url not in result:
+                result.append(url)
+    return result
+
+
 def _label_line(line: str) -> tuple[str, str] | None:
     text = str(line or "").strip()
     while text and text[0] in "#-*•":
@@ -66,7 +107,7 @@ def _label_line(line: str) -> tuple[str, str] | None:
     return label.casefold(), _clean(value)
 
 
-def _first(fields: Mapping[str, str], *names: str) -> str:
+def _first(fields: Mapping[str, Any], *names: str) -> str:
     for name in names:
         value = fields.get(name, "")
         if isinstance(value, (list, tuple)):
@@ -115,6 +156,8 @@ class CampaignProfile:
     length: dict[str, Any] = field(default_factory=dict)
     aspect_resolution: dict[str, Any] = field(default_factory=dict)
     platforms: list[str] = field(default_factory=list)
+    branding: dict[str, Any] = field(default_factory=dict)
+    video_links: list[str] = field(default_factory=list)
     captions_language: dict[str, Any] = field(default_factory=dict)
     copy_rules: dict[str, Any] = field(default_factory=dict)
     watermark_end_cards: dict[str, Any] = field(default_factory=dict)
@@ -137,6 +180,8 @@ class CampaignProfile:
             "length": dict(self.length),
             "aspect_resolution": dict(self.aspect_resolution),
             "platforms": list(self.platforms),
+            "branding": dict(self.branding),
+            "video_links": list(self.video_links),
             "captions_language": dict(self.captions_language),
             "copy_rules": dict(self.copy_rules),
             "watermark_end_cards": dict(self.watermark_end_cards),
@@ -189,7 +234,7 @@ def parse_campaign_profile(
         if "|" in line or "\t" in line:
             separator = "|" if "|" in line else "\t"
             cells = [_clean(item) for item in line.strip("|").split(separator)]
-            if len(cells) >= 2 and cells[0] and cells[1]:
+            if len(cells) >= 2 and cells[0] and cells[1] and ":" not in cells[0] and "=" not in cells[0]:
                 parts = (cells[0].casefold(), " | ".join(cells[1:]))
         if parts is None:
             parts = _label_line(line)
@@ -236,6 +281,19 @@ def parse_campaign_profile(
 
     platform_values = all_values("platform", "platforms", "allowed platforms", "publish to", "distribution")
     platforms = _unique([_platform(item) for value in platform_values for item in _split(value)])
+    branding_values = all_values("branding", "brand", "brand kit", "brand assets", "assets")
+    primary_color = _first(fields, "primary color", "primary colour", "brand primary color")
+    accent_color = _first(fields, "accent color", "accent colour", "highlight color", "brand highlight color")
+    branding = {
+        "logo": _first(fields, "logo", "logo asset", "brand logo", "watermark"),
+        "font": _first(fields, "font", "font family", "font asset", "brand font"),
+        "colors": {
+            key: value
+            for key, value in (("primary", primary_color), ("accent", accent_color))
+            if value
+        },
+        "assets": _values(" ".join(branding_values)),
+    }
     captions_values = all_values("captions", "caption", "caption rules", "language", "languages", "caption language")
     captions_language = {
         "required": _bool(_first(fields, "captions", "caption", "caption rules")),
@@ -268,6 +326,7 @@ def parse_campaign_profile(
         "allowed": _values(" ".join(all_values("allowed sources", "source rules", "approved sources", "source"))),
         "prohibited": _values(" ".join(all_values("prohibited sources", "disallowed sources"))),
         "attribution": _first(fields, "source attribution", "credit"),
+        "video_links": _video_links(raw),
     }
     audio_rules = {
         "allowed": _values(" ".join(all_values("allowed audio", "audio rules", "music"))),
@@ -279,6 +338,9 @@ def parse_campaign_profile(
     payout_values = all_values("payout", "payout rate", "compensation", "payment")
     deadline_values = all_values("deadline", "deadlines", "due date", "delivery date")
     payout_deadlines = {"payout": payout_values[0] if payout_values else "", "deadlines": deadline_values}
+    visibility_values = all_values("public visibility", "visibility", "public posting")
+    if visibility_values:
+        watermark_end_cards["public_visibility_required"] = _bool(visibility_values[0])
 
     for field_name, values in (
         ("platforms", platform_values),
@@ -303,6 +365,8 @@ def parse_campaign_profile(
         length=length,
         aspect_resolution=aspect_resolution,
         platforms=platforms,
+        branding=branding,
+        video_links=list(source_rules["video_links"]),
         captions_language=captions_language,
         copy_rules=copy_rules,
         watermark_end_cards=watermark_end_cards,
