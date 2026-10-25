@@ -218,12 +218,15 @@ class PublishManager:
             existing_mentions = brief_values.get("mentions", mentions) or []
             if isinstance(existing_mentions, str):
                 existing_mentions = existing_mentions.split()
-            merged_mentions = []
+            merged_mentions: list[str] = []
             for item in [*existing_mentions, *required_mentions]:
                 text = str(item).strip()
                 if not text:
                     continue
-                if text.casefold() in all_campaign_mentions and text.casefold() not in current_campaign_mentions:
+                if (
+                    text.casefold() in all_campaign_mentions
+                    and text.casefold() not in current_campaign_mentions
+                ):
                     continue
                 if text.casefold() not in {value.casefold() for value in merged_mentions}:
                     merged_mentions.append(text)

@@ -27,6 +27,8 @@ import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from importlib import import_module
+from typing import Any
 
 from config import settings
 from worker import candidate_ranking, engagement, intermediate_cache
@@ -153,15 +155,17 @@ def derive_visual_cues(frames: list[Keyframe]) -> list[Keyframe]:
     if not frames:
         return []
 
+    Image: Any = None
     try:  # lazy, optional
-        from PIL import Image
+        Image = import_module("PIL.Image")
     except Exception:
-        Image = None  # type: ignore[assignment]
+        Image = None
 
+    np: Any = None
     try:  # lazy, optional
-        import numpy as np
+        np = import_module("numpy")
     except Exception:
-        np = None  # type: ignore[assignment]
+        np = None
 
     def _brightness(path: str) -> float:
         if Image is None:

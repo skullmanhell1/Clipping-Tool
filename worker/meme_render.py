@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from config import settings
 from worker import meme_assets, meme_mode
@@ -71,7 +72,13 @@ def _enable(event: meme_mode.MemeEvent) -> str:
 
 
 def _safe_drawtext(value: Any) -> str:
-    return str(value or "").replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace("%", "\\%")
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "\\%")
+    )
 
 
 def _position(payload: dict[str, Any]) -> tuple[str, str]:
@@ -106,7 +113,14 @@ def build_video_plan(
     """Build linear visual filters and an exact-duration freeze-frame graph."""
     parsed = meme_mode.normalize_events(events, duration)
     plan = MemeVideoPlan(output_label=input_label)
-    freeze = next((event for event in parsed if event.kind == "visual" and event.effect in {"freeze", "freeze_frame"}), None)
+    freeze = next(
+        (
+            event
+            for event in parsed
+            if event.kind == "visual" and event.effect in {"freeze", "freeze_frame"}
+        ),
+        None,
+    )
     if freeze is not None and _available("tpad"):
         # Replace the selected interval with its first frame while preserving total duration. This
         # avoids changing audio/caption timing, unlike a naive stop_mode=clone tail pad.
@@ -148,7 +162,7 @@ def build_video_plan(
                 continue
             amplitude = max(1.0, min(width * 0.08, _finite(event.payload.get("amount"), 16.0)))
             plan.filters.append(
-                f"scale={int(width * 1.08)//2*2}:{int(height * 1.08)//2*2},"
+                f"scale={int(width * 1.08) // 2 * 2}:{int(height * 1.08) // 2 * 2},"
                 f"crop={width}:{height}:x='(iw-ow)/2+sin(t*55)*{amplitude:.1f}*between(t,{event.start:.3f},{event.end:.3f})':"
                 f"y='(ih-oh)/2+cos(t*47)*{amplitude:.1f}*between(t,{event.start:.3f},{event.end:.3f})'"
             )
@@ -158,7 +172,9 @@ def build_video_plan(
                 plan.markers.append("meme_degraded:flash")
                 continue
             amount = max(0.0, min(1.0, _finite(event.payload.get("amount"), 0.35)))
-            plan.filters.append(f"eq=brightness='if(between(t,{event.start:.3f},{event.end:.3f}),{amount:.3f},0)':eval=frame")
+            plan.filters.append(
+                f"eq=brightness='if(between(t,{event.start:.3f},{event.end:.3f}),{amount:.3f},0)':eval=frame"
+            )
             plan.markers.append("meme:flash")
         elif effect in {"glitch", "glitch_vhs", "vhs"}:
             if not _available("noise"):
@@ -187,7 +203,9 @@ def build_video_plan(
     return plan
 
 
-def _overlay_asset(event: meme_mode.MemeEvent, library: meme_assets.MemeAssetLibrary) -> meme_assets.MemeAsset | None:
+def _overlay_asset(
+    event: meme_mode.MemeEvent, library: meme_assets.MemeAssetLibrary
+) -> meme_assets.MemeAsset | None:
     tags = event.payload.get("tags", ())
     if isinstance(tags, str):
         tags = tuple(part.strip() for part in tags.split(",") if part.strip())
@@ -217,7 +235,9 @@ def build_overlay_plan(
 ) -> MemeOverlayPlan:
     """Build timed text/image/GIF/video overlays below the logo layer."""
     parsed = meme_mode.normalize_events(events, duration)
-    library = meme_assets.MemeAssetLibrary(asset_library or getattr(settings, "broll_dir", ""), kind="overlay")
+    library = meme_assets.MemeAssetLibrary(
+        asset_library or getattr(settings, "broll_dir", ""), kind="overlay"
+    )
     plan = MemeOverlayPlan(output_label=base_label)
     current = base_label
     input_index = input_offset
@@ -228,10 +248,16 @@ def build_overlay_plan(
         payload = event.payload
         x, y = _position(payload)
         out = f"meme_overlay_{overlay_index}"
-        text = payload.get("text") if event.kind in {"caption", "emoji"} or event.effect == "text" else None
+        text = (
+            payload.get("text")
+            if event.kind in {"caption", "emoji"} or event.effect == "text"
+            else None
+        )
         if text is not None:
             safe = _safe_drawtext(text)
-            font_size = max(12, int(height * max(0.025, min(0.2, _finite(payload.get("scale"), 0.08)))))
+            font_size = max(
+                12, int(height * max(0.025, min(0.2, _finite(payload.get("scale"), 0.08))))
+            )
             color = _safe_drawtext(payload.get("color") or "white")
             border = max(0, int(_finite(payload.get("border", 4), 4)))
             animate = str(payload.get("animate") or "").lower()
@@ -251,9 +277,23 @@ def build_overlay_plan(
                 continue
             is_image = asset.path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
             if is_image:
-                plan.input_args += ["-loop", "1", "-t", f"{max(0.1, duration):.3f}", "-i", str(asset.path)]
+                plan.input_args += [
+                    "-loop",
+                    "1",
+                    "-t",
+                    f"{max(0.1, duration):.3f}",
+                    "-i",
+                    str(asset.path),
+                ]
             else:
-                plan.input_args += ["-stream_loop", "-1", "-t", f"{max(0.1, duration):.3f}", "-i", str(asset.path)]
+                plan.input_args += [
+                    "-stream_loop",
+                    "-1",
+                    "-t",
+                    f"{max(0.1, duration):.3f}",
+                    "-i",
+                    str(asset.path),
+                ]
             scale = max(0.02, min(1.0, _finite(payload.get("scale"), 0.25)))
             graph = (
                 f"[{input_index}:v]setpts=PTS-STARTPTS,scale=w='iw*{scale:.4f}':h=-1:eval=init,"
@@ -347,10 +387,14 @@ def build_audio_plan(
         return plan
 
     audio_label = speech_label
-    duck_windows = [(event.start, max(event.end, event.start + 0.08)) for event, _, _ in hits if event.duck > 0]
+    duck_windows = [
+        (event.start, max(event.end, event.start + 0.08)) for event, _, _ in hits if event.duck > 0
+    ]
     duck_amount = max((event.duck for event, _, _ in hits), default=0.0)
     if duck_windows and duck_amount > 0:
-        plan.graph = audio.broll_duck_filter(audio_label, "meme_ducked", duck_windows, amount=duck_amount, ramp=0.04)
+        plan.graph = audio.broll_duck_filter(
+            audio_label, "meme_ducked", duck_windows, amount=duck_amount, ramp=0.04
+        )
         audio_label = "meme_ducked"
 
     labels: list[str] = []

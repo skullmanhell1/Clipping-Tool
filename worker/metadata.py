@@ -111,7 +111,12 @@ class ClipMetadata:
 def get_profile(platform: str) -> PlatformProfile:
     """Return the :class:`PlatformProfile` for ``platform`` (falls back generic)."""
     key = (platform or "generic").strip().lower().replace(" ", "_")
-    key = {"youtube_shorts": "youtube", "youtube_short": "youtube", "instagram_reels": "instagram", "reels": "instagram"}.get(key, key)
+    key = {
+        "youtube_shorts": "youtube",
+        "youtube_short": "youtube",
+        "instagram_reels": "instagram",
+        "reels": "instagram",
+    }.get(key, key)
     return PLATFORM_PROFILES.get(key, PLATFORM_PROFILES["generic"])
 
 

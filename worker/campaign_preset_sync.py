@@ -129,11 +129,14 @@ class CampaignPresetDriveService:
                         http_status=429 if "rate limit" in lowered else 422,
                     ) from exc
             except Exception as exc:
-                logger.info("campaign preset authenticated Drive read failed (%s)", type(exc).__name__)
+                logger.info(
+                    "campaign preset authenticated Drive read failed (%s)", type(exc).__name__
+                )
         if snapshot is None:
+            source_host = (urlsplit(url).hostname or "").lower()
             public_source_type = (
                 "google_docs"
-                if (urlsplit(url).hostname or "").lower().endswith("docs.google.com")
+                if source_host in {"docs.google.com", "www.docs.google.com"}
                 else "google_drive"
             )
 
@@ -177,7 +180,9 @@ class CampaignPresetDriveService:
             message = str(public_error or "Google Drive could not be read. Use the paste fallback.")
             code = "drive_rate_limit" if "rate limit" in message.casefold() else "drive_access"
             status = 429 if code == "drive_rate_limit" else 422
-            raise CampaignPresetImportError(message, code=code, http_status=status) from public_error
+            raise CampaignPresetImportError(
+                message, code=code, http_status=status
+            ) from public_error
 
         content = str(getattr(snapshot, "content", "") or "")
         if not content.strip():

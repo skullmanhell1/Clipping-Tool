@@ -117,18 +117,26 @@ def test_solved_campaign_brief_extracts_rules_and_platform_specific_mentions():
     assert preset.brief_rules["face_visible_within_seconds"] == 5.0
     assert preset.brief_rules["face_subject"] == "Mark"
     assert preset.required_mentions_for("youtube_shorts") == [
-        "@solvedpodcast", "@solvedclips", "@iammarkmanson"
+        "@solvedpodcast",
+        "@solvedclips",
+        "@iammarkmanson",
     ]
     assert preset.required_mentions_for("instagram") == ["@solvedpodcast", "@markmanson"]
     assert preset.brief_rules["source_policy"]["approved_channel_handles"] == ["@solvedpodcast"]
-    assert "https://instagram.com/solvedpodcast" in preset.brief_rules["source_policy"]["style_references"]
+    assert (
+        "https://instagram.com/solvedpodcast"
+        in preset.brief_rules["source_policy"]["style_references"]
+    )
     assert preset.brief_rules["audience_requirement"] == {
-        "regions": ["US", "UK", "CA", "AU"], "minimum_percent": 40.0
+        "regions": ["US", "UK", "CA", "AU"],
+        "minimum_percent": 40.0,
     }
     assert preset.brief_rules["minimum_post_days"] == 30
     assert preset.brief_rules["minimum_engagement_percent"] == 0.2
     assert preset.brief_rules["payout"] == {
-        "cpm_usd": 1.25, "maximum_per_clip_usd": 300.0, "minimum_payout_usd": 2.0
+        "cpm_usd": 1.25,
+        "maximum_per_clip_usd": 300.0,
+        "minimum_payout_usd": 2.0,
     }
     assert CampaignPreset.from_dict(preset.to_dict()).to_dict() == preset.to_dict()
 

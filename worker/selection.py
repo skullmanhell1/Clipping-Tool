@@ -108,7 +108,9 @@ class ClipCandidate:
         return self.end - self.start
 
 
-def filter_avoided_candidates(candidates: Sequence[ClipCandidate], avoid_windows: Sequence[dict]) -> list[ClipCandidate]:
+def filter_avoided_candidates(
+    candidates: Sequence[ClipCandidate], avoid_windows: Sequence[dict]
+) -> list[ClipCandidate]:
     """Drop candidates that substantially overlap previously delivered windows.
 
     The overlap threshold is relative to the shorter window, matching the project's existing
@@ -123,8 +125,12 @@ def filter_avoided_candidates(candidates: Sequence[ClipCandidate], avoid_windows
         duplicate = False
         for window in avoid_windows:
             try:
-                old_start = float(window.get("start"))
-                old_end = float(window.get("end"))
+                old_start_value = window.get("start")
+                old_end_value = window.get("end")
+                if old_start_value is None or old_end_value is None:
+                    continue
+                old_start = float(old_start_value)
+                old_end = float(old_end_value)
             except (AttributeError, TypeError, ValueError):
                 continue
             old_duration = max(0.001, old_end - old_start)

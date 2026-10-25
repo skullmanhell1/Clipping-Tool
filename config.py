@@ -1579,9 +1579,7 @@ class Settings(BaseSettings):
     # Editable campaign-profile import state. These are JSON/cache files rather than campaign
     # publish history so a re-sync never changes routes or attempts.
     campaign_profiles_path: Path = Field(default=BASE_DIR / "storage" / "campaign_profiles.json")
-    campaign_import_cache_dir: Path = Field(
-        default=BASE_DIR / "storage" / "campaign_import_cache"
-    )
+    campaign_import_cache_dir: Path = Field(default=BASE_DIR / "storage" / "campaign_import_cache")
     # Meme-mode local libraries. Empty keeps the existing SFX/b-roll directories as fallbacks.
     meme_asset_library: Path | None = Field(
         default=None,

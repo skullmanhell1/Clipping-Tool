@@ -250,9 +250,10 @@ jobs:
       # a unit test of a pure function cannot tell whether anything calls it and
       # `test_config_documentation.py` proves a setting is documented rather than read.
       #
-      # A ratchet against a recorded baseline, not a clean-tree assertion: four modules and fourteen
-      # settings are already dead and listed in the script with the reason, so this gates *new* dead
-      # code from today while the backlog is worked down. `tests/test_check_wired.py` asserts every
+      # A ratchet against a recorded baseline, not a clean-tree assertion: the experimental
+      # `facial_tracking_upgrade` planner is intentionally isolated until it has end-to-end ffmpeg
+      # parity and a quality benchmark; `KNOWN_UNWIRED` records that debt. This gates *new* dead code
+      # from today while the backlog is worked down. `tests/test_check_wired.py` asserts every
       # baseline entry is still dead, so the list can only shrink.
       - name: No new dead code (unwired modules, unread settings)
         run: python scripts/check_wired.py --check

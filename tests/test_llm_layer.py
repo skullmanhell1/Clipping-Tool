@@ -196,9 +196,7 @@ def test_campaign_brief_mentions_are_prompted_and_enforced_for_llm_metadata(monk
 def test_campaign_brief_mentions_are_also_enforced_in_fallback_metadata(monkeypatch):
     monkeypatch.setattr(md, "llm_available", lambda: False)
     preset = {
-        "brief_rules": {
-            "required_mentions": {"common": ["@solvedpodcast"], "by_platform": {}}
-        }
+        "brief_rules": {"required_mentions": {"common": ["@solvedpodcast"], "by_platform": {}}}
     }
     meta = md.generate_metadata(
         "hello there", _options(campaign_preset=preset, platform="instagram")

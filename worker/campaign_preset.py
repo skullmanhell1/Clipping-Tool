@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date as date_type
@@ -33,7 +33,7 @@ _ALIASES = {
 }
 
 
-def _unique(values: Sequence[str]) -> list[str]:
+def _unique(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -225,7 +225,9 @@ class CampaignPreset:
         self.public_visibility_required = bool(self.public_visibility_required)
         self.require_public_visibility = self.public_visibility_required
         self.pattern_interrupter_interval = max(0, int(self.pattern_interrupter_interval or 0))
-        self.brief_rules = deepcopy(dict(self.brief_rules or {})) if isinstance(self.brief_rules, Mapping) else {}
+        self.brief_rules = (
+            deepcopy(dict(self.brief_rules or {})) if isinstance(self.brief_rules, Mapping) else {}
+        )
 
     @property
     def brand(self) -> Branding:
@@ -302,7 +304,9 @@ class CampaignPreset:
         """Return required mentions keyed by all permitted platform spellings."""
         rule = self.brief_rules.get("required_mentions", {})
         by_platform = rule.get("by_platform", {}) if isinstance(rule, Mapping) else {}
-        platforms = self.allowed_platforms or (list(by_platform) if isinstance(by_platform, Mapping) else [])
+        platforms = self.allowed_platforms or (
+            list(by_platform) if isinstance(by_platform, Mapping) else []
+        )
         return {platform: self.required_mentions_for(platform) for platform in platforms}
 
     def to_dict(self) -> dict[str, Any]:
@@ -565,12 +569,12 @@ _BRIEF_BARE_YT_HANDLE_RE = re.compile(
     r"(?<![\w@])@?([A-Za-z0-9_.]{2,64})\s+on\s+(?:yt|youtube)\b", re.IGNORECASE
 )
 _BRIEF_DURATION_RANGE_RE = re.compile(
-    r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*"
-    r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b",
+    r"(?<!\d)(\d{1,4}(?:\.\d{1,2})?)\s*(?:-|–|—|to)\s*"
+    r"(\d{1,4}(?:\.\d{1,2})?)\s*(seconds?|secs?|s)\b",
     re.IGNORECASE,
 )
-_BRIEF_CURRENCY_RE = re.compile(r"\$\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)")
-_BRIEF_PERCENT_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*%")
+_BRIEF_CURRENCY_RE = re.compile(r"\$\s*(\d{1,12}(?:,\d{3}){0,3}(?:\.\d{1,2})?)")
+_BRIEF_PERCENT_RE = re.compile(r"(?<![\d.])(\d{1,4}(?:\.\d{1,2})?)\s*%")
 
 
 def _brief_lines(text: str) -> list[str]:
@@ -580,7 +584,7 @@ def _brief_lines(text: str) -> list[str]:
         line = raw.strip().replace("\u00a0", " ")
         for prefix in ("- ", "* ", "• ", "✓ ", "✗ ", "⚠ "):
             if line.startswith(prefix):
-                line = line[len(prefix):].strip()
+                line = line[len(prefix) :].strip()
                 break
         line = re.sub(r"^\d+[.)]\s+", "", line)
         if line:
@@ -608,9 +612,16 @@ def _brief_label_values(lines: list[str], labels: set[str]) -> list[str]:
             for candidate in lines[index + 1 : index + 3]:
                 normalized = _brief_norm(candidate)
                 if normalized in labels or normalized in {
-                    "quick facts", "what to do", "where to get the clips", "what to clip",
-                    "where to post", "the rules", "caption required", "on screen text required",
-                    "your audience required", "how to submit required",
+                    "quick facts",
+                    "what to do",
+                    "where to get the clips",
+                    "what to clip",
+                    "where to post",
+                    "the rules",
+                    "caption required",
+                    "on screen text required",
+                    "your audience required",
+                    "how to submit required",
                 }:
                     break
                 value = candidate.strip()
@@ -664,15 +675,24 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
     title = ""
     for line in lines:
         parts = _line_parts(line)
-        if parts and _brief_norm(parts[0]) in {"campaign", "campaign name", "name", "title"} and parts[1]:
+        if (
+            parts
+            and _brief_norm(parts[0]) in {"campaign", "campaign name", "name", "title"}
+            and parts[1]
+        ):
             title = parts[1]
             break
     if not title:
         for line in lines[:8]:
             candidate = line.lstrip("# ").strip("*_` ")
             if not candidate or _brief_norm(candidate) in {
-                "quick facts", "the goal", "what to do", "where to get the clips",
-                "where to post", "what to clip", "the rules",
+                "quick facts",
+                "the goal",
+                "what to do",
+                "where to get the clips",
+                "where to post",
+                "what to clip",
+                "the rules",
             }:
                 continue
             if ":" in candidate and len(candidate.split(":", 1)[0]) < 25:
@@ -682,18 +702,25 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
                 title = title.title()
             break
 
-    platform_lines = _brief_label_values(lines, {"platform", "platforms", "allowed platforms", "publish to"})
+    platform_lines = _brief_label_values(
+        lines, {"platform", "platforms", "allowed platforms", "publish to"}
+    )
     platform_lines.extend(
         _brief_section(
             lines,
             {"where to post", "platforms", "match the topic to the platform"},
-            {"caption", "caption required", "on screen text required", "your audience required", "how to submit required", "the rules"},
+            {
+                "caption",
+                "caption required",
+                "on screen text required",
+                "your audience required",
+                "how to submit required",
+                "the rules",
+            },
         )
     )
     platforms = _unique(
-        platform
-        for value in platform_lines
-        for platform in _brief_platforms(value)
+        platform for value in platform_lines for platform in _brief_platforms(value)
     )
 
     # Content-by-platform guidance usually appears as one platform name followed by a short list
@@ -716,17 +743,24 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
             current_platform = ""
 
     aspect_values = _brief_label_values(
-        lines, {"aspect", "aspect ratio", "aspect ratios", "target aspect ratios", "format", "formats"}
+        lines,
+        {"aspect", "aspect ratio", "aspect ratios", "target aspect ratios", "format", "formats"},
     )
     inferred_ratios = _unique(
         _ratio(value) for item in aspect_values for value in _split(item) if _ratio(value)
     )
-    if not inferred_ratios and platforms and set(platforms).issubset({"youtube_shorts", "instagram", "tiktok", "facebook_reels"}):
+    if (
+        not inferred_ratios
+        and platforms
+        and set(platforms).issubset({"youtube_shorts", "instagram", "tiktok", "facebook_reels"})
+    ):
         inferred_ratios = ["9:16"]
 
     rules: dict[str, Any] = {
         "daily_clip_target_explicit": bool(
-            _brief_label_values(lines, {"daily clip target", "daily clips", "clips per day", "daily target"})
+            _brief_label_values(
+                lines, {"daily clip target", "daily clips", "clips per day", "daily target"}
+            )
         )
     }
     if inferred_ratios:
@@ -741,8 +775,12 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
     required_subtitles = any(
         phrase in folded
         for phrase in (
-            "subtitles on the whole clip", "captions on the whole clip", "subtitles throughout",
-            "captions throughout", "subtitles for the entire clip", "captions for the entire clip",
+            "subtitles on the whole clip",
+            "captions on the whole clip",
+            "subtitles throughout",
+            "captions throughout",
+            "subtitles for the entire clip",
+            "captions for the entire clip",
         )
     ) or ("subtitle" in folded and "required" in folded and "whole clip" in folded)
     if required_subtitles:
@@ -751,10 +789,20 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
     guidance_lines = []
     for line in lines:
         lower = line.casefold()
-        if any(token in lower for token in (
-            "write your own", "lead with", "not a summary", "no clickbait", "misleading caption",
-            "subtitles on", "big, readable", "accurate", "keep the original meaning",
-        )):
+        if any(
+            token in lower
+            for token in (
+                "write your own",
+                "lead with",
+                "not a summary",
+                "no clickbait",
+                "misleading caption",
+                "subtitles on",
+                "big, readable",
+                "accurate",
+                "keep the original meaning",
+            )
+        ):
             if line not in guidance_lines:
                 guidance_lines.append(line)
     if guidance_lines:
@@ -771,7 +819,8 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
             rules["suggested_caption_font"] = suggested_font
 
     mention_lines = [
-        line for line in lines
+        line
+        for line in lines
         if _BRIEF_MENTION_RE.search(line)
         and any(token in line.casefold() for token in ("tag", "mention", "caption", "tagging"))
     ]
@@ -783,7 +832,10 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
         if "on yt" in line.casefold() or "on youtube" in line.casefold():
             groups = re.findall(r"\(([^)]{0,200})\)", line)
             special = [handle for group in groups for handle in _BRIEF_MENTION_RE.findall(group)]
-            special.extend("@" + match.group(1).lstrip("@") for match in _BRIEF_BARE_YT_HANDLE_RE.finditer(line))
+            special.extend(
+                "@" + match.group(1).lstrip("@")
+                for match in _BRIEF_BARE_YT_HANDLE_RE.finditer(line)
+            )
             youtube_mentions.extend(special)
             common_mentions.extend(handle for handle in handles if handle not in special)
         elif "on instagram" in line.casefold() or "on reels" in line.casefold():
@@ -800,7 +852,8 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
             # (e.g. @iammarkmanson vs @markmanson); keep the common campaign account but do not
             # require both variants on the same destination.
             youtube_base = [
-                handle for handle in common_mentions
+                handle
+                for handle in common_mentions
                 if not any(
                     handle.lstrip("@").casefold() in candidate.lstrip("@").casefold()
                     or candidate.lstrip("@").casefold() in handle.lstrip("@").casefold()
@@ -820,31 +873,54 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
     source_lines = _brief_section(
         lines,
         {"where to get the clips", "approved sources", "source rules", "where to get clips"},
-        {"do not use these parts", "what to clip", "match the topic to the platform", "where to post", "caption", "caption required", "the rules"},
+        {
+            "do not use these parts",
+            "what to clip",
+            "match the topic to the platform",
+            "where to post",
+            "caption",
+            "caption required",
+            "the rules",
+        },
     )
     source_lines.extend(
-        line for line in lines
-        if any(token in line.casefold() for token in (
-            "do not use any clip from outside", "clip only from", "outside clips get rejected",
-            "other podcasts from mark", "official episodes only",
-        ))
+        line
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in (
+                "do not use any clip from outside",
+                "clip only from",
+                "outside clips get rejected",
+                "other podcasts from mark",
+                "official episodes only",
+            )
+        )
     )
     approved_sources: list[str] = []
     style_references: list[str] = []
     for line in source_lines:
-        urls = [match.group(0).rstrip(".,;:!?)\"") for match in _BRIEF_URL_RE.finditer(line)]
-        urls.extend(match.group(0).rstrip(".,;:!?)\"") for match in _BARE_SOCIAL_URL_RE.finditer(line))
+        urls = [match.group(0).rstrip('.,;:!?)"') for match in _BRIEF_URL_RE.finditer(line)]
+        urls.extend(
+            match.group(0).rstrip('.,;:!?)"') for match in _BARE_SOCIAL_URL_RE.finditer(line)
+        )
         normalized_urls = _unique(
-            url if url.casefold().startswith("http") else "https://" + url
-            for url in urls
+            url if url.casefold().startswith("http") else "https://" + url for url in urls
         )
         if "style reference" in line.casefold() or "own reels" in line.casefold():
             style_references.extend(normalized_urls)
-        elif any(token in line.casefold() for token in ("official", "use only", "only the files", "source")):
+        elif any(
+            token in line.casefold()
+            for token in ("official", "use only", "only the files", "source")
+        ):
             approved_sources.extend(normalized_urls)
     prohibited_sources = [
-        line.strip() for line in source_lines
-        if any(token in line.casefold() for token in ("do not use", "outside", "other podcasts", "not be accepted"))
+        line.strip()
+        for line in source_lines
+        if any(
+            token in line.casefold()
+            for token in ("do not use", "outside", "other podcasts", "not be accepted")
+        )
     ]
     if approved_sources or style_references or prohibited_sources:
         rules["source_policy"] = {
@@ -864,12 +940,28 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
         }
 
     prohibited_content = [
-        line.strip() for line in lines
-        if any(token in line.casefold() for token in (
-            "ad reads", "sponsor segments", "misrepresents", "mid-sentence", "mid-thought",
-            "nsfw", "violent", "off-topic", "hidden likes", "fake views", "bots",
-            "paid ads", "boost and promote", "same video pushed", "stealing or reposting",
-        ))
+        line.strip()
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in (
+                "ad reads",
+                "sponsor segments",
+                "misrepresents",
+                "mid-sentence",
+                "mid-thought",
+                "nsfw",
+                "violent",
+                "off-topic",
+                "hidden likes",
+                "fake views",
+                "bots",
+                "paid ads",
+                "boost and promote",
+                "same video pushed",
+                "stealing or reposting",
+            )
+        )
     ]
     if prohibited_content:
         rules["prohibited_content"] = _unique(prohibited_content)
@@ -889,29 +981,41 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
             (
                 line
                 for line in lines
-                if "face" in line.casefold()
-                and re.search(r"\bfirst\s+\d", line, re.IGNORECASE)
+                if "face" in line.casefold() and re.search(r"\bfirst\s+\d", line, re.IGNORECASE)
             ),
             full_text,
         )
-        subject_match = re.search(
-            r"\b(?:(?i:show|keep|ensure|put|have|make\s+sure)\s+(?:the\s+)?)"
-            r"([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
-            face_context,
-        ) or re.search(
-            r"\b([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
-            face_context,
-        ) or re.search(
-            r"\bface\s+of\s+(?:the\s+)?([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})",
-            face_context,
+        subject_match = (
+            re.search(
+                r"\b(?:(?i:show|keep|ensure|put|have|make\s+sure)\s+(?:the\s+)?)"
+                r"([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
+                face_context,
+            )
+            or re.search(
+                r"\b([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})['’]s\s+face",
+                face_context,
+            )
+            or re.search(
+                r"\bface\s+of\s+(?:the\s+)?([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){0,2})",
+                face_context,
+            )
         )
         if subject_match:
             rules["face_subject"] = subject_match.group(1).strip()
 
-    audience_values = _brief_label_values(lines, {"audience", "your audience", "audience requirement"})
+    audience_values = _brief_label_values(
+        lines, {"audience", "your audience", "audience requirement"}
+    )
     audience_lines = _brief_section(
-        lines, {"your audience", "your audience required", "audience"},
-        {"how to submit", "how to submit required", "the rules", "you must", "you will not get paid if"},
+        lines,
+        {"your audience", "your audience required", "audience"},
+        {
+            "how to submit",
+            "how to submit required",
+            "the rules",
+            "you must",
+            "you will not get paid if",
+        },
     )
     audience_text = " ".join([*audience_values, *audience_lines])
     audience_match = _BRIEF_PERCENT_RE.search(audience_text)
@@ -930,13 +1034,19 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
             audience_rule["minimum_percent"] = float(audience_match.group(1))
         rules["audience_requirement"] = audience_rule
 
-    engagement_line = next((line for line in lines if "engagement" in line.casefold() and "%" in line), "")
+    engagement_line = next(
+        (line for line in lines if "engagement" in line.casefold() and "%" in line), ""
+    )
     engagement_match = _BRIEF_PERCENT_RE.search(engagement_line)
     if engagement_match:
         rules["minimum_engagement_percent"] = float(engagement_match.group(1))
-    post_line = next((line for line in lines if "post" in line.casefold() and "day" in line.casefold()), "")
-    if post_line and any(token in post_line.casefold() for token in ("keep", "at least", "minimum")):
-        days = re.search(r"(\d+)\s+days?\b", post_line, re.IGNORECASE)
+    post_line = next(
+        (line for line in lines if "post" in line.casefold() and "day" in line.casefold()), ""
+    )
+    if post_line and any(
+        token in post_line.casefold() for token in ("keep", "at least", "minimum")
+    ):
+        days = re.search(r"(\d{1,4})\s+days?\b", post_line, re.IGNORECASE)
         if days:
             rules["minimum_post_days"] = int(days.group(1))
     if "likes are visible" in folded or "hidden likes" in folded:
@@ -944,7 +1054,9 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
 
     quick_fact_values = {
         "cpm": _brief_label_values(lines, {"cpm", "payout rate"}),
-        "maximum_per_clip": _brief_label_values(lines, {"max per clip", "maximum per clip", "clip maximum"}),
+        "maximum_per_clip": _brief_label_values(
+            lines, {"max per clip", "maximum per clip", "clip maximum"}
+        ),
         "minimum_payout": _brief_label_values(lines, {"min payout", "minimum payout"}),
     }
     payout: dict[str, Any] = {}
@@ -956,7 +1068,10 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
         number = re.search(r"(\d+(?:\.\d+)?)", cpm_text)
         if number:
             payout["cpm_usd"] = float(number.group(1))
-    for key, label in (("maximum_per_clip_usd", "maximum_per_clip"), ("minimum_payout_usd", "minimum_payout")):
+    for key, label in (
+        ("maximum_per_clip_usd", "maximum_per_clip"),
+        ("minimum_payout_usd", "minimum_payout"),
+    ):
         match = _BRIEF_CURRENCY_RE.search(" ".join(quick_fact_values[label]))
         if match:
             payout[key] = float(match.group(1).replace(",", ""))
@@ -970,18 +1085,32 @@ def _extract_campaign_brief_rules(text: str) -> tuple[str, list[str], dict[str, 
         if normalized == "what to clip":
             in_clip_section = True
             continue
-        if in_clip_section and normalized in {"where to post", "the rules", "caption", "caption required"}:
+        if in_clip_section and normalized in {
+            "where to post",
+            "the rules",
+            "caption",
+            "caption required",
+        }:
             in_clip_section = False
         if in_clip_section and "|" in line:
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) >= 2 and cells[0] and cells[1] and _brief_norm(cells[0]) not in {"what", "what it looks like"}:
+            if (
+                len(cells) >= 2
+                and cells[0]
+                and cells[1]
+                and _brief_norm(cells[0]) not in {"what", "what it looks like"}
+            ):
                 clip_formats.append({"name": cells[0], "guidance": " | ".join(cells[1:])})
     if clip_formats:
         rules["clip_formats"] = clip_formats
 
     selection_lines = [
-        line.strip() for line in lines
-        if any(token in line.casefold() for token in ("focus on the latest episodes", "latest episodes first", "the goal:"))
+        line.strip()
+        for line in lines
+        if any(
+            token in line.casefold()
+            for token in ("focus on the latest episodes", "latest episodes first", "the goal:")
+        )
     ]
     if selection_lines:
         rules["selection_guidance"] = " ".join(selection_lines[:3])
@@ -1335,7 +1464,9 @@ def _same_host(actual: str, approved: str) -> bool:
     return actual in youtube_hosts and approved in youtube_hosts
 
 
-def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> list[ComplianceResult]:
+def _brief_review_results(
+    policy: CampaignPreset, facts: Any, metadata: Any
+) -> list[ComplianceResult]:
     """Check mechanically provable brief rules and flag the rest for a person to review."""
     rules = policy.brief_rules
     results: list[ComplianceResult] = []
@@ -1353,14 +1484,24 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
             minimum_value = maximum_value = None
             range_invalid = True
             results.append(
-                _result("clip_duration", ComplianceStatus.UNKNOWN, "campaign duration range is not numeric")
+                _result(
+                    "clip_duration",
+                    ComplianceStatus.UNKNOWN,
+                    "campaign duration range is not numeric",
+                )
             )
         if duration is _MISSING or duration is None or str(duration).strip() == "":
-            results.append(_result("clip_duration", ComplianceStatus.UNKNOWN, "clip duration was not provided"))
+            results.append(
+                _result("clip_duration", ComplianceStatus.UNKNOWN, "clip duration was not provided")
+            )
         elif not range_invalid:
             actual = _number(duration, -1.0)
             if actual < 0:
-                results.append(_result("clip_duration", ComplianceStatus.UNKNOWN, "clip duration is not numeric"))
+                results.append(
+                    _result(
+                        "clip_duration", ComplianceStatus.UNKNOWN, "clip duration is not numeric"
+                    )
+                )
             elif (minimum_value is not None and actual < minimum_value) or (
                 maximum_value is not None and actual > maximum_value
             ):
@@ -1403,7 +1544,7 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
         str(_first(facts, metadata, "platform", "target_platform") or "")
     )
     if required_mentions:
-        mention_values = []
+        mention_values: list[str] = []
         has_evidence = False
         for source in (facts, metadata):
             for key in ("mentions", "caption_mentions", "caption", "description"):
@@ -1424,7 +1565,11 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
         }
         if not has_evidence:
             results.append(
-                _result("required_mentions", ComplianceStatus.UNKNOWN, "caption mentions were not provided")
+                _result(
+                    "required_mentions",
+                    ComplianceStatus.UNKNOWN,
+                    "caption mentions were not provided",
+                )
             )
         else:
             missing_mentions = [
@@ -1445,9 +1590,7 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
         source_rule.get("allow_only_approved_sources") or source_rule.get("approved_sources")
     ):
         approved_sources = source_rule.get("approved_sources", [])
-        approved_hosts = {
-            host for host in (_url_host(item) for item in approved_sources) if host
-        }
+        approved_hosts = {host for host in (_url_host(item) for item in approved_sources) if host}
         source_host_value = _first(facts, metadata, "source_host")
         source_value = _first(facts, metadata, "source_url", "source_uri", "source")
         actual_host = _url_host(source_host_value) if source_host_value is not _MISSING else ""
@@ -1455,19 +1598,33 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
             actual_host = _url_host(source_value)
         if not actual_host:
             results.append(
-                _result("source_host", ComplianceStatus.UNKNOWN, "source host is not available; verify the official source")
+                _result(
+                    "source_host",
+                    ComplianceStatus.UNKNOWN,
+                    "source host is not available; verify the official source",
+                )
             )
         elif not approved_hosts:
             results.append(
-                _result("source_host", ComplianceStatus.UNKNOWN, "approved source hosts could not be extracted")
+                _result(
+                    "source_host",
+                    ComplianceStatus.UNKNOWN,
+                    "approved source hosts could not be extracted",
+                )
             )
         elif any(_same_host(actual_host, host) for host in approved_hosts):
             results.append(
-                _result("source_host", ComplianceStatus.PASS, f"source host {actual_host} is approved")
+                _result(
+                    "source_host", ComplianceStatus.PASS, f"source host {actual_host} is approved"
+                )
             )
         else:
             results.append(
-                _result("source_host", ComplianceStatus.FAIL, f"source host {actual_host} is not approved")
+                _result(
+                    "source_host",
+                    ComplianceStatus.FAIL,
+                    f"source host {actual_host} is not approved",
+                )
             )
 
         channel_handles = [str(item) for item in source_rule.get("approved_channel_handles", [])]
@@ -1480,7 +1637,11 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
             evidence = channel_text or source_text
             if not evidence:
                 results.append(
-                    _result("source_channel", ComplianceStatus.UNKNOWN, "official channel provenance needs human review")
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.UNKNOWN,
+                        "official channel provenance needs human review",
+                    )
                 )
             elif any(
                 handle.casefold() in evidence.casefold()
@@ -1489,11 +1650,19 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
                 for handle in channel_handles
             ):
                 results.append(
-                    _result("source_channel", ComplianceStatus.PASS, "source channel matches the approved channel")
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.PASS,
+                        "source channel matches the approved channel",
+                    )
                 )
             else:
                 results.append(
-                    _result("source_channel", ComplianceStatus.UNKNOWN, "source channel cannot be confirmed from the available metadata")
+                    _result(
+                        "source_channel",
+                        ComplianceStatus.UNKNOWN,
+                        "source channel cannot be confirmed from the available metadata",
+                    )
                 )
 
     if "face_visible_within_seconds" in rules:
@@ -1501,11 +1670,19 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
         subject = str(rules.get("face_subject") or "the featured person's").strip()
         subject_possessive = subject if subject.endswith(("'s", "’s")) else f"{subject}'s"
         first_face = _first(
-            facts, metadata, "face_first_appearance_seconds", "face_visible_at_seconds", "face_first_seen_seconds"
+            facts,
+            metadata,
+            "face_first_appearance_seconds",
+            "face_visible_at_seconds",
+            "face_first_seen_seconds",
         )
         if first_face is _MISSING or first_face is None or str(first_face).strip() == "":
             results.append(
-                _result("face_visibility", ComplianceStatus.UNKNOWN, f"human review needed: verify {subject_possessive} face appears within {limit:g}s")
+                _result(
+                    "face_visibility",
+                    ComplianceStatus.UNKNOWN,
+                    f"human review needed: verify {subject_possessive} face appears within {limit:g}s",
+                )
             )
         else:
             actual = _number(first_face, -1)
@@ -1513,7 +1690,9 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
                 _result(
                     "face_visibility",
                     ComplianceStatus.PASS if 0 <= actual <= limit else ComplianceStatus.FAIL,
-                    f"first face appears at {actual:g}s (limit {limit:g}s)" if actual >= 0 else "face timing is invalid",
+                    f"first face appears at {actual:g}s (limit {limit:g}s)"
+                    if actual >= 0
+                    else "face timing is invalid",
                 )
             )
 
@@ -1544,11 +1723,19 @@ def _brief_review_results(policy: CampaignPreset, facts: Any, metadata: Any) -> 
         )
     if rules.get("likes_must_be_visible"):
         results.append(
-            _result("likes_visibility", ComplianceStatus.UNKNOWN, "human review needed: confirm likes are visible")
+            _result(
+                "likes_visibility",
+                ComplianceStatus.UNKNOWN,
+                "human review needed: confirm likes are visible",
+            )
         )
     if rules.get("prohibited_content"):
         results.append(
-            _result("content_safety", ComplianceStatus.UNKNOWN, "human review needed: review the clip against the brief's exclusions")
+            _result(
+                "content_safety",
+                ComplianceStatus.UNKNOWN,
+                "human review needed: review the clip against the brief's exclusions",
+            )
         )
     return results
 

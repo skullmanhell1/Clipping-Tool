@@ -77,14 +77,17 @@ def test_campaign_mentions_are_tailored_to_each_destination(tmp_path, fake_clip,
         mode="review",
         mentions_by_platform=mentions_by_platform,
     )
-    requests = {store.get_attempt(item)["platform"]: store.get_attempt(item)["request_json"] for item in ids}
+    requests = {
+        store.get_attempt(item)["platform"]: store.get_attempt(item)["request_json"] for item in ids
+    }
 
     assert set(requests["youtube"]["mentions"]) == {
-        "@creator", "@solvedpodcast", "@solvedclips", "@iammarkmanson"
+        "@creator",
+        "@solvedpodcast",
+        "@solvedclips",
+        "@iammarkmanson",
     }
-    assert set(requests["instagram"]["mentions"]) == {
-        "@creator", "@solvedpodcast", "@markmanson"
-    }
+    assert set(requests["instagram"]["mentions"]) == {"@creator", "@solvedpodcast", "@markmanson"}
     assert "@markmanson" not in requests["youtube"]["mentions"]
     assert "@iammarkmanson" not in requests["instagram"]["mentions"]
 

@@ -359,8 +359,7 @@ def _run_pipeline(
         avg_fps=info.fps,
         base_fps=getattr(info, "base_fps", 0.0) or info.fps,
         configured_fps=int(
-            getattr(options, "quality_target_fps", 0)
-            or getattr(settings, "output_fps", 30)
+            getattr(options, "quality_target_fps", 0) or getattr(settings, "output_fps", 30)
         ),
         always_normalise=str(
             getattr(options, "frame_rate_policy", getattr(settings, "frame_rate_policy", "auto"))
@@ -478,9 +477,7 @@ def _run_pipeline(
 
     # O8: resolved once per job, not per clip - the probe runs a real one-frame encode, and the
     # answer cannot change between two clips of the same source.
-    encoder_choice = video_encoders.resolve_encoder(
-        getattr(options, "video_encoder", "") or None
-    )
+    encoder_choice = video_encoders.resolve_encoder(getattr(options, "video_encoder", "") or None)
     encoder_marker = encoder_choice.marker
     if encoder_choice.encoder.hardware:
         encoder_marker = encoder_marker or f"encoder:{encoder_choice.encoder.name}"
@@ -868,7 +865,10 @@ def _run_pipeline(
                 ]
                 if had_meme_audio:
                     applied.append("meme_audio_suppressed:permissibility")
-            meme_events = [event.to_dict() for event in meme_mode.normalize_events(requested_meme_events, clip_duration)]
+            meme_events = [
+                event.to_dict()
+                for event in meme_mode.normalize_events(requested_meme_events, clip_duration)
+            ]
 
         # Retention plan is built from the actual clip-relative words. Its event
         # evidence remains source-relative, so a silence-trimmed boundary can be
@@ -1243,7 +1243,9 @@ def _run_pipeline(
                     )
                     applied.append("reframe")
                 except (reframe.ReframeUnavailable, fu.FFmpegError):
-                    fallback_mode, fallback_background, fallback_marker = _tracking_fallback(options)
+                    fallback_mode, fallback_background, fallback_marker = _tracking_fallback(
+                        options
+                    )
                     fu.reformat_aspect(
                         raw,
                         geo,
@@ -1433,8 +1435,16 @@ def _run_pipeline(
                 retention_emphasis_indices=retention_plan.emphasis_indices,
                 quality_plan=quality_plan,
                 meme_events=meme_events,
-                meme_asset_library=(getattr(options, "meme_asset_library", "") or getattr(settings, "meme_asset_library", "") or ""),
-                meme_sfx_library=(getattr(options, "meme_sfx_library", "") or getattr(settings, "meme_sfx_library", "") or ""),
+                meme_asset_library=(
+                    getattr(options, "meme_asset_library", "")
+                    or getattr(settings, "meme_asset_library", "")
+                    or ""
+                ),
+                meme_sfx_library=(
+                    getattr(options, "meme_sfx_library", "")
+                    or getattr(settings, "meme_sfx_library", "")
+                    or ""
+                ),
                 meme_default_volume=float(getattr(options, "meme_default_volume", 0.35) or 0.35),
                 meme_default_duck=float(getattr(options, "meme_default_duck", 0.0) or 0.0),
                 # Markers reach `applied` even when the compositor decides nothing needs rendering.

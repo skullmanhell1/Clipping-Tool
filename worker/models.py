@@ -249,27 +249,67 @@ class ProcessingOptions:
     # These mirror the environment settings but live on the job so a queued render cannot change
     # when another request changes the process-wide defaults. Empty/legacy values keep the existing
     # output path unchanged.
-    output_short_side: int = field(default_factory=lambda: _default_int_setting("output_short_side", 1080))  # 720 | 1080 | 1440 | 2160
-    quality_preset: str = field(default_factory=lambda: _default_string_setting("quality_preset", "off"))  # off | 720p | 1080p | 1440p | 4k
-    quality_smart_scale: bool = field(default_factory=lambda: _default_bool_setting("quality_smart_scale", False))
-    quality_crop_mode: str = field(default_factory=lambda: _default_string_setting("quality_crop_mode", "crop"))  # crop | fit | smart
-    quality_denoise: str = field(default_factory=lambda: _default_string_setting("quality_denoise", "off"))
-    quality_sharpen: float = field(default_factory=lambda: _default_float_setting("quality_sharpen", 0.0))
-    quality_colour_correction: bool = field(default_factory=lambda: _default_bool_setting("quality_colour_correction", False))
-    quality_target_fps: int = field(default_factory=lambda: _default_int_setting("quality_target_fps", 0))  # 0 | 30 | 60
-    quality_interpolation: bool = field(default_factory=lambda: _default_bool_setting("quality_interpolation", False))
-    quality_audio_denoise: str = field(default_factory=lambda: _default_string_setting("quality_audio_denoise", "off"))
-    quality_audio_loudness: bool = field(default_factory=lambda: _default_bool_setting("quality_audio_loudness", False))
-    quality_voice_clarity: bool = field(default_factory=lambda: _default_bool_setting("quality_voice_clarity", False))
-    quality_progress_metadata: bool = field(default_factory=lambda: _default_bool_setting("quality_progress_metadata", False))
+    output_short_side: int = field(
+        default_factory=lambda: _default_int_setting("output_short_side", 1080)
+    )  # 720 | 1080 | 1440 | 2160
+    quality_preset: str = field(
+        default_factory=lambda: _default_string_setting("quality_preset", "off")
+    )  # off | 720p | 1080p | 1440p | 4k
+    quality_smart_scale: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_smart_scale", False)
+    )
+    quality_crop_mode: str = field(
+        default_factory=lambda: _default_string_setting("quality_crop_mode", "crop")
+    )  # crop | fit | smart
+    quality_denoise: str = field(
+        default_factory=lambda: _default_string_setting("quality_denoise", "off")
+    )
+    quality_sharpen: float = field(
+        default_factory=lambda: _default_float_setting("quality_sharpen", 0.0)
+    )
+    quality_colour_correction: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_colour_correction", False)
+    )
+    quality_target_fps: int = field(
+        default_factory=lambda: _default_int_setting("quality_target_fps", 0)
+    )  # 0 | 30 | 60
+    quality_interpolation: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_interpolation", False)
+    )
+    quality_audio_denoise: str = field(
+        default_factory=lambda: _default_string_setting("quality_audio_denoise", "off")
+    )
+    quality_audio_loudness: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_audio_loudness", False)
+    )
+    quality_voice_clarity: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_voice_clarity", False)
+    )
+    quality_progress_metadata: bool = field(
+        default_factory=lambda: _default_bool_setting("quality_progress_metadata", False)
+    )
     x264_crf: int = field(default_factory=lambda: _default_int_setting("x264_crf", 20))
-    video_encoder: str = field(default_factory=lambda: _default_string_setting("video_encoder", "libx264"))
-    scaler_flags: str = field(default_factory=lambda: _default_string_setting("scaler_flags", "bicubic"))
-    frame_rate_policy: str = field(default_factory=lambda: _default_string_setting("frame_rate_policy", "auto"))
-    face_detector_min_score: float = field(default_factory=lambda: _default_float_setting("face_detector_min_score", 0.5))
-    reframe_zero_phase: bool = field(default_factory=lambda: _default_bool_setting("reframe_zero_phase", True))
-    reframe_reset_on_cut: bool = field(default_factory=lambda: _default_bool_setting("reframe_reset_on_cut", True))
-    split_screen_max_regions: int = field(default_factory=lambda: _default_int_setting("split_screen_max_regions", 2))
+    video_encoder: str = field(
+        default_factory=lambda: _default_string_setting("video_encoder", "libx264")
+    )
+    scaler_flags: str = field(
+        default_factory=lambda: _default_string_setting("scaler_flags", "bicubic")
+    )
+    frame_rate_policy: str = field(
+        default_factory=lambda: _default_string_setting("frame_rate_policy", "auto")
+    )
+    face_detector_min_score: float = field(
+        default_factory=lambda: _default_float_setting("face_detector_min_score", 0.5)
+    )
+    reframe_zero_phase: bool = field(
+        default_factory=lambda: _default_bool_setting("reframe_zero_phase", True)
+    )
+    reframe_reset_on_cut: bool = field(
+        default_factory=lambda: _default_bool_setting("reframe_reset_on_cut", True)
+    )
+    split_screen_max_regions: int = field(
+        default_factory=lambda: _default_int_setting("split_screen_max_regions", 2)
+    )
     facial_fallback: str = "static_crop_blur"  # static_crop_blur | static_crop | none
 
     # --- Kinetic typography engine (default OFF) --------------------------
@@ -351,7 +391,7 @@ class ProcessingOptions:
     meme_asset_library: str = ""  # local overlay/sticker/GIF/video directory
     meme_sfx_library: str = ""  # local SFX directory; falls back to settings.sfx_dir
     meme_default_volume: float = 0.35
-    meme_default_duck: float = 0.0
+    meme_default_duck: float = 0.65
 
     # U2: the built-in profile this request was built from, "" when none. Recorded so a
     # finished job says which bundle produced it; it never changes behaviour on its own -
@@ -443,7 +483,7 @@ class ProcessingOptions:
             data["meme_mode"] = data["meme_mode_enabled"]
         if "meme_events" not in data and "meme_timeline_events" in data:
             data["meme_events"] = data["meme_timeline_events"]
-        valid = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
+        valid: dict[str, Any] = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
 
         profile_name = str(data.get("profile", "") or "").strip().lower()
         profile = BUILTIN_PROFILES.get(profile_name)
@@ -480,9 +520,7 @@ class ProcessingOptions:
                 valid["hashtag_count"] = 5
         if "output_platform" in valid:
             value = str(valid["output_platform"] or "").strip().lower()
-            valid["output_platform"] = (
-                value if value in cls._OUTPUT_PLATFORMS else ""
-            )
+            valid["output_platform"] = value if value in cls._OUTPUT_PLATFORMS else ""
         # Coerce boolean-ish effect flags that may arrive as strings.
         for bool_field in (
             "reframe",
@@ -552,14 +590,20 @@ class ProcessingOptions:
         if "meme_events" in valid and not isinstance(valid["meme_events"], list):
             valid["meme_events"] = []
         if "meme_preset" in valid:
-            preset = str(valid["meme_preset"] or "").strip().lower().replace("-", "_").replace(" ", "_")
-            valid["meme_preset"] = preset if preset in ("", "chaotic", "subtle", "gaming_rage") else ""
+            preset = (
+                str(valid["meme_preset"] or "").strip().lower().replace("-", "_").replace(" ", "_")
+            )
+            valid["meme_preset"] = (
+                preset if preset in ("", "chaotic", "subtle", "gaming_rage") else ""
+            )
         if "output_short_side" in valid:
             try:
                 short_side = int(valid["output_short_side"])
             except (TypeError, ValueError):
                 short_side = 1080
-            valid["output_short_side"] = short_side if short_side in (720, 1080, 1440, 2160) else 1080
+            valid["output_short_side"] = (
+                short_side if short_side in (720, 1080, 1440, 2160) else 1080
+            )
         if "quality_preset" in valid:
             preset = str(valid["quality_preset"] or "off").strip().lower().replace(" ", "")
             valid["quality_preset"] = {
@@ -574,26 +618,28 @@ class ProcessingOptions:
             )
         if "quality_crop_mode" in valid:
             crop_mode = str(valid["quality_crop_mode"] or "crop").strip().lower()
-            valid["quality_crop_mode"] = crop_mode if crop_mode in ("crop", "fit", "smart") else "crop"
+            valid["quality_crop_mode"] = (
+                crop_mode if crop_mode in ("crop", "fit", "smart") else "crop"
+            )
         for field_name in ("quality_sharpen", "face_detector_min_score"):
             if field_name in valid:
                 try:
-                    value = float(valid[field_name])
+                    float_value = float(valid[field_name])
                 except (TypeError, ValueError):
-                    value = 0.0 if field_name == "quality_sharpen" else 0.5
-                valid[field_name] = max(0.0, min(1.0, value))
+                    float_value = 0.0 if field_name == "quality_sharpen" else 0.5
+                valid[field_name] = max(0.0, min(1.0, float_value))
         for field_name in ("quality_target_fps", "x264_crf", "split_screen_max_regions"):
             if field_name in valid:
                 try:
-                    value = int(valid[field_name])
+                    int_value = int(valid[field_name])
                 except (TypeError, ValueError):
-                    value = 0
+                    int_value = 0
                 if field_name == "quality_target_fps":
-                    valid[field_name] = value if value in (0, 30, 60) else 0
+                    valid[field_name] = int_value if int_value in (0, 30, 60) else 0
                 elif field_name == "x264_crf":
-                    valid[field_name] = max(0, min(51, value))
+                    valid[field_name] = max(0, min(51, int_value))
                 else:
-                    valid[field_name] = max(2, min(4, value or 2))
+                    valid[field_name] = max(2, min(4, int_value or 2))
         for field_name, default in (
             ("quality_denoise", "off"),
             ("quality_audio_denoise", "off"),

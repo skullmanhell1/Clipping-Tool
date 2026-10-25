@@ -289,6 +289,8 @@ class FakeWord:
 #: Every optional effect, at its disabled value.
 EFFECTS_OFF: dict = {
     "reframe": False,
+    "reframe_zero_phase": False,
+    "reframe_reset_on_cut": False,
     "zoom": False,
     "transitions": False,
     "hook_title": False,
