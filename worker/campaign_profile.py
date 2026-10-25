@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit
 
 from worker.campaign_preset import _platform, _ratio, _split, _unique
@@ -199,7 +200,7 @@ class CampaignProfile:
         }
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any] | None) -> "CampaignProfile":
+    def from_dict(cls, value: Mapping[str, Any] | None) -> CampaignProfile:
         data = dict(value or {})
         known = {field_name for field_name in cls.__dataclass_fields__}
         return cls(**{key: data[key] for key in known if key in data})

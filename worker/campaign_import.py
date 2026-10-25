@@ -160,7 +160,8 @@ class CampaignImportService:
                 return self._read_folder(folder_id, url, force=force, download_assets=download_assets, seen=set())
             except GoogleDriveError as exc:
                 raise self._map_error(exc) from exc
-        source_type = "google_docs" if (urlsplit(url).hostname or "").lower().endswith("docs.google.com") else "google_drive"
+        hostname = (urlsplit(url).hostname or "").lower()
+        source_type = "google_docs" if hostname in {"docs.google.com", "www.docs.google.com"} else "google_drive"
         if not configured():
             public_key = self.cache.key(url)
             if not force:

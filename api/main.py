@@ -73,8 +73,6 @@ from worker.campaign_compliance import (
     check_clip_against_profiles,
 )
 from worker.campaign_import import CampaignImportError, CampaignImportService
-from worker.campaign_profile import CampaignProfile, parse_campaign_profile
-from worker.campaign_profile_store import get_campaign_profile_store
 from worker.campaign_preset import (
     CampaignPreset,
     parse_campaign_preset,
@@ -85,6 +83,8 @@ from worker.campaign_preset_sync import (
     CampaignPresetDriveService,
     CampaignPresetImportError,
 )
+from worker.campaign_profile import CampaignProfile, parse_campaign_profile
+from worker.campaign_profile_store import get_campaign_profile_store
 from worker.compliance import check_compliance
 from worker.download import (
     DownloadError,
