@@ -59,7 +59,10 @@ async function jsonOrThrow(res) {
       typeof detail === "string"
         ? detail
         : detail?.message || `Request failed (${res.status})`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = res.status;
+    error.detail = detail;
+    throw error;
   }
   return data;
 }

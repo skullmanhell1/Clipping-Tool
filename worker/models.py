@@ -102,7 +102,7 @@ class ProcessingOptions:
     # Free text rather than a list: it is fed to the model as a prompt, and a comma-separated
     # phrase reads as naturally to it as a sentence does.
     vocabulary: str = ""
-    clip_length: str = "auto"  # auto | <30s | 30-60s | 60-90s | 90s-3min
+    clip_length: str = "auto"  # auto | 20-60s | <30s | 30-60s | 60-90s | 90s-3min
     aspect: str = "9:16"  # 9:16 | 1:1 | 16:9 | 4:5
     # O7: optional per-job encoder target. Empty preserves the environment-level output profile
     # (and the historical behaviour); when set, the render path applies it through a ContextVar so

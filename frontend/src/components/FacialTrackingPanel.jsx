@@ -1,9 +1,40 @@
 import Dropdown from "./Dropdown.jsx";
 
+const LAYOUT_LABELS = {
+  follow_active: "Follow active speaker",
+  split_screen: "Split screen",
+};
+const INTENSITY_LABELS = {
+  subtle: "Subtle",
+  standard: "Standard",
+  heavy: "Heavy",
+};
+const DETECTOR_LABELS = {
+  haar: "Haar cascade · default",
+  mediapipe: "MediaPipe BlazeFace",
+};
+
+const optionsFrom = (values, labels, fallback) =>
+  Array.isArray(values) && values.length
+    ? values.map((value) => ({ value, label: labels[value] || value }))
+    : fallback;
+
 export default function FacialTrackingPanel({ settings, onChange, effects = null }) {
   const detectors = Array.isArray(effects?.face_detectors) && effects.face_detectors.length
-    ? effects.face_detectors.map((item) => ({ value: item.name, label: item.available === false ? `${item.name} · unavailable` : item.name }))
-    : [{ value: "haar", label: "Haar cascade · default" }, { value: "mediapipe", label: "MediaPipe BlazeFace" }];
+    ? effects.face_detectors.map((item) => ({
+        value: item.name,
+        label: `${DETECTOR_LABELS[item.name] || item.name}${item.available === false ? " · unavailable" : ""}`,
+      }))
+    : [{ value: "haar", label: DETECTOR_LABELS.haar }, { value: "mediapipe", label: DETECTOR_LABELS.mediapipe }];
+  const layouts = optionsFrom(effects?.reframe_layouts, LAYOUT_LABELS, [
+    { value: "follow_active", label: LAYOUT_LABELS.follow_active },
+    { value: "split_screen", label: LAYOUT_LABELS.split_screen },
+  ]);
+  const intensities = optionsFrom(effects?.reframe_intensities, INTENSITY_LABELS, [
+    { value: "subtle", label: INTENSITY_LABELS.subtle },
+    { value: "standard", label: INTENSITY_LABELS.standard },
+    { value: "heavy", label: INTENSITY_LABELS.heavy },
+  ]);
   const set = (key) => (value) => onChange({ ...settings, [key]: value });
   const split = settings.reframe_layout === "split_screen";
 
@@ -18,7 +49,8 @@ export default function FacialTrackingPanel({ settings, onChange, effects = null
         <label className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"><input type="checkbox" checked={!!settings.reframe} onChange={(event) => onChange({ ...settings, reframe: event.target.checked })} className="accent-emerald-400" />Enable face tracking</label>
         <label className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"><input type="checkbox" checked={!!settings.speaker_reframe} onChange={(event) => onChange({ ...settings, speaker_reframe: event.target.checked, diarization: event.target.checked ? true : settings.diarization })} className="accent-emerald-400" />Follow active speaker</label>
         <label className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"><input type="checkbox" checked={!!settings.diarization} onChange={(event) => onChange({ ...settings, diarization: event.target.checked })} className="accent-emerald-400" />Detect speaker turns</label>
-        <Dropdown label="Active speaker layout" value={settings.reframe_layout || "follow_active"} onChange={set("reframe_layout")} options={[{ value: "follow_active", label: "Follow active speaker" }, { value: "split_screen", label: "Split screen" }]} />
+        <Dropdown label="Active speaker layout" value={settings.reframe_layout || "follow_active"} onChange={set("reframe_layout")} options={layouts} />
+        <Dropdown label="Tracking movement" value={settings.reframe_intensity || "standard"} onChange={set("reframe_intensity")} options={intensities} />
         <Dropdown label="Smoothing" value={settings.reframe_zero_phase === false ? "causal" : "zero_phase"} onChange={(value) => onChange({ ...settings, reframe_zero_phase: value === "zero_phase" })} options={[{ value: "zero_phase", label: "Zero-phase · less lag" }, { value: "causal", label: "Causal · lower look-ahead" }]} />
         <Dropdown label="Face detector" value={settings.face_detector || "haar"} onChange={set("face_detector")} options={detectors} />
         <label className="flex flex-col gap-1.5 text-sm"><span className="text-slate-400">Confidence floor · {Math.round((Number(settings.face_detector_min_score) || 0.5) * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={settings.face_detector_min_score ?? 0.5} onChange={(event) => onChange({ ...settings, face_detector_min_score: Number(event.target.value) })} className="accent-emerald-400" /><span className="text-[11px] text-slate-500">MediaPipe only; Haar does not expose confidence.</span></label>

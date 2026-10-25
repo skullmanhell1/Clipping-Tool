@@ -43,6 +43,14 @@ def test_info_advertises_campaign_automation():
     assert body["campaign_automation"]["public_visibility_required"] is True
 
 
+def test_info_advertises_twenty_to_sixty_second_clip_range():
+    with TestClient(app) as client:
+        lengths = client.get("/api/info").json()["clip_lengths"]
+    assert "20-60s" in lengths
+    assert "30-60s" in lengths
+    assert "60-90s" in lengths
+
+
 def test_daily_schedule_rejects_anything_other_than_two_clips():
     with TestClient(app) as client:
         response = client.post(
@@ -126,15 +134,78 @@ def test_campaign_preset_drive_endpoint_reads_and_parses_without_saving_campaign
     assert after == before
 
 
-def test_campaign_preset_drive_endpoint_surfaces_safe_configuration_errors(monkeypatch):
+def test_campaign_preset_public_google_link_fallback_works_without_oauth(monkeypatch):
     from worker import campaign_preset_sync
 
     monkeypatch.setattr(campaign_preset_sync, "configured", lambda: False)
+    monkeypatch.setattr(
+        campaign_preset_sync,
+        "download_public_text_file",
+        lambda file_id, source_type: (
+            "Campaign: Public Brief\nAllowed platforms: YouTube Shorts\nBest 20-60 seconds",
+            {"id": file_id, "mimeType": "text/plain"},
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/campaign-presets/from-drive",
+            json={"url": "https://docs.google.com/document/d/drive-brief-12345/edit"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preset"]["name"] == "Public Brief"
+    assert body["preset"]["allowed_platforms"] == ["youtube_shorts"]
+    assert body["preset"]["brief_rules"]["clip_duration_seconds"] == {"min": 20.0, "max": 60.0}
+    assert body["provenance"]["source_type"] == "google_docs"
+
+
+def test_public_drive_share_link_retries_as_a_google_doc_export(monkeypatch):
+    from worker import campaign_preset_sync
+    from worker.google_drive import GoogleDriveError
+
+    calls = []
+
+    def public_download(file_id, source_type):
+        calls.append(source_type)
+        if source_type == "google_drive":
+            raise GoogleDriveError("The shared Drive download did not return readable text.")
+        return "Campaign: Shared Doc\nBest 20-60 seconds", {"id": file_id}
+
+    monkeypatch.setattr(campaign_preset_sync, "configured", lambda: False)
+    monkeypatch.setattr(campaign_preset_sync, "download_public_text_file", public_download)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/campaign-presets/from-drive",
+            json={"url": "https://drive.google.com/open?id=drive-doc-12345"},
+        )
+
+    assert response.status_code == 200
+    assert calls == ["google_drive", "google_docs"]
+    assert response.json()["preset"]["name"] == "Shared Doc"
+    assert response.json()["preset"]["brief_rules"]["clip_duration_seconds"] == {
+        "min": 20.0,
+        "max": 60.0,
+    }
+
+
+def test_campaign_preset_drive_endpoint_surfaces_safe_fallback_errors(monkeypatch):
+    from worker import campaign_preset_sync
+    from worker.google_drive import GoogleDriveError
+
+    monkeypatch.setattr(campaign_preset_sync, "configured", lambda: False)
+    monkeypatch.setattr(
+        campaign_preset_sync,
+        "download_public_text_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            GoogleDriveError("The Google link is private or access was denied.")
+        ),
+    )
     with TestClient(app) as client:
         invalid = client.post(
             "/api/campaign-presets/from-drive", json={"url": "https://example.com/brief"}
         )
-        missing_config = client.post(
+        unavailable = client.post(
             "/api/campaign-presets/from-drive",
             json={"url": "https://drive.google.com/file/d/drive-brief-12345/view"},
         )
@@ -142,6 +213,35 @@ def test_campaign_preset_drive_endpoint_surfaces_safe_configuration_errors(monke
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_url"
     assert invalid.json()["detail"]["fall_back_to_paste"] is True
-    assert missing_config.status_code == 409
-    assert missing_config.json()["detail"]["code"] == "not_configured"
-    assert "paste fallback" in missing_config.json()["detail"]["message"].lower()
+    assert unavailable.status_code == 422
+    assert unavailable.json()["detail"]["code"] == "drive_access"
+    assert unavailable.json()["detail"]["fall_back_to_paste"] is True
+
+
+def test_oauth_preset_read_falls_back_to_public_export(monkeypatch):
+    from worker import campaign_preset_sync
+    from worker.google_drive import GoogleDriveError
+
+    class Reader:
+        def fetch(self, _file_id, **_kwargs):
+            raise GoogleDriveError("Google Drive file access was denied. Confirm Viewer access.")
+
+    monkeypatch.setattr(campaign_preset_sync, "configured", lambda: True)
+    monkeypatch.setattr(campaign_preset_sync, "GoogleDriveBriefReader", Reader)
+    monkeypatch.setattr(
+        campaign_preset_sync,
+        "download_public_text_file",
+        lambda file_id, source_type: (
+            "Campaign: OAuth Fallback\nHashtags: #public",
+            {"id": file_id, "mimeType": "text/plain"},
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/campaign-presets/from-drive",
+            json={"url": "https://docs.google.com/document/d/drive-brief-12345/edit"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["preset"]["name"] == "OAuth Fallback"
+    assert response.json()["preset"]["hashtags"] == ["#public"]

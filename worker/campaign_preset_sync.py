@@ -14,9 +14,14 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from worker.campaign_brief_sync import GoogleDriveBriefReader
+from worker.campaign_brief_sync import DriveBriefSnapshot, GoogleDriveBriefReader
 from worker.campaign_preset import CampaignPreset, parse_campaign_preset
-from worker.google_drive import GoogleDriveError, configured, extract_file_id
+from worker.google_drive import (
+    GoogleDriveError,
+    configured,
+    download_public_text_file,
+    extract_file_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,34 +111,73 @@ class CampaignPresetDriveService:
                 code="invalid_url",
                 http_status=422,
             )
-        if not configured():
-            raise CampaignPresetImportError(
-                "Google Drive import is not configured on the server. Use the paste fallback or "
-                "ask an administrator to configure Drive OAuth.",
-                code="not_configured",
-                http_status=409,
+        snapshot = None
+        public_error: GoogleDriveError | None = None
+        if configured():
+            try:
+                snapshot = self.drive_reader.fetch(file_id)
+            except GoogleDriveError as exc:
+                # A public Docs export can still work when OAuth is absent, has the wrong scope,
+                # or the configured account has not been granted access. Do not mask rate limits
+                # or malformed IDs with a second request.
+                message = str(exc)
+                lowered = message.casefold()
+                if "rate limit" in lowered or "file id is not valid" in lowered:
+                    raise CampaignPresetImportError(
+                        message,
+                        code="drive_rate_limit" if "rate limit" in lowered else "invalid_file_id",
+                        http_status=429 if "rate limit" in lowered else 422,
+                    ) from exc
+            except Exception as exc:
+                logger.info("campaign preset authenticated Drive read failed (%s)", type(exc).__name__)
+        if snapshot is None:
+            public_source_type = (
+                "google_docs"
+                if (urlsplit(url).hostname or "").lower().endswith("docs.google.com")
+                else "google_drive"
             )
 
-        try:
-            snapshot = self.drive_reader.fetch(file_id)
-        except GoogleDriveError as exc:
-            # GoogleDriveError messages are intentionally safe and omit OAuth credentials. Do not
-            # include arbitrary exception text from a network client in the response or logs.
-            message = str(exc)
-            code = "drive_access"
-            status = 422
-            if "not configured" in message.casefold():
-                code = "not_configured"
-                status = 409
-            raise CampaignPresetImportError(message, code=code, http_status=status) from exc
-        except Exception as exc:
-            logger.info("campaign preset Drive read failed (%s)", type(exc).__name__)
-            raise CampaignPresetImportError(
-                "Google Drive could not be read. Confirm the server account has Viewer access "
-                "and use the paste fallback if needed.",
-                code="drive_access",
-                http_status=422,
-            ) from exc
+            def public_snapshot(source_type: str) -> DriveBriefSnapshot:
+                content, metadata = download_public_text_file(file_id, source_type=source_type)
+                return DriveBriefSnapshot.from_content(
+                    file_id,
+                    content,
+                    revision_id=str(metadata.get("version") or ""),
+                    modified_time=str(metadata.get("modifiedTime") or ""),
+                    mime_type=str(metadata.get("mimeType") or "text/plain"),
+                )
+
+            try:
+                snapshot = public_snapshot(public_source_type)
+            except GoogleDriveError as exc:
+                public_error = exc
+                # A Drive sharing URL can point to a native Google Doc. Without OAuth we cannot
+                # inspect its MIME type first, so try the Docs export endpoint after an ordinary
+                # Drive download failure. Do not spend a second request on malformed IDs or rate limits.
+                lowered = str(exc).casefold()
+                if public_source_type != "google_docs" and not any(
+                    marker in lowered for marker in ("rate limit", "file id is not valid")
+                ):
+                    try:
+                        snapshot = public_snapshot("google_docs")
+                    except GoogleDriveError as docs_error:
+                        if "rate limit" in str(docs_error).casefold():
+                            public_error = docs_error
+                    except Exception as docs_error:
+                        logger.info(
+                            "campaign preset public Docs fallback failed (%s)",
+                            type(docs_error).__name__,
+                        )
+            except Exception as exc:
+                logger.info("campaign preset public Drive read failed (%s)", type(exc).__name__)
+                public_error = GoogleDriveError(
+                    "The Google link could not be read. Confirm link sharing is enabled and use the paste fallback if needed."
+                )
+        if snapshot is None:
+            message = str(public_error or "Google Drive could not be read. Use the paste fallback.")
+            code = "drive_rate_limit" if "rate limit" in message.casefold() else "drive_access"
+            status = 429 if code == "drive_rate_limit" else 422
+            raise CampaignPresetImportError(message, code=code, http_status=status) from public_error
 
         content = str(getattr(snapshot, "content", "") or "")
         if not content.strip():

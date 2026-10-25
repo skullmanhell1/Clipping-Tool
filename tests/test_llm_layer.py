@@ -165,6 +165,48 @@ def test_a_generated_result_carries_no_marker(monkeypatch):
     assert meta.fallback_reason == ""
 
 
+def test_campaign_brief_mentions_are_prompted_and_enforced_for_llm_metadata(monkeypatch):
+    monkeypatch.setattr(md, "llm_available", lambda: True)
+    preset = {
+        "allowed_platforms": ["youtube_shorts", "instagram"],
+        "brief_rules": {
+            "caption_guidance": "Lead with the clip's idea, not a show summary.",
+            "required_mentions": {
+                "common": ["@solvedpodcast", "@markmanson"],
+                "by_platform": {"youtube_shorts": ["@solvedpodcast", "@iammarkmanson"]},
+            },
+        },
+    }
+    client = MockLLMClient(
+        responses=['{"title":"A title","description":"A caption","mentions":[]}']
+    )
+    meta = md.generate_metadata(
+        "hello there",
+        _options(campaign_preset=preset, platform="youtube_shorts"),
+        client=client,
+    )
+
+    assert meta.platform == "youtube"
+    assert meta.mentions == ["@solvedpodcast", "@iammarkmanson"]
+    assert "campaign-required handles" in client.calls[0]["prompt"]
+    assert "@iammarkmanson" in client.calls[0]["prompt"]
+    assert "Lead with the clip's idea" in client.calls[0]["prompt"]
+
+
+def test_campaign_brief_mentions_are_also_enforced_in_fallback_metadata(monkeypatch):
+    monkeypatch.setattr(md, "llm_available", lambda: False)
+    preset = {
+        "brief_rules": {
+            "required_mentions": {"common": ["@solvedpodcast"], "by_platform": {}}
+        }
+    }
+    meta = md.generate_metadata(
+        "hello there", _options(campaign_preset=preset, platform="instagram")
+    )
+
+    assert meta.mentions == ["@solvedpodcast"]
+
+
 def test_a_broken_sdk_falls_back_instead_of_failing_the_job(monkeypatch):
     """Client construction was outside the `try`, so this raised out of the function.
 

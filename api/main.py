@@ -73,8 +73,6 @@ from worker.campaign_compliance import (
     check_clip_against_profiles,
 )
 from worker.campaign_import import CampaignImportError, CampaignImportService
-from worker.campaign_profile import CampaignProfile
-from worker.campaign_profile_store import get_campaign_profile_store
 from worker.campaign_preset import (
     CampaignPreset,
     parse_campaign_preset,
@@ -85,6 +83,8 @@ from worker.campaign_preset_sync import (
     CampaignPresetDriveService,
     CampaignPresetImportError,
 )
+from worker.campaign_profile import CampaignProfile
+from worker.campaign_profile_store import get_campaign_profile_store
 from worker.compliance import check_compliance
 from worker.download import (
     DownloadError,
@@ -813,7 +813,7 @@ def info() -> dict[str, object]:
         # metadata must not silently reshape a YouTube-landscape render, and the UI needs the
         # resolved dimensions/limits before it submits a job.
         "output_profiles": output_profiles.available_profiles(),
-        "clip_lengths": ["auto", "<30s", "30-60s", "60-90s", "90s-3min"],
+        "clip_lengths": ["auto", "20-60s", "<30s", "30-60s", "60-90s", "90s-3min"],
         "clip_counts": ["auto", "1", "3", "5", "10", "max"],
         "platforms": list(PLATFORM_PROFILES.keys()),
         "strategies": ["ai", "silence", "fixed"],
@@ -2611,6 +2611,11 @@ def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -
         "hashtags": list(getattr(clip, "hashtags", []) or []),
         "cta": getattr(clip, "cta", ""),
         "caption_style": getattr(options, "caption_preset", ""),
+        "duration": getattr(clip, "duration", None),
+        "captions_enabled": bool(getattr(options, "captions", False)),
+        "mentions": list(getattr(clip, "mentions", []) or []),
+        "caption": getattr(clip, "description", ""),
+        "source_url": str(getattr(job, "source", "") or ""),
         "branding": {
             "logo": getattr(options, "brand_logo", ""),
             "font": getattr(options, "brand_font", ""),
@@ -2709,6 +2714,7 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
             schedule_at=slot,
             route_overrides=routes,
             public_only=True,
+            mentions_by_platform=preset.required_mentions_by_platform(),
         )
         clip_items.append(
             {
@@ -2844,32 +2850,18 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                 detail={"message": "Campaign compliance failed", "blockers": compliance.blockers},
             )
     preset_data = dict(getattr(job.options, "campaign_preset", {}) or {})
+    mentions_by_platform: dict[str, list[str]] = {}
     if preset_data:
         preset = CampaignPreset.from_dict(preset_data)
+        mentions_by_platform = preset.required_mentions_by_platform()
         report = validate_clip_against_preset(
             preset,
-            {
-                "visibility": "public" if public_only else "private",
-                "platform": req.platforms[0] if req.platforms else clip.platform,
-                "aspect_ratio": getattr(job.options, "aspect", ""),
-                "hashtags": clip.hashtags,
-                "cta": clip.cta,
-                "caption_style": getattr(job.options, "caption_preset", ""),
-                "branding": {
-                    "logo": getattr(job.options, "brand_logo", ""),
-                    "font": getattr(job.options, "brand_font", ""),
-                    "colors": {
-                        "primary": getattr(job.options, "brand_primary_color", ""),
-                        "accent": getattr(job.options, "brand_highlight_color", ""),
-                    },
-                },
-                "hook": bool(clip.hook_text),
-                "cliffhanger": bool(
-                    (getattr(clip, "storytelling_plan", {}) or {})
-                    .get("end_card", {})
-                    .get("detected")
-                ),
-            },
+            _clip_preset_facts(
+                job,
+                clip,
+                visibility="public" if public_only else "private",
+                platform=req.platforms[0] if req.platforms else clip.platform,
+            ),
         )
         if report.status == "fail":
             raise HTTPException(
@@ -2931,6 +2923,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         schedule_at=req.schedule_at,
         route_overrides=routes,
         public_only=public_only,
+        mentions_by_platform=mentions_by_platform,
     )
     if not ids:
         raise HTTPException(status_code=400, detail="No valid publishing routes")

@@ -40,8 +40,8 @@ from worker import (
     intermediate_cache,
     meme_mode,
     quality_upgrade,
-    segmentation,
     scene_detect,
+    segmentation,
     stabilise,
     storytelling,
     subtitle_export,
@@ -796,6 +796,8 @@ def _run_pipeline(
             md.cta = md.cta or policy.cta
             if md.platform == "generic" and policy.allowed_platforms:
                 md.platform = policy.allowed_platforms[0]
+            required_mentions = policy.required_mentions_for(md.platform)
+            md.mentions = list(dict.fromkeys([*required_mentions, *md.mentions]))[:5]
 
         # Selection fell back to deterministic segmentation rather than the model. A property of
         # the job rather than of this clip, but the clip record is the only thing a caller sees -
@@ -1680,6 +1682,11 @@ def _run_pipeline(
                         "hashtags": md.hashtags,
                         "cta": md.cta,
                         "caption_style": getattr(options, "caption_preset", ""),
+                        "duration": clip_duration,
+                        "captions_enabled": bool(getattr(options, "captions", False)),
+                        "mentions": list(md.mentions or []),
+                        "caption": md.description,
+                        "source_url": str(source),
                         "branding": {
                             "logo": getattr(options, "brand_logo", ""),
                             "font": getattr(options, "brand_font", ""),

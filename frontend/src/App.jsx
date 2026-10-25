@@ -404,6 +404,7 @@ function StatCard({ label, value, detail, tone }) {
 
 export default function App() {
   const [activeView, setActiveView] = useState("create");
+  const [showMoreVideoTools, setShowMoreVideoTools] = useState(false);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [publishing, setPublishing] = useState(DEFAULT_PUBLISHING);
   const [publisherStatuses, setPublisherStatuses] = useState({});
@@ -712,17 +713,45 @@ export default function App() {
   };
 
   const handlePresetApplied = (preset) => {
+    const branding = preset.branding || {};
+    const duration = preset.brief_rules?.clip_duration_seconds || {};
+    const supportedLengths = [
+      [20, 60, "20-60s"],
+      [5, 30, "<30s"],
+      [30, 60, "30-60s"],
+      [60, 90, "60-90s"],
+      [90, 180, "90s-3min"],
+    ];
+    const briefClipLength = supportedLengths.find(
+      ([minimum, maximum]) => Number(duration.min) === minimum && Number(duration.max) === maximum,
+    )?.[2] || DEFAULT_SETTINGS.clip_length;
+    const platformAliases = {
+      youtube_shorts: "youtube",
+      youtube_short: "youtube",
+      instagram_reels: "instagram",
+      reels: "instagram",
+      twitter: "x",
+    };
+    const metadataPlatform = (preset.allowed_platforms || [])
+      .map((value) => String(value).trim().toLowerCase().replaceAll(" ", "_"))
+      .map((value) => platformAliases[value] || value)
+      .find((value) => ["generic", "youtube", "tiktok", "instagram", "x", "whop"].includes(value))
+      || DEFAULT_SETTINGS.platform;
     setSettings((previous) => ({
       ...previous,
       campaign_preset: preset,
       storytelling_enabled: true,
-      aspect: preset.aspect_ratios?.[0] || previous.aspect,
-      brand_logo: preset.branding?.logo || previous.brand_logo,
-      brand_font: preset.branding?.font || previous.brand_font,
-      brand_primary_color: preset.branding?.colors?.primary || previous.brand_primary_color,
-      brand_highlight_color: preset.branding?.colors?.accent || previous.brand_highlight_color,
-      brand_cta: preset.cta || previous.brand_cta,
-      caption_preset: preset.caption_style || previous.caption_preset,
+      // A brief is a replacement, not a merge. Clear values the previous preset supplied when
+      // the new brief leaves them blank; otherwise old campaign branding quietly leaks forward.
+      aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
+      clip_length: briefClipLength,
+      platform: metadataPlatform,
+      brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
+      brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
+      brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
+      brand_highlight_color: branding.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
+      brand_cta: preset.cta || DEFAULT_SETTINGS.brand_cta,
+      caption_preset: preset.caption_style || DEFAULT_SETTINGS.caption_preset,
     }));
     setPublishing((previous) => ({
       ...previous,
@@ -797,9 +826,10 @@ export default function App() {
 
           <nav aria-label="Primary" className="order-3 flex w-full items-center gap-1 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/20 p-1 sm:order-none sm:w-auto">
             {[
-              ["create", "Create"],
-              ["schedule", "Schedule"],
-              ["history", "History"],
+              ["create", "Make clips"],
+              ["campaigns", "Campaigns"],
+              ["schedule", "Post plan"],
+              ["history", "Past posts"],
               ["settings", "Settings"],
             ].map(([id, label]) => (
               <button
@@ -877,6 +907,74 @@ export default function App() {
             </section>
           )}
 
+          {activeView === "campaigns" && (
+            <section className="space-y-8">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">Campaign workspace</p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Campaigns &amp; saved setups</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                  Read or replace a campaign brief, manage posting plans, and save settings to reuse. Brief rules and campaign profiles are kept separate so each is easier to review.
+                </p>
+              </div>
+
+              <section className="space-y-4">
+                <WorkflowHeading
+                  number="01"
+                  title="Campaign brief and posting plan"
+                  description="Load the brief that explains what clips should follow. The public scheduler is here too."
+                />
+                <CampaignAutomationPanel
+                  campaigns={campaigns}
+                  publisherStatuses={publisherStatuses}
+                  jobs={jobs}
+                  driveConfigured={driveConfigured}
+                  onPresetApplied={handlePresetApplied}
+                  onScheduled={loadPublishingData}
+                />
+              </section>
+
+              <section className="space-y-4">
+                <WorkflowHeading
+                  number="02"
+                  title="Import or review a campaign profile"
+                  description="This profile tool edits campaign details and checks captions; it is different from loading a clipping brief."
+                />
+                <CampaignImportPanel onPresetApplied={handlePresetApplied} />
+              </section>
+
+              <section className="space-y-4">
+                <WorkflowHeading
+                  number="03"
+                  title="Built-in campaign"
+                  description="Use this ready-made campaign setup when it is available in your workspace."
+                />
+                <BoxablCampaignPanel
+                  active={settings.profile === "boxabl_campaign"}
+                  driveConfigured={driveConfigured}
+                  profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
+                  onApply={applyBoxablCampaign}
+                />
+              </section>
+
+              <section className="space-y-4">
+                <WorkflowHeading
+                  number="04"
+                  title="Save settings to reuse"
+                  description="Keep a named setup for clip length, captions, effects, and publishing."
+                />
+                <ProfilesBar
+                  profiles={profiles}
+                  defaultId={defaultProfileId}
+                  activeId={activeProfileId}
+                  onApply={applyProfile}
+                  onSave={handleSaveProfile}
+                  onSetDefault={handleSetDefaultProfile}
+                  onDelete={handleDeleteProfile}
+                />
+              </section>
+            </section>
+          )}
+
           {activeView === "settings" && (
             <section className="space-y-6">
               <div>
@@ -947,31 +1045,6 @@ export default function App() {
               </section>
 
               <section className="space-y-5">
-                <BoxablCampaignPanel
-                  active={settings.profile === "boxabl_campaign"}
-                  driveConfigured={driveConfigured}
-                  profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
-                  onApply={applyBoxablCampaign}
-                />
-                <CampaignAutomationPanel
-                  campaigns={campaigns}
-                  publisherStatuses={publisherStatuses}
-                  jobs={jobs}
-                  driveConfigured={driveConfigured}
-                  onPresetApplied={handlePresetApplied}
-                  onScheduled={loadPublishingData}
-                />
-                <CampaignImportPanel onPresetApplied={handlePresetApplied} />
-                <ProfilesBar
-                  profiles={profiles}
-                  defaultId={defaultProfileId}
-                  activeId={activeProfileId}
-                  onApply={applyProfile}
-                  onSave={handleSaveProfile}
-                  onSetDefault={handleSetDefaultProfile}
-                  onDelete={handleDeleteProfile}
-                />
-
                 <section>
                   <WorkflowHeading
                     number="01"
@@ -990,7 +1063,7 @@ export default function App() {
                   <WorkflowHeading
                     number="02"
                     title="Set the format and style"
-                    description="Start with a platform-ready preset, then fine-tune any of the advanced options."
+                    description="Pick a ready-made format. Open clip settings for the choices you want to change."
                   />
                   <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3" role="group" aria-label="Quick format presets">
                     {FORMAT_PRESETS.map((preset) => {
@@ -1028,10 +1101,27 @@ export default function App() {
                     capabilities={capabilities}
                     outputProfiles={outputProfiles}
                   />
-                  <div className="mt-4 space-y-4">
-                    <MemeModePanel settings={settings} onChange={setSettings} />
-                    <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} />
-                    <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} />
+                  <div className="mt-4 rounded-2xl border border-white/[0.07] bg-slate-950/35 p-4">
+                    <button
+                      type="button"
+                      onClick={() => setShowMoreVideoTools((current) => !current)}
+                      aria-expanded={showMoreVideoTools}
+                      aria-controls="more-video-tools"
+                      className="flex w-full items-center justify-between gap-3 text-left"
+                    >
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-100">More video tools</span>
+                        <span className="mt-1 block text-xs text-slate-500">Quality, face tracking, and meme effects. Most projects can use the defaults.</span>
+                      </span>
+                      <span className="shrink-0 text-xs font-semibold text-violet-200">{showMoreVideoTools ? "Hide" : "Show"}</span>
+                    </button>
+                    {showMoreVideoTools ? (
+                      <div id="more-video-tools" className="mt-4 space-y-4">
+                        <MemeModePanel settings={settings} onChange={setSettings} />
+                        <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} />
+                        <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} />
+                      </div>
+                    ) : null}
                   </div>
                 </section>
 

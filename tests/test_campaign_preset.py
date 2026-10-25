@@ -66,6 +66,115 @@ def test_google_doc_brief_parses_complete_campaign_preset():
     assert preset.cliffhanger_settings == CliffhangerSettings(True, 2.0, "open loop")
 
 
+SOLVED_BRIEF = """
+CLIPFARM × SOLVED WITH MARK MANSON
+
+QUICK FACTS
+Client
+Solved with Mark Manson
+Where to get the clips
+Official YouTube channel: https://www.youtube.com/@solvedpodcast
+Use only the files from these links. Rip straight from YouTube.
+Our Instagram Reels: instagram.com/solvedpodcast (style reference only)
+Do not use any clip from outside the official channel; other podcasts from Mark are not allowed.
+Best ~20-60 seconds. Show Mark's face in the first 5 seconds.
+Do not cut mid-thought; avoid ad reads or sponsor segments.
+Match the topic to the platform
+YouTube Shorts
+Values, purpose and meaning
+Instagram Reels
+Honest self-reflection
+Where to post
+YouTube Shorts
+Instagram Reels
+CAPTION (REQUIRED)
+Write your own. Lead with the idea in the clip, not a summary of the show. No clickbait.
+Subtitles on the whole clip, accurate and readable.
+Tagging @solvedpodcast @markmanson (@solvedclips @iammarkmanson on YT)
+YOUR AUDIENCE (REQUIRED)
+At least 40% of views from US, UK, Canada, Australia.
+Keep posts up for at least 30 days. Likes must be visible.
+0.20% engagement minimum.
+No bots, fake views, paid ads, spam or reposts.
+CPM
+$1.25 / 1K
+MAX PER CLIP
+$300
+MIN PAYOUT
+$2
+Their official font is ‘Selecta’ - Not required (Suggested)
+"""
+
+
+def test_solved_campaign_brief_extracts_rules_and_platform_specific_mentions():
+    preset = parse_campaign_preset(SOLVED_BRIEF)
+
+    assert preset.name == "Solved With Mark Manson"
+    assert preset.allowed_platforms == ["youtube_shorts", "instagram"]
+    assert preset.aspect_ratios == ["9:16"]
+    assert preset.brief_rules["clip_duration_seconds"] == {"min": 20.0, "max": 60.0}
+    assert preset.brief_rules["subtitles_required"] is True
+    assert preset.brief_rules["face_visible_within_seconds"] == 5.0
+    assert preset.brief_rules["face_subject"] == "Mark"
+    assert preset.required_mentions_for("youtube_shorts") == [
+        "@solvedpodcast", "@solvedclips", "@iammarkmanson"
+    ]
+    assert preset.required_mentions_for("instagram") == ["@solvedpodcast", "@markmanson"]
+    assert preset.brief_rules["source_policy"]["approved_channel_handles"] == ["@solvedpodcast"]
+    assert "https://instagram.com/solvedpodcast" in preset.brief_rules["source_policy"]["style_references"]
+    assert preset.brief_rules["audience_requirement"] == {
+        "regions": ["US", "UK", "CA", "AU"], "minimum_percent": 40.0
+    }
+    assert preset.brief_rules["minimum_post_days"] == 30
+    assert preset.brief_rules["minimum_engagement_percent"] == 0.2
+    assert preset.brief_rules["payout"] == {
+        "cpm_usd": 1.25, "maximum_per_clip_usd": 300.0, "minimum_payout_usd": 2.0
+    }
+    assert CampaignPreset.from_dict(preset.to_dict()).to_dict() == preset.to_dict()
+
+
+def test_brief_compliance_checks_machine_evidence_and_flags_human_review():
+    preset = parse_campaign_preset(SOLVED_BRIEF)
+    report = validate_clip_against_preset(
+        preset,
+        {
+            "visibility": "public",
+            "platform": "youtube_shorts",
+            "aspect_ratio": "9:16",
+            "duration": 34,
+            "captions_enabled": True,
+            "mentions": ["@solvedpodcast", "@solvedclips", "@iammarkmanson"],
+            "source_url": "https://www.youtube.com/@solvedpodcast",
+        },
+    )
+
+    assert report.for_rule("clip_duration").status == "pass"
+    assert report.for_rule("subtitles").status == "pass"
+    assert report.for_rule("required_mentions").status == "pass"
+    assert report.for_rule("source_host").status == "pass"
+    assert report.for_rule("source_channel").status == "pass"
+    assert report.for_rule("face_visibility").status == "unknown"
+    assert report.for_rule("audience_requirement").status == "unknown"
+    assert report.for_rule("minimum_engagement").status == "unknown"
+    assert report.status == "unknown"
+
+    failed = validate_clip_against_preset(
+        preset,
+        {
+            "visibility": "public",
+            "platform": "youtube_shorts",
+            "duration": 61,
+            "captions_enabled": False,
+            "mentions": ["@solvedpodcast"],
+            "source_url": "https://vimeo.com/12345",
+        },
+    )
+    assert failed.for_rule("clip_duration").status == "fail"
+    assert failed.for_rule("subtitles").status == "fail"
+    assert failed.for_rule("required_mentions").status == "fail"
+    assert failed.for_rule("source_host").status == "fail"
+
+
 def test_default_daily_target_and_public_policy_are_safe():
     preset = parse_campaign_preset("Campaign: Minimal")
 

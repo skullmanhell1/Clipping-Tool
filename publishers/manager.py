@@ -114,6 +114,7 @@ class PublishManager:
         schedule_at: float | None = None,
         route_overrides: dict[str, dict[str, str]] | None = None,
         public_only: bool = False,
+        mentions_by_platform: dict[str, list[str]] | None = None,
     ):
         routes = {}
         campaign = self.history.campaign(campaign_id) if campaign_id else None
@@ -194,6 +195,39 @@ class PublishManager:
                     "hashtags": clip.hashtags,
                     "mentions": mentions,
                 }
+            platform_mentions = mentions_by_platform or {}
+            lookup_keys = [requested_platform, platform]
+            if platform == "youtube":
+                lookup_keys.append("youtube_shorts")
+            elif platform == "instagram":
+                lookup_keys.append("instagram_reels")
+            required_mentions = []
+            for key in lookup_keys:
+                value = platform_mentions.get(key)
+                if isinstance(value, (list, tuple, set)) and value:
+                    required_mentions = [str(item).strip() for item in value if str(item).strip()]
+                    break
+            all_campaign_mentions = {
+                str(item).strip().casefold()
+                for values in platform_mentions.values()
+                if isinstance(values, (list, tuple, set))
+                for item in values
+                if str(item).strip()
+            }
+            current_campaign_mentions = {item.casefold() for item in required_mentions}
+            existing_mentions = brief_values.get("mentions", mentions) or []
+            if isinstance(existing_mentions, str):
+                existing_mentions = existing_mentions.split()
+            merged_mentions = []
+            for item in [*existing_mentions, *required_mentions]:
+                text = str(item).strip()
+                if not text:
+                    continue
+                if text.casefold() in all_campaign_mentions and text.casefold() not in current_campaign_mentions:
+                    continue
+                if text.casefold() not in {value.casefold() for value in merged_mentions}:
+                    merged_mentions.append(text)
+            brief_values["mentions"] = merged_mentions
             req = {
                 "video_path": str(video_path),
                 "title": clip.title,
