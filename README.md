@@ -135,8 +135,9 @@ records provenance.
 Campaigns use one versioned preset workflow. The Campaign panel imports multiple Google Docs/Drive
 links, folders, pasted text, or multiple local requirement files, then exposes one editable preset for
 clipping, editing tools, captions/brand rules, source approvals, compliance, and posting. Local TXT,
-Markdown, CSV, JSON, and YAML files are read in the browser (2 MB each, 10 per intake); structured JSON
-is review-only until the operator chooses Save & apply. The same review step now includes an optional
+Markdown, CSV, JSON, and YAML files are read in the browser (2 MB each, 10 per intake); raw file objects
+stay local while extracted text goes through the review-only importer. Structured JSON is review-only
+until the operator chooses Save & apply. The same review step now includes an optional
 creator-studio blueprint for content type, clip goal, audience, hook approach, selection direction,
 retention ranking, target clip count, story-first assembly, active-speaker framing, and b-roll intent.
 Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are

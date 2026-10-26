@@ -16,9 +16,10 @@ the importer does not invent them when a brief is silent.
 
 The Campaign panel accepts multiple local `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, and
 `.yml` requirement files by drag-and-drop or file picker. Files are read in the browser, limited to 2 MB
-each and 10 files per intake, and are not uploaded during analysis. Text files are combined into one
-reviewable brief. A structured campaign JSON file is loaded into the same Review step without saving it;
-**Save & apply** is still explicit. PDF and DOCX are intentionally not treated as plain text because
+each and 10 files per intake. Raw file objects stay in the browser; when Analyze is clicked, extracted
+text is sent to the normal review-only brief importer and is not saved as a preset. Text files are
+combined into one reviewable brief. A structured campaign JSON file is loaded into the same Review step
+without saving it; **Save & apply** is still explicit. PDF and DOCX are intentionally not treated as plain text because
 silently extracting binary data would create unsafe, misleading campaign rules; export them to text or
 use the authorized Drive connector instead.
 

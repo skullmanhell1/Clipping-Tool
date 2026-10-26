@@ -882,7 +882,7 @@ export default function CampaignPanel({
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button type="button" onClick={importBrief} disabled={busy === "import" || busy === "read-files" || !hasImportInput} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40">{busy === "read-files" ? "Reading files…" : busy === "import" ? "Analyzing…" : requirementFiles.length ? "Analyze requirements" : "Import and analyze"}</button>
-                <span className="text-[11px] text-slate-500">{requirementFiles.length ? "Local files take priority for this analysis; nothing is uploaded until the campaign is saved." : driveConfigured ? "Server-side Drive OAuth is configured." : "Drive OAuth is not configured; public links and paste remain available."}</span>
+                <span className="text-[11px] text-slate-500">{requirementFiles.length ? "Raw files stay in the browser; extracted text is sent only to the review parser and is not saved until you apply the campaign." : driveConfigured ? "Server-side Drive OAuth is configured." : "Drive OAuth is not configured; public links and paste remain available."}</span>
               </div>
             </div>
             {!presets.length && !draft.id ? (
