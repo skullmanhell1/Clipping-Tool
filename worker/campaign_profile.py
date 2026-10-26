@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from worker.campaign_preset import _platform, _ratio, _split, _unique
+from worker.campaign_policy import canonical_clip_length
 from worker.campaign_sources import extract_source_manifest
 
 _TAG_RE = re.compile(r"(?<![\w])#[\w][\w-]*", re.UNICODE)
@@ -488,7 +489,7 @@ def parse_campaign_profile(
         "required_checks": [],
     }
     settings = {
-        "clip_length": length.get("raw", "") if length else "auto",
+        "clip_length": canonical_clip_length(length.get("raw", "") if length else "auto"),
         "aspect": ratios[0] if ratios else "",
         "platform": platforms[0] if platforms else "generic",
         "captions": captions_language.get("required") is not False,

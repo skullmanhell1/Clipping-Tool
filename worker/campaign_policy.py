@@ -9,6 +9,26 @@ from typing import Any
 from worker.campaign_sources import source_blocker
 
 
+def canonical_clip_length(value: Any) -> str:
+    """Map human brief duration text onto the ProcessingOptions enum."""
+
+    raw = str(value or "").strip()
+    compact = re.sub(r"\s+", "", raw.casefold()).replace("–", "-").replace("—", "-")
+    if compact in {"auto", ""}:
+        return "auto"
+    if re.fullmatch(r"<30(?:s|sec|secs|second|seconds)?", compact):
+        return "<30s"
+    if re.fullmatch(r"30-60(?:s|sec|secs|second|seconds)?", compact):
+        return "30-60s"
+    if re.fullmatch(r"60-90(?:s|sec|secs|second|seconds)?", compact):
+        return "60-90s"
+    if re.fullmatch(r"90(?:s|sec|secs|second|seconds)?-3(?:m|min|mins|minute|minutes)", compact):
+        return "90s-3min"
+    if re.fullmatch(r"90-180(?:s|sec|secs|second|seconds)?", compact):
+        return "90s-3min"
+    return raw
+
+
 def preset_settings(preset: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return ProcessingOptions-shaped defaults without mutating the saved preset."""
 
@@ -32,6 +52,8 @@ def preset_settings(preset: Mapping[str, Any] | None) -> dict[str, Any]:
     settings.setdefault("brand_primary_color", colors.get("primary") or "")
     settings.setdefault("brand_highlight_color", colors.get("accent") or "")
     settings.setdefault("brand_cta", copy_rules.get("cta") or data.get("cta") or "")
+    if "clip_length" in settings:
+        settings["clip_length"] = canonical_clip_length(settings.get("clip_length"))
     settings.setdefault("publish_mode", "review" if posting.get("manual_only") else "review")
     settings.setdefault("public_visibility", "public")
     if platforms:
@@ -254,6 +276,7 @@ def enrich_campaign_metadata_for_preset(metadata: Any, preset: Mapping[str, Any]
 
 __all__ = [
     "preset_apply_blockers",
+    "canonical_clip_length",
     "preset_is_manual_only",
     "preset_required_fields",
     "preset_settings",

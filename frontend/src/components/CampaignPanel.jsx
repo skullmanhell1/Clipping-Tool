@@ -65,6 +65,10 @@ const inputClass =
 
 function normalizePreset(value) {
   const preset = value?.preset || value?.profile || value || {};
+  const normalizedSettings = { ...(preset.settings || {}) };
+  if (Object.prototype.hasOwnProperty.call(normalizedSettings, "clip_length")) {
+    normalizedSettings.clip_length = lengthSettings(normalizedSettings.clip_length).clipLength;
+  }
   const sourceLibrary = Array.isArray(preset.source_library)
     ? preset.source_library.map((item, index) => {
         const source = item && typeof item === "object" ? item : { url: String(item || "") };
@@ -111,7 +115,7 @@ function normalizePreset(value) {
     },
     source_rules: { ...EMPTY_PRESET.source_rules, ...(preset.source_rules || {}) },
     source_library: sourceLibrary,
-    settings: { ...(preset.settings || {}) },
+    settings: normalizedSettings,
     posting: { ...EMPTY_PRESET.posting, ...(preset.posting || {}) },
     compliance: { ...(preset.compliance || {}) },
     source_links: Array.isArray(preset.source_links) ? preset.source_links : [],
