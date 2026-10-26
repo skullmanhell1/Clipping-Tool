@@ -362,7 +362,7 @@ export default function JobCard({
             </div>
             {moreError && <p className="mt-2 text-xs text-rose-400">{moreError}</p>}
           </div>
-          {job.clips.length === 0 ? (
+          {clips.length === 0 ? (
             // U10: an empty result is not an error, and it has specific likely causes. Saying
             // only "no clips" leaves the user with nothing to change.
             <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 text-sm text-slate-300">
@@ -403,12 +403,12 @@ export default function JobCard({
                   key={clip.id}
                   jobId={job.id}
                   clip={clip}
-                  campaignProfile={job.options?.profile || ""}
-                  settings={
-                    job.options?.profile === "boxabl_campaign"
-                      ? { ...(settings || {}), profile: "boxabl_campaign" }
-                      : settings
+                  campaignPreset={
+                    settings?.campaign_preset && Object.keys(settings.campaign_preset).length > 0
+                      ? settings.campaign_preset
+                      : job.options?.campaign_preset || null
                   }
+                  settings={settings}
                   selected={selectedClips.has(clip.id)}
                   onToggleSelected={toggleSelected}
                   focused={index === focusIndex}

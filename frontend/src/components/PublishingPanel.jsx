@@ -18,7 +18,7 @@ export default function PublishingPanel({
   statuses,
   campaigns,
   onCampaignSaved,
-  campaignProfile = "",
+  campaignPreset = null,
 }) {
   const [show, setShow] = useState(false);
   const [name, setName] = useState("");
@@ -27,32 +27,43 @@ export default function PublishingPanel({
   const [verifyingYouTube, setVerifyingYouTube] = useState(false);
   const [youtubeVerification, setYouTubeVerification] = useState(null);
 
+  const allowedPlatforms = Array.isArray(campaignPreset?.posting?.platforms) && campaignPreset.posting.platforms.length
+    ? campaignPreset.posting.platforms
+    : Array.isArray(campaignPreset?.platforms)
+      ? campaignPreset.platforms
+      : [];
   const toggle = (platform) => {
-    const platforms = value.platforms.includes(platform)
-      ? value.platforms.filter((item) => item !== platform)
-      : [...value.platforms, platform];
+    if (allowedPlatforms.length && !allowedPlatforms.includes(platform)) return;
+    const currentPlatforms = value.platforms || [];
+    const platforms = currentPlatforms.includes(platform)
+      ? currentPlatforms.filter((item) => item !== platform)
+      : [...currentPlatforms, platform];
     onChange({ ...value, platforms });
   };
 
   const selectCampaign = (campaignId) => {
     const campaign = campaigns.find((item) => item.id === campaignId);
+    const routedPlatforms = campaign ? Object.keys(campaign.routes || {}) : value.platforms || [];
+    const platforms = allowedPlatforms.length
+      ? routedPlatforms.filter((platform) => allowedPlatforms.includes(platform))
+      : routedPlatforms;
     onChange({
       ...value,
       campaign_id: campaignId,
-      platforms: campaign ? Object.keys(campaign.routes || {}) : value.platforms,
+      platforms,
     });
   };
 
   const saveCampaign = async () => {
     setError("");
-    if (!name.trim() || !value.platforms.length) {
+    if (!name.trim() || !(value.platforms || []).length) {
       setError("Enter a campaign name and select at least one platform.");
       return;
     }
     setSaving(true);
     try {
       const routes = {};
-      value.platforms.forEach((platform) => {
+      (value.platforms || []).forEach((platform) => {
         routes[platform] = {
           account_id: value.account_id,
           target_type: platform === "whop" ? value.target_type : "",
@@ -87,7 +98,8 @@ export default function PublishingPanel({
   };
 
   const statusEntries = Object.entries(statuses || {});
-  const isBoxablCampaign = campaignProfile === "boxabl_campaign";
+  const manualOnly = !!(campaignPreset?.posting?.manual_only || campaignPreset?.posting?.review_only);
+  const affiliateRequired = (campaignPreset?.posting?.affiliate_required_platforms || []).includes("x");
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
@@ -124,9 +136,9 @@ export default function PublishingPanel({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                        checked={value.platforms.includes(platform)}
-                        onChange={() => toggle(platform)}
-                        disabled={!status.configured}
+                         checked={(value.platforms || []).includes(platform)}
+                         onChange={() => toggle(platform)}
+                         disabled={!status.configured || (allowedPlatforms.length > 0 && !allowedPlatforms.includes(platform))}
                       />
                       <b>{LABELS[platform] || platform}</b>
                     </label>
@@ -188,15 +200,15 @@ export default function PublishingPanel({
             <label className="text-xs text-slate-400">
               Mode
               <select
-                value={isBoxablCampaign ? "review" : value.mode}
+                value={manualOnly ? "review" : value.mode}
                 onChange={(event) => onChange({ ...value, mode: event.target.value })}
-                disabled={isBoxablCampaign}
+                disabled={manualOnly}
                 className={inputClass}
               >
                 <option value="review">
-                  {isBoxablCampaign ? "Review / draft (campaign required)" : "Review / draft"}
+                  {manualOnly ? "Review / draft (campaign required)" : "Review / draft"}
                 </option>
-                {!isBoxablCampaign ? <option value="auto">Auto publish</option> : null}
+                {!manualOnly ? <option value="auto">Auto publish</option> : null}
               </select>
             </label>
             <label className="text-xs text-slate-400">
@@ -250,9 +262,9 @@ export default function PublishingPanel({
             </label>
           </div>
 
-          {isBoxablCampaign && value.platforms.includes("x") ? (
+          {affiliateRequired && (value.platforms || []).includes("x") ? (
             <label className="block text-xs text-amber-100">
-              Personal, trackable BOXABL affiliate URL for X
+               Personal, trackable affiliate URL for X
               <input
                 type="url"
                 value={value.affiliate_url || ""}
@@ -285,8 +297,8 @@ export default function PublishingPanel({
           </div>
           {error && <p className="text-xs text-rose-400">{error}</p>}
           <p className="text-xs text-slate-500">
-            {isBoxablCampaign
-              ? "The BOXABL profile always requires a human-reviewed clip and a review/draft upload. Instagram native account tagging and any final publishing step must be completed in the platform app."
+            {manualOnly
+              ? "The active campaign preset requires a human-reviewed clip. Platform-native tagging or affiliate steps must be completed wherever the connected publisher cannot provide them."
               : "Auto mode publishes completed clips through a saved campaign. Review mode leaves publishing to each clip button."} Schedule times are entered in your browser’s local time and converted to UTC for the server.
           </p>
         </div>

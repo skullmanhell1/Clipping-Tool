@@ -3,7 +3,7 @@
 Turn long-form video into short, vertical, captioned clips — and (optionally)
 auto-publish them.
 
-> **Status:** v0.8.0 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
+> **Status:** v0.12.4 — **Phases 1–5 + the Tier 1 creator-output upgrade + speaker diarisation & multi-speaker reframe are working.** Paste a URL or upload video,
 > and the tool transcribes it, uses an **LLM to pick the most engaging moments**
 > (with a virality score), reformats to vertical (or 1:1 / 16:9 / 4:5) — with
 > optional **face-tracking auto-reframe** — burns in word-timed captions,
@@ -112,8 +112,8 @@ work is opt-in and adds render time).
   context-aware mode, four intensity levels, and an optional pop animation.
 - **Filler-word removal:** cuts "um"/"uh" and long pauses, keeping captions and
   emoji in sync by rebasing the word timeline.
-- **Caption Template & Position:** karaoke / boxed / minimal, at bottom / center
-  / top.
+- **Caption Template & Position:** karaoke / boxed / minimal plus animated `pop`,
+  `typewriter`, and `hormozi` presets, at bottom / center / top.
 
 > A selected non-vendored emoji style can download PNGs from its configured CDN
 > on first use (cached under `assets/emoji`); set `EMOJI_ALLOW_DOWNLOAD=false`
@@ -121,7 +121,7 @@ work is opt-in and adds render time).
 > Burned-in text uses libass — the Docker image installs `fonts-liberation` so a
 > font is always available.
 
-## Meme mode, campaign profiles, and quality delivery
+## Meme mode, unified campaign presets, and quality delivery
 
 The creator workflow now includes an opt-in **Meme mode** panel. It stores a clip-relative timeline
 of SFX, visual beats, caption emphasis, and image/GIF/video/text overlays. Presets (`Chaotic`,
@@ -132,12 +132,34 @@ neighboring events. Built-in tones are generated locally; uploaded files are sto
 `POST /api/meme-assets/upload` and are marked `user_supplied`/`license: unknown` until the operator
 records provenance.
 
-Campaign profiles can import multiple Google Docs or Drive folder/file links through
-`/api/campaign-profiles/import`, cache revisions, traverse authorized folders, preserve headings,
-bullets, and table rows, expose ambiguities for human correction, save/select profiles, generate
-campaign copy, and run multi-profile compliance checks before export. Private sources require
-server-side read-only Drive OAuth; public links use a constrained fallback. Credentials never enter
-the browser bundle or Git.
+Campaigns use one versioned preset workflow. The Campaign panel imports multiple Google Docs/Drive
+links, folders, or pasted text, then exposes one editable preset for clipping, editing tools,
+captions/brand rules, source approvals, compliance, and posting. Required fields are warnings until
+resolved or explicitly dismissed; channels and discovered videos are always `suggested`, never
+auto-approved. Saved presets support switch, rename, duplicate, delete, force re-sync, JSON
+export/import, original-source links, last-synced timestamps, and changed-since-sync indicators. See
+[`docs/UNIFIED_CAMPAIGNS.md`](docs/UNIFIED_CAMPAIGNS.md) for the schema, source-review rules, and
+endpoint map.
+
+The canonical API is `/api/campaign-presets`; `/api/campaign-profiles/*` remains a compatibility
+adapter for older clients. The stored JSON uses `schema_version: 2` and keeps the source library
+separate from the brief's original links. Private sources require server-side read-only Drive OAuth;
+public links use a constrained fallback. Credentials never enter the browser bundle or Git.
+
+Minimal shape of a saved preset:
+
+```json
+{
+  "schema_version": 2,
+  "name": "Creator launch",
+  "aspect_resolution": {"aspect_ratios": ["9:16"], "resolutions": [{"width": 1080, "height": 1920}]},
+  "posting": {"platforms": ["youtube_shorts", "tiktok"], "manual_only": false},
+  "source_library": [{"url": "https://youtu.be/example", "type": "youtube_video", "status": "suggested"}],
+  "settings": {"clip_length": "30-60s", "caption_preset": "karaoke"},
+  "compliance": {"required_checks": []},
+  "warnings": []
+}
+```
 
 Quality delivery is per job and remains opt-in: 720p/1080p/1440p/4K targets, smart crop/fit, denoise,
 subtle sharpening, mild correction, 30/60 fps policy, optional interpolation, platform-aware
@@ -297,6 +319,9 @@ Instagram / X.
 │   ├── selection.py                # AI "best moment" selection
 │   ├── metadata.py                 # titles / descriptions / hashtags
 │   ├── captions.py                 # subtitle build + burn-in
+│   ├── campaign_profile.py         # versioned campaign preset model/importer
+│   ├── campaign_preset.py          # deterministic policy parser/checker
+│   ├── campaign_profile_store.py   # saved preset persistence + migration
 │   ├── llm_client.py               # pluggable OpenAI/Anthropic client
 │   └── effects/                    # Phase 4 visual effects
 │       ├── overlays.py             # zoom/color/fade/progress filter builders
@@ -412,9 +437,8 @@ fallback is a synthetic two-tone drone, not a commercial song, and is marked
 
 Campaign import is reviewable and deterministic:
 
-- Paste a brief in **Campaign automation**, or provide one direct Google Drive/
-  Google Docs file link. Folder links and general channel browsing are not
-  supported.
+- Paste a brief in **Campaign**, or provide multiple Google Drive/Google Docs file or folder links.
+  General channel browsing is discovery-only and never approves a source.
 - A Drive import runs in the server process, not through the assistant's
   connected Drive account. The server account needs Viewer access to the file.
 - The paste path remains available when Drive OAuth is not configured. Parsing a
@@ -650,7 +674,9 @@ git pull && docker compose up --build
 ```
 
 Campaign preset parsing, storytelling plans, compliance checks, and the exactly-two-public-clips
-daily scheduler are documented in [`docs/CAMPAIGN_AUTOMATION.md`](docs/CAMPAIGN_AUTOMATION.md).
+daily scheduler are documented in [`docs/CAMPAIGN_AUTOMATION.md`](docs/CAMPAIGN_AUTOMATION.md);
+the saved preset schema and canonical route map are in
+[`docs/UNIFIED_CAMPAIGNS.md`](docs/UNIFIED_CAMPAIGNS.md).
 After updating, keep `.env` and `storage/` intact, rebuild the image, and confirm that each
 platform reports direct-public approval before using the campaign scheduler.
 
@@ -687,9 +713,15 @@ music, consult a qualified professional.
 
 ---
 
-## BOXABL campaign setup
+## Legacy campaign migration
 
-The optional `boxabl_campaign` profile is based on the supplied BOXABL clipper guide and Drive source list. It includes individual-link source allow-listing, a timed 0:05–0:08 BOXABL caption card, deterministic caption/metadata branding, human review gates, Google Drive file-link import, and review-only campaign publishing. See [`docs/BOXABL_CAMPAIGN_SETUP.md`](docs/BOXABL_CAMPAIGN_SETUP.md) for the Drive and YouTube OAuth setup steps. YouTube uploads require OAuth refresh-token credentials; a public API key alone cannot upload.
+On first load of the configured campaign preset store, the previous BOXABL source list and review
+rules are seeded once as the ordinary saved preset `BOXABL Casita`. It can then be edited, duplicated,
+re-synced, or deleted like any other preset; the renderer and publisher consume the active preset's
+generic policy fields rather than a permanent BOXABL runtime branch. See
+[`docs/BOXABL_CAMPAIGN_SETUP.md`](docs/BOXABL_CAMPAIGN_SETUP.md) for the original Drive and YouTube
+OAuth setup steps. YouTube uploads require OAuth refresh-token credentials; a public API key alone
+cannot upload.
 
 ---
 

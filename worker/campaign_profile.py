@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from worker.campaign_preset import _platform, _ratio, _split, _unique
+from worker.campaign_sources import extract_source_manifest
 
 _TAG_RE = re.compile(r"(?<![\w])#[\w][\w-]*", re.UNICODE)
 _MENTION_RE = re.compile(r"(?<![\w])@[\w][\w.-]*", re.UNICODE)
@@ -108,8 +110,41 @@ def _resolutions(value: str) -> list[dict[str, int]]:
     return [{"width": int(left), "height": int(right)} for left, right in _RESOLUTION_RE.findall(value)]
 
 
+def _review_warnings(
+    ambiguities: list[dict[str, Any]], uncertainties: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for index, item in enumerate(ambiguities):
+        field_name = str(item.get("field") or "campaign rule")
+        warnings.append(
+            {
+                "id": f"ambiguity:{field_name}:{index}",
+                "severity": "warning",
+                "kind": "ambiguity",
+                "field": field_name,
+                "message": f"Multiple values were found for {field_name}; review the candidates.",
+                "details": dict(item),
+            }
+        )
+    for index, item in enumerate(uncertainties):
+        field_name = str(item.get("field") or "campaign rule")
+        reason = str(item.get("reason") or "The brief did not provide an explicit value.")
+        warnings.append(
+            {
+                "id": f"uncertainty:{field_name}:{index}",
+                "severity": "required" if field_name in {"platforms", "aspect_resolution", "name"} else "warning",
+                "kind": "uncertainty",
+                "field": field_name,
+                "message": reason,
+                "details": dict(item),
+            }
+        )
+    return warnings
+
+
 @dataclass
 class CampaignProfile:
+    schema_version: int = 2
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     name: str = "Untitled campaign"
     length: dict[str, Any] = field(default_factory=dict)
@@ -120,9 +155,24 @@ class CampaignProfile:
     watermark_end_cards: dict[str, Any] = field(default_factory=dict)
     banned_words_topics: dict[str, Any] = field(default_factory=dict)
     source_rules: dict[str, Any] = field(default_factory=dict)
+    source_library: list[dict[str, Any]] = field(default_factory=list)
     audio_rules: dict[str, Any] = field(default_factory=dict)
     meme_policy: dict[str, Any] = field(default_factory=dict)
     payout_deadlines: dict[str, Any] = field(default_factory=dict)
+    settings: dict[str, Any] = field(default_factory=dict)
+    edit_policy: dict[str, Any] = field(default_factory=dict)
+    quality_policy: dict[str, Any] = field(default_factory=dict)
+    posting: dict[str, Any] = field(default_factory=dict)
+    compliance: dict[str, Any] = field(default_factory=dict)
+    source_links: list[str] = field(default_factory=list)
+    source_revision: str = ""
+    source_content_hash: str = ""
+    last_synced_at: float = 0.0
+    changed: bool = False
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+    dismissed_warnings: list[str] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
     ambiguities: list[dict[str, Any]] = field(default_factory=list)
     uncertainties: list[dict[str, Any]] = field(default_factory=list)
     provenance: list[dict[str, Any]] = field(default_factory=list)
@@ -132,6 +182,7 @@ class CampaignProfile:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": int(self.schema_version or 2),
             "id": self.id,
             "name": self.name,
             "length": dict(self.length),
@@ -142,9 +193,24 @@ class CampaignProfile:
             "watermark_end_cards": dict(self.watermark_end_cards),
             "banned_words_topics": dict(self.banned_words_topics),
             "source_rules": dict(self.source_rules),
+            "source_library": [dict(item) for item in self.source_library],
             "audio_rules": dict(self.audio_rules),
             "meme_policy": dict(self.meme_policy),
             "payout_deadlines": dict(self.payout_deadlines),
+            "settings": dict(self.settings),
+            "edit_policy": dict(self.edit_policy),
+            "quality_policy": dict(self.quality_policy),
+            "posting": dict(self.posting),
+            "compliance": dict(self.compliance),
+            "source_links": list(self.source_links),
+            "source_revision": self.source_revision,
+            "source_content_hash": self.source_content_hash,
+            "last_synced_at": float(self.last_synced_at or 0.0),
+            "changed": bool(self.changed),
+            "warnings": [dict(item) for item in self.warnings],
+            "dismissed_warnings": list(self.dismissed_warnings),
+            "created_at": float(self.created_at or 0.0),
+            "updated_at": float(self.updated_at or 0.0),
             "ambiguities": list(self.ambiguities),
             "uncertainties": list(self.uncertainties),
             "provenance": list(self.provenance),
@@ -157,7 +223,102 @@ class CampaignProfile:
     def from_dict(cls, value: Mapping[str, Any] | None) -> "CampaignProfile":
         data = dict(value or {})
         known = {field_name for field_name in cls.__dataclass_fields__}
-        return cls(**{key: data[key] for key in known if key in data})
+        payload = {key: data[key] for key in known if key in data}
+        item = cls(**payload)
+        for field_name in (
+            "length",
+            "aspect_resolution",
+            "captions_language",
+            "copy_rules",
+            "watermark_end_cards",
+            "banned_words_topics",
+            "source_rules",
+            "audio_rules",
+            "meme_policy",
+            "payout_deadlines",
+            "settings",
+            "edit_policy",
+            "quality_policy",
+            "posting",
+            "compliance",
+        ):
+            if not isinstance(getattr(item, field_name), dict):
+                setattr(item, field_name, {})
+        if not isinstance(item.source_library, list):
+            item.source_library = []
+        item.source_library = [dict(entry) for entry in item.source_library if isinstance(entry, Mapping)]
+        for field_name in (
+            "platforms",
+            "source_links",
+            "warnings",
+            "dismissed_warnings",
+            "ambiguities",
+            "uncertainties",
+            "provenance",
+        ):
+            if not isinstance(getattr(item, field_name), list):
+                setattr(item, field_name, [])
+        item.warnings = [
+            dict(warning)
+            if isinstance(warning, Mapping)
+            else {
+                "id": f"warning:{index}",
+                "severity": "warning",
+                "message": str(warning),
+            }
+            for index, warning in enumerate(item.warnings)
+        ]
+        try:
+            item.schema_version = max(2, int(data.get("schema_version") or 1))
+        except (TypeError, ValueError):
+            item.schema_version = 2
+        if not item.source_library:
+            item.source_library = extract_source_manifest(
+                "\n".join(item.source_links),
+                allowed=item.source_rules.get("allowed", []),
+                prohibited=item.source_rules.get("prohibited", []),
+                origin="legacy_profile",
+            )
+        if "source_links" not in data:
+            item.source_links = [
+                str(entry.get("url") or "")
+                for entry in item.source_library
+                if str(entry.get("url") or "")
+            ]
+        approved_urls = [
+            str(entry.get("url") or "")
+            for entry in item.source_library
+            if isinstance(entry, Mapping) and entry.get("status") == "approved" and entry.get("url")
+        ]
+        if approved_urls:
+            item.source_rules["allowed"] = _unique(
+                [*item.source_rules.get("allowed", []), *approved_urls]
+            )
+        if not item.posting:
+            item.posting = {
+                "platforms": list(item.platforms),
+                "manual_only": False,
+                "public_visibility_required": True,
+                "daily_clip_target": 2,
+                "timezone": "",
+                "peak_hours": [],
+            }
+        item.watermark_end_cards.setdefault(
+            "public_visibility_required",
+            bool(item.posting.get("public_visibility_required", True)),
+        )
+        if not item.compliance:
+            item.compliance = {
+                "required_copy": list(item.copy_rules.get("required_copy", [])),
+                "required_hashtags": list(item.copy_rules.get("hashtags", [])),
+                "required_mentions": list(item.copy_rules.get("mentions", [])),
+                "banned_words": list(item.banned_words_topics.get("words", [])),
+                "banned_topics": list(item.banned_words_topics.get("topics", [])),
+                "required_checks": [],
+            }
+        if not item.warnings:
+            item.warnings = _review_warnings(item.ambiguities, item.uncertainties)
+        return item
 
 
 def _record_conflict(
@@ -217,6 +378,11 @@ def parse_campaign_profile(
     name_values = all_values("campaign", "campaign name", "name", "title")
     _record_conflict(ambiguities, "name", name_values)
     name = name_values[0] if name_values and len({item.casefold() for item in name_values}) == 1 else heading_name
+    if not name_values and not heading_name:
+        uncertainties.append({"field": "name", "reason": "no explicit campaign name found"})
+
+    brand_values = all_values("brand", "brand name", "campaign brand", "company", "company name")
+    _record_conflict(ambiguities, "brand", brand_values)
 
     length_values = all_values("length", "clip length", "duration", "durations", "video length")
     _record_conflict(ambiguities, "length", length_values)
@@ -259,6 +425,7 @@ def parse_campaign_profile(
         "watermark": watermark_values[0] if watermark_values else "",
         "end_card_required": _bool(end_card_values[0]) if end_card_values else None,
         "end_card": end_card_values[0] if end_card_values else "",
+        "public_visibility_required": True,
     }
     banned = all_values("banned words", "forbidden words", "prohibited words", "avoid words", "banned topics", "prohibited topics")
     banned_words = all_values("banned words", "forbidden words", "prohibited words", "avoid words")
@@ -269,6 +436,11 @@ def parse_campaign_profile(
         "prohibited": _values(" ".join(all_values("prohibited sources", "disallowed sources"))),
         "attribution": _first(fields, "source attribution", "credit"),
     }
+    source_library = extract_source_manifest(
+        raw,
+        allowed=source_rules["allowed"],
+        prohibited=source_rules["prohibited"],
+    )
     audio_rules = {
         "allowed": _values(" ".join(all_values("allowed audio", "audio rules", "music"))),
         "prohibited": _values(" ".join(all_values("prohibited audio", "disallowed audio"))),
@@ -298,7 +470,37 @@ def parse_campaign_profile(
     if not copy_rules["hashtags"] and not copy_rules["required_copy"]:
         uncertainties.append({"field": "copy_rules", "reason": "no required caption or hashtag copy found"})
 
+    warnings = _review_warnings(ambiguities, uncertainties)
+    posting = {
+        "platforms": list(platforms),
+        "manual_only": False,
+        "public_visibility_required": True,
+        "daily_clip_target": 2,
+        "timezone": "",
+        "peak_hours": [],
+    }
+    compliance = {
+        "required_copy": list(copy_rules["required_copy"]),
+        "required_hashtags": list(copy_rules["hashtags"]),
+        "required_mentions": list(copy_rules["mentions"]),
+        "banned_words": list(banned_words_topics["words"]),
+        "banned_topics": list(banned_words_topics["topics"]),
+        "required_checks": [],
+    }
+    settings = {
+        "clip_length": length.get("raw", "") if length else "auto",
+        "aspect": ratios[0] if ratios else "",
+        "platform": platforms[0] if platforms else "generic",
+        "captions": captions_language.get("required") is not False,
+        "caption_preset": captions_language.get("style", "") or "karaoke",
+        "brand_logo": watermark_end_cards.get("watermark", ""),
+        "brand_name": brand_values[0] if brand_values and len({item.casefold() for item in brand_values}) == 1 else "",
+        "brand_cta": copy_rules.get("cta", ""),
+        "storytelling_enabled": True,
+    }
+
     return CampaignProfile(
+        schema_version=2,
         name=name or "Untitled campaign",
         length=length,
         aspect_resolution=aspect_resolution,
@@ -308,9 +510,16 @@ def parse_campaign_profile(
         watermark_end_cards=watermark_end_cards,
         banned_words_topics=banned_words_topics,
         source_rules=source_rules,
+        source_library=source_library,
         audio_rules=audio_rules,
         meme_policy=meme_policy,
         payout_deadlines=payout_deadlines,
+        settings=settings,
+        posting=posting,
+        compliance=compliance,
+        source_links=[str(item.get("url") or "") for item in source_library if item.get("url")],
+        last_synced_at=time.time() if raw else 0.0,
+        warnings=warnings,
         ambiguities=ambiguities,
         uncertainties=uncertainties,
         provenance=list(provenance or []),

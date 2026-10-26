@@ -1,0 +1,69 @@
+# Unified campaign presets
+
+The Campaign panel is the source of truth for a campaign. It follows four explicit stages:
+
+1. **Import** — submit one or more public/private Docs or Drive links, folders, or pasted text.
+2. **Review** — edit the extracted policy and source library. Ambiguity is retained as a warning.
+3. **Save & apply** — persist one versioned preset and apply its settings to the next clipping job.
+4. **Compliance & posting** — run the active preset's compliance report and use the public scheduler.
+
+## Schema
+
+The JSON store is versioned at `schema_version: 2`. The main blocks are:
+
+- `length` — explicit clip duration range.
+- `aspect_resolution` — allowed aspect ratios and output resolutions.
+- `settings` — ProcessingOptions-shaped defaults and optional `locked_fields`.
+- `edit_policy` — enforced editor locks and `enforced_settings` for campaign-specific tools.
+- `quality_policy` — whether quality delivery is allowed.
+- `captions_language`, `copy_rules`, `watermark_end_cards` — caption, spelling, CTA, brand, and card rules.
+- `audio_rules`, `meme_policy` — allowed/prohibited audio and meme policy.
+- `posting` — allowed platforms, manual-only mode, public visibility, peak slots, and affiliate requirements.
+- `compliance` — required copy, prohibited terms/topics, and human review checks.
+- `source_library` — individual sources with `approved`, `suggested`, or `banned` status.
+- `source_links` — original brief/Drive links used for re-sync; these are not automatically approved footage.
+- `warnings`, `dismissed_warnings`, `last_synced_at`, `changed` — review and synchronization state.
+
+## Source safety
+
+Links extracted from a brief are `suggested` unless the brief explicitly says they are approved or
+the operator accepts them in the source library. YouTube channels are discovery references; they do
+not approve every video on the channel. A URL submission is rejected when it is banned, suggested,
+or absent from the active preset's approved source library. Local files require the source review
+check when a campaign has a source allow-list.
+
+## Migration
+
+`CampaignProfileStore` migrates old profile records on load without deleting them. The configured
+application store receives a one-time migrated `BOXABL Casita` preset from the previous source list
+and review checklist. The migration marker is stored beside the profiles, so deleting the preset
+does not cause it to be recreated. Explicit temporary stores do not receive the product seed.
+
+The migrated BOXABL record is ordinary saved preset data. New clients must not special-case its
+name or id; rendering and publishing consume the same generic preset fields as every other campaign.
+
+The older `/api/campaign-profiles/*` endpoints remain compatibility adapters. New clients should use:
+
+- `GET /api/campaign-presets`
+- `POST /api/campaign-presets/import`
+- `POST /api/campaign-presets` with `select: true` to save and apply
+- `POST /api/campaign-presets/{id}/select`
+- `PATCH /api/campaign-presets/{id}` to rename
+- `POST /api/campaign-presets/{id}/duplicate`
+- `DELETE /api/campaign-presets/{id}`
+- `POST /api/campaign-presets/{id}/sync`
+- `GET /api/campaign-presets/{id}/export`
+- `POST /api/campaign-presets/import-json`
+
+The review-only parser/connector endpoints remain available for automation-focused clients:
+
+- `POST /api/campaign-presets/parse` for the deterministic parser
+- `POST /api/campaign-presets/from-drive` for the Drive connector
+
+Compliance evaluation is currently exposed at `POST /api/campaign-profiles/compliance` because it
+accepts the compatibility profile payload and can evaluate one or more saved preset ids. Treat this
+route as a compatibility surface while using the `/api/campaign-presets` routes for preset storage,
+selection, import, export, and synchronization.
+
+OAuth credentials remain server-side and use the existing minimum read-only Drive scope. No token is
+serialized into a preset, source record, browser response, or Git-tracked file.

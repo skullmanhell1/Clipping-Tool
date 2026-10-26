@@ -31,15 +31,6 @@ const REVIEW_STYLES = {
   pending: "border-slate-700 bg-slate-800/60 text-slate-400",
 };
 
-const BOXABL_REVIEW_ITEMS = [
-  ["source_approved", "Source link is on the approved Drive / YouTube list."],
-  ["whole_home_2_5", "The complete Casita is visible by 0:02–0:05."],
-  ["brand_by_8", "Exact BOXABL branding is spoken or visible by 0:05–0:08."],
-  ["hook_and_pacing", "Strong first-two-second hook; brisk edits and clean framing."],
-  ["captions_verified", "Captions are readable and BOXABL is spelled exactly BOXABL."],
-  ["no_prohibited_content", "No Kanye West, stock/equity/ticker talk, political/negative bait, or unedited rip."],
-];
-
 function scoreColor(score) {
   if (score >= 80) return "bg-emerald-500/90";
   if (score >= 60) return "bg-lime-500/90";
@@ -81,7 +72,7 @@ const toEpoch = (localDateTime) => {
 export default function ClipCard({
   jobId,
   clip,
-  campaignProfile = "",
+  campaignPreset = null,
   llmAvailable,
   publishing,
   publisherStatuses,
@@ -116,7 +107,17 @@ export default function ClipCard({
   const [rerendering, setRerendering] = useState(false);
   const [editingTranscript, setEditingTranscript] = useState(false);
   const [campaignChecks, setCampaignChecks] = useState({});
-  const isBoxablCampaign = campaignProfile === "boxabl_campaign";
+  const requiredChecks = (campaignPreset?.compliance?.required_checks || []).map((item) => [
+    item.id || item.key || item.label,
+    item.label || item.message || item.id || "Campaign review check",
+  ]);
+  const manualOnly = !!(campaignPreset?.posting?.manual_only || campaignPreset?.posting?.review_only);
+  const allowedPlatforms = Array.isArray(campaignPreset?.posting?.platforms) && campaignPreset.posting.platforms.length
+    ? campaignPreset.posting.platforms
+    : Array.isArray(campaignPreset?.platforms)
+      ? campaignPreset.platforms
+      : [];
+  const affiliatePlatforms = new Set(campaignPreset?.posting?.affiliate_required_platforms || []);
 
   useEffect(() => {
     setSelectedPlatforms(publishing?.platforms || []);
@@ -182,6 +183,7 @@ export default function ClipCard({
   };
 
   const togglePlatform = (platform) => {
+    if (allowedPlatforms.length && !allowedPlatforms.includes(platform)) return;
     setSelectedPlatforms((current) =>
       current.includes(platform)
         ? current.filter((item) => item !== platform)
@@ -195,30 +197,29 @@ export default function ClipCard({
       setError("Select at least one configured platform.");
       return;
     }
+    if (allowedPlatforms.length && selectedPlatforms.some((platform) => !allowedPlatforms.includes(platform))) {
+      setError("The active campaign preset does not allow one or more selected platforms.");
+      return;
+    }
     if (dirty) {
       setError("Save metadata changes before publishing.");
       return;
     }
-    if (isBoxablCampaign) {
+    if (manualOnly) {
       if (publishing?.mode !== "review") {
-        setError("BOXABL clips must be uploaded in review mode.");
+        setError("This campaign requires review mode before publishing.");
         return;
       }
       if (clip.review_state !== "approved") {
         setError("Watch and approve this clip before publishing it.");
         return;
       }
-      if (selectedPlatforms.includes("instagram")) {
-        setError("Instagram API publishing is blocked for this campaign because it cannot set the required native @boxabl tag. Download the clip and publish/tag it manually in Instagram.");
+      if (requiredChecks.some(([key]) => campaignChecks[key] !== true)) {
+        setError("Complete every active campaign review checkbox before publishing.");
         return;
       }
-      const requiredChecks = BOXABL_REVIEW_ITEMS.map(([key]) => key);
-      if (requiredChecks.some((key) => campaignChecks[key] !== true)) {
-        setError("Complete every BOXABL campaign review checkbox before uploading.");
-        return;
-      }
-      if (selectedPlatforms.includes("x") && !publishing?.affiliate_url?.trim()) {
-        setError("Add your personal trackable affiliate URL in Publishing settings for X.");
+      if (selectedPlatforms.some((platform) => affiliatePlatforms.has(platform)) && !publishing?.affiliate_url?.trim()) {
+        setError("Add the required trackable affiliate URL in Publishing settings.");
         return;
       }
     }
@@ -240,8 +241,8 @@ export default function ClipCard({
         mode: publishing.mode || "review",
         schedule_at: toEpoch(publishing.schedule),
         routes,
-        campaign_checks: isBoxablCampaign ? campaignChecks : {},
-        affiliate_url: isBoxablCampaign ? publishing?.affiliate_url || "" : "",
+        campaign_checks: manualOnly ? campaignChecks : {},
+        affiliate_url: manualOnly ? publishing?.affiliate_url || "" : "",
       });
       onPublished?.(result.attempts || []);
     } catch (publishError) {
@@ -280,7 +281,7 @@ export default function ClipCard({
       try {
         const updated = await api.rerenderClip(jobId, clip.id, settings || {}, cuts);
         onUpdated?.(updated);
-        if (isBoxablCampaign) setCampaignChecks({});
+        if (manualOnly) setCampaignChecks({});
         // U4: the struck words have been applied and the clip record replaced, so leaving the
         // editor open would show a selection against a transcript that no longer describes the
         // media. Closing it forces a fresh fetch if the user wants to trim again.
@@ -291,7 +292,7 @@ export default function ClipCard({
         setRerendering(false);
       }
     },
-    [clip.id, isBoxablCampaign, jobId, onUpdated, settings],
+    [clip.id, manualOnly, jobId, onUpdated, settings],
   );
 
   // U4: the transcript editor is a panel rather than a separate view, so the player stays
@@ -587,16 +588,16 @@ export default function ClipCard({
           )}
         </div>
 
-        {isBoxablCampaign ? (
+        {manualOnly && requiredChecks.length ? (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-200">
-                  BOXABL campaign review
+                  Campaign review
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  A 0:05–0:08 BOXABL title card is rendered automatically. Watch the clip to
-                  verify the Casita framing, source, spoken branding, captions, and context.
+                  Watch the clip to verify the source, framing, required copy, captions, and context
+                  before publishing.
                 </p>
               </div>
               <span className="rounded-full border border-amber-300/20 px-2 py-1 text-[10px] text-amber-100">
@@ -604,7 +605,7 @@ export default function ClipCard({
               </span>
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {BOXABL_REVIEW_ITEMS.map(([key, label]) => (
+              {requiredChecks.map(([key, label]) => (
                 <label key={key} className="flex items-start gap-2 text-xs leading-5 text-slate-300">
                   <input
                     type="checkbox"
@@ -618,13 +619,6 @@ export default function ClipCard({
                 </label>
               ))}
             </div>
-            {selectedPlatforms.includes("instagram") ? (
-              <p className="mt-2 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-2 text-[11px] leading-5 text-rose-200">
-                Instagram API publishing is blocked for this campaign because the current publisher cannot
-                apply its required native @boxabl account tag. Download this clip and post/tag it manually
-                in Instagram.
-              </p>
-            ) : null}
           </div>
         ) : null}
 
@@ -653,9 +647,9 @@ export default function ClipCard({
                 <input
                   type="checkbox"
                   className="mr-1"
-                  checked={selectedPlatforms.includes(platform)}
-                  onChange={() => togglePlatform(platform)}
-                  disabled={!status.configured}
+                   checked={selectedPlatforms.includes(platform)}
+                   onChange={() => togglePlatform(platform)}
+                   disabled={!status.configured || (allowedPlatforms.length > 0 && !allowedPlatforms.includes(platform))}
                 />
                 {PLATFORM_LABELS[platform] || platform}
               </label>

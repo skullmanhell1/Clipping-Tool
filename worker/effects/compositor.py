@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from config import settings
 from worker import branding, caption_contrast, meme_mode, meme_render, turn_gain
 from worker import captions as cap
-from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
+from worker.campaign_policy import campaign_brand_config
 from worker.effects import audio, broll, caption_presets, emoji, overlays, sfx
 from worker.ffmpeg_utils import _run, aac_args, h264_args, probe
 from worker.models import ProcessingOptions
@@ -366,7 +366,7 @@ def render_clip(
     # The campaign's explicit brand beat is placed at 0:05–0:08 in the rendered frame. This is
     # separate from the opening hook, so a silent viewer sees the required brand during the
     # guide's specified window even when the speaker never says it.
-    campaign_brand_text = "BOXABL" if options.profile == BOXABL_PROFILE_NAME else ""
+    campaign_brand_text = campaign_brand_config(getattr(options, "campaign_preset", {}) or {}).get("card_text", "")
     need_brand = bool(campaign_brand_text) and duration > 5.0
 
     # Caption ownership (Reqs 3.2, 3.9). ``None`` on every v0.8.0 / all-off run,

@@ -2,9 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, resolveLanguage } from "./api.js";
 import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
-import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
-import CampaignAutomationPanel from "./components/CampaignAutomationPanel.jsx";
-import CampaignImportPanel from "./components/CampaignImportPanel.jsx";
+import CampaignPanel from "./components/CampaignPanel.jsx";
 import FacialTrackingPanel from "./components/FacialTrackingPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
 import MemeModePanel from "./components/MemeModePanel.jsx";
@@ -430,7 +428,6 @@ export default function App() {
   const [capabilities, setCapabilities] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [driveConfigured, setDriveConfigured] = useState(false);
-  const [builtinProfiles, setBuiltinProfiles] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [defaultProfileId, setDefaultProfileId] = useState(null);
   const [activeProfileId, setActiveProfileId] = useState("");
@@ -464,23 +461,8 @@ export default function App() {
     setPublishing({
       ...DEFAULT_PUBLISHING,
       ...(profile.publishing || {}),
-      ...(profileSettings.profile === "boxabl_campaign" ? { mode: "review" } : {}),
     });
   }, [profiles]);
-
-  const applyBoxablCampaign = useCallback(() => {
-    const profile = builtinProfiles.find((item) => item.name === "boxabl_campaign");
-    if (!profile) return;
-    setActiveProfileId("");
-    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}), profile: profile.name });
-    setPublishing((current) => ({
-      ...DEFAULT_PUBLISHING,
-      ...current,
-      platforms: [],
-      campaign_id: "",
-      mode: "review",
-    }));
-  }, [builtinProfiles]);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -508,7 +490,6 @@ export default function App() {
         setDriveConfigured(!!info.google_drive?.configured);
       })
       .catch(() => setApiStatus("offline"));
-    api.builtinProfiles().then((data) => setBuiltinProfiles(data.profiles || [])).catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
     loadPublishingData();
     // Load profiles and pre-fill from the default profile once on startup.
@@ -711,25 +692,85 @@ export default function App() {
     setCampaigns((previous) => [campaign, ...previous.filter((item) => item.id !== campaign.id)]);
   };
 
-  const handlePresetApplied = (preset) => {
+  const handlePresetApplied = useCallback((preset) => {
+    const presetSettings = preset?.settings && typeof preset.settings === "object"
+      ? preset.settings
+      : {};
+    const posting = preset?.posting && typeof preset.posting === "object" ? preset.posting : {};
+    const editPolicy = preset?.edit_policy && typeof preset.edit_policy === "object"
+      ? preset.edit_policy
+      : {};
+    const qualityPolicy = preset?.quality_policy && typeof preset.quality_policy === "object"
+      ? preset.quality_policy
+      : {};
+    const memePolicy = preset?.meme_policy && typeof preset.meme_policy === "object"
+      ? preset.meme_policy
+      : {};
+    const enforcedSettings = editPolicy.enforced_settings && typeof editPolicy.enforced_settings === "object"
+      ? editPolicy.enforced_settings
+      : {};
+    const directEditSettings = ["reframe", "zoom", "transitions", "hook_title", "fades", "progress_bar"]
+      .filter((key) => Object.prototype.hasOwnProperty.call(editPolicy, key))
+      .reduce((result, key) => ({ ...result, [key]: editPolicy[key] }), {});
+    const presetPlatforms = Array.isArray(posting.platforms) && posting.platforms.length
+      ? posting.platforms
+      : Array.isArray(preset.platforms) && preset.platforms.length
+        ? preset.platforms
+        : Array.isArray(preset.allowed_platforms)
+          ? preset.allowed_platforms
+          : [];
+    const ratios = preset.aspect_resolution?.aspect_ratios || preset.aspect_ratios || [];
+    let brandColors = {};
+    if (presetSettings.brand_colors && typeof presetSettings.brand_colors === "object") {
+      brandColors = presetSettings.brand_colors;
+    } else if (typeof presetSettings.brand_colors === "string") {
+      try {
+        const parsedColors = JSON.parse(presetSettings.brand_colors);
+        if (parsedColors && typeof parsedColors === "object" && !Array.isArray(parsedColors)) {
+          brandColors = parsedColors;
+        }
+      } catch {
+        // Keep the previous brand colors until the review field contains valid JSON.
+      }
+    }
+    const memeDisallowed = editPolicy.meme_allowed === false || memePolicy.allowed === false;
+    const qualityDisallowed = qualityPolicy.allowed === false;
+    const manualOnly = !!(posting.manual_only || posting.review_only);
+
     setSettings((previous) => ({
       ...previous,
+      ...presetSettings,
+      ...enforcedSettings,
+      ...directEditSettings,
       campaign_preset: preset,
-      storytelling_enabled: true,
-      aspect: preset.aspect_ratios?.[0] || previous.aspect,
-      brand_logo: preset.branding?.logo || previous.brand_logo,
-      brand_font: preset.branding?.font || previous.brand_font,
-      brand_primary_color: preset.branding?.colors?.primary || previous.brand_primary_color,
-      brand_highlight_color: preset.branding?.colors?.accent || previous.brand_highlight_color,
-      brand_cta: preset.cta || previous.brand_cta,
-      caption_preset: preset.caption_style || previous.caption_preset,
+      profile: "",
+      storytelling_enabled: presetSettings.storytelling_enabled ?? previous.storytelling_enabled,
+      aspect: presetSettings.aspect || ratios[0] || previous.aspect,
+      platform: presetSettings.platform || presetPlatforms[0] || previous.platform,
+      captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : previous.captions),
+      brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || previous.brand_logo,
+      brand_font: presetSettings.brand_font || preset.branding?.font || previous.brand_font,
+      brand_primary_color: presetSettings.brand_primary_color || brandColors.primary || preset.branding?.colors?.primary || previous.brand_primary_color,
+      brand_highlight_color: presetSettings.brand_highlight_color || brandColors.accent || preset.branding?.colors?.accent || previous.brand_highlight_color,
+      brand_cta: presetSettings.brand_cta || preset.copy_rules?.cta || previous.brand_cta,
+      caption_preset: presetSettings.caption_preset || preset.captions_language?.style || previous.caption_preset,
+      meme_mode: memeDisallowed ? false : presetSettings.meme_mode ?? previous.meme_mode,
+      meme_mode_enabled: memeDisallowed ? false : presetSettings.meme_mode_enabled ?? previous.meme_mode_enabled,
+      meme_auto_suggest: memeDisallowed ? false : presetSettings.meme_auto_suggest ?? previous.meme_auto_suggest,
+      meme_events: memeDisallowed ? [] : presetSettings.meme_events ?? previous.meme_events,
+      meme_timeline_events: memeDisallowed ? [] : presetSettings.meme_timeline_events ?? previous.meme_timeline_events,
+      quality_enabled: qualityDisallowed ? false : presetSettings.quality_enabled ?? previous.quality_enabled,
+      quality_preset: qualityDisallowed ? "off" : presetSettings.quality_preset ?? previous.quality_preset,
+      quality_upscale: qualityDisallowed ? "off" : presetSettings.quality_upscale ?? previous.quality_upscale,
+      quality_smart_scale: qualityDisallowed ? false : presetSettings.quality_smart_scale ?? previous.quality_smart_scale,
+      quality_interpolation: qualityDisallowed ? "off" : presetSettings.quality_interpolation ?? previous.quality_interpolation,
     }));
     setPublishing((previous) => ({
       ...previous,
-      campaign_id: previous.campaign_id || "",
-      mode: "review",
+      platforms: presetPlatforms,
+      mode: manualOnly ? "review" : presetSettings.publish_mode || "review",
     }));
-  };
+  }, []);
 
   const handlePublished = (attempts) => {
     setPublishAttempts((previous) => [
@@ -768,6 +809,9 @@ export default function App() {
   const activePreset = FORMAT_PRESETS.find((preset) =>
     Object.entries(preset.values).every(([key, value]) => settings[key] === value)
   );
+  const activeCampaignPreset = settings.campaign_preset && typeof settings.campaign_preset === "object"
+    ? settings.campaign_preset
+    : null;
 
   const applyFormatPreset = (preset) => {
     setSettings((previous) => ({ ...previous, ...preset.values }));
@@ -947,13 +991,7 @@ export default function App() {
               </section>
 
               <section className="space-y-5">
-                <BoxablCampaignPanel
-                  active={settings.profile === "boxabl_campaign"}
-                  driveConfigured={driveConfigured}
-                  profileAvailable={builtinProfiles.some((item) => item.name === "boxabl_campaign")}
-                  onApply={applyBoxablCampaign}
-                />
-                <CampaignAutomationPanel
+                <CampaignPanel
                   campaigns={campaigns}
                   publisherStatuses={publisherStatuses}
                   jobs={jobs}
@@ -961,7 +999,6 @@ export default function App() {
                   onPresetApplied={handlePresetApplied}
                   onScheduled={loadPublishingData}
                 />
-                <CampaignImportPanel onPresetApplied={handlePresetApplied} />
                 <ProfilesBar
                   profiles={profiles}
                   defaultId={defaultProfileId}
@@ -1027,11 +1064,12 @@ export default function App() {
                     engines={engines}
                     capabilities={capabilities}
                     outputProfiles={outputProfiles}
+                    campaignPreset={activeCampaignPreset}
                   />
                   <div className="mt-4 space-y-4">
-                    <MemeModePanel settings={settings} onChange={setSettings} />
-                    <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} />
-                    <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} />
+                    <MemeModePanel settings={settings} onChange={setSettings} campaignPreset={activeCampaignPreset} />
+                    <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} campaignPreset={activeCampaignPreset} />
+                    <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} campaignPreset={activeCampaignPreset} />
                   </div>
                 </section>
 
@@ -1044,7 +1082,7 @@ export default function App() {
                   <PublishingPanel
                     value={publishing}
                     onChange={setPublishing}
-                    campaignProfile={settings.profile}
+                    campaignPreset={activeCampaignPreset}
                     statuses={publisherStatuses}
                     campaigns={campaigns}
                     onCampaignSaved={handleCampaignSaved}
