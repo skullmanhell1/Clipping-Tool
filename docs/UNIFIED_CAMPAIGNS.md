@@ -16,6 +16,11 @@ Review also offers editable quick-start recipes for podcast growth, education au
 and clean storytelling. A recipe only fills the draft; campaign locks still win, and the operator must
 review and explicitly Save & apply.
 
+The Review and Save & apply stages show a campaign-readiness preflight with separate states for identity,
+output format, distribution, clip strategy, source approvals, and policy checks. Blocked items match the
+required fields that prevent applying; source suggestions and optional strategy gaps remain visible as
+review states rather than being silently promoted to blockers.
+
 ## Local requirement files
 
 The Campaign panel accepts multiple local `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, and

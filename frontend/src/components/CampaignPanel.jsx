@@ -352,6 +352,42 @@ function sourceStatusClass(status) {
   return "border-amber-400/30 bg-amber-400/[0.06] text-amber-100";
 }
 
+function readinessStatusClass(status) {
+  if (status === "ready") return "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-100";
+  if (status === "blocked") return "border-rose-400/20 bg-rose-400/[0.05] text-rose-100";
+  return "border-amber-400/20 bg-amber-400/[0.05] text-amber-100";
+}
+
+function ReadinessPanel({ checks, readyCount }) {
+  const blockedCount = checks.filter((check) => check.status === "blocked").length;
+  const warningCount = checks.filter((check) => check.status === "warning").length;
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/45 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Campaign readiness</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">A transparent preflight for the same rules Save &amp; apply will enforce.</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-semibold text-white">{readyCount}/{checks.length} ready</p>
+          <p className="mt-1 text-[10px] text-slate-500">{blockedCount} blocked · {warningCount} review</p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {checks.map((check) => (
+          <div key={check.id} className={`rounded-lg border p-3 ${readinessStatusClass(check.status)}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold">{check.label}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide">{check.status === "ready" ? "Ready" : check.status === "blocked" ? "Blocked" : "Review"}</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-4 opacity-75">{check.detail}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CampaignPanel({
   campaigns = [],
   publisherStatuses = {},
@@ -936,6 +972,48 @@ export default function CampaignPanel({
     ["Framing", recipeValue("speaker_reframe", false) ? "Speaker-aware" : "Campaign default"],
     ["Captions", recipeValue("caption_preset", draft.captions_language?.style || "Karaoke")],
   ];
+  const sourceItems = draft.source_library || [];
+  const approvedSourceCount = sourceItems.filter((item) => item.status === "approved").length;
+  const suggestedSourceCount = sourceItems.filter((item) => item.status === "suggested").length;
+  const readinessChecks = [
+    {
+      id: "identity",
+      label: "Campaign identity",
+      status: draft.name.trim() ? "ready" : "blocked",
+      detail: draft.name.trim() ? draft.name.trim() : "Add a campaign name before applying.",
+    },
+    {
+      id: "format",
+      label: "Output format",
+      status: presetRatios.length ? "ready" : "blocked",
+      detail: presetRatios.length ? `${presetRatios.join(", ")} format${presetRatios.length === 1 ? "" : "s"} configured.` : "Choose at least one aspect ratio.",
+    },
+    {
+      id: "distribution",
+      label: "Distribution",
+      status: presetPlatforms.length ? "ready" : "blocked",
+      detail: presetPlatforms.length ? `${presetPlatforms.length} allowed platform${presetPlatforms.length === 1 ? "" : "s"}.` : "Choose at least one allowed platform.",
+    },
+    {
+      id: "strategy",
+      label: "Clip strategy",
+      status: recipeValue("selection_prompt", "") || recipeValue("content_type", "") || recipeValue("clip_goal", "") ? "ready" : "warning",
+      detail: recipeValue("selection_prompt", "") ? "Selection direction is explicit." : recipeValue("content_type", "") || recipeValue("clip_goal", "") ? "Structured intent is configured; add a prompt for more control." : "Optional: choose a recipe or leave the engine on its default strategy.",
+    },
+    {
+      id: "sources",
+      label: "Source approvals",
+      status: suggestedSourceCount ? "warning" : "ready",
+      detail: suggestedSourceCount ? `${suggestedSourceCount} suggested source${suggestedSourceCount === 1 ? " remains" : "s remain"} unapproved; ${approvedSourceCount} approved.` : sourceItems.length ? `${approvedSourceCount} source${approvedSourceCount === 1 ? " is" : "s are"} approved.` : "No source allow-list is configured yet.",
+    },
+    {
+      id: "policy",
+      label: "Policy checks",
+      status: requiredWarnings.length ? "blocked" : "ready",
+      detail: requiredWarnings.length ? `${requiredWarnings.length} required item${requiredWarnings.length === 1 ? "" : "s"} must be resolved or dismissed.` : "Required fields are resolved or explicitly dismissed.",
+    },
+  ];
+  const readinessReadyCount = readinessChecks.filter((check) => check.status === "ready").length;
 
   return (
     <section className="rounded-2xl border border-violet-400/20 bg-violet-400/[0.035] p-5 shadow-xl shadow-violet-950/10">
@@ -1213,8 +1291,10 @@ export default function CampaignPanel({
              </div>
              {draft.provenance?.some((item) => item.source_type === "local_requirement_file") ? <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-400/[0.035] p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-200">Requirement intake provenance</p><p className="mt-1 text-[11px] text-slate-500">These local files shaped the draft; they are not automatically treated as footage or approved sources.</p><div className="mt-2 flex flex-wrap gap-1.5">{draft.provenance.filter((item) => item.source_type === "local_requirement_file").map((item) => <span key={`${item.source_name}-${item.content_hash}`} className="rounded-full border border-cyan-300/15 px-2 py-1 text-[10px] text-cyan-100">{item.source_name}</span>)}</div></div> : null}
              {draft.source_links?.length ? <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Original brief sources</p><div className="mt-2 grid gap-1">{draft.source_links.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer" className="truncate text-xs text-indigo-200 hover:underline">{url}</a>)}</div></div> : null}
-            {draft.source_library?.length ? <ul className="mt-3 grid gap-2">{draft.source_library.map(renderSource)}</ul> : <p className="mt-3 text-xs text-slate-500">No explicit sources were found. Add and approve sources manually, or re-import a brief containing links.</p>}
+           {draft.source_library?.length ? <ul className="mt-3 grid gap-2">{draft.source_library.map(renderSource)}</ul> : <p className="mt-3 text-xs text-slate-500">No explicit sources were found. Add and approve sources manually, or re-import a brief containing links.</p>}
           </div>
+
+          <ReadinessPanel checks={readinessChecks} readyCount={readinessReadyCount} />
 
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-4">
             <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-amber-100">Warnings and required review</h3><p className="mt-1 text-xs text-amber-200/70">Uncertainty is kept visible instead of being guessed.</p></div><span className="text-xs text-amber-200">{activeWarnings.length} open</span></div>
@@ -1238,6 +1318,7 @@ export default function CampaignPanel({
                <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200">Production blueprint</p><span className="text-[10px] text-slate-500">No automatic publishing</span></div>
                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{blueprintSignals.map(([label, value]) => <div key={label} className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="mt-1 text-xs font-semibold text-slate-200">{value}</div></div>)}</div>
              </div>
+             <div className="mt-4"><ReadinessPanel checks={readinessChecks} readyCount={readinessReadyCount} /></div>
              {requiredWarnings.length ? <p className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-3 text-xs text-rose-100">{requiredWarnings.map((warning) => warning.message).join(" ")}</p> : <p className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.05] p-3 text-xs text-emerald-100">Required campaign fields are resolved or explicitly dismissed.</p>}
              <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => setStep("review")} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">Edit review</button><button type="button" onClick={applyPreset} disabled={!!busy || !!requiredWarnings.length} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40">{busy === "save" ? "Saving…" : "Save & apply"}</button></div>
           </div>

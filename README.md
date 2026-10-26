@@ -143,6 +143,8 @@ retention ranking, target clip count, story-first assembly, active-speaker frami
 the actual caption, framing, sourcing, and visual-selection recipe used by the clip engine. Editable
 quick-start recipes cover podcast growth, education authority, product launches, and clean storytelling;
 they fill the review draft but never bypass campaign locks or Save & apply.
+Review and Save & apply also show a readiness preflight for identity, output format, distribution,
+strategy, source approvals, and policy checks, so blocked requirements are explicit instead of hidden.
 Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are
 always `suggested`, never auto-approved. Saved presets support switch, rename, duplicate, delete, force
 re-sync, JSON export/import, original-source links, last-synced timestamps, and changed-since-sync
