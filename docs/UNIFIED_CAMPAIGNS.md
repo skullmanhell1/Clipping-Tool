@@ -12,6 +12,10 @@ target audience, hook approach, selection direction, retention ranking, target c
 assembly, active-speaker framing, and b-roll intent beside the campaign rules. These fields are optional;
 the importer does not invent them when a brief is silent.
 
+Review also offers editable quick-start recipes for podcast growth, education authority, product launch,
+and clean storytelling. A recipe only fills the draft; campaign locks still win, and the operator must
+review and explicitly Save & apply.
+
 ## Local requirement files
 
 The Campaign panel accepts multiple local `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, and
@@ -36,7 +40,8 @@ The JSON store is versioned at `schema_version: 2`. The main blocks are:
 - `aspect_resolution` — allowed aspect ratios and output resolutions.
 - `settings` — ProcessingOptions-shaped defaults, optional `locked_fields`, and strategy keys such as
   `content_type`, `clip_goal`, `target_audience`, `hook_style`, `selection_prompt`, `retention_mode`,
-  and `num_clips`.
+  `num_clips`, `strategy`, `vibe`, `caption_preset`, `caption_position`, `broll_intensity`,
+  `asset_sourcing_mode`, `reframe_layout`, and `reframe_intensity`.
 - `edit_policy` — enforced editor locks and `enforced_settings` for campaign-specific tools.
 - `quality_policy` — whether quality delivery is allowed.
 - `captions_language`, `copy_rules`, `watermark_end_cards` — caption, spelling, CTA, brand, and card rules.

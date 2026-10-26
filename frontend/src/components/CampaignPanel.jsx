@@ -98,6 +98,148 @@ const STRATEGY_OPTIONS = {
     ["aggressive", "Aggressive retention"],
   ],
 };
+const PRODUCTION_OPTIONS = {
+  strategy: [
+    ["ai", "AI highlights"],
+    ["silence", "Silence-based"],
+    ["fixed", "Fixed length"],
+  ],
+  vibe: [
+    ["", "Auto"],
+    ["energetic", "Energetic"],
+    ["educational", "Educational"],
+    ["funny", "Funny"],
+    ["inspirational", "Inspirational"],
+    ["dramatic", "Dramatic"],
+    ["chill", "Chill"],
+  ],
+  caption_preset: [
+    ["karaoke", "Karaoke"],
+    ["boxed", "Boxed"],
+    ["minimal", "Minimal"],
+    ["pop", "Pop"],
+    ["typewriter", "Typewriter"],
+    ["hormozi", "Hormozi"],
+  ],
+  caption_position: [
+    ["bottom", "Bottom"],
+    ["center", "Center"],
+    ["top", "Top"],
+  ],
+  broll_intensity: [
+    ["off", "Off"],
+    ["subtle", "Subtle"],
+    ["standard", "Standard"],
+    ["heavy", "Heavy"],
+  ],
+  asset_sourcing_mode: [
+    ["off", "Off"],
+    ["local_only", "Local only"],
+    ["local_then_external", "Local, then external"],
+  ],
+  reframe_layout: [
+    ["follow_active", "Follow active speaker"],
+    ["split_screen", "Split screen"],
+  ],
+  reframe_intensity: [
+    ["subtle", "Subtle"],
+    ["standard", "Standard"],
+    ["heavy", "Heavy"],
+  ],
+};
+const CREATOR_RECIPES = [
+  {
+    id: "podcast_growth",
+    label: "Podcast growth",
+    description: "Strong openings, speaker-aware framing, punchy captions.",
+    values: {
+      content_type: "interview",
+      clip_goal: "growth",
+      hook_style: "payoff_first",
+      strategy: "ai",
+      vibe: "energetic",
+      retention_mode: "balanced",
+      storytelling_enabled: true,
+      speaker_reframe: true,
+      reframe_layout: "follow_active",
+      reframe_intensity: "standard",
+      caption_preset: "hormozi",
+      caption_position: "bottom",
+      caption_keyword_highlight: true,
+      caption_emoji: false,
+      visual_selection: true,
+    },
+  },
+  {
+    id: "education_authority",
+    label: "Education authority",
+    description: "Complete explanations, readable captions, low distraction.",
+    values: {
+      content_type: "course",
+      clip_goal: "education",
+      hook_style: "question",
+      strategy: "ai",
+      vibe: "educational",
+      retention_mode: "balanced",
+      storytelling_enabled: true,
+      speaker_reframe: true,
+      reframe_layout: "follow_active",
+      reframe_intensity: "subtle",
+      caption_preset: "karaoke",
+      caption_position: "bottom",
+      caption_keyword_highlight: true,
+      caption_emoji: false,
+      visual_selection: true,
+      filler_removal: true,
+    },
+  },
+  {
+    id: "product_launch",
+    label: "Product launch",
+    description: "Benefit-led hooks, brand-safe visuals, clear CTA.",
+    values: {
+      content_type: "demo",
+      clip_goal: "leads",
+      hook_style: "bold_claim",
+      strategy: "ai",
+      vibe: "energetic",
+      retention_mode: "aggressive",
+      storytelling_enabled: true,
+      speaker_reframe: false,
+      caption_preset: "pop",
+      caption_position: "bottom",
+      caption_keyword_highlight: true,
+      caption_emoji: false,
+      visual_selection: true,
+      broll: true,
+      broll_intensity: "subtle",
+      asset_sourcing_mode: "local_only",
+      hook_title: true,
+    },
+  },
+  {
+    id: "clean_story",
+    label: "Clean story",
+    description: "Minimal treatment for thoughtful, high-trust clips.",
+    values: {
+      content_type: "commentary",
+      clip_goal: "brand",
+      hook_style: "story",
+      strategy: "ai",
+      vibe: "inspirational",
+      retention_mode: "off",
+      storytelling_enabled: true,
+      speaker_reframe: false,
+      caption_preset: "minimal",
+      caption_position: "bottom",
+      caption_keyword_highlight: false,
+      caption_emoji: false,
+      visual_selection: true,
+      broll: false,
+      asset_sourcing_mode: "off",
+    },
+  },
+];
 
 function requirementFileExtension(name) {
   return String(name || "").split(".").pop()?.toLowerCase() || "";
@@ -293,7 +435,28 @@ export default function CampaignPanel({
   const setNested = (section, key, value) =>
     setDraft((current) => ({ ...current, [section]: { ...(current[section] || {}), [key]: value } }));
   const setStrategyField = (key, value) =>
-    setDraft((current) => ({ ...current, settings: { ...(current.settings || {}), [key]: value } }));
+    setDraft((current) => {
+      const enforced = current.edit_policy?.enforced_settings || {};
+      const locked = current.settings?.locked_fields || [];
+      if (Object.prototype.hasOwnProperty.call(enforced, key) || locked.includes(key)) return current;
+      return { ...current, settings: { ...(current.settings || {}), [key]: value } };
+    });
+
+  const applyCreatorRecipe = (recipe) => {
+    setDraft((current) => {
+      const enforced = current.edit_policy?.enforced_settings || {};
+      const locked = new Set(current.settings?.locked_fields || []);
+      const nextSettings = { ...(current.settings || {}) };
+      Object.entries(recipe.values).forEach(([key, value]) => {
+        if (!Object.prototype.hasOwnProperty.call(enforced, key) && !locked.has(key)) nextSettings[key] = value;
+      });
+      const nextCaptions = Object.prototype.hasOwnProperty.call(enforced, "caption_preset") || locked.has("caption_preset")
+        ? current.captions_language
+        : { ...(current.captions_language || {}), style: recipe.values.caption_preset || current.captions_language?.style || "" };
+      return { ...current, settings: nextSettings, captions_language: nextCaptions };
+    });
+    setMessage(`${recipe.label} recipe loaded. Review the fields before applying the campaign.`);
+  };
 
   const addRequirementFiles = async (incomingFiles) => {
     clearStatus();
@@ -755,12 +918,23 @@ export default function CampaignPanel({
   const requiredChecks = draft.compliance?.required_checks || [];
   const manualOnly = !!(draft.posting?.manual_only || draft.posting?.review_only);
   const strategySettings = draft.settings || {};
+  const enforcedStrategySettings = draft.edit_policy?.enforced_settings || {};
+  const lockedStrategyFields = new Set(draft.settings?.locked_fields || []);
+  const recipeValue = (key, fallback) =>
+    Object.prototype.hasOwnProperty.call(enforcedStrategySettings, key)
+      ? enforcedStrategySettings[key]
+      : Object.prototype.hasOwnProperty.call(strategySettings, key)
+        ? strategySettings[key]
+        : fallback;
+  const recipeLocked = (key) => lockedStrategyFields.has(key) || Object.prototype.hasOwnProperty.call(enforcedStrategySettings, key);
+  const settingFlag = (key, fallback = false) =>
+    !!recipeValue(key, fallback);
   const hasImportInput = Boolean(requirementFiles.length || (usePaste ? pasteText.trim() : sources.trim()));
   const blueprintSignals = [
-    ["Selection", strategySettings.selection_prompt ? "Directed by your brief" : "AI selects from the source"],
-    ["Retention", selectLabel(STRATEGY_OPTIONS.retention_mode, strategySettings.retention_mode || "off", "Standard ranking")],
-    ["Framing", strategySettings.speaker_reframe ? "Speaker-aware" : "Campaign default"],
-    ["Captions", strategySettings.caption_preset || draft.captions_language?.style || "Karaoke"],
+    ["Selection", recipeValue("selection_prompt", "") ? "Directed by your brief" : "AI selects from the source"],
+    ["Retention", selectLabel(STRATEGY_OPTIONS.retention_mode, recipeValue("retention_mode", "off"), "Standard ranking")],
+    ["Framing", recipeValue("speaker_reframe", false) ? "Speaker-aware" : "Campaign default"],
+    ["Captions", recipeValue("caption_preset", draft.captions_language?.style || "Karaoke")],
   ];
 
   return (
@@ -913,43 +1087,101 @@ export default function CampaignPanel({
               </div>
               <span className="rounded-full border border-cyan-300/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-100">Deterministic + reviewable</span>
             </div>
+            <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/35 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Quick-start recipes</p><span className="text-[10px] text-slate-600">Loads editable defaults — never auto-applies</span></div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {CREATOR_RECIPES.map((recipe) => (
+                  <button key={recipe.id} type="button" onClick={() => applyCreatorRecipe(recipe)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-left transition hover:border-cyan-300/40 hover:bg-cyan-400/[0.05]">
+                    <span className="block text-xs font-semibold text-slate-200">{recipe.label}</span>
+                    <span className="mt-1 block text-[10px] leading-4 text-slate-500">{recipe.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Content type">
-                <select value={strategySettings.content_type || ""} onChange={(event) => setStrategyField("content_type", event.target.value)} className={inputClass}>
+                <select value={recipeValue("content_type", "")} onChange={(event) => setStrategyField("content_type", event.target.value)} disabled={recipeLocked("content_type")} className={`${inputClass} disabled:opacity-40`}>
                   {STRATEGY_OPTIONS.content_type.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </Field>
               <Field label="Clip goal">
-                <select value={strategySettings.clip_goal || ""} onChange={(event) => setStrategyField("clip_goal", event.target.value)} className={inputClass}>
+                <select value={recipeValue("clip_goal", "")} onChange={(event) => setStrategyField("clip_goal", event.target.value)} disabled={recipeLocked("clip_goal")} className={`${inputClass} disabled:opacity-40`}>
                   {STRATEGY_OPTIONS.clip_goal.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </Field>
               <Field label="Hook approach">
-                <select value={strategySettings.hook_style || ""} onChange={(event) => setStrategyField("hook_style", event.target.value)} className={inputClass}>
+                <select value={recipeValue("hook_style", "")} onChange={(event) => setStrategyField("hook_style", event.target.value)} disabled={recipeLocked("hook_style")} className={`${inputClass} disabled:opacity-40`}>
                   {STRATEGY_OPTIONS.hook_style.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </Field>
               <Field label="Target clips" hint="A target, not a promise. The source may yield fewer usable moments.">
-                <input type="number" min="1" max="50" value={strategySettings.num_clips || ""} onChange={(event) => setStrategyField("num_clips", event.target.value)} placeholder="Auto" className={inputClass} />
+                <input type="number" min="1" max="50" value={recipeValue("num_clips", "")} onChange={(event) => setStrategyField("num_clips", event.target.value)} disabled={recipeLocked("num_clips")} placeholder="Auto" className={`${inputClass} disabled:opacity-40`} />
               </Field>
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[0.8fr_1.2fr]">
               <Field label="Audience / viewer promise">
-                <input value={strategySettings.target_audience || ""} onChange={(event) => setStrategyField("target_audience", event.target.value)} placeholder="Who should stop scrolling?" className={inputClass} />
+                <input value={recipeValue("target_audience", "")} onChange={(event) => setStrategyField("target_audience", event.target.value)} disabled={recipeLocked("target_audience")} placeholder="Who should stop scrolling?" className={`${inputClass} disabled:opacity-40`} />
               </Field>
               <Field label="Selection direction" hint="This is sent to the clip-selection engine as a natural-language cue.">
-                <textarea rows="2" value={strategySettings.selection_prompt || ""} onChange={(event) => setStrategyField("selection_prompt", event.target.value)} placeholder="Find moments with a clear payoff, a surprising insight, or a useful before/after transformation." className={`${inputClass} resize-y`} />
+                <textarea rows="2" value={recipeValue("selection_prompt", "")} onChange={(event) => setStrategyField("selection_prompt", event.target.value)} disabled={recipeLocked("selection_prompt")} placeholder="Find moments with a clear payoff, a surprising insight, or a useful before/after transformation." className={`${inputClass} resize-y disabled:opacity-40`} />
               </Field>
             </div>
             <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Retention ranking">
-                <select value={strategySettings.retention_mode || "off"} onChange={(event) => setStrategyField("retention_mode", event.target.value)} className={inputClass}>
+                <select value={recipeValue("retention_mode", "off")} onChange={(event) => setStrategyField("retention_mode", event.target.value)} disabled={recipeLocked("retention_mode")} className={`${inputClass} disabled:opacity-40`}>
                   {STRATEGY_OPTIONS.retention_mode.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </Field>
-              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={!!strategySettings.storytelling_enabled} onChange={(event) => setStrategyField("storytelling_enabled", event.target.checked)} className="accent-cyan-400" /> Story-first assembly</label>
-              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={!!strategySettings.speaker_reframe} onChange={(event) => setStrategyField("speaker_reframe", event.target.checked)} className="accent-cyan-400" /> Active-speaker framing</label>
-              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={!!strategySettings.broll} onChange={(event) => setStrategyField("broll", event.target.checked)} className="accent-cyan-400" /> B-roll cues</label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={settingFlag("storytelling_enabled")} disabled={recipeLocked("storytelling_enabled")} onChange={(event) => setStrategyField("storytelling_enabled", event.target.checked)} className="accent-cyan-400" /> Story-first assembly</label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={settingFlag("speaker_reframe")} disabled={recipeLocked("speaker_reframe")} onChange={(event) => setStrategyField("speaker_reframe", event.target.checked)} className="accent-cyan-400" /> Active-speaker framing</label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"><input type="checkbox" checked={settingFlag("broll")} disabled={recipeLocked("broll")} onChange={(event) => setStrategyField("broll", event.target.checked)} className="accent-cyan-400" /> B-roll cues</label>
+            </div>
+            <div className="mt-4 border-t border-cyan-300/10 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div><p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200">Production recipe</p><p className="mt-1 text-[11px] text-slate-500">These controls map directly to the existing clip engine and stay locked to the saved campaign.</p></div>
+                <span className="text-[10px] text-slate-600">No hidden provider calls</span>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="Clip engine">
+                  <select value={recipeValue("strategy", "ai")} onChange={(event) => setStrategyField("strategy", event.target.value)} disabled={recipeLocked("strategy")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.strategy.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Vibe / tone">
+                  <select value={recipeValue("vibe", "")} onChange={(event) => setStrategyField("vibe", event.target.value)} disabled={recipeLocked("vibe")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.vibe.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Caption preset">
+                  <select value={recipeValue("caption_preset", "karaoke")} onChange={(event) => { if (recipeLocked("caption_preset")) return; setStrategyField("caption_preset", event.target.value); setNested("captions_language", "style", event.target.value); }} disabled={recipeLocked("caption_preset")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.caption_preset.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Caption placement">
+                  <select value={recipeValue("caption_position", "bottom")} onChange={(event) => setStrategyField("caption_position", event.target.value)} disabled={recipeLocked("caption_position")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.caption_position.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="B-roll intensity">
+                  <select value={recipeValue("broll_intensity", "standard")} onChange={(event) => setStrategyField("broll_intensity", event.target.value)} disabled={recipeLocked("broll_intensity")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.broll_intensity.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Asset sourcing" hint="Permissibility mode can force this back to local-only.">
+                  <select value={recipeValue("asset_sourcing_mode", "off")} onChange={(event) => setStrategyField("asset_sourcing_mode", event.target.value)} disabled={recipeLocked("asset_sourcing_mode")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.asset_sourcing_mode.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Speaker layout">
+                  <select value={recipeValue("reframe_layout", "follow_active")} onChange={(event) => setStrategyField("reframe_layout", event.target.value)} disabled={!recipeValue("speaker_reframe", false) || recipeLocked("reframe_layout")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.reframe_layout.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+                <Field label="Speaker motion">
+                  <select value={recipeValue("reframe_intensity", "standard")} onChange={(event) => setStrategyField("reframe_intensity", event.target.value)} disabled={!recipeValue("speaker_reframe", false) || recipeLocked("reframe_intensity")} className={`${inputClass} disabled:opacity-40`}>{PRODUCTION_OPTIONS.reframe_intensity.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                </Field>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["hook_title", "Hook title overlay", true],
+                  ["subtitle_sidecar", "Subtitle sidecar", false],
+                  ["filler_removal", "Remove filler / long pauses", false],
+                  ["visual_selection", "Visual scene selection", true],
+                  ["caption_keyword_highlight", "Highlight keywords", true],
+                  ["caption_emoji", "Caption emoji", true],
+                  ["permissibility_mode", "Local-only assets", false],
+                ].map(([key, label, fallback]) => (
+                  <label key={key} className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] text-slate-300"><input type="checkbox" checked={settingFlag(key, fallback)} disabled={recipeLocked(key)} onChange={(event) => setStrategyField(key, event.target.checked)} className="accent-cyan-400" /> {label}</label>
+                ))}
+              </div>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -959,7 +1191,7 @@ export default function CampaignPanel({
             <Field label="Clip length"><input value={draft.length?.raw || draft.settings?.clip_length || ""} onChange={(event) => { const { length, clipLength } = lengthSettings(event.target.value); setDraft((current) => ({ ...current, length, settings: { ...(current.settings || {}), clip_length: clipLength } })); }} placeholder="30-60 seconds" className={inputClass} /></Field>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Caption style"><input value={strategySettings.caption_preset || draft.captions_language?.style || ""} onChange={(event) => { setNested("captions_language", "style", event.target.value); setStrategyField("caption_preset", event.target.value); }} className={inputClass} /></Field>
+            <Field label="Caption style"><input value={recipeValue("caption_preset", draft.captions_language?.style || "")} onChange={(event) => { if (recipeLocked("caption_preset")) return; setNested("captions_language", "style", event.target.value); setStrategyField("caption_preset", event.target.value); }} disabled={recipeLocked("caption_preset")} className={`${inputClass} disabled:opacity-40`} /></Field>
             <Field label="Hashtags"><input value={(draft.copy_rules?.hashtags || []).join(" ")} onChange={(event) => setNested("copy_rules", "hashtags", splitLines(event.target.value).map((tag) => tag.startsWith("#") ? tag : `#${tag}`))} className={inputClass} /></Field>
             <Field label="Required spelling / copy"><input value={(draft.copy_rules?.required_copy || []).join(", ")} onChange={(event) => setNested("copy_rules", "required_copy", splitLines(event.target.value))} className={inputClass} /></Field>
             <Field label="CTA"><input value={draft.copy_rules?.cta || ""} onChange={(event) => setNested("copy_rules", "cta", event.target.value)} className={inputClass} /></Field>

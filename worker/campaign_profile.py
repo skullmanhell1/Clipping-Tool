@@ -88,6 +88,25 @@ def _bool(value: str, default: bool | None = None) -> bool | None:
     return default
 
 
+def _choice(value: Any, allowed: set[str]) -> str:
+    """Keep explicit engine choices bounded instead of passing prose into an option field."""
+    text = _clean(value).casefold().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "auto_highlights": "ai",
+        "ai_highlights": "ai",
+        "silence_based": "silence",
+        "fixed_length": "fixed",
+        "local_only_assets": "local_only",
+        "local_then_external_assets": "local_then_external",
+        "follow_active_speaker": "follow_active",
+        "split_screen_2_up": "split_screen",
+        "standard_retention": "balanced",
+        "high_retention": "aggressive",
+    }
+    candidate = aliases.get(text, text)
+    return candidate if candidate in allowed else ""
+
+
 def _length(value: str) -> dict[str, Any]:
     matches = list(_RANGE_RE.finditer(value))
     if matches:
@@ -462,13 +481,27 @@ def parse_campaign_profile(
         "target_audience": _first(fields, "target audience", "audience", "viewer"),
         "hook_style": _first(fields, "hook style", "hook approach"),
         "selection_prompt": _first(fields, "selection prompt", "clip prompt", "moments to find", "what to find"),
-        "retention_mode": _first(fields, "retention mode", "retention ranking"),
+        "retention_mode": _choice(_first(fields, "retention mode", "retention ranking"), {"off", "balanced", "aggressive"}),
         "num_clips": _first(fields, "number of clips", "clip count", "clips per source"),
+        "strategy": _choice(_first(fields, "clip strategy", "selection strategy", "strategy"), {"ai", "silence", "fixed"}),
+        "vibe": _choice(_first(fields, "vibe", "tone", "tone of voice"), {"energetic", "educational", "funny", "inspirational", "dramatic", "chill"}),
+        "caption_position": _choice(_first(fields, "caption position", "caption placement"), {"bottom", "center", "top"}),
+        "broll_intensity": _choice(_first(fields, "b-roll intensity", "broll intensity"), {"off", "subtle", "standard", "heavy"}),
+        "asset_sourcing_mode": _choice(_first(fields, "asset sourcing", "asset sourcing mode"), {"off", "local_only", "local_then_external"}),
+        "reframe_layout": _choice(_first(fields, "speaker layout", "reframe layout"), {"follow_active", "split_screen"}),
+        "reframe_intensity": _choice(_first(fields, "speaker motion", "reframe intensity"), {"subtle", "standard", "heavy"}),
     }
     strategy_flags = {
         "storytelling_enabled": _bool(_first(fields, "storytelling", "story-first", "story structure")),
         "speaker_reframe": _bool(_first(fields, "speaker reframe", "active speaker framing")),
-        "broll": _bool(_first(fields, "b-roll", "broll", "b-roll allowed")),
+        "broll": _bool(_first(fields, "b-roll", "broll", "b roll", "b-roll allowed")),
+        "hook_title": _bool(_first(fields, "hook title", "hook title overlay")),
+        "subtitle_sidecar": _bool(_first(fields, "subtitle sidecar", "subtitle files")),
+        "filler_removal": _bool(_first(fields, "filler removal", "remove filler")),
+        "visual_selection": _bool(_first(fields, "visual selection", "visual cues")),
+        "caption_keyword_highlight": _bool(_first(fields, "keyword highlight", "caption keyword highlight")),
+        "caption_emoji": _bool(_first(fields, "caption emoji", "emoji in captions")),
+        "permissibility_mode": _bool(_first(fields, "permissibility", "local-only assets", "local only assets")),
     }
 
     for field_name, values in (

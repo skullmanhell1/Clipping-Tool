@@ -736,6 +736,15 @@ export default function App() {
     const memeDisallowed = editPolicy.meme_allowed === false || memePolicy.allowed === false;
     const qualityDisallowed = qualityPolicy.allowed === false;
     const manualOnly = !!(posting.manual_only || posting.review_only);
+    const strategyHints = [
+      presetSettings.content_type ? `Content type: ${presetSettings.content_type}.` : "",
+      presetSettings.clip_goal ? `Goal: ${presetSettings.clip_goal}.` : "",
+      presetSettings.target_audience ? `Audience: ${presetSettings.target_audience}.` : "",
+      presetSettings.hook_style ? `Prefer a ${presetSettings.hook_style.replace(/_/g, " ")} opening.` : "",
+    ].filter(Boolean).join(" ");
+    const effectiveSelectionPrompt = [presetSettings.selection_prompt, strategyHints]
+      .filter(Boolean)
+      .join(" ");
 
     setSettings((previous) => ({
       ...previous,
@@ -745,6 +754,7 @@ export default function App() {
       campaign_preset: preset,
       profile: "",
       storytelling_enabled: presetSettings.storytelling_enabled ?? previous.storytelling_enabled,
+      selection_prompt: effectiveSelectionPrompt || previous.selection_prompt,
       aspect: presetSettings.aspect || ratios[0] || previous.aspect,
       platform: presetSettings.platform || presetPlatforms[0] || previous.platform,
       captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : previous.captions),

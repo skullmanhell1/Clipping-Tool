@@ -139,7 +139,10 @@ Markdown, CSV, JSON, and YAML files are read in the browser (2 MB each, 10 per i
 stay local while extracted text goes through the review-only importer. Structured JSON is review-only
 until the operator chooses Save & apply. The same review step now includes an optional
 creator-studio blueprint for content type, clip goal, audience, hook approach, selection direction,
-retention ranking, target clip count, story-first assembly, active-speaker framing, and b-roll intent.
+retention ranking, target clip count, story-first assembly, active-speaker framing, b-roll intent, and
+the actual caption, framing, sourcing, and visual-selection recipe used by the clip engine. Editable
+quick-start recipes cover podcast growth, education authority, product launches, and clean storytelling;
+they fill the review draft but never bypass campaign locks or Save & apply.
 Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are
 always `suggested`, never auto-approved. Saved presets support switch, rename, duplicate, delete, force
 re-sync, JSON export/import, original-source links, last-synced timestamps, and changed-since-sync
