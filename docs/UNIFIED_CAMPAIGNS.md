@@ -2,10 +2,30 @@
 
 The Campaign panel is the source of truth for a campaign. It follows four explicit stages:
 
-1. **Import** — submit one or more public/private Docs or Drive links, folders, or pasted text.
+1. **Import** — submit one or more public/private Docs or Drive links, folders, pasted text, or local requirement files.
 2. **Review** — edit the extracted policy and source library. Ambiguity is retained as a warning.
 3. **Save & apply** — persist one versioned preset and apply its settings to the next clipping job.
 4. **Compliance & posting** — run the active preset's compliance report and use the public scheduler.
+
+The import surface also includes a creator-studio strategy blueprint. It keeps content type, clip goal,
+target audience, hook approach, selection direction, retention ranking, target clip count, story-first
+assembly, active-speaker framing, and b-roll intent beside the campaign rules. These fields are optional;
+the importer does not invent them when a brief is silent.
+
+## Local requirement files
+
+The Campaign panel accepts multiple local `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, and
+`.yml` requirement files by drag-and-drop or file picker. Files are read in the browser, limited to 2 MB
+each and 10 files per intake, and are not uploaded during analysis. Text files are combined into one
+reviewable brief. A structured campaign JSON file is loaded into the same Review step without saving it;
+**Save & apply** is still explicit. PDF and DOCX are intentionally not treated as plain text because
+silently extracting binary data would create unsafe, misleading campaign rules; export them to text or
+use the authorized Drive connector instead.
+
+The strategy blueprint is inspired by the useful workflow patterns common to modern clip studios:
+brief/transcript-first intake, guided highlight selection, active-speaker framing, caption/brand controls,
+multi-platform output planning, and human review before publishing. It does not copy provider branding or
+claim a deterministic "virality" score.
 
 ## Schema
 
@@ -13,7 +33,9 @@ The JSON store is versioned at `schema_version: 2`. The main blocks are:
 
 - `length` — explicit clip duration range.
 - `aspect_resolution` — allowed aspect ratios and output resolutions.
-- `settings` — ProcessingOptions-shaped defaults and optional `locked_fields`.
+- `settings` — ProcessingOptions-shaped defaults, optional `locked_fields`, and strategy keys such as
+  `content_type`, `clip_goal`, `target_audience`, `hook_style`, `selection_prompt`, `retention_mode`,
+  and `num_clips`.
 - `edit_policy` — enforced editor locks and `enforced_settings` for campaign-specific tools.
 - `quality_policy` — whether quality delivery is allowed.
 - `captions_language`, `copy_rules`, `watermark_end_cards` — caption, spelling, CTA, brand, and card rules.
@@ -53,7 +75,7 @@ The older `/api/campaign-profiles/*` endpoints remain compatibility adapters. Ne
 - `DELETE /api/campaign-presets/{id}`
 - `POST /api/campaign-presets/{id}/sync`
 - `GET /api/campaign-presets/{id}/export`
-- `POST /api/campaign-presets/import-json`
+- `POST /api/campaign-presets/import-json` (pass `save: false` for review-only JSON intake)
 
 The review-only parser/connector endpoints remain available for automation-focused clients:
 

@@ -705,6 +705,7 @@ class CampaignPresetActionRequest(BaseModel):
 class CampaignPresetJsonRequest(BaseModel):
     preset: dict = Field(default_factory=dict)
     select: bool = False
+    save: bool = True
 
 
 class CampaignProfileModel(BaseModel):
@@ -2823,6 +2824,8 @@ def import_unified_campaign_preset_json(req: CampaignPresetJsonRequest) -> dict[
     if not req.preset:
         raise HTTPException(status_code=400, detail="Provide a campaign preset JSON object")
     profile = CampaignProfile.from_dict(req.preset)
+    if not req.save and not req.select:
+        return _unified_preset_response(profile, selected_id=None)
     return _save_unified_profile(profile, profile_id=profile.id, select=req.select)
 
 

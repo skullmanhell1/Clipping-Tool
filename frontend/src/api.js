@@ -253,11 +253,11 @@ export const api = {
     apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/sync`, { method: "POST" }).then(jsonOrThrow),
   exportCampaignPreset: (id) =>
     apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/export`).then(jsonOrThrow),
-  importCampaignPresetJson: (preset, select = false) =>
+  importCampaignPresetJson: (preset, select = false, save = true) =>
     apiFetch("/api/campaign-presets/import-json", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preset, select }),
+      body: JSON.stringify({ preset, select, save }),
     }).then(jsonOrThrow),
   parseBrief: (rawText, payload = {}) =>
     apiFetch("/api/briefs/parse", {

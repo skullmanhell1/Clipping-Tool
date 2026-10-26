@@ -453,6 +453,24 @@ def parse_campaign_profile(
     deadline_values = all_values("deadline", "deadlines", "due date", "delivery date")
     payout_deadlines = {"payout": payout_values[0] if payout_values else "", "deadlines": deadline_values}
 
+    # Creator-studio strategy is optional metadata, but it is still explicit campaign intent. Keep
+    # it in the versioned settings block so the frontend can review it and the existing options
+    # surface can carry the fields into the clipping job without inventing defaults.
+    strategy_values = {
+        "content_type": _first(fields, "content type", "content format", "video type"),
+        "clip_goal": _first(fields, "clip goal", "content goal", "goal", "objective"),
+        "target_audience": _first(fields, "target audience", "audience", "viewer"),
+        "hook_style": _first(fields, "hook style", "hook approach"),
+        "selection_prompt": _first(fields, "selection prompt", "clip prompt", "moments to find", "what to find"),
+        "retention_mode": _first(fields, "retention mode", "retention ranking"),
+        "num_clips": _first(fields, "number of clips", "clip count", "clips per source"),
+    }
+    strategy_flags = {
+        "storytelling_enabled": _bool(_first(fields, "storytelling", "story-first", "story structure")),
+        "speaker_reframe": _bool(_first(fields, "speaker reframe", "active speaker framing")),
+        "broll": _bool(_first(fields, "b-roll", "broll", "b-roll allowed")),
+    }
+
     for field_name, values in (
         ("platforms", platform_values),
         ("captions_language", captions_values),
@@ -499,6 +517,8 @@ def parse_campaign_profile(
         "brand_cta": copy_rules.get("cta", ""),
         "storytelling_enabled": True,
     }
+    settings.update({key: value for key, value in strategy_values.items() if value})
+    settings.update({key: value for key, value in strategy_flags.items() if value is not None})
 
     return CampaignProfile(
         schema_version=2,

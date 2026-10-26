@@ -133,13 +133,17 @@ neighboring events. Built-in tones are generated locally; uploaded files are sto
 records provenance.
 
 Campaigns use one versioned preset workflow. The Campaign panel imports multiple Google Docs/Drive
-links, folders, or pasted text, then exposes one editable preset for clipping, editing tools,
-captions/brand rules, source approvals, compliance, and posting. Required fields are warnings until
-resolved or explicitly dismissed; channels and discovered videos are always `suggested`, never
-auto-approved. Saved presets support switch, rename, duplicate, delete, force re-sync, JSON
-export/import, original-source links, last-synced timestamps, and changed-since-sync indicators. See
-[`docs/UNIFIED_CAMPAIGNS.md`](docs/UNIFIED_CAMPAIGNS.md) for the schema, source-review rules, and
-endpoint map.
+links, folders, pasted text, or multiple local requirement files, then exposes one editable preset for
+clipping, editing tools, captions/brand rules, source approvals, compliance, and posting. Local TXT,
+Markdown, CSV, JSON, and YAML files are read in the browser (2 MB each, 10 per intake); structured JSON
+is review-only until the operator chooses Save & apply. The same review step now includes an optional
+creator-studio blueprint for content type, clip goal, audience, hook approach, selection direction,
+retention ranking, target clip count, story-first assembly, active-speaker framing, and b-roll intent.
+Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are
+always `suggested`, never auto-approved. Saved presets support switch, rename, duplicate, delete, force
+re-sync, JSON export/import, original-source links, last-synced timestamps, and changed-since-sync
+indicators. See [`docs/UNIFIED_CAMPAIGNS.md`](docs/UNIFIED_CAMPAIGNS.md) for the schema, safe file
+intake, source-review rules, and endpoint map.
 
 The canonical API is `/api/campaign-presets`; `/api/campaign-profiles/*` remains a compatibility
 adapter for older clients. The stored JSON uses `schema_version: 2` and keeps the source library
