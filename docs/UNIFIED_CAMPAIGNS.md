@@ -28,6 +28,9 @@ different peak slots before it can queue public posts.
 Those checks are enforced by the API as well: direct scheduling calls must provide the active campaign's
 allowed platforms and review-check acknowledgements, use approved clips, and supply valid distinct slots.
 Compliance is evaluated for every requested platform before any attempt is queued.
+Publish requests that omit a platform list resolve the saved campaign routes first, so the same policy
+cannot be bypassed by relying on publisher defaults; aliases that resolve to the same publisher are
+rejected rather than creating duplicate attempts.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 

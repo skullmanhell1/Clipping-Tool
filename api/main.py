@@ -2983,6 +2983,9 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
             detail="The active campaign preset requires human review before publishing.",
         )
     platforms = list(req.platforms or campaign.routes.keys())
+    resolved_platforms = [resolve_platform(platform) for platform in platforms]
+    if len(set(resolved_platforms)) != len(resolved_platforms):
+        raise HTTPException(status_code=400, detail="Do not select the same publisher more than once")
     allowed_platforms = list(
         (preset_data.get("posting") or {}).get("platforms")
         or preset_data.get("platforms")
@@ -3186,7 +3189,23 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         or ""
     ).strip()
     routes = {platform: dict(route) for platform, route in req.routes.items()}
+    campaign_for_routes = get_history().campaign(publish_campaign_id) if publish_campaign_id else None
+    requested_platforms = list(req.platforms)
+    if not requested_platforms:
+        requested_platforms = list(routes)
+    if not requested_platforms and campaign_for_routes is not None:
+        requested_platforms = list(campaign_for_routes.routes)
+    resolved_requested = [resolve_platform(platform) for platform in requested_platforms]
+    if len(set(resolved_requested)) != len(resolved_requested):
+        raise HTTPException(status_code=400, detail="Do not select the same publisher more than once")
     preset_data = dict(getattr(job.options, "campaign_preset", {}) or {})
+    if not preset_data and campaign_for_routes is not None and getattr(campaign_for_routes, "brief", None) is not None:
+        preset_data = CampaignPreset.from_dict(
+            {
+                **campaign_for_routes.brief.to_dict(),
+                "name": getattr(campaign_for_routes, "name", ""),
+            }
+        ).to_dict()
     if preset_data:
         allowed_platforms = list(
             (preset_data.get("posting") or {}).get("platforms")
@@ -3199,7 +3218,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             allowed_publishers = {resolve_platform(item) for item in allowed_keys}
             disallowed = [
                 requested
-                for requested in req.platforms
+                for requested in requested_platforms
                 if str(requested).strip().casefold() not in allowed_keys
                 and resolve_platform(requested) not in allowed_publishers
             ]
@@ -3236,18 +3255,18 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         affiliate_platforms = {
             str(item).strip().casefold() for item in posting_policy.get("affiliate_required_platforms") or []
         }
-        if {str(item).strip().casefold() for item in req.platforms} & affiliate_platforms:
+        if {str(item).strip().casefold() for item in requested_platforms} & affiliate_platforms:
             affiliate_url = req.affiliate_url.strip()
             if not affiliate_url.startswith("https://"):
                 raise HTTPException(status_code=409, detail="Add the required trackable HTTPS affiliate URL before publishing.")
-            for platform in affiliate_platforms & {str(item).strip().casefold() for item in req.platforms}:
+            for platform in affiliate_platforms & {str(item).strip().casefold() for item in requested_platforms}:
                 routes.setdefault(platform, {})["affiliate_url"] = affiliate_url
     # Public-only platform readiness runs after the active preset preflight so a review-only
     # campaign gets the specific policy answer rather than a platform status error.
     public_only = req.mode == "auto"
     if public_only:
         publish_manager = get_publish_manager()
-        for requested in req.platforms:
+        for requested in requested_platforms:
             platform = resolve_platform(requested)
             publisher = publish_manager.publishers.get(platform)
             if publisher is None:
@@ -3293,7 +3312,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             )
     if preset_data:
         preset = campaign_validation_preset(preset_data)
-        validation_platforms = list(req.platforms or [clip.platform or ""])
+        validation_platforms = list(requested_platforms or [clip.platform or ""])
         versioned_profile = CampaignProfile.from_dict(preset_data) if is_versioned_preset(preset_data) else None
         for requested_platform in validation_platforms:
             facts = _clip_preset_facts(
@@ -3340,7 +3359,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             if profile is None:
                 raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
             profiles.append(profile)
-        for requested_platform in list(req.platforms or [clip.platform or ""]):
+        for requested_platform in list(requested_platforms or [clip.platform or ""]):
             profile_facts = clip.to_dict()
             profile_facts.update(
                 {
@@ -3380,7 +3399,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         job_id=job_id,
         clip=clip,
         video_path=path,
-        platforms=req.platforms,
+        platforms=requested_platforms,
         campaign_id=publish_campaign_id,
         mode=req.mode,
         schedule_at=req.schedule_at,
