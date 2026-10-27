@@ -766,7 +766,7 @@ class CampaignProfileComplianceRequest(BaseModel):
 
 
 class DailyScheduleRequest(BaseModel):
-    """Schedule exactly two clips for one campaign day."""
+    """Schedule the configured number of clips for one campaign day."""
 
     job_id: str
     clip_ids: list[str]
@@ -2073,6 +2073,7 @@ def set_clip_thumbnail(job_id: str, clip_id: str, req: ThumbnailFrameModel) -> d
         logger.exception("Could not generate selected thumbnail for %s/%s", job_id, clip_id)
         raise HTTPException(status_code=409, detail=f"Could not generate thumbnail: {exc}") from exc
     fields = {"thumbnail_url": f"clips/{Path(job_id).name}/{thumbnail_name}"}
+    _invalidate_campaign_review(job, clip, fields, force=True)
     updated = manager.store.update_clip(job_id, clip_id, fields)
     if updated is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
@@ -3025,7 +3026,10 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         )
     posting = dict(preset_data.get("posting") or {})
     try:
-        daily_target = max(1, min(10, int(posting.get("daily_clip_target") or 2)))
+        daily_target = max(
+            1,
+            min(10, int(posting.get("daily_clip_target") or preset_data.get("daily_clip_target") or 2)),
+        )
     except (TypeError, ValueError):
         daily_target = 2
     if len(req.clip_ids) != daily_target or len(set(req.clip_ids)) != daily_target:
@@ -3154,7 +3158,7 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         if getattr(clip, "review_state", "pending") != "approved":
             raise HTTPException(
                 status_code=409,
-                detail="Approve both clips after watching them before scheduling public posts.",
+                    detail="Approve every selected clip after watching it before scheduling public posts.",
             )
         live_platforms = [
             requested_platform

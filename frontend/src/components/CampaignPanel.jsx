@@ -29,7 +29,7 @@ function lengthSettings(rawValue) {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
-const DEFAULT_PEAK_HOURS = ["12:00", "15:00", "17:00", "19:00", "21:00"];
+const DEFAULT_PEAK_HOURS = ["09:00", "11:00", "12:00", "14:00", "15:00", "17:00", "18:00", "19:00", "21:00", "22:00"];
 
 const EMPTY_PRESET = {
   schema_version: 2,
@@ -938,8 +938,8 @@ export default function CampaignPanel({
     }
     const unapproved = (selectedJob?.clips || [])
       .filter((clip) => schedule.clipIds.includes(clip.id) && clip.review_state !== "approved");
-    if (unapproved.length) {
-      setError("Approve both selected clips before scheduling them.");
+     if (unapproved.length) {
+       setError("Approve every selected clip before scheduling them.");
       return;
     }
     if (requiredChecks.some((check) => scheduleChecks[check.id] !== true)) {
@@ -968,7 +968,7 @@ export default function CampaignPanel({
         visibility: "public",
       });
       onScheduled?.(result);
-      setMessage(`Queued two public clips for ${result.day}.`);
+       setMessage(`Queued ${campaignTarget} public clip${campaignTarget === 1 ? "" : "s"} for ${result.day}.`);
     } catch (scheduleError) {
       setError(scheduleError.message || "Could not schedule the campaign day.");
     } finally {
@@ -1008,7 +1008,10 @@ export default function CampaignPanel({
     : Array.isArray(draft.platforms)
       ? draft.platforms
       : [];
-  const campaignTarget = Math.max(1, Math.min(10, Number(draft.posting?.daily_clip_target) || 2));
+  const campaignTarget = Math.max(
+    1,
+    Math.min(10, Number(draft.posting?.daily_clip_target ?? draft.daily_clip_target) || 2),
+  );
   const platformAllowed = (platform) =>
     !presetPlatforms.length
     || presetPlatforms.includes(platform)
@@ -1034,6 +1037,15 @@ export default function CampaignPanel({
     setComplianceJobId("");
     setComplianceClipId("");
   }, [draft.id, requiredCheckSignature]);
+  useEffect(() => {
+    const configuredPeakHours = Array.isArray(draft.posting?.peak_hours)
+      ? draft.posting.peak_hours.filter(Boolean)
+      : [];
+    const peakHours = Array.from({ length: campaignTarget }, (_, index) =>
+      configuredPeakHours[index] || DEFAULT_PEAK_HOURS[index] || "12:00",
+    );
+    setSchedule((current) => ({ ...current, peakHours }));
+  }, [campaignTarget, draft.id]);
   const manualOnly = !!(draft.posting?.manual_only || draft.posting?.review_only);
   const strategySettings = draft.settings || {};
   const enforcedStrategySettings = draft.edit_policy?.enforced_settings || {};
@@ -1447,7 +1459,7 @@ export default function CampaignPanel({
                 <Field label="Timezone"><input value={schedule.timezone} onChange={(event) => setSchedule((current) => ({ ...current, timezone: event.target.value }))} className={inputClass} /></Field>
               </div>
                 {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly {campaignTarget} approved clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className={`flex items-center gap-2 text-xs ${clip.review_state === "approved" ? "text-slate-300" : "text-slate-600"}`}><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} disabled={clip.review_state !== "approved"} className="accent-emerald-400" />{clip.title || clip.id}{clip.review_state !== "approved" ? " · approve first" : ""}</label>)}</div></div> : null}
-                 <div className="mt-3 grid gap-3 sm:grid-cols-3">{Array.from({ length: campaignTarget }, (_, index) => <Field key={`peak-${index}`} label={`Peak slot ${index + 1}`}><input value={schedule.peakHours[index] || DEFAULT_PEAK_HOURS[index] || "12:00"} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: current.peakHours.map((value, itemIndex) => itemIndex === index ? event.target.value : value) }))} className={inputClass} /></Field>)}<div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = platformAllowed(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
+                 <div className="mt-3 grid gap-3 sm:grid-cols-3">{Array.from({ length: campaignTarget }, (_, index) => <Field key={`peak-${index}`} label={`Peak slot ${index + 1}`}><input value={schedule.peakHours[index] || DEFAULT_PEAK_HOURS[index] || "12:00"} onChange={(event) => setSchedule((current) => { const peakHours = [...current.peakHours]; peakHours[index] = event.target.value; return { ...current, peakHours }; })} className={inputClass} /></Field>)}<div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = platformAllowed(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
                 {requiredChecks.length ? <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3"><p className="text-xs font-semibold text-amber-100">Complete pre-submit checklist</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => <label key={check.id} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={scheduleChecks[check.id] === true} onChange={(event) => setScheduleChecks((current) => ({ ...current, [check.id]: event.target.checked }))} className="mt-0.5 accent-amber-300" /><span>{check.label}</span></label>)}</div></div> : null}
                  <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly || !compliance || compliance.status !== "pass"} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : !compliance || compliance.status !== "pass" ? "Pass compliance first" : `Schedule ${campaignTarget} public clip${campaignTarget === 1 ? "" : "s"}`}</button>
             </div>

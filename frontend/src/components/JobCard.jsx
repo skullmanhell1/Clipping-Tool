@@ -71,6 +71,17 @@ export default function JobCard({
     () => reviewFilter === "all" ? clips : clips.filter((clip) => (clip.review_state || "pending") === reviewFilter),
     [clips, reviewFilter],
   );
+  const changeReviewFilter = useCallback((nextFilter) => {
+    setReviewFilter(nextFilter);
+    setFocusIndex(0);
+    setSelectedClips((previous) => new Set(
+      [...previous].filter((clipId) => {
+        const clip = clips.find((item) => item.id === clipId);
+        return nextFilter === "all"
+          || (clip && (clip.review_state || "pending") === nextFilter);
+      }),
+    ));
+  }, [clips]);
 
   const toggleSelected = useCallback((clipId) => {
     setSelectedClips((previous) => {
@@ -386,7 +397,7 @@ export default function JobCard({
               total={clips.length}
               selectedCount={selectedClips.size}
               filter={reviewFilter}
-              onFilterChange={(nextFilter) => { setReviewFilter(nextFilter); setFocusIndex(0); }}
+              onFilterChange={changeReviewFilter}
               reviewNote={reviewNote}
               onReviewNoteChange={setReviewNote}
               busy={batchBusy}
