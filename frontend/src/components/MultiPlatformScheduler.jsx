@@ -97,6 +97,9 @@ export default function MultiPlatformScheduler({
       ? campaignPreset.platforms
       : [];
   const manualOnly = !!(campaignPreset?.posting?.manual_only || campaignPreset?.posting?.review_only);
+  const campaignReviewRequired = manualOnly
+    || Boolean(campaignPreset?.source_library?.length)
+    || Boolean(campaignPreset?.compliance?.required_checks?.length);
   const platformAllowed = (platform) =>
     !allowedPlatforms.length || allowedPlatforms.includes(platform) ||
     (platform === "youtube_shorts" && allowedPlatforms.includes("youtube"));
@@ -162,8 +165,8 @@ export default function MultiPlatformScheduler({
       setError("Choose at least one platform.");
       return;
     }
-    if (manualOnly) {
-      setError("The active campaign requires human review. Approve and publish from the clip review card instead.");
+    if (campaignReviewRequired) {
+      setError("The active campaign has review checks. Complete them and publish from the clip review card instead.");
       return;
     }
     if (selectedPlatforms.some((platform) => !platformAllowed(platform))) {
@@ -236,7 +239,7 @@ export default function MultiPlatformScheduler({
           </p>
         </div>
         <span className="rounded-full border border-violet-300/20 px-2 py-1 text-[10px] text-violet-200">
-          {manualOnly ? "Manual review required" : "Direct / auto mode"}
+          {campaignReviewRequired ? "Campaign review required" : "Direct / auto mode"}
         </span>
       </div>
 
@@ -378,10 +381,10 @@ export default function MultiPlatformScheduler({
                <button
                 type="button"
                 onClick={publish}
-                disabled={busy || manualOnly || !selectedPlatforms.length || Boolean(durationBlocker)}
+                disabled={busy || campaignReviewRequired || !selectedPlatforms.length || Boolean(durationBlocker)}
                 className="rounded-lg bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {busy ? "Queueing…" : manualOnly ? "Manual review required" : schedule ? "Schedule selected" : "Publish selected"}
+                {busy ? "Queueing…" : campaignReviewRequired ? "Publish from clip review" : schedule ? "Schedule selected" : "Publish selected"}
               </button>
             </div>
           </div>

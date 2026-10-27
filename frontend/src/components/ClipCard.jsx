@@ -107,10 +107,14 @@ export default function ClipCard({
   const [rerendering, setRerendering] = useState(false);
   const [editingTranscript, setEditingTranscript] = useState(false);
   const [campaignChecks, setCampaignChecks] = useState({});
-  const requiredChecks = (campaignPreset?.compliance?.required_checks || []).map((item) => [
-    item.id || item.key || item.label,
-    item.label || item.message || item.id || "Campaign review check",
-  ]);
+  const requiredChecks = (Array.isArray(campaignPreset?.compliance?.required_checks)
+    ? campaignPreset.compliance.required_checks
+    : []
+  ).map((item, index) => {
+    if (typeof item === "string") return [item, item];
+    const id = item?.id || item?.key || item?.label || `campaign-check-${index}`;
+    return [id, item?.label || item?.message || id];
+  });
   if (campaignPreset?.source_library?.length && !requiredChecks.some(([key]) => key === "source_approved")) {
     requiredChecks.push(["source_approved", "I reviewed and approved the source for this campaign"]);
   }
@@ -121,6 +125,11 @@ export default function ClipCard({
     : Array.isArray(campaignPreset?.platforms)
       ? campaignPreset.platforms
       : [];
+  const platformAllowed = (platform) =>
+    !allowedPlatforms.length
+    || allowedPlatforms.includes(platform)
+    || (platform === "youtube" && allowedPlatforms.includes("youtube_shorts"))
+    || (platform === "youtube_shorts" && allowedPlatforms.includes("youtube"));
   const affiliatePlatforms = new Set(campaignPreset?.posting?.affiliate_required_platforms || []);
 
   useEffect(() => {
@@ -187,7 +196,7 @@ export default function ClipCard({
   };
 
   const togglePlatform = (platform) => {
-    if (allowedPlatforms.length && !allowedPlatforms.includes(platform)) return;
+    if (!platformAllowed(platform)) return;
     setSelectedPlatforms((current) =>
       current.includes(platform)
         ? current.filter((item) => item !== platform)
@@ -201,7 +210,7 @@ export default function ClipCard({
       setError("Select at least one configured platform.");
       return;
     }
-    if (allowedPlatforms.length && selectedPlatforms.some((platform) => !allowedPlatforms.includes(platform))) {
+    if (selectedPlatforms.some((platform) => !platformAllowed(platform))) {
       setError("The active campaign preset does not allow one or more selected platforms.");
       return;
     }
@@ -218,17 +227,13 @@ export default function ClipCard({
         setError("Watch and approve this clip before publishing it.");
         return;
       }
-      if (requiredChecks.some(([key]) => campaignChecks[key] !== true)) {
-        setError("Complete every active campaign review checkbox before publishing.");
-        return;
-      }
       if (selectedPlatforms.some((platform) => affiliatePlatforms.has(platform)) && !publishing?.affiliate_url?.trim()) {
         setError("Add the required trackable affiliate URL in Publishing settings.");
         return;
       }
     }
-    if (sourceReviewRequired && campaignChecks.source_approved !== true) {
-      setError("Confirm that you reviewed and approved this source before publishing.");
+    if (requiredChecks.some(([key]) => campaignChecks[key] !== true)) {
+      setError("Complete every active campaign review checkbox before publishing.");
       return;
     }
 
@@ -249,7 +254,7 @@ export default function ClipCard({
         mode: publishing.mode || "review",
         schedule_at: toEpoch(publishing.schedule),
         routes,
-        campaign_checks: manualOnly || sourceReviewRequired ? campaignChecks : {},
+        campaign_checks: requiredChecks.length ? campaignChecks : {},
         affiliate_url: manualOnly ? publishing?.affiliate_url || "" : "",
       });
       onPublished?.(result.attempts || []);
@@ -596,7 +601,7 @@ export default function ClipCard({
           )}
         </div>
 
-        {(manualOnly || sourceReviewRequired) && requiredChecks.length ? (
+        {requiredChecks.length ? (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -657,7 +662,7 @@ export default function ClipCard({
                   className="mr-1"
                    checked={selectedPlatforms.includes(platform)}
                    onChange={() => togglePlatform(platform)}
-                   disabled={!status.configured || (allowedPlatforms.length > 0 && !allowedPlatforms.includes(platform))}
+                    disabled={!status.configured || !platformAllowed(platform)}
                 />
                 {PLATFORM_LABELS[platform] || platform}
               </label>

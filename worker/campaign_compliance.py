@@ -49,6 +49,13 @@ def _items(value: Any) -> list[Any]:
     return [value] if value not in (None, "") else []
 
 
+def _platform_key(value: Any) -> str:
+    """Compare publisher aliases consistently while retaining product-specific output limits elsewhere."""
+
+    key = str(value or "").strip().casefold()
+    return "youtube" if key == "youtube_shorts" else key
+
+
 def _check(results: list[dict[str, Any]], rule: str, passed: bool | None, message: str) -> None:
     results.append({"rule": rule, "status": "pass" if passed is True else "fail" if passed is False else "unknown", "message": message})
 
@@ -96,8 +103,8 @@ def check_profile_compliance(profile: CampaignProfile, clip: Any, *, visibility:
     missing_mentions = [item for item in required_mentions if item not in text.casefold()]
     _check(results, "mentions", not missing_mentions, f"missing mentions: {', '.join(missing_mentions)}" if missing_mentions else "required mentions are present")
 
-    platforms = [str(item).casefold() for item in _items(profile.platforms)]
-    actual_platform = str(_value(clip, "platform", "") or "").casefold()
+    platforms = [_platform_key(item) for item in _items(profile.platforms)]
+    actual_platform = _platform_key(_value(clip, "platform", ""))
     _check(results, "platform", True if not platforms else (actual_platform in platforms if actual_platform else None), "platform is allowed" if actual_platform in platforms or not platforms else "platform is not allowed")
     ratio = str(_value(clip, "aspect_ratio", "") or _value(clip, "aspect", "") or "")
     ratios = [str(item) for item in _items(profile.aspect_resolution.get("aspect_ratios", []))]

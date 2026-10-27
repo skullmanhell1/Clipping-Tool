@@ -176,6 +176,25 @@ def preset_apply_blockers(preset: Mapping[str, Any] | None) -> list[str]:
     return list(dict.fromkeys(blockers))
 
 
+def preset_required_check_ids(preset: Mapping[str, Any] | None) -> list[str]:
+    """Return stable IDs for every review check enforced by a campaign preset."""
+
+    data = dict(preset or {})
+    checks = list((data.get("compliance") or {}).get("required_checks") or [])
+    result: list[str] = []
+    for item in checks:
+        if isinstance(item, Mapping):
+            value = item.get("id") or item.get("key") or item.get("label")
+        else:
+            value = item
+        value = str(value or "").strip()
+        if value:
+            result.append(value)
+    if data.get("source_library") and "source_approved" not in result:
+        result.append("source_approved")
+    return list(dict.fromkeys(result))
+
+
 def preset_is_manual_only(preset: Mapping[str, Any] | None) -> bool:
     posting = dict((preset or {}).get("posting") or {})
     return bool(posting.get("manual_only") or posting.get("review_only"))
@@ -310,6 +329,7 @@ def enrich_campaign_metadata_for_preset(metadata: Any, preset: Mapping[str, Any]
 
 __all__ = [
     "preset_apply_blockers",
+    "preset_required_check_ids",
     "canonical_clip_count",
     "canonical_clip_length",
     "campaign_selection_prompt",

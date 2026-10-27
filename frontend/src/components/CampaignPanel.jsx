@@ -716,6 +716,7 @@ export default function CampaignPanel({
       setPresets((current) => current.filter((item) => item.id !== selectedId));
       setSelectedId("");
       setDraft(EMPTY_PRESET);
+      onPresetApplied?.(EMPTY_PRESET);
       setStep("import");
       setMessage("Campaign preset deleted.");
     } catch (deleteError) {
@@ -837,30 +838,41 @@ export default function CampaignPanel({
   };
 
   const runCompliance = async () => {
-    if (!draft.id) {
-      setError("Save the preset before running its stored compliance report.");
+    if (!draft.name.trim()) {
+      setError("Add a campaign name before running compliance.");
       return;
     }
     setBusy("compliance");
     clearStatus();
     try {
-      const result = await api.campaignPresetCompliance({
-        profile_id: draft.id,
+      const platforms = presetPlatforms.length ? presetPlatforms : [""];
+      const reports = await Promise.all(platforms.map((platform) => api.campaignPresetCompliance({
+        profile: draft,
         visibility: "public",
         clip: {
           caption: complianceText,
           description: complianceText,
           hashtags: draft.copy_rules?.hashtags || [],
-          platform: (Array.isArray(draft.posting?.platforms) && draft.posting.platforms.length
-            ? draft.posting.platforms
-            : draft.platforms || [])[0] || "",
+          platform,
           aspect_ratio: (draft.aspect_resolution?.aspect_ratios || [])[0] || "",
           captions: draft.captions_language?.required !== false,
           source_url: (draft.source_library || []).find((item) => item.status === "approved" && item.url)?.url || "",
         },
-      });
+      })));
+      const result = reports.length === 1
+        ? reports[0]
+        : {
+            status: reports.some((item) => item.status === "fail")
+              ? "fail"
+              : reports.some((item) => item.status === "unknown") ? "unknown" : "pass",
+            platform_reports: reports.map((item, index) => ({ platform: platforms[index] || "default", ...item })),
+            profiles: reports.flatMap((item, index) => (item.profiles || []).map((profile) => ({
+              ...profile,
+              platform: platforms[index] || "default",
+            }))),
+          };
       setCompliance(result);
-      setMessage(result.status === "pass" ? "Compliance report passed." : "Review the compliance report before publishing.");
+      setMessage(result.status === "pass" ? "Compliance passed for every configured platform." : "Review the compliance report before publishing.");
     } catch (complianceError) {
       setError(complianceError.message || "Could not run campaign compliance.");
     } finally {
@@ -880,7 +892,7 @@ export default function CampaignPanel({
   };
 
   const togglePlatform = (platform) => {
-    if (presetPlatforms.length && !presetPlatforms.includes(platform)) return;
+    if (!platformAllowed(platform)) return;
     setSchedule((current) => ({
       ...current,
       platforms: current.platforms.includes(platform)
@@ -894,7 +906,7 @@ export default function CampaignPanel({
       setError("Choose a campaign, a rendered job, exactly two clips, and at least one connected platform.");
       return;
     }
-    if (presetPlatforms.length && schedule.platforms.some((platform) => !presetPlatforms.includes(platform))) {
+    if (schedule.platforms.some((platform) => !platformAllowed(platform))) {
       setError("The active campaign preset does not allow one or more scheduled platforms.");
       return;
     }
@@ -908,7 +920,7 @@ export default function CampaignPanel({
       setError("Approve both selected clips before scheduling them.");
       return;
     }
-    if (requiredChecks.some((check) => scheduleChecks[check.id || check.key || check.label] !== true)) {
+    if (requiredChecks.some((check) => scheduleChecks[check.id] !== true)) {
       setError("Complete every active campaign checklist item before scheduling.");
       return;
     }
@@ -927,6 +939,7 @@ export default function CampaignPanel({
         job_id: schedule.jobId,
         clip_ids: schedule.clipIds,
         platforms: schedule.platforms,
+        campaign_checks: scheduleChecks,
         day: schedule.day,
         timezone: schedule.timezone,
         peak_hours: schedule.peakHours,
@@ -973,8 +986,29 @@ export default function CampaignPanel({
     : Array.isArray(draft.platforms)
       ? draft.platforms
       : [];
+  const platformAllowed = (platform) =>
+    !presetPlatforms.length
+    || presetPlatforms.includes(platform)
+    || (platform === "youtube" && presetPlatforms.includes("youtube_shorts"))
+    || (platform === "youtube_shorts" && presetPlatforms.includes("youtube"));
   const presetRatios = draft.aspect_resolution?.aspect_ratios || [];
-  const requiredChecks = draft.compliance?.required_checks || [];
+  const requiredChecks = (Array.isArray(draft.compliance?.required_checks) ? draft.compliance.required_checks : [])
+    .map((item, index) => {
+      if (typeof item === "string") return { id: item, label: item };
+      const id = item?.id || item?.key || item?.label || `campaign-check-${index}`;
+      return { ...item, id, label: item?.label || item?.message || id };
+    });
+  if (draft.source_library?.length && !requiredChecks.some((check) => check.id === "source_approved")) {
+    requiredChecks.push({ id: "source_approved", label: "I reviewed and approved the campaign source" });
+  }
+  const requiredCheckSignature = [
+    ...requiredChecks.map((check) => check.id),
+    ...(draft.source_library || []).map((item) => `${item.id || item.url || "source"}:${item.status || "suggested"}`),
+  ].join("|");
+  useEffect(() => {
+    setScheduleChecks({});
+    setCompliance(null);
+  }, [draft.id, requiredCheckSignature]);
   const manualOnly = !!(draft.posting?.manual_only || draft.posting?.review_only);
   const strategySettings = draft.settings || {};
   const enforcedStrategySettings = draft.edit_policy?.enforced_settings || {};
@@ -1037,6 +1071,12 @@ export default function CampaignPanel({
     },
   ];
   const readinessReadyCount = readinessChecks.filter((check) => check.status === "ready").length;
+  const complianceResults = compliance?.platform_reports
+    ? compliance.platform_reports.flatMap((report) => (report.profiles || []).flatMap((profile) => (profile.results || []).map((item) => ({
+        ...item,
+        platform: report.platform,
+      }))))
+    : (compliance?.profiles?.[0]?.results || compliance?.results || []);
 
   return (
     <section className="rounded-2xl border border-violet-400/20 bg-violet-400/[0.035] p-5 shadow-xl shadow-violet-950/10">
@@ -1362,9 +1402,9 @@ export default function CampaignPanel({
             <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.035] p-4">
               <h3 className="text-sm font-semibold text-white">Compliance report</h3>
               <p className="mt-1 text-xs leading-5 text-slate-400">Check required copy, hashtags, platforms, aspect ratio, captions, and source provenance before publishing.</p>
-              <textarea value={complianceText} onChange={(event) => setComplianceText(event.target.value)} rows="5" className={`${inputClass} mt-3 w-full resize-y`} placeholder="Paste a caption or describe the clip for a review report" />
-              <button type="button" onClick={runCompliance} disabled={!draft.id || !!busy} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "compliance" ? "Checking…" : "Run compliance check"}</button>
-              {compliance ? <div className={`mt-3 rounded-lg border p-3 text-xs ${compliance.status === "pass" ? "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-100" : "border-amber-400/20 bg-amber-400/[0.05] text-amber-100"}`}><p className="font-semibold">Status: {compliance.status}</p><ul className="mt-2 space-y-1">{(compliance.profiles?.[0]?.results || compliance.results || []).map((item, index) => <li key={`${item.rule || "rule"}-${index}`}>{item.rule || "rule"}: {item.status} · {item.message}</li>)}</ul></div> : null}
+              <textarea value={complianceText} onChange={(event) => { setComplianceText(event.target.value); setCompliance(null); }} rows="5" className={`${inputClass} mt-3 w-full resize-y`} placeholder="Paste a caption or describe the clip for a review report" />
+              <button type="button" onClick={runCompliance} disabled={!draft.name.trim() || !!busy} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "compliance" ? "Checking…" : "Run compliance check"}</button>
+              {compliance ? <div className={`mt-3 rounded-lg border p-3 text-xs ${compliance.status === "pass" ? "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-100" : "border-amber-400/20 bg-amber-400/[0.05] text-amber-100"}`}><p className="font-semibold">Status: {compliance.status}</p><ul className="mt-2 space-y-1">{complianceResults.map((item, index) => <li key={`${item.platform || "platform"}-${item.rule || "rule"}-${index}`}>{item.platform ? `${item.platform}: ` : ""}{item.rule || "rule"}: {item.status} · {item.message}</li>)}</ul></div> : null}
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-sm font-semibold text-white">Posting schedule</h3><p className="mt-1 text-xs text-slate-500">The public-only scheduler queues exactly two clips at distinct peak slots.</p></div><span className="rounded-full border border-emerald-400/20 px-2 py-1 text-[10px] text-emerald-200">{manualOnly ? "Manual publish policy" : "Review required"}</span></div>
@@ -1375,8 +1415,8 @@ export default function CampaignPanel({
                 <Field label="Timezone"><input value={schedule.timezone} onChange={(event) => setSchedule((current) => ({ ...current, timezone: event.target.value }))} className={inputClass} /></Field>
               </div>
                {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly two approved clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className={`flex items-center gap-2 text-xs ${clip.review_state === "approved" ? "text-slate-300" : "text-slate-600"}`}><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} disabled={clip.review_state !== "approved"} className="accent-emerald-400" />{clip.title || clip.id}{clip.review_state !== "approved" ? " · approve first" : ""}</label>)}</div></div> : null}
-                <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field label="Peak slot 1"><input value={schedule.peakHours[0]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [event.target.value, current.peakHours[1]] }))} className={inputClass} /></Field><Field label="Peak slot 2"><input value={schedule.peakHours[1]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [current.peakHours[0], event.target.value] }))} className={inputClass} /></Field><div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = !presetPlatforms.length || presetPlatforms.includes(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
-                {requiredChecks.length ? <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3"><p className="text-xs font-semibold text-amber-100">Complete pre-submit checklist</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => { const id = check.id || check.key || check.label; return <label key={id} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={scheduleChecks[id] === true} onChange={(event) => setScheduleChecks((current) => ({ ...current, [id]: event.target.checked }))} className="mt-0.5 accent-amber-300" /><span>{check.label || check}</span></label>; })}</div></div> : null}
+                <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field label="Peak slot 1"><input value={schedule.peakHours[0]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [event.target.value, current.peakHours[1]] }))} className={inputClass} /></Field><Field label="Peak slot 2"><input value={schedule.peakHours[1]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [current.peakHours[0], event.target.value] }))} className={inputClass} /></Field><div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = platformAllowed(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
+                {requiredChecks.length ? <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3"><p className="text-xs font-semibold text-amber-100">Complete pre-submit checklist</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => <label key={check.id} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={scheduleChecks[check.id] === true} onChange={(event) => setScheduleChecks((current) => ({ ...current, [check.id]: event.target.checked }))} className="mt-0.5 accent-amber-300" /><span>{check.label}</span></label>)}</div></div> : null}
                 <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly || !compliance || compliance.status !== "pass"} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : !compliance || compliance.status !== "pass" ? "Pass compliance first" : "Schedule two public clips"}</button>
             </div>
           </div>

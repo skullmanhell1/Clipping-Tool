@@ -278,7 +278,7 @@ class CampaignProfile:
         ):
             if not isinstance(getattr(item, field_name), list):
                 setattr(item, field_name, [])
-        if not item.platforms and item.posting.get("platforms"):
+        if isinstance(item.posting.get("platforms"), list) and item.posting.get("platforms"):
             item.platforms = list(item.posting.get("platforms") or [])
         item.warnings = [
             dict(warning)

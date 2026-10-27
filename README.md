@@ -148,6 +148,9 @@ strategy, source approvals, and policy checks, so blocked requirements are expli
 The active preset also follows the clip into scheduling: manual-only campaigns disable direct auto
 publishing, disallowed platforms are filtered out, and daily public scheduling requires compliance,
 approved clips, required checklist completion, and distinct peak slots.
+The API enforces the same platform allow-list, review acknowledgements, approved-clip state, valid slots,
+and per-platform compliance before it queues any public attempts.
+The compliance preview also checks the current unsaved campaign draft, including source decisions.
 The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
 submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.
 Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are

@@ -25,6 +25,11 @@ The campaign policy also follows clips into the scheduling workspace. A manual-o
 direct auto scheduler, disallowed platforms are unavailable, and the Campaign panel's daily scheduler
 requires a passing compliance report, two approved clips, completed required checklist items, and two
 different peak slots before it can queue public posts.
+Those checks are enforced by the API as well: direct scheduling calls must provide the active campaign's
+allowed platforms and review-check acknowledgements, use approved clips, and supply valid distinct slots.
+Compliance is evaluated for every requested platform before any attempt is queued.
+The compliance preview reads the current editable draft, including local source decisions, so review
+changes are checked before Save & apply rather than being silently replaced by an older saved version.
 
 Server-side job creation also consumes the strategy fields, so API, upload, and watch-folder submissions
 receive the same selection direction as the browser flow. Supported duration and clip-count phrases are
