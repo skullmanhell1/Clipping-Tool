@@ -152,6 +152,8 @@ The API enforces the same platform allow-list, review acknowledgements, approved
 and per-platform compliance before it queues any public attempts.
 Omitted publish destinations resolve from the saved campaign routes before policy checks, and duplicate
 publisher aliases are rejected instead of creating duplicate attempts.
+Campaign posting targets can be configured from 1 to 10 clips per day, with matching distinct peak
+slots. Compliance preview can check either draft copy or a selected rendered clip.
 The compliance preview also checks the current unsaved campaign draft, including source decisions.
 The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
 submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.

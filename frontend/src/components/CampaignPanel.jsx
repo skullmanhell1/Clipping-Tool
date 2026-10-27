@@ -29,6 +29,7 @@ function lengthSettings(rawValue) {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
+const DEFAULT_PEAK_HOURS = ["12:00", "15:00", "17:00", "19:00", "21:00"];
 
 const EMPTY_PRESET = {
   schema_version: 2,
@@ -412,6 +413,8 @@ export default function CampaignPanel({
   const [error, setError] = useState("");
   const [compliance, setCompliance] = useState(null);
   const [complianceText, setComplianceText] = useState("");
+  const [complianceJobId, setComplianceJobId] = useState("");
+  const [complianceClipId, setComplianceClipId] = useState("");
   const [scheduleChecks, setScheduleChecks] = useState({});
   const [schedule, setSchedule] = useState({
     campaignId: "",
@@ -419,15 +422,17 @@ export default function CampaignPanel({
     clipIds: [],
     day: today(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    peakHours: ["12:00", "19:00"],
+     peakHours: DEFAULT_PEAK_HOURS.slice(),
     platforms: [],
   });
 
   const completedJobs = useMemo(
-    () => jobs.filter((job) => job.status === "completed" && Array.isArray(job.clips) && job.clips.length > 1),
+    () => jobs.filter((job) => job.status === "completed" && Array.isArray(job.clips) && job.clips.length > 0),
     [jobs],
   );
   const selectedJob = completedJobs.find((job) => job.id === schedule.jobId);
+  const complianceJob = completedJobs.find((job) => job.id === complianceJobId);
+  const complianceClip = complianceJob?.clips?.find((clip) => clip.id === complianceClipId);
   const warnings = useMemo(() => {
     const result = [...(draft.warnings || [])];
     if (!draft.name.trim()) {
@@ -848,6 +853,9 @@ export default function CampaignPanel({
       const platforms = presetPlatforms.length ? presetPlatforms : [""];
       const reports = await Promise.all(platforms.map((platform) => api.campaignPresetCompliance({
         profile: draft,
+        ...(complianceJobId && complianceClipId
+          ? { job_id: complianceJobId, clip_id: complianceClipId }
+          : {}),
         visibility: "public",
         clip: {
           caption: complianceText,
@@ -872,7 +880,9 @@ export default function CampaignPanel({
             }))),
           };
       setCompliance(result);
-      setMessage(result.status === "pass" ? "Compliance passed for every configured platform." : "Review the compliance report before publishing.");
+      setMessage(result.status === "pass"
+        ? `${complianceClip ? "Clip compliance passed" : "Draft compliance passed"} for every configured platform.`
+        : "Review the compliance report before publishing.");
     } catch (complianceError) {
       setError(complianceError.message || "Could not run campaign compliance.");
     } finally {
@@ -885,7 +895,7 @@ export default function CampaignPanel({
       ...current,
       clipIds: current.clipIds.includes(clipId)
         ? current.clipIds.filter((id) => id !== clipId)
-        : current.clipIds.length < 2
+        : current.clipIds.length < campaignTarget
           ? [...current.clipIds, clipId]
           : current.clipIds,
     }));
@@ -902,8 +912,8 @@ export default function CampaignPanel({
   };
 
   const scheduleDay = async () => {
-    if (!schedule.campaignId || !schedule.jobId || schedule.clipIds.length !== 2 || !schedule.platforms.length) {
-      setError("Choose a campaign, a rendered job, exactly two clips, and at least one connected platform.");
+    if (!schedule.campaignId || !schedule.jobId || schedule.clipIds.length !== campaignTarget || !schedule.platforms.length) {
+      setError(`Choose a campaign, a rendered job, exactly ${campaignTarget} approved clips, and at least one connected platform.`);
       return;
     }
     if (schedule.platforms.some((platform) => !platformAllowed(platform))) {
@@ -924,8 +934,8 @@ export default function CampaignPanel({
       setError("Complete every active campaign checklist item before scheduling.");
       return;
     }
-    if (schedule.peakHours[0] === schedule.peakHours[1]) {
-      setError("Choose two distinct peak-time slots.");
+    if (new Set(schedule.peakHours.slice(0, campaignTarget)).size !== campaignTarget) {
+      setError(`Choose ${campaignTarget} distinct peak-time slots.`);
       return;
     }
     if (!compliance || compliance.status !== "pass") {
@@ -986,6 +996,7 @@ export default function CampaignPanel({
     : Array.isArray(draft.platforms)
       ? draft.platforms
       : [];
+  const campaignTarget = Math.max(1, Math.min(10, Number(draft.posting?.daily_clip_target) || 2));
   const platformAllowed = (platform) =>
     !presetPlatforms.length
     || presetPlatforms.includes(platform)
@@ -1008,6 +1019,8 @@ export default function CampaignPanel({
   useEffect(() => {
     setScheduleChecks({});
     setCompliance(null);
+    setComplianceJobId("");
+    setComplianceClipId("");
   }, [draft.id, requiredCheckSignature]);
   const manualOnly = !!(draft.posting?.manual_only || draft.posting?.review_only);
   const strategySettings = draft.settings || {};
@@ -1077,6 +1090,9 @@ export default function CampaignPanel({
         platform: report.platform,
       }))))
     : (compliance?.profiles?.[0]?.results || compliance?.results || []);
+  const complianceSubjectLabel = complianceClip
+    ? `${complianceJob?.title || complianceJobId} · ${complianceClip.title || complianceClipId}`
+    : "current draft text";
 
   return (
     <section className="rounded-2xl border border-violet-400/20 bg-violet-400/[0.035] p-5 shadow-xl shadow-violet-950/10">
@@ -1401,23 +1417,27 @@ export default function CampaignPanel({
           <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
             <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.035] p-4">
               <h3 className="text-sm font-semibold text-white">Compliance report</h3>
-              <p className="mt-1 text-xs leading-5 text-slate-400">Check required copy, hashtags, platforms, aspect ratio, captions, and source provenance before publishing.</p>
+              <p className="mt-1 text-xs leading-5 text-slate-400">Check the current draft or a real rendered clip before publishing.</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Field label="Compliance subject"><select value={complianceJobId} onChange={(event) => { setComplianceJobId(event.target.value); setComplianceClipId(""); setCompliance(null); }} className={inputClass}><option value="">Current draft text</option>{completedJobs.map((job) => <option key={job.id} value={job.id}>{job.title || job.id}</option>)}</select></Field>
+                <Field label="Rendered clip"><select value={complianceClipId} onChange={(event) => { setComplianceClipId(event.target.value); setCompliance(null); }} disabled={!complianceJob} className={inputClass}><option value="">Choose a clip…</option>{(complianceJob?.clips || []).map((clip) => <option key={clip.id} value={clip.id}>{clip.title || clip.id}</option>)}</select></Field>
+              </div>
               <textarea value={complianceText} onChange={(event) => { setComplianceText(event.target.value); setCompliance(null); }} rows="5" className={`${inputClass} mt-3 w-full resize-y`} placeholder="Paste a caption or describe the clip for a review report" />
               <button type="button" onClick={runCompliance} disabled={!draft.name.trim() || !!busy} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "compliance" ? "Checking…" : "Run compliance check"}</button>
-              {compliance ? <div className={`mt-3 rounded-lg border p-3 text-xs ${compliance.status === "pass" ? "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-100" : "border-amber-400/20 bg-amber-400/[0.05] text-amber-100"}`}><p className="font-semibold">Status: {compliance.status}</p><ul className="mt-2 space-y-1">{complianceResults.map((item, index) => <li key={`${item.platform || "platform"}-${item.rule || "rule"}-${index}`}>{item.platform ? `${item.platform}: ` : ""}{item.rule || "rule"}: {item.status} · {item.message}</li>)}</ul></div> : null}
+              {compliance ? <div className={`mt-3 rounded-lg border p-3 text-xs ${compliance.status === "pass" ? "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-100" : "border-amber-400/20 bg-amber-400/[0.05] text-amber-100"}`}><p className="font-semibold">Status: {compliance.status} · {complianceSubjectLabel}</p><ul className="mt-2 space-y-1">{complianceResults.map((item, index) => <li key={`${item.platform || "platform"}-${item.rule || "rule"}-${index}`}>{item.platform ? `${item.platform}: ` : ""}{item.rule || "rule"}: {item.status} · {item.message}</li>)}</ul></div> : null}
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-sm font-semibold text-white">Posting schedule</h3><p className="mt-1 text-xs text-slate-500">The public-only scheduler queues exactly two clips at distinct peak slots.</p></div><span className="rounded-full border border-emerald-400/20 px-2 py-1 text-[10px] text-emerald-200">{manualOnly ? "Manual publish policy" : "Review required"}</span></div>
+               <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-sm font-semibold text-white">Posting schedule</h3><p className="mt-1 text-xs text-slate-500">The public-only scheduler queues {campaignTarget} approved clip{campaignTarget === 1 ? "" : "s"} at distinct peak slots.</p></div><span className="rounded-full border border-emerald-400/20 px-2 py-1 text-[10px] text-emerald-200">{manualOnly ? "Manual publish policy" : "Review required"}</span></div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <Field label="Saved publishing campaign"><select value={schedule.campaignId} onChange={(event) => setSchedule((current) => ({ ...current, campaignId: event.target.value }))} className={inputClass}><option value="">Choose campaign…</option>{campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select></Field>
                 <Field label="Rendered job"><select value={schedule.jobId} onChange={(event) => setSchedule((current) => ({ ...current, jobId: event.target.value, clipIds: [] }))} className={inputClass}><option value="">Choose job…</option>{completedJobs.map((job) => <option key={job.id} value={job.id}>{job.title || job.id}</option>)}</select></Field>
                 <Field label="Date"><input type="date" value={schedule.day} onChange={(event) => setSchedule((current) => ({ ...current, day: event.target.value }))} className={inputClass} /></Field>
                 <Field label="Timezone"><input value={schedule.timezone} onChange={(event) => setSchedule((current) => ({ ...current, timezone: event.target.value }))} className={inputClass} /></Field>
               </div>
-               {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly two approved clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className={`flex items-center gap-2 text-xs ${clip.review_state === "approved" ? "text-slate-300" : "text-slate-600"}`}><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} disabled={clip.review_state !== "approved"} className="accent-emerald-400" />{clip.title || clip.id}{clip.review_state !== "approved" ? " · approve first" : ""}</label>)}</div></div> : null}
-                <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field label="Peak slot 1"><input value={schedule.peakHours[0]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [event.target.value, current.peakHours[1]] }))} className={inputClass} /></Field><Field label="Peak slot 2"><input value={schedule.peakHours[1]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [current.peakHours[0], event.target.value] }))} className={inputClass} /></Field><div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = platformAllowed(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
+                {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly {campaignTarget} approved clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className={`flex items-center gap-2 text-xs ${clip.review_state === "approved" ? "text-slate-300" : "text-slate-600"}`}><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} disabled={clip.review_state !== "approved"} className="accent-emerald-400" />{clip.title || clip.id}{clip.review_state !== "approved" ? " · approve first" : ""}</label>)}</div></div> : null}
+                 <div className="mt-3 grid gap-3 sm:grid-cols-3">{Array.from({ length: campaignTarget }, (_, index) => <Field key={`peak-${index}`} label={`Peak slot ${index + 1}`}><input value={schedule.peakHours[index] || DEFAULT_PEAK_HOURS[index] || "12:00"} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: current.peakHours.map((value, itemIndex) => itemIndex === index ? event.target.value : value) }))} className={inputClass} /></Field>)}<div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = platformAllowed(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
                 {requiredChecks.length ? <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3"><p className="text-xs font-semibold text-amber-100">Complete pre-submit checklist</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => <label key={check.id} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={scheduleChecks[check.id] === true} onChange={(event) => setScheduleChecks((current) => ({ ...current, [check.id]: event.target.checked }))} className="mt-0.5 accent-amber-300" /><span>{check.label}</span></label>)}</div></div> : null}
-                <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly || !compliance || compliance.status !== "pass"} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : !compliance || compliance.status !== "pass" ? "Pass compliance first" : "Schedule two public clips"}</button>
+                 <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly || !compliance || compliance.status !== "pass"} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : !compliance || compliance.status !== "pass" ? "Pass compliance first" : `Schedule ${campaignTarget} public clip${campaignTarget === 1 ? "" : "s"}`}</button>
             </div>
           </div>
            <button type="button" onClick={() => setStep("review")} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">Back to preset review</button>

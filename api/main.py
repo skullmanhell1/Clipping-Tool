@@ -2953,10 +2953,7 @@ def _clip_preset_facts(
 
 @app.post("/api/campaigns/{campaign_id}/daily-schedule", tags=["publishing"])
 def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
-    """Queue exactly two public clips at two distinct peak-time slots."""
-
-    if len(req.clip_ids) != 2 or len(set(req.clip_ids)) != 2:
-        raise HTTPException(status_code=400, detail="Exactly two different clip_ids are required")
+    """Queue a campaign's configured number of public clips at distinct peak-time slots."""
     if str(req.visibility).strip().casefold() != "public":
         raise HTTPException(
             status_code=400, detail="Campaign automation only supports public visibility"
@@ -2981,6 +2978,16 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         raise HTTPException(
             status_code=409,
             detail="The active campaign preset requires human review before publishing.",
+        )
+    posting = dict(preset_data.get("posting") or {})
+    try:
+        daily_target = max(1, min(10, int(posting.get("daily_clip_target") or 2)))
+    except (TypeError, ValueError):
+        daily_target = 2
+    if len(req.clip_ids) != daily_target or len(set(req.clip_ids)) != daily_target:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Exactly {daily_target} different clip_ids are required for this campaign day",
         )
     platforms = list(req.platforms or campaign.routes.keys())
     resolved_platforms = [resolve_platform(platform) for platform in platforms]
@@ -3054,8 +3061,18 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         from zoneinfo import ZoneInfo
 
         calendar_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
+    peak_hours = list(req.peak_hours)
+    preset_peak_hours = posting.get("peak_hours")
+    if preset_peak_hours and peak_hours == ["12:00", "19:00"]:
+        peak_hours = list(preset_peak_hours)
     try:
-        slots = plan_daily_slots(calendar_day, timezone, req.peak_hours, visibility="public")
+        slots = plan_daily_slots(
+            calendar_day,
+            timezone,
+            peak_hours,
+            visibility="public",
+            count=daily_target,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     preset = campaign_validation_preset(preset_data)
@@ -3150,7 +3167,7 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         "day": calendar_day,
         "timezone": timezone,
         "visibility": "public",
-        "daily_clip_target": 2,
+        "daily_clip_target": daily_target,
         "slots": list(slots),
         "clips": clip_items,
         "attempts": [

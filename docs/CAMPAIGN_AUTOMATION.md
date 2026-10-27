@@ -26,7 +26,7 @@ long-form source -> transcript -> selection -> render -> review
         |
         +--> campaign-aware publish preflight
                     |
-                    +--> exactly two clips/day at two distinct slots
+                    +--> configured clips/day at distinct peak slots
                     +--> public-only direct publishing
 ```
 

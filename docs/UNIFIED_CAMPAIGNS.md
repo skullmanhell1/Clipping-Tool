@@ -33,6 +33,10 @@ cannot be bypassed by relying on publisher defaults; aliases that resolve to the
 rejected rather than creating duplicate attempts.
 The daily scheduler also rejects a clip/platform pair that is already live instead of reporting a new
 slot while silently reusing the old attempt.
+Campaigns may configure a bounded `posting.daily_clip_target` from 1 to 10; the UI requests that many
+approved clips and distinct peak slots, and the API enforces the same target.
+Compliance preview can also run against a selected completed job and rendered clip, rather than only
+against pasted draft copy.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 
