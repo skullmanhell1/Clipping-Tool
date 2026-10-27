@@ -53,6 +53,7 @@ export default function JobCard({
   // pass actually happens - you work through what one source produced.
   const [selectedClips, setSelectedClips] = useState(() => new Set());
   const [reviewFilter, setReviewFilter] = useState("all");
+  const [reviewNote, setReviewNote] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState("");
   const [morePrompt, setMorePrompt] = useState("");
@@ -87,18 +88,19 @@ export default function JobCard({
       setBatchBusy(true);
       setBatchError("");
       try {
-        const result = await api.reviewClips(job.id, ids, state);
+        const result = await api.reviewClips(job.id, ids, state, reviewNote.trim());
         (result.updated || []).forEach((clip) => onClipUpdated?.(job.id, clip));
         // Cleared only on success: leaving the selection intact after a failure means the user can
         // retry without picking twenty clips again.
         setSelectedClips(new Set());
+        setReviewNote("");
       } catch (error) {
         setBatchError(error.message || "Batch review failed.");
       } finally {
         setBatchBusy(false);
       }
     },
-    [job.id, onClipUpdated, selectedClips],
+    [job.id, onClipUpdated, reviewNote, selectedClips],
   );
 
   const reviewFocused = useCallback(
@@ -385,6 +387,8 @@ export default function JobCard({
               selectedCount={selectedClips.size}
               filter={reviewFilter}
               onFilterChange={(nextFilter) => { setReviewFilter(nextFilter); setFocusIndex(0); }}
+              reviewNote={reviewNote}
+              onReviewNoteChange={setReviewNote}
               busy={batchBusy}
               error={batchError}
               onSelectAll={() => setSelectedClips(new Set(visibleClips.map((clip) => clip.id)))}

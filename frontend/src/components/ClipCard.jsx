@@ -108,6 +108,7 @@ export default function ClipCard({
   const [editingTranscript, setEditingTranscript] = useState(false);
   const [thumbnailTime, setThumbnailTime] = useState(String(Math.max(0, Math.min(Number(clip.duration || 0) / 2, Number(clip.duration || 0)))));
   const [savingThumbnail, setSavingThumbnail] = useState(false);
+  const [reviewNote, setReviewNote] = useState(clip.review_note || "");
   const [campaignChecks, setCampaignChecks] = useState({});
   const requiredChecks = (Array.isArray(campaignPreset?.compliance?.required_checks)
     ? campaignPreset.compliance.required_checks
@@ -293,7 +294,7 @@ export default function ClipCard({
       setReviewing(true);
       setError("");
       try {
-        const updated = await api.reviewClip(jobId, clip.id, next);
+        const updated = await api.reviewClip(jobId, clip.id, next, reviewNote.trim());
         onUpdated?.(updated);
       } catch (reviewError) {
         setError(reviewError.message || "Could not record the review.");
@@ -301,7 +302,7 @@ export default function ClipCard({
         setReviewing(false);
       }
     },
-    [clip.id, clip.review_state, jobId, onUpdated],
+    [clip.id, clip.review_state, jobId, onUpdated, reviewNote],
   );
 
   // U7: re-render this clip with the settings currently in the panel. Resubmitting the source
@@ -426,6 +427,8 @@ export default function ClipCard({
         >
           {rerendering ? "Re-rendering…" : "↻ Re-render this clip"}
         </button>
+        <label className="mt-2 block text-[10px] text-slate-500" htmlFor={`review-note-${clip.id}`}>Review note</label>
+        <textarea id={`review-note-${clip.id}`} value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} rows="2" placeholder="Optional reason or handoff note" className="mt-1 w-full resize-y rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-300" />
         {/* U4: click words out of the transcript and re-render without them. */}
         <button
           type="button"

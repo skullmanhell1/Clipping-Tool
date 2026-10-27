@@ -42,6 +42,7 @@ The clip review workspace includes pending/approved/rejected filters, filter-sco
 and keyboard review controls so large jobs can be processed without losing focus.
 Each clip review card also supports choosing and saving a precise thumbnail frame for platform
 previews instead of relying only on the automatic thumbnail.
+Review decisions can carry handoff notes, including one shared note for a filtered batch action.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 

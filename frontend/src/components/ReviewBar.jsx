@@ -28,6 +28,8 @@ export default function ReviewBar({
   approvedDownloadUrl = "",
   filter = "all",
   onFilterChange,
+  reviewNote = "",
+  onReviewNoteChange,
 }) {
   const hasSelection = selectedCount > 0;
 
@@ -103,6 +105,7 @@ export default function ReviewBar({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
+        <input value={reviewNote} onChange={(event) => onReviewNoteChange?.(event.target.value)} placeholder="Optional review note for selected clips" className="min-w-[220px] flex-1 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-300" />
         <span className="text-[10px] uppercase tracking-wide text-slate-600">Export</span>
         <a
           href={selectedDownloadUrl || undefined}

@@ -157,6 +157,7 @@ slots. Compliance preview can check either draft copy or a selected rendered cli
 Clip review also supports status filters and filter-scoped batch actions, while campaign application
 selects the first configured platform output profile automatically.
 Reviewers can choose and save a precise thumbnail frame for each rendered clip.
+Review decisions also support per-clip notes and shared notes for batch actions.
 The compliance preview also checks the current unsaved campaign draft, including source decisions.
 The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
 submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.
