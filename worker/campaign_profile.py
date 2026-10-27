@@ -343,7 +343,14 @@ class CampaignProfile:
         item.compliance.setdefault("required_mentions", list(item.copy_rules.get("mentions", [])))
         item.compliance.setdefault("banned_words", list(item.banned_words_topics.get("words", [])))
         item.compliance.setdefault("banned_topics", list(item.banned_words_topics.get("topics", [])))
-        item.compliance.setdefault("required_checks", [])
+        required_checks = item.compliance.get("required_checks")
+        if isinstance(required_checks, Mapping):
+            item.compliance["required_checks"] = [
+                {"id": str(key), "label": str(value or key), "required": True}
+                for key, value in required_checks.items()
+            ]
+        elif not isinstance(required_checks, list):
+            item.compliance["required_checks"] = []
         if not item.warnings:
             item.warnings = _review_warnings(item.ambiguities, item.uncertainties)
         return item

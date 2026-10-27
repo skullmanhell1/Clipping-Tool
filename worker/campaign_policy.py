@@ -180,7 +180,12 @@ def preset_required_check_ids(preset: Mapping[str, Any] | None) -> list[str]:
     """Return stable IDs for every review check enforced by a campaign preset."""
 
     data = dict(preset or {})
-    checks = list((data.get("compliance") or {}).get("required_checks") or [])
+    raw_checks = (data.get("compliance") or {}).get("required_checks") or []
+    checks = (
+        [{"id": key, "label": value} for key, value in raw_checks.items()]
+        if isinstance(raw_checks, Mapping)
+        else list(raw_checks)
+    )
     result: list[str] = []
     for item in checks:
         if isinstance(item, Mapping):
