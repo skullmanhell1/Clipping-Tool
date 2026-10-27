@@ -757,6 +757,7 @@ export default function App() {
       selection_prompt: effectiveSelectionPrompt || DEFAULT_SETTINGS.selection_prompt,
       aspect: presetSettings.aspect || ratios[0] || DEFAULT_SETTINGS.aspect,
       platform: presetSettings.platform || presetPlatforms[0] || DEFAULT_SETTINGS.platform,
+      output_platform: presetSettings.output_platform || presetPlatforms[0] || DEFAULT_SETTINGS.output_platform,
       captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : DEFAULT_SETTINGS.captions),
       brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || DEFAULT_SETTINGS.brand_logo,
       brand_font: presetSettings.brand_font || preset.branding?.font || DEFAULT_SETTINGS.brand_font,

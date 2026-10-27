@@ -833,6 +833,18 @@ export default function CampaignPanel({
     }));
   };
 
+  const approveSuggestedSources = () => {
+    setDraft((current) => ({
+      ...current,
+      source_library: (current.source_library || []).map((item) =>
+        item.status === "suggested" && item.url
+          ? { ...item, status: "approved", approved: true }
+          : item,
+      ),
+    }));
+    setMessage("All suggested source URLs were approved for review.");
+  };
+
   const toggleWarning = (warningId) => {
     setDraft((current) => {
       const dismissed = new Set(current.dismissed_warnings || []);
@@ -1366,7 +1378,7 @@ export default function CampaignPanel({
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
              <div className="flex flex-wrap items-start justify-between gap-3">
                <div><h3 className="text-sm font-semibold text-white">Source library</h3><p className="mt-1 text-xs text-slate-500">Only approved sources can be submitted while this preset is active.</p>{draft.last_synced_at ? <p className="mt-1 text-[11px] text-slate-600">Last synced {new Date(draft.last_synced_at * 1000).toLocaleString()}{draft.changed ? " · changed since sync" : ""}</p> : null}</div>
-               <div className="flex gap-2"><input value={manualSource} onChange={(event) => setManualSource(event.target.value)} placeholder="Add source URL" className={`${inputClass} min-w-[220px]`} /><button type="button" onClick={addManualSource} className="rounded-lg border border-violet-300/30 px-3 py-2 text-xs text-violet-100">Add suggested</button></div>
+                <div className="flex flex-wrap justify-end gap-2"><input value={manualSource} onChange={(event) => setManualSource(event.target.value)} placeholder="Add source URL" className={`${inputClass} min-w-[220px]`} /><button type="button" onClick={addManualSource} className="rounded-lg border border-violet-300/30 px-3 py-2 text-xs text-violet-100">Add suggested</button>{suggestedSourceCount ? <button type="button" onClick={approveSuggestedSources} className="rounded-lg border border-emerald-300/30 px-3 py-2 text-xs text-emerald-100">Approve suggested</button> : null}</div>
              </div>
              {draft.provenance?.some((item) => item.source_type === "local_requirement_file") ? <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-400/[0.035] p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-200">Requirement intake provenance</p><p className="mt-1 text-[11px] text-slate-500">These local files shaped the draft; they are not automatically treated as footage or approved sources.</p><div className="mt-2 flex flex-wrap gap-1.5">{draft.provenance.filter((item) => item.source_type === "local_requirement_file").map((item) => <span key={`${item.source_name}-${item.content_hash}`} className="rounded-full border border-cyan-300/15 px-2 py-1 text-[10px] text-cyan-100">{item.source_name}</span>)}</div></div> : null}
              {draft.source_links?.length ? <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Original brief sources</p><div className="mt-2 grid gap-1">{draft.source_links.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer" className="truncate text-xs text-indigo-200 hover:underline">{url}</a>)}</div></div> : null}

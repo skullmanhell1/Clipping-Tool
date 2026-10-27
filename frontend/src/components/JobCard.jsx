@@ -52,6 +52,7 @@ export default function JobCard({
   // U9: which clips a batch action applies to. Scoped to this job, because that is how a review
   // pass actually happens - you work through what one source produced.
   const [selectedClips, setSelectedClips] = useState(() => new Set());
+  const [reviewFilter, setReviewFilter] = useState("all");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState("");
   const [morePrompt, setMorePrompt] = useState("");
@@ -65,6 +66,10 @@ export default function JobCard({
   // Memoised because `job.clips || []` allocates a fresh array on every render, which would make
   // the keyboard effect below re-bind its window listener continuously.
   const clips = useMemo(() => job.clips || [], [job.clips]);
+  const visibleClips = useMemo(
+    () => reviewFilter === "all" ? clips : clips.filter((clip) => (clip.review_state || "pending") === reviewFilter),
+    [clips, reviewFilter],
+  );
 
   const toggleSelected = useCallback((clipId) => {
     setSelectedClips((previous) => {
@@ -98,7 +103,7 @@ export default function JobCard({
 
   const reviewFocused = useCallback(
     async (state) => {
-      const clip = clips[focusIndex];
+      const clip = visibleClips[focusIndex];
       if (!clip) return;
       const next = clip.review_state === state ? "pending" : state;
       try {
@@ -108,7 +113,7 @@ export default function JobCard({
         setBatchError(error.message || "Could not record the review.");
       }
     },
-    [clips, focusIndex, job.id, onClipUpdated],
+    [focusIndex, job.id, onClipUpdated, visibleClips],
   );
 
   const counts = useMemo(() => {
@@ -139,7 +144,7 @@ export default function JobCard({
   // a select has focus: `a` must type an `a` when the user is writing a caption, and getting that
   // wrong would silently approve clips while someone edits metadata.
   useEffect(() => {
-    if (!clips.length) return undefined;
+    if (!visibleClips.length) return undefined;
     const onKeyDown = (event) => {
       const tag = (event.target?.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) {
@@ -149,7 +154,7 @@ export default function JobCard({
 
       switch (event.key) {
         case "j":
-          setFocusIndex((index) => Math.min(clips.length - 1, index + 1));
+           setFocusIndex((index) => Math.min(visibleClips.length - 1, index + 1));
           break;
         case "k":
           setFocusIndex((index) => Math.max(0, index - 1));
@@ -161,7 +166,7 @@ export default function JobCard({
           reviewFocused("rejected");
           break;
         case "s":
-          toggleSelected(clips[focusIndex]?.id);
+           toggleSelected(visibleClips[focusIndex]?.id);
           break;
         case " ":
           // Prevented, or space scrolls the page out from under the clip being reviewed.
@@ -186,12 +191,12 @@ export default function JobCard({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clips, focusIndex, reviewFocused, toggleSelected]);
+  }, [focusIndex, reviewFocused, toggleSelected, visibleClips]);
 
   useEffect(() => {
     // Keep the focus inside the list when clips arrive or disappear.
-    setFocusIndex((index) => Math.max(0, Math.min(index, Math.max(0, clips.length - 1))));
-  }, [clips.length]);
+    setFocusIndex((index) => Math.max(0, Math.min(index, Math.max(0, visibleClips.length - 1))));
+  }, [visibleClips.length]);
 
   const percentage = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
@@ -378,14 +383,16 @@ export default function JobCard({
               counts={counts}
               total={clips.length}
               selectedCount={selectedClips.size}
+              filter={reviewFilter}
+              onFilterChange={(nextFilter) => { setReviewFilter(nextFilter); setFocusIndex(0); }}
               busy={batchBusy}
               error={batchError}
-              onSelectAll={() => setSelectedClips(new Set(clips.map((clip) => clip.id)))}
+              onSelectAll={() => setSelectedClips(new Set(visibleClips.map((clip) => clip.id)))}
               onSelectNone={() => setSelectedClips(new Set())}
               onSelectPending={() =>
                 setSelectedClips(
                   new Set(
-                    clips
+                    visibleClips
                       .filter((clip) => (clip.review_state || "pending") === "pending")
                       .map((clip) => clip.id),
                   ),
@@ -397,8 +404,8 @@ export default function JobCard({
               selectedDownloadUrl={api.jobDownloadUrl(job.id, selectedClipIds)}
               approvedDownloadUrl={api.jobDownloadUrl(job.id, approvedClipIds)}
             />
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {clips.map((clip, index) => (
+            {visibleClips.length ? <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              {visibleClips.map((clip, index) => (
                 <ClipCard
                   key={clip.id}
                   jobId={job.id}
@@ -430,7 +437,7 @@ export default function JobCard({
                   onPublished={onPublished}
                 />
               ))}
-            </div>
+            </div> : <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-500">No clips match the <span className="text-slate-300">{reviewFilter}</span> review filter.</div>}
             </>
           )}
 

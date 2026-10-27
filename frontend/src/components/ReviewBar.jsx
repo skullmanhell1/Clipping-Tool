@@ -26,6 +26,8 @@ export default function ReviewBar({
   onReset,
   selectedDownloadUrl = "",
   approvedDownloadUrl = "",
+  filter = "all",
+  onFilterChange,
 }) {
   const hasSelection = selectedCount > 0;
 
@@ -42,6 +44,10 @@ export default function ReviewBar({
           {total} total
         </span>
 
+        <span className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-slate-600">Show</span>
+          {[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["rejected", "Rejected"]].map(([value, label]) => <button key={value} type="button" onClick={() => onFilterChange?.(value)} className={`${chip} ${filter === value ? "border-brand-accent text-white" : ""}`} disabled={busy}>{label}</button>)}
+        </span>
         <span className="flex items-center gap-1">
           <button type="button" onClick={onSelectPending} className={chip} disabled={busy}>
             Select pending
