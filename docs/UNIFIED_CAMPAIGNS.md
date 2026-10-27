@@ -23,8 +23,8 @@ review states rather than being silently promoted to blockers.
 
 The campaign policy also follows clips into the scheduling workspace. A manual-only preset disables the
 direct auto scheduler, disallowed platforms are unavailable, and the Campaign panel's daily scheduler
-requires a passing compliance report, two approved clips, completed required checklist items, and two
-different peak slots before it can queue public posts.
+ requires a passing compliance report, the configured number of approved clips, completed required
+ checklist items, and distinct peak slots before it can queue public posts.
 Those checks are enforced by the API as well: direct scheduling calls must provide the active campaign's
 allowed platforms and review-check acknowledgements, use approved clips, and supply valid distinct slots.
 Compliance is evaluated for every requested platform before any attempt is queued.
@@ -33,6 +33,7 @@ cannot be bypassed by relying on publisher defaults; aliases that resolve to the
 rejected rather than creating duplicate attempts.
 The daily scheduler also rejects a clip/platform pair that is already live instead of reporting a new
 slot while silently reusing the old attempt.
+It also rejects destination-slot collisions already present in the publishing calendar.
 Campaigns may configure a bounded `posting.daily_clip_target` from 1 to 10; the UI requests that many
 approved clips and distinct peak slots, and the API enforces the same target.
 Compliance preview can also run against a selected completed job and rendered clip, rather than only

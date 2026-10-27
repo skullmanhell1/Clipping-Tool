@@ -3075,6 +3075,31 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    live_states = {"queued", "scheduled", "uploading", "review_required"}
+    existing_attempts = get_history().scheduled_between(min(slots) - 60, max(slots) + 60)
+    collisions = []
+    for attempt in existing_attempts:
+        if attempt.get("state") not in live_states:
+            continue
+        attempt_platform = resolve_platform(str(attempt.get("platform") or ""))
+        if attempt_platform not in resolved_platforms:
+            continue
+        for slot in slots:
+            if abs(float(attempt.get("scheduled_at") or 0) - slot) <= 60:
+                collisions.append({
+                    "attempt_id": attempt.get("id"),
+                    "platform": attempt.get("platform"),
+                    "scheduled_at": attempt.get("scheduled_at"),
+                })
+                break
+    if collisions:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "One or more campaign peak slots are already occupied.",
+                "collisions": collisions,
+            },
+        )
     preset = campaign_validation_preset(preset_data)
 
     validated_items = []
