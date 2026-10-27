@@ -3026,7 +3026,13 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         if publisher is None:
             raise HTTPException(status_code=400, detail=f"Unknown publishing platform: {requested}")
         account_id = str(
-            routes.get(requested, campaign.routes.get(platform, {})).get("account_id") or ""
+            (
+                routes.get(requested)
+                or routes.get(platform)
+                or campaign.routes.get(requested)
+                or campaign.routes.get(platform, {})
+            ).get("account_id")
+            or ""
         )
         status = publisher.status(account_id)
         if not status.configured or not status.direct_publish:
@@ -3248,7 +3254,9 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                 raise HTTPException(
                     status_code=400, detail=f"Unknown publishing platform: {requested}"
                 )
-            status = publisher.status(str(routes.get(requested, {}).get("account_id") or ""))
+            status = publisher.status(
+                str((routes.get(requested) or routes.get(platform) or {}).get("account_id") or "")
+            )
             if not status.configured:
                 raise HTTPException(
                     status_code=409, detail=f"{platform} is not configured: {status.message}"

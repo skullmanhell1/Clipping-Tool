@@ -32,11 +32,17 @@ export default function PublishingPanel({
     : Array.isArray(campaignPreset?.platforms)
       ? campaignPreset.platforms
       : [];
+  const platformAllowed = (platform) =>
+    !allowedPlatforms.length
+    || allowedPlatforms.includes(platform)
+    || (platform === "youtube" && allowedPlatforms.includes("youtube_shorts"))
+    || (platform === "youtube_shorts" && allowedPlatforms.includes("youtube"));
   const toggle = (platform) => {
-    if (allowedPlatforms.length && !allowedPlatforms.includes(platform)) return;
+    if (!platformAllowed(platform)) return;
     const currentPlatforms = value.platforms || [];
-    const platforms = currentPlatforms.includes(platform)
-      ? currentPlatforms.filter((item) => item !== platform)
+    const aliases = platform === "youtube" ? new Set(["youtube", "youtube_shorts"]) : new Set([platform]);
+    const platforms = currentPlatforms.some((item) => aliases.has(item))
+      ? currentPlatforms.filter((item) => !aliases.has(item))
       : [...currentPlatforms, platform];
     onChange({ ...value, platforms });
   };
@@ -45,7 +51,7 @@ export default function PublishingPanel({
     const campaign = campaigns.find((item) => item.id === campaignId);
     const routedPlatforms = campaign ? Object.keys(campaign.routes || {}) : value.platforms || [];
     const platforms = allowedPlatforms.length
-      ? routedPlatforms.filter((platform) => allowedPlatforms.includes(platform))
+      ? routedPlatforms.filter((platform) => platformAllowed(platform))
       : routedPlatforms;
     onChange({
       ...value,
@@ -136,9 +142,9 @@ export default function PublishingPanel({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                         checked={(value.platforms || []).includes(platform)}
-                         onChange={() => toggle(platform)}
-                         disabled={!status.configured || (allowedPlatforms.length > 0 && !allowedPlatforms.includes(platform))}
+                          checked={(value.platforms || []).includes(platform) || (platform === "youtube" && (value.platforms || []).includes("youtube_shorts"))}
+                          onChange={() => toggle(platform)}
+                          disabled={!status.configured || !platformAllowed(platform)}
                       />
                       <b>{LABELS[platform] || platform}</b>
                     </label>
