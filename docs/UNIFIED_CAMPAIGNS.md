@@ -21,6 +21,17 @@ output format, distribution, clip strategy, source approvals, and policy checks.
 required fields that prevent applying; source suggestions and optional strategy gaps remain visible as
 review states rather than being silently promoted to blockers.
 
+The campaign policy also follows clips into the scheduling workspace. A manual-only preset disables the
+direct auto scheduler, disallowed platforms are unavailable, and the Campaign panel's daily scheduler
+requires a passing compliance report, two approved clips, completed required checklist items, and two
+different peak slots before it can queue public posts.
+
+Server-side job creation also consumes the strategy fields, so API, upload, and watch-folder submissions
+receive the same selection direction as the browser flow. Supported duration and clip-count phrases are
+normalized before segmentation. Local uploads may enter a campaign with a source library; the existing
+source confirmation is collected at publish time rather than rejecting the upload before the creator can
+review it.
+
 ## Local requirement files
 
 The Campaign panel accepts multiple local `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, and

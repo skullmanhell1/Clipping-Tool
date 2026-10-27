@@ -18,15 +18,44 @@ def canonical_clip_length(value: Any) -> str:
         return "auto"
     if re.fullmatch(r"<30(?:s|sec|secs|second|seconds)?", compact):
         return "<30s"
-    if re.fullmatch(r"30-60(?:s|sec|secs|second|seconds)?", compact):
+    if re.fullmatch(r"30(?:-|to)60(?:s|sec|secs|second|seconds)?", compact):
         return "30-60s"
-    if re.fullmatch(r"60-90(?:s|sec|secs|second|seconds)?", compact):
+    if re.fullmatch(r"60(?:-|to)90(?:s|sec|secs|second|seconds)?", compact):
         return "60-90s"
-    if re.fullmatch(r"90(?:s|sec|secs|second|seconds)?-3(?:m|min|mins|minute|minutes)", compact):
+    if re.fullmatch(r"90(?:s|sec|secs|second|seconds)?(?:-|to)3(?:m|min|mins|minute|minutes)", compact):
         return "90s-3min"
-    if re.fullmatch(r"90-180(?:s|sec|secs|second|seconds)?", compact):
+    if re.fullmatch(r"90(?:-|to)180(?:s|sec|secs|second|seconds)?", compact):
         return "90s-3min"
     return raw
+
+
+def canonical_clip_count(value: Any) -> str:
+    """Map brief prose such as ``3 clips`` to the bounded selection option."""
+    compact = re.sub(r"\s+", "", str(value or "").casefold())
+    if compact in {"", "auto", "automatic", "asneeded"}:
+        return "auto"
+    if compact in {"max", "maximum", "all", "as_many_as_possible"}:
+        return "max"
+    match = re.fullmatch(r"(\d+)(?:clips?|videos?|shorts?)?", compact)
+    if match and 1 <= int(match.group(1)) <= 50:
+        return match.group(1)
+    return str(value or "").strip()
+
+
+def campaign_selection_prompt(preset: Mapping[str, Any] | None) -> str:
+    """Compose bounded structured intent for every server-side submission path."""
+    data = dict(preset or {})
+    settings = dict(data.get("settings") or {})
+    hints = [
+        f"Content type: {settings['content_type']}." if settings.get("content_type") else "",
+        f"Goal: {settings['clip_goal']}." if settings.get("clip_goal") else "",
+        f"Audience: {settings['target_audience']}." if settings.get("target_audience") else "",
+        f"Prefer a {str(settings['hook_style']).replace('_', ' ')} opening." if settings.get("hook_style") else "",
+    ]
+    prompt = " ".join(str(item).strip() for item in [settings.get("selection_prompt", ""), *hints] if str(item).strip())
+    if len(prompt) > 1600:
+        prompt = prompt[:1600].rsplit(" ", 1)[0]
+    return prompt
 
 
 def preset_settings(preset: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -54,6 +83,11 @@ def preset_settings(preset: Mapping[str, Any] | None) -> dict[str, Any]:
     settings.setdefault("brand_cta", copy_rules.get("cta") or data.get("cta") or "")
     if "clip_length" in settings:
         settings["clip_length"] = canonical_clip_length(settings.get("clip_length"))
+    if "num_clips" in settings:
+        settings["num_clips"] = canonical_clip_count(settings.get("num_clips"))
+    selection_prompt = campaign_selection_prompt(data)
+    if selection_prompt:
+        settings["selection_prompt"] = selection_prompt
     settings.setdefault("publish_mode", "review" if posting.get("manual_only") else "review")
     settings.setdefault("public_visibility", "public")
     if platforms:
@@ -276,7 +310,9 @@ def enrich_campaign_metadata_for_preset(metadata: Any, preset: Mapping[str, Any]
 
 __all__ = [
     "preset_apply_blockers",
+    "canonical_clip_count",
     "canonical_clip_length",
+    "campaign_selection_prompt",
     "preset_is_manual_only",
     "preset_required_fields",
     "preset_settings",

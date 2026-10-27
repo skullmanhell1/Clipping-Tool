@@ -145,6 +145,11 @@ quick-start recipes cover podcast growth, education authority, product launches,
 they fill the review draft but never bypass campaign locks or Save & apply.
 Review and Save & apply also show a readiness preflight for identity, output format, distribution,
 strategy, source approvals, and policy checks, so blocked requirements are explicit instead of hidden.
+The active preset also follows the clip into scheduling: manual-only campaigns disable direct auto
+publishing, disallowed platforms are filtered out, and daily public scheduling requires compliance,
+approved clips, required checklist completion, and distinct peak slots.
+The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
+submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.
 Required fields are warnings until resolved or explicitly dismissed; channels and discovered videos are
 always `suggested`, never auto-approved. Saved presets support switch, rename, duplicate, delete, force
 re-sync, JSON export/import, original-source links, last-synced timestamps, and changed-since-sync

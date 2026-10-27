@@ -746,37 +746,38 @@ export default function App() {
       .filter(Boolean)
       .join(" ");
 
-    setSettings((previous) => ({
-      ...previous,
+    setSettings(() => ({
+      ...DEFAULT_SETTINGS,
       ...presetSettings,
       ...enforcedSettings,
       ...directEditSettings,
       campaign_preset: preset,
       profile: "",
-      storytelling_enabled: presetSettings.storytelling_enabled ?? previous.storytelling_enabled,
-      selection_prompt: effectiveSelectionPrompt || previous.selection_prompt,
-      aspect: presetSettings.aspect || ratios[0] || previous.aspect,
-      platform: presetSettings.platform || presetPlatforms[0] || previous.platform,
-      captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : previous.captions),
-      brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || previous.brand_logo,
-      brand_font: presetSettings.brand_font || preset.branding?.font || previous.brand_font,
-      brand_primary_color: presetSettings.brand_primary_color || brandColors.primary || preset.branding?.colors?.primary || previous.brand_primary_color,
-      brand_highlight_color: presetSettings.brand_highlight_color || brandColors.accent || preset.branding?.colors?.accent || previous.brand_highlight_color,
-      brand_cta: presetSettings.brand_cta || preset.copy_rules?.cta || previous.brand_cta,
-      caption_preset: presetSettings.caption_preset || preset.captions_language?.style || previous.caption_preset,
-      meme_mode: memeDisallowed ? false : presetSettings.meme_mode ?? previous.meme_mode,
-      meme_mode_enabled: memeDisallowed ? false : presetSettings.meme_mode_enabled ?? previous.meme_mode_enabled,
-      meme_auto_suggest: memeDisallowed ? false : presetSettings.meme_auto_suggest ?? previous.meme_auto_suggest,
-      meme_events: memeDisallowed ? [] : presetSettings.meme_events ?? previous.meme_events,
-      meme_timeline_events: memeDisallowed ? [] : presetSettings.meme_timeline_events ?? previous.meme_timeline_events,
-      quality_enabled: qualityDisallowed ? false : presetSettings.quality_enabled ?? previous.quality_enabled,
-      quality_preset: qualityDisallowed ? "off" : presetSettings.quality_preset ?? previous.quality_preset,
-      quality_upscale: qualityDisallowed ? "off" : presetSettings.quality_upscale ?? previous.quality_upscale,
-      quality_smart_scale: qualityDisallowed ? false : presetSettings.quality_smart_scale ?? previous.quality_smart_scale,
-      quality_interpolation: qualityDisallowed ? "off" : presetSettings.quality_interpolation ?? previous.quality_interpolation,
+      storytelling_enabled: presetSettings.storytelling_enabled ?? DEFAULT_SETTINGS.storytelling_enabled,
+      selection_prompt: effectiveSelectionPrompt || DEFAULT_SETTINGS.selection_prompt,
+      aspect: presetSettings.aspect || ratios[0] || DEFAULT_SETTINGS.aspect,
+      platform: presetSettings.platform || presetPlatforms[0] || DEFAULT_SETTINGS.platform,
+      captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : DEFAULT_SETTINGS.captions),
+      brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || DEFAULT_SETTINGS.brand_logo,
+      brand_font: presetSettings.brand_font || preset.branding?.font || DEFAULT_SETTINGS.brand_font,
+      brand_primary_color: presetSettings.brand_primary_color || brandColors.primary || preset.branding?.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
+      brand_highlight_color: presetSettings.brand_highlight_color || brandColors.accent || preset.branding?.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
+      brand_cta: presetSettings.brand_cta || preset.copy_rules?.cta || DEFAULT_SETTINGS.brand_cta,
+      caption_preset: presetSettings.caption_preset || preset.captions_language?.style || DEFAULT_SETTINGS.caption_preset,
+      meme_mode: memeDisallowed ? false : presetSettings.meme_mode ?? DEFAULT_SETTINGS.meme_mode,
+      meme_mode_enabled: memeDisallowed ? false : presetSettings.meme_mode_enabled ?? DEFAULT_SETTINGS.meme_mode_enabled,
+      meme_auto_suggest: memeDisallowed ? false : presetSettings.meme_auto_suggest ?? DEFAULT_SETTINGS.meme_auto_suggest,
+      meme_events: memeDisallowed ? [] : presetSettings.meme_events ?? DEFAULT_SETTINGS.meme_events,
+      meme_timeline_events: memeDisallowed ? [] : presetSettings.meme_timeline_events ?? DEFAULT_SETTINGS.meme_timeline_events,
+      quality_enabled: qualityDisallowed ? false : presetSettings.quality_enabled ?? DEFAULT_SETTINGS.quality_enabled,
+      quality_preset: qualityDisallowed ? "off" : presetSettings.quality_preset ?? DEFAULT_SETTINGS.quality_preset,
+      quality_upscale: qualityDisallowed ? "off" : presetSettings.quality_upscale ?? DEFAULT_SETTINGS.quality_upscale,
+      quality_smart_scale: qualityDisallowed ? false : presetSettings.quality_smart_scale ?? DEFAULT_SETTINGS.quality_smart_scale,
+      quality_interpolation: qualityDisallowed ? "off" : presetSettings.quality_interpolation ?? DEFAULT_SETTINGS.quality_interpolation,
     }));
-    setPublishing((previous) => ({
-      ...previous,
+    setActiveProfileId("");
+    setPublishing(() => ({
+      ...DEFAULT_PUBLISHING,
       platforms: presetPlatforms,
       mode: manualOnly ? "review" : presetSettings.publish_mode || "review",
     }));
@@ -916,6 +917,7 @@ export default function App() {
                 campaigns={campaigns}
                 publisherStatuses={publisherStatuses}
                 outputProfiles={outputProfiles}
+                campaignPreset={activeCampaignPreset}
               />
             </section>
           )}

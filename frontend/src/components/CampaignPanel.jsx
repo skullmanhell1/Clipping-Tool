@@ -412,6 +412,7 @@ export default function CampaignPanel({
   const [error, setError] = useState("");
   const [compliance, setCompliance] = useState(null);
   const [complianceText, setComplianceText] = useState("");
+  const [scheduleChecks, setScheduleChecks] = useState({});
   const [schedule, setSchedule] = useState({
     campaignId: "",
     jobId: "",
@@ -423,7 +424,7 @@ export default function CampaignPanel({
   });
 
   const completedJobs = useMemo(
-    () => jobs.filter((job) => Array.isArray(job.clips) && job.clips.length > 1),
+    () => jobs.filter((job) => job.status === "completed" && Array.isArray(job.clips) && job.clips.length > 1),
     [jobs],
   );
   const selectedJob = completedJobs.find((job) => job.id === schedule.jobId);
@@ -897,6 +898,28 @@ export default function CampaignPanel({
       setError("The active campaign preset does not allow one or more scheduled platforms.");
       return;
     }
+    if (manualOnly) {
+      setError("This campaign requires human review; use each clip's review card instead of the automation scheduler.");
+      return;
+    }
+    const unapproved = (selectedJob?.clips || [])
+      .filter((clip) => schedule.clipIds.includes(clip.id) && clip.review_state !== "approved");
+    if (unapproved.length) {
+      setError("Approve both selected clips before scheduling them.");
+      return;
+    }
+    if (requiredChecks.some((check) => scheduleChecks[check.id || check.key || check.label] !== true)) {
+      setError("Complete every active campaign checklist item before scheduling.");
+      return;
+    }
+    if (schedule.peakHours[0] === schedule.peakHours[1]) {
+      setError("Choose two distinct peak-time slots.");
+      return;
+    }
+    if (!compliance || compliance.status !== "pass") {
+      setError("Run a passing compliance check before scheduling the campaign day.");
+      return;
+    }
     setBusy("schedule");
     clearStatus();
     try {
@@ -1351,13 +1374,13 @@ export default function CampaignPanel({
                 <Field label="Date"><input type="date" value={schedule.day} onChange={(event) => setSchedule((current) => ({ ...current, day: event.target.value }))} className={inputClass} /></Field>
                 <Field label="Timezone"><input value={schedule.timezone} onChange={(event) => setSchedule((current) => ({ ...current, timezone: event.target.value }))} className={inputClass} /></Field>
               </div>
-              {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly two clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} className="accent-emerald-400" />{clip.title || clip.id}</label>)}</div></div> : null}
-               <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field label="Peak slot 1"><input value={schedule.peakHours[0]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [event.target.value, current.peakHours[1]] }))} className={inputClass} /></Field><Field label="Peak slot 2"><input value={schedule.peakHours[1]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [current.peakHours[0], event.target.value] }))} className={inputClass} /></Field><div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = !presetPlatforms.length || presetPlatforms.includes(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
-               <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : "Schedule two public clips"}</button>
+               {selectedJob ? <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><p className="text-xs font-semibold text-slate-300">Select exactly two approved clips</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectedJob.clips.map((clip) => <label key={clip.id} className={`flex items-center gap-2 text-xs ${clip.review_state === "approved" ? "text-slate-300" : "text-slate-600"}`}><input type="checkbox" checked={schedule.clipIds.includes(clip.id)} onChange={() => toggleClip(clip.id)} disabled={clip.review_state !== "approved"} className="accent-emerald-400" />{clip.title || clip.id}{clip.review_state !== "approved" ? " · approve first" : ""}</label>)}</div></div> : null}
+                <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field label="Peak slot 1"><input value={schedule.peakHours[0]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [event.target.value, current.peakHours[1]] }))} className={inputClass} /></Field><Field label="Peak slot 2"><input value={schedule.peakHours[1]} onChange={(event) => setSchedule((current) => ({ ...current, peakHours: [current.peakHours[0], event.target.value] }))} className={inputClass} /></Field><div><span className="text-xs text-slate-400">Connected platforms</span><div className="mt-1 flex flex-wrap gap-1">{Object.entries(publisherStatuses).map(([platform, status]) => { const allowed = !presetPlatforms.length || presetPlatforms.includes(platform); return <label key={platform} className={`rounded-full border px-2 py-1 text-[10px] ${schedule.platforms.includes(platform) ? "border-emerald-300 text-emerald-100" : "border-slate-700 text-slate-500"} ${!status.configured || !status.direct_publish || !allowed ? "opacity-40" : ""}`}><input type="checkbox" checked={schedule.platforms.includes(platform)} onChange={() => togglePlatform(platform)} disabled={!status.configured || !status.direct_publish || !allowed} className="mr-1" />{platform}</label>; })}</div></div></div>
+                {requiredChecks.length ? <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3"><p className="text-xs font-semibold text-amber-100">Complete pre-submit checklist</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => { const id = check.id || check.key || check.label; return <label key={id} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={scheduleChecks[id] === true} onChange={(event) => setScheduleChecks((current) => ({ ...current, [id]: event.target.checked }))} className="mt-0.5 accent-amber-300" /><span>{check.label || check}</span></label>; })}</div></div> : null}
+                <button type="button" onClick={scheduleDay} disabled={!!busy || manualOnly || !compliance || compliance.status !== "pass"} className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{busy === "schedule" ? "Scheduling…" : manualOnly ? "Manual publish required" : !compliance || compliance.status !== "pass" ? "Pass compliance first" : "Schedule two public clips"}</button>
             </div>
           </div>
-          {requiredChecks.length ? <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-4"><h3 className="text-sm font-semibold text-amber-100">Pre-submit checklist</h3><ul className="mt-2 grid gap-2 sm:grid-cols-2">{requiredChecks.map((check) => <li key={check.id || check.label} className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" className="mt-0.5 accent-amber-300" /><span>{check.label || check}</span></li>)}</ul></div> : null}
-          <button type="button" onClick={() => setStep("review")} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">Back to preset review</button>
+           <button type="button" onClick={() => setStep("review")} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">Back to preset review</button>
         </div>
       )}
 

@@ -111,7 +111,11 @@ export default function ClipCard({
     item.id || item.key || item.label,
     item.label || item.message || item.id || "Campaign review check",
   ]);
+  if (campaignPreset?.source_library?.length && !requiredChecks.some(([key]) => key === "source_approved")) {
+    requiredChecks.push(["source_approved", "I reviewed and approved the source for this campaign"]);
+  }
   const manualOnly = !!(campaignPreset?.posting?.manual_only || campaignPreset?.posting?.review_only);
+  const sourceReviewRequired = Boolean(campaignPreset?.source_library?.length);
   const allowedPlatforms = Array.isArray(campaignPreset?.posting?.platforms) && campaignPreset.posting.platforms.length
     ? campaignPreset.posting.platforms
     : Array.isArray(campaignPreset?.platforms)
@@ -223,6 +227,10 @@ export default function ClipCard({
         return;
       }
     }
+    if (sourceReviewRequired && campaignChecks.source_approved !== true) {
+      setError("Confirm that you reviewed and approved this source before publishing.");
+      return;
+    }
 
     const routes = {};
     selectedPlatforms.forEach((platform) => {
@@ -241,7 +249,7 @@ export default function ClipCard({
         mode: publishing.mode || "review",
         schedule_at: toEpoch(publishing.schedule),
         routes,
-        campaign_checks: manualOnly ? campaignChecks : {},
+        campaign_checks: manualOnly || sourceReviewRequired ? campaignChecks : {},
         affiliate_url: manualOnly ? publishing?.affiliate_url || "" : "",
       });
       onPublished?.(result.attempts || []);
@@ -281,7 +289,7 @@ export default function ClipCard({
       try {
         const updated = await api.rerenderClip(jobId, clip.id, settings || {}, cuts);
         onUpdated?.(updated);
-        if (manualOnly) setCampaignChecks({});
+        if (manualOnly || sourceReviewRequired) setCampaignChecks({});
         // U4: the struck words have been applied and the clip record replaced, so leaving the
         // editor open would show a selection against a transcript that no longer describes the
         // media. Closing it forces a fresh fetch if the user wants to trim again.
@@ -292,7 +300,7 @@ export default function ClipCard({
         setRerendering(false);
       }
     },
-    [clip.id, manualOnly, jobId, onUpdated, settings],
+    [clip.id, manualOnly, jobId, onUpdated, settings, sourceReviewRequired],
   );
 
   // U4: the transcript editor is a panel rather than a separate view, so the player stays
@@ -588,7 +596,7 @@ export default function ClipCard({
           )}
         </div>
 
-        {manualOnly && requiredChecks.length ? (
+        {(manualOnly || sourceReviewRequired) && requiredChecks.length ? (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>

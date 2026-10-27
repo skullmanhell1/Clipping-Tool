@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from worker.campaign_preset import _platform, _ratio, _split, _unique
-from worker.campaign_policy import canonical_clip_length
+from worker.campaign_policy import canonical_clip_count, canonical_clip_length
 from worker.campaign_sources import extract_source_manifest
 
 _TAG_RE = re.compile(r"(?<![\w])#[\w][\w-]*", re.UNICODE)
@@ -278,6 +278,8 @@ class CampaignProfile:
         ):
             if not isinstance(getattr(item, field_name), list):
                 setattr(item, field_name, [])
+        if not item.platforms and item.posting.get("platforms"):
+            item.platforms = list(item.posting.get("platforms") or [])
         item.warnings = [
             dict(warning)
             if isinstance(warning, Mapping)
@@ -482,7 +484,7 @@ def parse_campaign_profile(
         "hook_style": _first(fields, "hook style", "hook approach"),
         "selection_prompt": _first(fields, "selection prompt", "clip prompt", "moments to find", "what to find"),
         "retention_mode": _choice(_first(fields, "retention mode", "retention ranking"), {"off", "balanced", "aggressive"}),
-        "num_clips": _first(fields, "number of clips", "clip count", "clips per source"),
+        "num_clips": canonical_clip_count(_first(fields, "number of clips", "clip count", "clips per source")),
         "strategy": _choice(_first(fields, "clip strategy", "selection strategy", "strategy"), {"ai", "silence", "fixed"}),
         "vibe": _choice(_first(fields, "vibe", "tone", "tone of voice"), {"energetic", "educational", "funny", "inspirational", "dramatic", "chill"}),
         "caption_position": _choice(_first(fields, "caption position", "caption placement"), {"bottom", "center", "top"}),

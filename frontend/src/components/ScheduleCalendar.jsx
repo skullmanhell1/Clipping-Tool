@@ -70,6 +70,7 @@ export default function ScheduleCalendar({
   campaigns = [],
   publisherStatuses = {},
   outputProfiles = [],
+  campaignPreset = null,
 }) {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [attempts, setAttempts] = useState([]);
@@ -173,6 +174,7 @@ export default function ScheduleCalendar({
         campaigns={campaigns}
         publisherStatuses={publisherStatuses}
         outputProfiles={outputProfiles}
+        campaignPreset={campaignPreset}
         onError={onError}
         onPublished={load}
       />

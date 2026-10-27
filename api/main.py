@@ -1644,13 +1644,6 @@ async def upload(
         }
     )
     options = _apply_campaign_defaults(options)
-    if getattr(options, "campaign_preset", {}) and getattr(options, "campaign_preset", {}).get("source_library"):
-        blocker = preset_source_blocker(options.campaign_preset, "")
-        if blocker:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Local uploads need an approved source entry in the active campaign preset. {blocker}",
-            )
 
     uploads_dir = Path(settings.uploads_dir)
     uploads_dir.mkdir(parents=True, exist_ok=True)
