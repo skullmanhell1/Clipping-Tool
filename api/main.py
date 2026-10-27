@@ -2901,7 +2901,14 @@ def campaign_profiles_compliance(req: CampaignProfileComplianceRequest) -> dict:
     return check_clip_against_profiles(profiles, clip, visibility=req.visibility)
 
 
-def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -> dict[str, Any]:
+def _clip_preset_facts(
+    job: Any,
+    clip: Any,
+    *,
+    visibility: str,
+    platform: str,
+    source_approved: bool = False,
+) -> dict[str, Any]:
     """Project a rendered clip into the pure campaign-policy vocabulary."""
 
     options = job.options
@@ -2938,6 +2945,7 @@ def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -
         "end_card": getattr(job.options, "brand_outro_asset", "")
         or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
         "source_url": getattr(job, "source", ""),
+        "source_approved": bool(source_approved),
         "audio_source": getattr(job.options, "music", "") or "",
         "meme": any("meme" in str(marker).casefold() for marker in (getattr(clip, "effects_applied", []) or [])),
     }
@@ -3060,6 +3068,10 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
                 clip,
                 visibility="public",
                 platform=requested_platform,
+                source_approved=(
+                    getattr(job, "input_type", "") == "file"
+                    and req.campaign_checks.get("source_approved") is True
+                ),
             )
             if is_versioned_preset(preset_data):
                 from worker.campaign_compliance import check_profile_compliance
@@ -3273,30 +3285,38 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             )
     if preset_data:
         preset = campaign_validation_preset(preset_data)
-        facts = _clip_preset_facts(
-            job,
-            clip,
-            visibility="public" if public_only else "private",
-            platform=req.platforms[0] if req.platforms else clip.platform,
-        )
-        if is_versioned_preset(preset_data):
-            from worker.campaign_compliance import check_profile_compliance
+        validation_platforms = list(req.platforms or [clip.platform or ""])
+        versioned_profile = CampaignProfile.from_dict(preset_data) if is_versioned_preset(preset_data) else None
+        for requested_platform in validation_platforms:
+            facts = _clip_preset_facts(
+                job,
+                clip,
+                visibility="public" if public_only else "private",
+                platform=requested_platform,
+                source_approved=(
+                    getattr(job, "input_type", "") == "file"
+                    and req.campaign_checks.get("source_approved") is True
+                ),
+            )
+            if versioned_profile is not None:
+                from worker.campaign_compliance import check_profile_compliance
 
-            report = check_profile_compliance(
-                CampaignProfile.from_dict(preset_data),
-                facts,
-                visibility=facts["visibility"],
-            )
-        else:
-            report = validate_clip_against_preset(preset, facts)
-        if report.status != "pass":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "Campaign preset compliance failed",
-                    "report": report.to_dict(),
-                },
-            )
+                report = check_profile_compliance(
+                    versioned_profile,
+                    facts,
+                    visibility=facts["visibility"],
+                )
+            else:
+                report = validate_clip_against_preset(preset, facts)
+            if report.status != "pass":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign preset compliance failed",
+                        "platform": requested_platform,
+                        "report": report.to_dict(),
+                    },
+                )
     campaign_profile_ids = list(req.campaign_profile_ids)
     if req.campaign_profile_id:
         campaign_profile_ids.append(req.campaign_profile_id)
@@ -3312,32 +3332,41 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             if profile is None:
                 raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
             profiles.append(profile)
-        profile_facts = clip.to_dict()
-        profile_facts.update(
-            {
-                "platform": req.platforms[0] if req.platforms else clip.platform,
-                "aspect_ratio": getattr(job.options, "aspect", ""),
-                "visibility": "public" if public_only else "private",
-                "duration": getattr(clip, "duration", None),
-                "captions": bool(getattr(job.options, "captions", False)),
-                "language": getattr(job.options, "language", "") or "",
-                "caption_language": getattr(job.options, "language", "") or "",
-                "watermark": getattr(job.options, "brand_logo", ""),
-                "end_card": getattr(job.options, "brand_outro_asset", "")
-                or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
-                "source_url": getattr(job, "source", ""),
-                "audio_source": getattr(job.options, "music", "") or "",
-                "meme": any("meme" in str(marker).casefold() for marker in (getattr(clip, "effects_applied", []) or [])),
-            }
-        )
-        profile_report = check_clip_against_profiles(
-            profiles, profile_facts, visibility=profile_facts["visibility"]
-        )
-        if profile_report["status"] != "pass":
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "Campaign profile compliance failed", "report": profile_report},
+        for requested_platform in list(req.platforms or [clip.platform or ""]):
+            profile_facts = clip.to_dict()
+            profile_facts.update(
+                {
+                    "platform": requested_platform,
+                    "aspect_ratio": getattr(job.options, "aspect", ""),
+                    "visibility": "public" if public_only else "private",
+                    "duration": getattr(clip, "duration", None),
+                    "captions": bool(getattr(job.options, "captions", False)),
+                    "language": getattr(job.options, "language", "") or "",
+                    "caption_language": getattr(job.options, "language", "") or "",
+                    "watermark": getattr(job.options, "brand_logo", ""),
+                    "end_card": getattr(job.options, "brand_outro_asset", "")
+                    or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
+                    "source_url": getattr(job, "source", ""),
+                    "source_approved": (
+                        getattr(job, "input_type", "") == "file"
+                        and req.campaign_checks.get("source_approved") is True
+                    ),
+                    "audio_source": getattr(job.options, "music", "") or "",
+                    "meme": any("meme" in str(marker).casefold() for marker in (getattr(clip, "effects_applied", []) or [])),
+                }
             )
+            profile_report = check_clip_against_profiles(
+                profiles, profile_facts, visibility=profile_facts["visibility"]
+            )
+            if profile_report["status"] != "pass":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign profile compliance failed",
+                        "platform": requested_platform,
+                        "report": profile_report,
+                    },
+                )
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,

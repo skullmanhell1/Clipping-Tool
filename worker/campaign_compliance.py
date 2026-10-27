@@ -143,7 +143,9 @@ def check_profile_compliance(profile: CampaignProfile, clip: Any, *, visibility:
     allowed_sources = [str(item).casefold() for item in source_rules.get("allowed", []) if str(item).strip()]
     prohibited_sources = [str(item).casefold() for item in source_rules.get("prohibited", []) if str(item).strip()]
     if allowed_sources or prohibited_sources:
-        if not source_url:
+        if _value(clip, "source_approved", False) is True:
+            _check(results, "source", True, "local source approval is recorded")
+        elif not source_url:
             _check(results, "source", None, "source provenance was not provided")
         else:
             folded_source = source_url.casefold()
