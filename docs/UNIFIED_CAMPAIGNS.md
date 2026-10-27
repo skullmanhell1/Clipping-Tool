@@ -31,6 +31,8 @@ Compliance is evaluated for every requested platform before any attempt is queue
 Publish requests that omit a platform list resolve the saved campaign routes first, so the same policy
 cannot be bypassed by relying on publisher defaults; aliases that resolve to the same publisher are
 rejected rather than creating duplicate attempts.
+The daily scheduler also rejects a clip/platform pair that is already live instead of reporting a new
+slot while silently reusing the old attempt.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 

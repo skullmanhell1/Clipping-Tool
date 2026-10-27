@@ -3070,6 +3070,23 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
                 status_code=409,
                 detail="Approve both clips after watching them before scheduling public posts.",
             )
+        live_platforms = [
+            requested_platform
+            for requested_platform in platforms
+            if get_history().live_attempt_id(
+                req.job_id,
+                clip_id,
+                resolve_platform(requested_platform),
+            )
+        ]
+        if live_platforms:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Clip {clip_id} already has a live campaign attempt for: "
+                    + ", ".join(live_platforms)
+                ),
+            )
         reports = []
         for requested_platform in platforms:
             facts = _clip_preset_facts(
