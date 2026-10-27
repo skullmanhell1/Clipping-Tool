@@ -266,7 +266,18 @@ class CampaignProfile:
                 setattr(item, field_name, {})
         if not isinstance(item.source_library, list):
             item.source_library = []
-        item.source_library = [dict(entry) for entry in item.source_library if isinstance(entry, Mapping)]
+        normalized_sources: list[dict[str, Any]] = []
+        for entry in item.source_library:
+            if not isinstance(entry, Mapping):
+                continue
+            source = dict(entry)
+            status = str(source.get("status") or "").casefold()
+            if status not in {"approved", "suggested", "banned"}:
+                status = "approved" if source.get("approved") is True else "suggested"
+            source["status"] = status
+            source["approved"] = status == "approved"
+            normalized_sources.append(source)
+        item.source_library = normalized_sources
         for field_name in (
             "platforms",
             "source_links",
@@ -316,28 +327,23 @@ class CampaignProfile:
             item.source_rules["allowed"] = _unique(
                 [*item.source_rules.get("allowed", []), *approved_urls]
             )
-        if not item.posting:
-            item.posting = {
-                "platforms": list(item.platforms),
-                "manual_only": False,
-                "public_visibility_required": True,
-                "daily_clip_target": 2,
-                "timezone": "",
-                "peak_hours": [],
-            }
+        item.posting.setdefault("platforms", list(item.platforms))
+        item.posting.setdefault("manual_only", False)
+        item.posting.setdefault("review_only", False)
+        item.posting.setdefault("public_visibility_required", True)
+        item.posting.setdefault("daily_clip_target", 2)
+        item.posting.setdefault("timezone", "")
+        item.posting.setdefault("peak_hours", [])
         item.watermark_end_cards.setdefault(
             "public_visibility_required",
             bool(item.posting.get("public_visibility_required", True)),
         )
-        if not item.compliance:
-            item.compliance = {
-                "required_copy": list(item.copy_rules.get("required_copy", [])),
-                "required_hashtags": list(item.copy_rules.get("hashtags", [])),
-                "required_mentions": list(item.copy_rules.get("mentions", [])),
-                "banned_words": list(item.banned_words_topics.get("words", [])),
-                "banned_topics": list(item.banned_words_topics.get("topics", [])),
-                "required_checks": [],
-            }
+        item.compliance.setdefault("required_copy", list(item.copy_rules.get("required_copy", [])))
+        item.compliance.setdefault("required_hashtags", list(item.copy_rules.get("hashtags", [])))
+        item.compliance.setdefault("required_mentions", list(item.copy_rules.get("mentions", [])))
+        item.compliance.setdefault("banned_words", list(item.banned_words_topics.get("words", [])))
+        item.compliance.setdefault("banned_topics", list(item.banned_words_topics.get("topics", [])))
+        item.compliance.setdefault("required_checks", [])
         if not item.warnings:
             item.warnings = _review_warnings(item.ambiguities, item.uncertainties)
         return item
