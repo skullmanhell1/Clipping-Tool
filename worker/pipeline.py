@@ -802,6 +802,8 @@ def _run_pipeline(
         # and "is the AI actually running?" is exactly the question it answers.
         if getattr(c, "fallback_reason", ""):
             applied.append(f"selection_degraded:{c.fallback_reason}")
+        if getattr(c, "features", {}).get("boundary_repaired"):
+            applied.append("selection_boundary_repaired")
 
         # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
         words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []

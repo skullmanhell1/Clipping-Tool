@@ -158,6 +158,11 @@ Clip review also supports status filters and filter-scoped batch actions, while 
 selects the first configured platform output profile automatically.
 Reviewers can choose and save a precise thumbnail frame for each rendered clip.
 Review decisions also support per-clip notes and shared notes for batch actions.
+Selection protects against mid-thought openings and dangling endings, and caption rendering uses
+measured wrapping plus automatic TikTok, Reels, and Shorts safe-area margins when an output target
+is selected.
+Visual selection now compares motion and brightness changes against the source baseline instead of
+rewarding footage merely because it is globally bright. Review cards show the resulting quality axes.
 The compliance preview also checks the current unsaved campaign draft, including source decisions.
 The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
 submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.

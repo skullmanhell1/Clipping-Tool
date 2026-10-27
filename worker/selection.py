@@ -378,6 +378,87 @@ def text_between(segments: list[TranscriptSegment], start: float, end: float) ->
     return " ".join(parts).strip()
 
 
+def repair_candidate_boundaries(
+    candidates: Sequence[ClipCandidate],
+    segments: Sequence[TranscriptSegment],
+    *,
+    total_duration: float,
+    min_len: float,
+    max_len: float,
+) -> list[ClipCandidate]:
+    """Pull weak clip edges onto nearby complete thoughts when the length budget allows.
+
+    Sentence snapping gets most boundaries right, but ASR segments can begin with ``and`` or end
+    with ``because`` when the selector starts or stops inside a conversational thought. The old
+    pipeline measured that defect but still rendered it. This pass only expands to an adjacent
+    transcript segment, never cuts content, and only accepts a change when the standalone/ending
+    score improves without violating the requested duration window.
+    """
+    if not candidates or not segments:
+        return list(candidates)
+
+    ordered = sorted(segments, key=lambda item: (float(item.start), float(item.end)))
+    repaired: list[ClipCandidate] = []
+    for candidate in candidates:
+        start, end = float(candidate.start), float(candidate.end)
+        original_text = text_between(list(ordered), start, end)
+        original_standalone = discourse.standalone_completeness(original_text).score
+        original_payoff = discourse.ending_payoff(original_text)
+
+        # Repair a mid-thought opener only when the immediately preceding segment is close enough
+        # to be context, rather than an unrelated earlier answer.
+        if original_standalone < 0.65:
+            previous = next(
+                (
+                    segment
+                    for segment in reversed(ordered)
+                    if float(segment.end) <= start + 0.08
+                    and start - float(segment.end) <= 1.25
+                ),
+                None,
+            )
+            if previous is not None:
+                proposed_start = max(0.0, float(previous.start))
+                proposed_duration = end - proposed_start
+                if proposed_duration >= max(min_len, 1.0) and (
+                    max_len <= 0 or proposed_duration <= max_len
+                ):
+                    proposed_text = text_between(list(ordered), proposed_start, end)
+                    if discourse.standalone_completeness(proposed_text).score > original_standalone:
+                        start = proposed_start
+
+        # Repair an unfinished ending by including the next complete segment, if it still fits.
+        current_text = text_between(list(ordered), start, end)
+        current_payoff = discourse.ending_payoff(current_text)
+        if current_payoff < 0.70:
+            following = next(
+                (
+                    segment
+                    for segment in ordered
+                    if float(segment.start) >= end - 0.08
+                    and float(segment.start) - end <= 1.25
+                ),
+                None,
+            )
+            if following is not None:
+                proposed_end = min(float(total_duration), float(following.end))
+                proposed_duration = proposed_end - start
+                if proposed_duration >= max(min_len, 1.0) and (
+                    max_len <= 0 or proposed_duration <= max_len
+                ):
+                    proposed_text = text_between(list(ordered), start, proposed_end)
+                    if discourse.ending_payoff(proposed_text) > current_payoff:
+                        end = proposed_end
+
+        if (start, end) != (float(candidate.start), float(candidate.end)):
+            candidate.start = round(start, 2)
+            candidate.end = round(end, 2)
+            candidate.text = text_between(list(ordered), candidate.start, candidate.end)
+            candidate.features["boundary_repaired"] = True
+        repaired.append(candidate)
+    return repaired
+
+
 def _fallback(
     path: str | Path,
     total_duration: float,
@@ -609,6 +690,13 @@ def select_moments(
                 segments=transcript.segments,
             )
         )
+        found = repair_candidate_boundaries(
+            found,
+            transcript.segments,
+            total_duration=total_duration,
+            min_len=min_len,
+            max_len=max_len,
+        )
         found = engagement.rerank(found, getattr(options, "retention_mode", "off"))
         found = candidate_ranking.deduplicate(found, limit=max_clips)
         if reason:
@@ -774,6 +862,13 @@ def select_moments(
     # the media that will actually be rendered.
     for candidate in candidates:
         candidate.text = text_between(transcript.segments, candidate.start, candidate.end)
+    candidates = repair_candidate_boundaries(
+        candidates,
+        transcript.segments,
+        total_duration=total_duration,
+        min_len=min_len,
+        max_len=max_len,
+    )
     _measured(candidates)
     candidates = engagement.rerank(candidates, getattr(options, "retention_mode", "off"))
     candidates.sort(key=lambda c: c.score, reverse=True)

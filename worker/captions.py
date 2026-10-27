@@ -411,9 +411,14 @@ def safe_area_margins(
     unchanged - the insets are a *choice* being made available, not a silent reframing of every
     existing clip.
     """
-    profile = SAFE_AREA_INSETS.get(
-        (platform or DEFAULT_SAFE_AREA).strip().lower(), SAFE_AREA_INSETS[DEFAULT_SAFE_AREA]
-    )
+    requested = (platform or DEFAULT_SAFE_AREA).strip().lower().replace("-", "_")
+    requested = {
+        "youtube_shorts": "youtube",
+        "instagram_reels": "instagram",
+        "reels": "instagram",
+        "ig": "instagram",
+    }.get(requested, requested)
+    profile = SAFE_AREA_INSETS.get(requested, SAFE_AREA_INSETS[DEFAULT_SAFE_AREA])
     height = max(1, int(video_height or 1))
     width = max(1, int(video_width or 1))
     return {
@@ -458,6 +463,11 @@ def _caption_style(
     position: str,
     font: str,
     font_size: int,
+    *,
+    video_width: int = 1080,
+    video_height: int = 1920,
+    safe_area: str | None = None,
+    caption_offset: int = 0,
 ) -> tuple[str, int, bool]:
     """Return ``(style_line, alignment, karaoke)`` for a caption template.
 
@@ -467,6 +477,17 @@ def _caption_style(
         * ``minimal`` — plain white text, thin outline, no karaoke.
     """
     align, margin_v = _POSITION_ALIGN.get(position, _POSITION_ALIGN["bottom"])
+    margin_h = 80
+    if safe_area or caption_offset:
+        margin_h, _margin_r, resolved_v = resolve_margins(
+            position,
+            video_width,
+            video_height,
+            platform=safe_area,
+            offset=caption_offset,
+        )
+        if align not in (4, 5, 6):
+            margin_v = resolved_v
 
     white = "&H00FFFFFF"
     # C4: the karaoke fill was pure green (&H0000FF00), which reads as dated - it is the
@@ -482,19 +503,19 @@ def _caption_style(
         # BorderStyle 3 draws an opaque box behind the text (uses OutlineColour).
         style = (
             f"Style: Default,{font},{font_size},{white},{white},{box},{box},"
-            f"-1,0,0,0,100,100,0,0,3,0,0,{align},80,80,{margin_v},1"
+            f"-1,0,0,0,100,100,0,0,3,0,0,{align},{margin_h},{margin_h},{margin_v},1"
         )
         return style, align, False
     if template == "minimal":
         style = (
             f"Style: Default,{font},{font_size},{white},{white},{black},&H64000000,"
-            f"-1,0,0,0,100,100,0,0,1,2,1,{align},80,80,{margin_v},1"
+            f"-1,0,0,0,100,100,0,0,1,2,1,{align},{margin_h},{margin_h},{margin_v},1"
         )
         return style, align, False
     # Default: karaoke.
     style = (
         f"Style: Default,{font},{font_size},{white},{highlight},{black},&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,4,2,{align},80,80,{margin_v},1"
+        f"-1,0,0,0,100,100,0,0,1,4,2,{align},{margin_h},{margin_h},{margin_v},1"
     )
     return style, align, True
 
@@ -1567,6 +1588,8 @@ def _face_aware_position(
     video_height: int,
     font_size: int,
     notes: list[str] | None,
+    safe_area: str | None = None,
+    caption_offset: int | None = None,
 ) -> str | None:
     """The caption position with V15's mouth-avoidance applied, or ``position`` untouched.
 
@@ -1594,8 +1617,16 @@ def _face_aware_position(
     # two disagree and a collision is either missed or invented. Computed only when C12/C13 are
     # configured, mirroring `_preset_header_styles` -- unconditionally resolving margins would also
     # change the numbers on every existing render, which is why that function guards it too.
-    safe_area = (getattr(settings, "caption_safe_area", "") or "") or None
-    caption_offset = int(getattr(settings, "caption_offset_px", 0) or 0)
+    safe_area = (
+        safe_area
+        if safe_area is not None
+        else (getattr(settings, "caption_safe_area", "") or "") or None
+    )
+    caption_offset = (
+        int(caption_offset)
+        if caption_offset is not None
+        else int(getattr(settings, "caption_offset_px", 0) or 0)
+    )
     margin_px: int | None = None
     if safe_area or caption_offset:
         _margin_l, _margin_r, margin_px = resolve_margins(
@@ -1648,6 +1679,8 @@ def build_ass(
     language: str = "",
     clip_path: Any | None = None,
     face_boxes: Any | None = None,
+    safe_area: str | None = None,
+    caption_offset: int | None = None,
 ) -> Path:
     """Render ``cues`` (and an optional hook title) to an ASS file at ``dest``.
 
@@ -1714,6 +1747,8 @@ def build_ass(
         # the wrong one would misjudge the caption's height by whatever the two happen to differ by.
         font_size=(preset.font_size if preset is not None else font_size),
         notes=notes,
+        safe_area=safe_area,
+        caption_offset=caption_offset,
     )
 
     # C21: pick a font that can actually render what was said, and note it when nothing can.
@@ -1748,8 +1783,16 @@ def build_ass(
             video_width=video_width,
             video_height=video_height,
             # C12/C13: both inert unless configured, so an unconfigured render is byte-identical.
-            safe_area=(getattr(settings, "caption_safe_area", "") or "") or None,
-            caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
+            safe_area=(
+                safe_area
+                if safe_area is not None
+                else (getattr(settings, "caption_safe_area", "") or "") or None
+            ),
+            caption_offset=(
+                int(caption_offset)
+                if caption_offset is not None
+                else int(getattr(settings, "caption_offset_px", 0) or 0)
+            ),
         )
         # C6/C16: measure in the font that will draw the text, at the frame's real width.
         body = _preset_dialogue_lines(
@@ -1769,13 +1812,47 @@ def build_ass(
     else:
         legacy_position = position if position is not None else "bottom"
         style_line, _align, template_karaoke = _caption_style(
-            template, legacy_position, font, font_size
+            template,
+            legacy_position,
+            font,
+            font_size,
+            video_width=video_width,
+            video_height=video_height,
+            safe_area=(
+                safe_area
+                if safe_area is not None
+                else (getattr(settings, "caption_safe_area", "") or "") or None
+            ),
+            caption_offset=(
+                int(caption_offset)
+                if caption_offset is not None
+                else int(getattr(settings, "caption_offset_px", 0) or 0)
+            ),
         )
         use_karaoke = template_karaoke if karaoke is None else karaoke
+        legacy_safe_area = (
+            safe_area
+            if safe_area is not None
+            else (getattr(settings, "caption_safe_area", "") or "") or None
+        )
+        legacy_offset = (
+            int(caption_offset)
+            if caption_offset is not None
+            else int(getattr(settings, "caption_offset_px", 0) or 0)
+        )
+        hook_margin_v = 160
+        if legacy_safe_area or legacy_offset:
+            _hook_l, _hook_r, hook_margin_v = resolve_margins(
+                "top",
+                video_width,
+                video_height,
+                platform=legacy_safe_area,
+                offset=legacy_offset,
+            )
         # A dedicated top-anchored style for the hook title (alignment 8 = top).
         hook_style = (
             f"Style: Hook,{font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
-            f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,160,1"
+            f"&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,2,8,60,60,{hook_margin_v},1"
         )
         body = _legacy_dialogue_lines(cues, use_karaoke, clip_duration=clip_duration)
 
@@ -2049,13 +2126,23 @@ def _preset_header_styles(
         # not tell you what a clip was rendered in. C1 asks for the real substitution.
         notes.append(f"font_substituted:{resolved_font}")
 
+    hook_margin_v = 160
+    if safe_area or caption_offset:
+        _hook_l, _hook_r, hook_margin_v = resolve_margins(
+            "top",
+            video_width,
+            video_height,
+            platform=safe_area,
+            offset=caption_offset,
+        )
+
     style_line = _preset_style_line(
         preset, resolved_font, preset.font_size, align, margin_v, margin_h
     )
     hook_style = (
         f"Style: Hook,{resolved_font},{hook_font_size},&H0000E5FF,&H0000E5FF,"
         f"&H00000000,&H64000000,{ass_bold_flag(preset)},0,0,0,100,100,0,0,1,5,2,8,"
-        f"60,60,160,1"
+        f"60,60,{hook_margin_v},1"
     )
     return style_line, hook_style
 

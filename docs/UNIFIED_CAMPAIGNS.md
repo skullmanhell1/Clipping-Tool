@@ -24,7 +24,7 @@ review states rather than being silently promoted to blockers.
 The campaign policy also follows clips into the scheduling workspace. A manual-only preset disables the
 direct auto scheduler, disallowed platforms are unavailable, and the Campaign panel's daily scheduler
  requires a passing compliance report, the configured number of approved clips, completed required
- checklist items, and distinct peak slots before it can queue public posts.
+checklist items, and distinct peak slots before it can queue public posts.
 Those checks are enforced by the API as well: direct scheduling calls must provide the active campaign's
 allowed platforms and review-check acknowledgements, use approved clips, and supply valid distinct slots.
 Compliance is evaluated for every requested platform before any attempt is queued.
@@ -43,6 +43,11 @@ and keyboard review controls so large jobs can be processed without losing focus
 Each clip review card also supports choosing and saving a precise thumbnail frame for platform
 previews instead of relying only on the automatic thumbnail.
 Review decisions can carry handoff notes, including one shared note for a filtered batch action.
+Clip selection now repairs nearby mid-thought openings and unfinished endings when the requested
+length budget allows. Caption cues use measured font widths and platform-aware safe areas, while
+quality cards expose flow, impact, clarity, and relevance signals for review.
+Visual selection normalizes motion and brightness against the source baseline, avoiding a bias toward
+bright but visually static footage.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 

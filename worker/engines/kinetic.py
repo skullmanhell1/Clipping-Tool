@@ -485,6 +485,36 @@ class Kinetic_Options:
         if not _is_member(raw_position, _POSITION_CHOICES):
             notes.append("position_substituted")
 
+        raw_safe_x = coerce_float(
+            _read(options, "kinetic_safe_area_x_pct", "safe_area_x_pct"),
+            6.0,
+            lo=0.0,
+            hi=25.0,
+        )
+        raw_safe_y = coerce_float(
+            _read(options, "kinetic_safe_area_y_pct", "safe_area_y_pct"),
+            10.0,
+            lo=0.0,
+            hi=40.0,
+        )
+        output_platform = str(_read(options, "output_platform", default="") or "").lower().replace(
+            "-", "_"
+        )
+        output_platform = {
+            "youtube_shorts": "youtube",
+            "instagram_reels": "instagram",
+            "reels": "instagram",
+        }.get(output_platform, output_platform)
+        # The kinetic defaults predate platform output profiles. Upgrade only an untouched default;
+        # an explicit creator margin remains authoritative.
+        platform_safe_area = {
+            "tiktok": (6.0, 22.0),
+            "instagram": (5.5, 20.0),
+            "youtube": (5.0, 16.0),
+        }.get(output_platform)
+        if platform_safe_area and raw_safe_x == 6.0 and raw_safe_y == 10.0:
+            raw_safe_x, raw_safe_y = platform_safe_area
+
         # The engine never redefines the look: font, size, position, colours and
         # border style all come from the Base_Preset (Req 10.4).
         highlight = bool(
@@ -517,14 +547,14 @@ class Kinetic_Options:
                 hi=80,
             ),
             safe_area_x_pct=coerce_float(
-                _read(options, "kinetic_safe_area_x_pct", "safe_area_x_pct"),
-                6.0,
+                raw_safe_x,
+                raw_safe_x,
                 lo=0.0,
                 hi=25.0,
             ),
             safe_area_y_pct=coerce_float(
-                _read(options, "kinetic_safe_area_y_pct", "safe_area_y_pct"),
-                10.0,
+                raw_safe_y,
+                raw_safe_y,
                 lo=0.0,
                 hi=40.0,
             ),

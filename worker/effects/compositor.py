@@ -56,6 +56,28 @@ class RenderResult:
 KINETIC_ENGINE_ID = "kinetic_typography"
 
 
+def _caption_safe_area(options: ProcessingOptions) -> str | None:
+    """Resolve the caption safe-area profile from explicit settings or the output target.
+
+    A platform output profile already tells the encoder where the clip is going. Requiring a
+    second, unrelated safe-area setting meant a TikTok/Reels render could still place captions
+    beneath the destination UI. Explicit server configuration wins; otherwise the selected output
+    platform supplies the conservative profile automatically.
+    """
+    explicit = str(getattr(settings, "caption_safe_area", "") or "").strip()
+    if explicit:
+        return explicit
+    target = str(
+        getattr(options, "output_platform", "") or getattr(options, "platform", "") or ""
+    ).strip().lower().replace("-", "_")
+    return {
+        "youtube_shorts": "youtube",
+        "instagram_reels": "instagram",
+        "reels": "instagram",
+        "ig": "instagram",
+    }.get(target, target if target in {"tiktok", "instagram", "youtube"} else None)
+
+
 def _kinetic_subtitle_path(
     contributions: Sequence[Compose_Contribution],
 ) -> Path | None:
@@ -411,8 +433,9 @@ def render_clip(
             applied.append("hook_title")
     elif need_caps or need_hook or need_brand:
         ass_path = temp_dir / f"{base_clip.stem}.ass"
-        cues = cap.words_to_cues(words) if need_caps else []
-
+        safe_area_profile = _caption_safe_area(options)
+        if safe_area_profile and f"caption_safe_area:{safe_area_profile}" not in applied:
+            applied.append(f"caption_safe_area:{safe_area_profile}")
         # Feature A — decide whether the animated caption-preset system drives
         # the captions, or the legacy ``caption_template`` path does. The preset
         # system engages only when a non-default preset / animation override /
@@ -428,6 +451,24 @@ def render_clip(
             or bool(retention_emphasis_indices)
             or options.caption_emoji
         )
+        if use_preset:
+            layout_preset, _layout_substituted = caption_presets.resolve_preset(
+                options.caption_preset
+            )
+            cue_fit = cap.TextFit.for_preset(layout_preset, video_width=width)
+        else:
+            # The legacy path used a three-word ceiling but never measured those words. Long names,
+            # compound words and all-caps copy could therefore overflow the frame. Build cues with
+            # the same measured two-line budget used by the preset path.
+            cue_fit = cap.TextFit(
+                font="Poppins ExtraBold",
+                font_size=84,
+                max_width_px=cap.text_metrics.line_budget_px(width),
+                max_lines=2,
+            )
+        cues = cap.words_to_cues(words, fit=cue_fit) if need_caps else []
+        if need_caps:
+            applied.append("caption_measured_wrap")
 
         if use_preset:
             preset, substituted = caption_presets.resolve_preset(options.caption_preset)
@@ -456,6 +497,7 @@ def render_clip(
                 video_width=width,
                 video_height=height,
                 position=options.caption_position or None,
+                safe_area=safe_area_profile,
             )
             applied.extend(contrast_markers)
 
@@ -503,6 +545,8 @@ def render_clip(
                 # `crop_blur` and `pad` branches no detection ran at all -- so re-detecting here is
                 # both simpler and the only option that covers every geometry branch.
                 clip_path=base_clip,
+                safe_area=safe_area_profile,
+                caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
             )
             applied.append(f"caption_preset:{preset.name}")
             if substituted:
@@ -539,6 +583,8 @@ def render_clip(
                 # a legibility feature that silently depends on which caption *look* was chosen is
                 # the same defect in a different place.
                 clip_path=base_clip,
+                safe_area=safe_area_profile,
+                caption_offset=int(getattr(settings, "caption_offset_px", 0) or 0),
             )
             for note in legacy_notes:
                 if note not in applied:

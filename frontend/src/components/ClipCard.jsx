@@ -338,6 +338,7 @@ export default function ClipCard({
   const sortedAttempts = [...(attempts || [])].sort(
     (left, right) => (right.created_at || 0) - (left.created_at || 0)
   );
+  const qualityScores = clip.engagement_features?.quality_scores || {};
 
   return (
     <div
@@ -367,6 +368,7 @@ export default function ClipCard({
         <div className="mt-1 text-center text-xs text-slate-500">
           {formatDuration(clip.duration)} · {clip.start}s–{clip.end}s
         </div>
+        {Object.keys(qualityScores).length ? <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/50 p-2" title="Deterministic transcript and delivery quality signals"><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Quality signals</p><div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-1">{[["flow", "Flow"], ["impact", "Impact"], ["clarity", "Clarity"], ["relevance", "Relevance"]].map(([key, label]) => { const score = Math.max(0, Math.min(1, Number(qualityScores[key]) || 0)); return <div key={key}><div className="flex justify-between text-[9px] text-slate-500"><span>{label}</span><span>{Math.round(score * 100)}</span></div><div className="mt-0.5 h-1 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-cyan-400/80" style={{ width: `${score * 100}%` }} /></div></div>; })}</div></div> : null}
         <a
           href={api.downloadUrl(jobId, clip.filename)}
           className="mt-2 block rounded-lg bg-emerald-600 py-1.5 text-center text-xs font-semibold text-white transition hover:bg-emerald-500"

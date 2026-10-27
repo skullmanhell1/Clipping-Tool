@@ -102,6 +102,7 @@ def caption_band(
     *,
     font_size: int = 96,
     max_lines: int = 2,
+    safe_area: str | None = None,
 ) -> tuple[int, int, int, int]:
     """The ``(w, h, x, y)`` rectangle a caption occupies, for sampling.
 
@@ -115,7 +116,7 @@ def caption_band(
     # 1.35 line height, which is roughly what libass produces for these faces, plus the outline.
     band_h = min(height, max(1, int(round(font_size * 1.35 * max(1, max_lines)))))
 
-    margins = safe_area_bottom(width, height)
+    margins = safe_area_bottom(width, height, profile=safe_area)
     place = (position or "bottom").strip().lower()
     if place.startswith("top"):
         y = margins
@@ -126,13 +127,17 @@ def caption_band(
     return (width, band_h, 0, min(y, max(0, height - band_h)))
 
 
-def safe_area_bottom(video_width: int, video_height: int) -> int:
+def safe_area_bottom(
+    video_width: int, video_height: int, *, profile: str | None = None
+) -> int:
     """The configured bottom inset in pixels, reusing the C12 profiles."""
     try:
         from worker.captions import safe_area_margins
 
-        profile = str(getattr(settings, "caption_safe_area", "") or "") or None
-        return int(safe_area_margins(video_width, video_height, profile)["bottom"])
+        selected = profile
+        if selected is None:
+            selected = str(getattr(settings, "caption_safe_area", "") or "") or None
+        return int(safe_area_margins(video_width, video_height, selected)["bottom"])
     except Exception:
         return int(video_height * 0.11)
 
@@ -235,6 +240,7 @@ def choose_for_clip(
     video_width: int,
     video_height: int,
     position: str | None = None,
+    safe_area: str | None = None,
 ) -> tuple[_Preset, list[str]]:
     """Measure the caption region of ``video`` and adapt ``preset``'s legibility colours (C20).
 
@@ -250,6 +256,7 @@ def choose_for_clip(
         video_height,
         font_size=int(getattr(preset, "font_size", 96) or 96),
         max_lines=int(getattr(preset, "max_lines", 2) or 2),
+        safe_area=safe_area,
     )
     sample = sample_background(video, duration, band)
     if sample is None:
