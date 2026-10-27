@@ -40,6 +40,8 @@ Compliance preview can also run against a selected completed job and rendered cl
 against pasted draft copy.
 The clip review workspace includes pending/approved/rejected filters, filter-scoped batch selection,
 and keyboard review controls so large jobs can be processed without losing focus.
+Each clip review card also supports choosing and saving a precise thumbnail frame for platform
+previews instead of relying only on the automatic thumbnail.
 The compliance preview reads the current editable draft, including local source decisions, so review
 changes are checked before Save & apply rather than being silently replaced by an older saved version.
 

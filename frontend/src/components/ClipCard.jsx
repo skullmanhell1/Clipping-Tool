@@ -106,6 +106,8 @@ export default function ClipCard({
   const [reviewing, setReviewing] = useState(false);
   const [rerendering, setRerendering] = useState(false);
   const [editingTranscript, setEditingTranscript] = useState(false);
+  const [thumbnailTime, setThumbnailTime] = useState(String(Math.max(0, Math.min(Number(clip.duration || 0) / 2, Number(clip.duration || 0)))));
+  const [savingThumbnail, setSavingThumbnail] = useState(false);
   const [campaignChecks, setCampaignChecks] = useState({});
   const requiredChecks = (Array.isArray(campaignPreset?.compliance?.required_checks)
     ? campaignPreset.compliance.required_checks
@@ -161,6 +163,24 @@ export default function ClipCard({
       setError(saveError.message || "Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveThumbnail = async () => {
+    const at = Number(thumbnailTime);
+    if (!Number.isFinite(at) || at < 0 || at > Number(clip.duration || 0)) {
+      setError(`Choose a thumbnail time between 0 and ${Number(clip.duration || 0).toFixed(1)} seconds.`);
+      return;
+    }
+    setSavingThumbnail(true);
+    setError("");
+    try {
+      const updated = await api.setClipThumbnail(jobId, clip.id, at);
+      onUpdated?.(updated.clip || updated);
+    } catch (thumbnailError) {
+      setError(thumbnailError.message || "Could not save the thumbnail frame.");
+    } finally {
+      setSavingThumbnail(false);
     }
   };
 
@@ -358,6 +378,13 @@ export default function ClipCard({
         >
           Video only
         </a>
+        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/50 p-2">
+          <label className="block text-[10px] text-slate-500" htmlFor={`thumbnail-time-${clip.id}`}>Thumbnail frame (seconds)</label>
+          <div className="mt-1 flex gap-1">
+            <input id={`thumbnail-time-${clip.id}`} type="number" min="0" max={clip.duration || 0} step="0.1" value={thumbnailTime} onChange={(event) => setThumbnailTime(event.target.value)} className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200" />
+            <button type="button" onClick={saveThumbnail} disabled={savingThumbnail} className="rounded border border-violet-300/30 px-2 py-1 text-[10px] text-violet-100 disabled:opacity-50">{savingThumbnail ? "Saving…" : "Use frame"}</button>
+          </div>
+        </div>
 
         {/* U9: the verdict, and U7: re-render with the current settings. */}
         <div className="mt-2 flex items-center gap-1">

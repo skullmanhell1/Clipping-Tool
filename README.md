@@ -156,6 +156,7 @@ Campaign posting targets can be configured from 1 to 10 clips per day, with matc
 slots. Compliance preview can check either draft copy or a selected rendered clip.
 Clip review also supports status filters and filter-scoped batch actions, while campaign application
 selects the first configured platform output profile automatically.
+Reviewers can choose and save a precise thumbnail frame for each rendered clip.
 The compliance preview also checks the current unsaved campaign draft, including source decisions.
 The same strategy and normalization rules are applied server-side for API, upload, and watch-folder
 submissions, and local footage is confirmed at publish time when a campaign source allow-list is active.

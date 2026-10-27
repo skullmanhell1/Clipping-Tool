@@ -302,6 +302,12 @@ export const api = {
   publishClip: (jobId, clipId, payload) =>
     apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
+  setClipThumbnail: (jobId, clipId, at) =>
+    apiFetch(`/api/jobs/${jobId}/clips/${clipId}/thumbnail`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ at }),
+    }).then(jsonOrThrow),
   history: (platform = "") =>
     apiFetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
 

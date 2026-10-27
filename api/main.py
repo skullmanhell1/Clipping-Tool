@@ -575,6 +575,12 @@ class ClipEditModel(BaseModel):
     thumbnail_text: str | None = None
 
 
+class ThumbnailFrameModel(BaseModel):
+    """Choose a review thumbnail frame from the rendered clip."""
+
+    at: float
+
+
 class RegenerateRequest(BaseModel):
     """Request to regenerate a single metadata field for a clip."""
 
@@ -2034,6 +2040,44 @@ def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, clip)
     return clip.to_dict()
+
+
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/thumbnail",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
+def set_clip_thumbnail(job_id: str, clip_id: str, req: ThumbnailFrameModel) -> dict:
+    """Generate a thumbnail at a creator-selected clip-relative timestamp."""
+
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    try:
+        at = float(req.at)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Thumbnail time must be numeric") from None
+    duration = float(getattr(clip, "duration", 0) or 0)
+    if not 0 <= at <= duration:
+        raise HTTPException(status_code=422, detail=f"Thumbnail time must be between 0 and {duration:.2f} seconds")
+    video_path, _ = _resolve_clip_file(job_id, clip.filename)
+    thumbnail_name = f"clip_{Path(clip_id).name}.jpg"
+    thumbnail_path = video_path.with_name(thumbnail_name)
+    try:
+        from worker import ffmpeg_utils
+
+        ffmpeg_utils.generate_thumbnail(video_path, thumbnail_path, at=at)
+    except Exception as exc:
+        logger.exception("Could not generate selected thumbnail for %s/%s", job_id, clip_id)
+        raise HTTPException(status_code=409, detail=f"Could not generate thumbnail: {exc}") from exc
+    fields = {"thumbnail_url": f"clips/{Path(job_id).name}/{thumbnail_name}"}
+    updated = manager.store.update_clip(job_id, clip_id, fields)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    get_history().sync_clip(job_id, updated)
+    return {"at": at, "thumbnail_url": updated.thumbnail_url, "clip": updated.to_dict()}
 
 
 def _preset_detail(preset) -> dict:
