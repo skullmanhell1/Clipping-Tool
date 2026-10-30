@@ -27,7 +27,7 @@ const sameFile = (left, right) =>
  *
  * Calls onChange({ urls: string[], files: File[] }) whenever the inputs change.
  */
-export default function InputBar({ onChange = () => {}, onPreview }) {
+export default function InputBar({ onChange = () => {}, onPreview, prefillUrls = [] }) {
   const [urlText, setUrlText] = useState("");
   const [files, setFiles] = useState([]);
   const [fileError, setFileError] = useState("");
@@ -37,6 +37,17 @@ export default function InputBar({ onChange = () => {}, onPreview }) {
   const dragDepthRef = useRef(0);
   const urls = parseUrls(urlText);
   const totalBytes = files.reduce((total, file) => total + file.size, 0);
+
+  useEffect(() => {
+    const additions = (prefillUrls || []).filter(Boolean);
+    if (!additions.length) return;
+    setUrlText((currentText) => {
+      const nextUrls = [...new Set([...parseUrls(currentText), ...additions])];
+      const nextText = nextUrls.join("\n");
+      if (nextText !== currentText) onChange({ urls: nextUrls, files });
+      return nextText;
+    });
+  }, [prefillUrls, files, onChange]);
 
   useEffect(() => {
     const video = previewRef.current;

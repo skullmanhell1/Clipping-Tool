@@ -737,21 +737,64 @@ export default function App() {
       .map((value) => platformAliases[value] || value)
       .find((value) => ["generic", "youtube", "tiktok", "instagram", "x", "whop"].includes(value))
       || DEFAULT_SETTINGS.platform;
+
+    // A unified campaign workspace sends a parsed profile; the brief editor sends brief_rules.
+    // Both are supported, because the two panels are deliberately separate screens.
+    const profile = preset.campaign_profile || {};
+    const length = profile.length || {};
+    const maxSeconds = Number(length.max_seconds);
+    const profileClipLength = Number.isFinite(maxSeconds)
+      ? maxSeconds <= 30
+        ? "<30s"
+        : maxSeconds <= 60
+          ? "30-60s"
+          : maxSeconds <= 90
+            ? "60-90s"
+            : "90s-3min"
+      : undefined;
+    const profileBranding = profile.branding || preset.branding || {};
+    const profileColors = profileBranding.colors || {};
+    const profileAspect = profile.aspect_resolution?.aspect_ratios?.[0] || preset.aspect_ratios?.[0];
+    const profilePlatform = profile.platforms?.[0] || preset.allowed_platforms?.[0];
+    const profileCaptions = profile.captions_language?.required;
+
     setSettings((previous) => ({
       ...previous,
       campaign_preset: preset,
       storytelling_enabled: true,
-      // A brief is a replacement, not a merge. Clear values the previous preset supplied when
-      // the new brief leaves them blank; otherwise old campaign branding quietly leaks forward.
-      aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
-      clip_length: briefClipLength,
-      platform: metadataPlatform,
-      brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
-      brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
-      brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
-      brand_highlight_color: branding.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
-      brand_cta: preset.cta || DEFAULT_SETTINGS.brand_cta,
-      caption_preset: preset.caption_style || DEFAULT_SETTINGS.caption_preset,
+      ...(Object.keys(profile).length
+        ? {
+            aspect: profileAspect || previous.aspect,
+            clip_length: profileClipLength || previous.clip_length,
+            platform: profilePlatform || previous.platform,
+            captions: profileCaptions === null || profileCaptions === undefined ? previous.captions : profileCaptions,
+            brand_logo: profileBranding.logo || profile.watermark_end_cards?.watermark || previous.brand_logo,
+            brand_font: profileBranding.font || previous.brand_font,
+            brand_primary_color: profileColors.primary || previous.brand_primary_color,
+            brand_highlight_color: profileColors.accent || previous.brand_highlight_color,
+            brand_cta: preset.cta || profile.copy_rules?.cta || previous.brand_cta,
+            caption_preset: preset.caption_style || profile.captions_language?.style || previous.caption_preset,
+            topic: profile.source_rules?.allowed?.join(", ") || previous.topic,
+            vocabulary: profile.copy_rules?.required_copy?.join(", ") || previous.vocabulary,
+            selection_prompt: [
+              ...(profile.banned_words_topics?.topics || []).map((item) => `Avoid topic: ${item}`),
+              ...(profile.banned_words_topics?.words || []).map((item) => `Avoid word: ${item}`),
+            ].join("; ") || previous.selection_prompt,
+          }
+        : {
+            // A brief is a replacement, not a merge. Clear values the previous preset supplied when
+            // the new brief leaves them blank; otherwise old campaign branding quietly leaks forward.
+            aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
+            clip_length: briefClipLength,
+            platform: metadataPlatform,
+            brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
+            brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
+            brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
+            brand_highlight_color: branding.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
+            brand_cta: preset.cta || DEFAULT_SETTINGS.brand_cta,
+            caption_preset: preset.caption_style || DEFAULT_SETTINGS.caption_preset,
+          }),
+
     }));
     setPublishing((previous) => ({
       ...previous,
@@ -759,6 +802,7 @@ export default function App() {
       mode: "review",
     }));
   };
+
 
   const handlePublished = (attempts) => {
     setPublishAttempts((previous) => [

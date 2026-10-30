@@ -83,7 +83,7 @@ from worker.campaign_preset_sync import (
     CampaignPresetDriveService,
     CampaignPresetImportError,
 )
-from worker.campaign_profile import CampaignProfile
+from worker.campaign_profile import CampaignProfile, parse_campaign_profile
 from worker.campaign_profile_store import get_campaign_profile_store
 from worker.compliance import check_compliance
 from worker.download import (
@@ -652,6 +652,13 @@ class CampaignImportRequest(BaseModel):
     download_assets: bool = False
     save: bool = False
     select: bool = False
+
+
+class CampaignProfileTextRequest(BaseModel):
+    """Parse a pasted brief with the same profile vocabulary as Drive imports."""
+
+    raw_text: str = ""
+    source_url: str = ""
 
 
 class CampaignProfileModel(BaseModel):
@@ -2544,11 +2551,37 @@ def import_campaign_profiles(req: CampaignImportRequest) -> dict:
         if req.select:
             get_campaign_profile_store().select(profile.id)
         body["profile"] = profile.to_dict()
-        selected_profile = get_campaign_profile_store().selected()
-        body["selected_id"] = (
-            profile.id if req.select else selected_profile.id if selected_profile else None
-        )
+        if req.select:
+            body["selected_id"] = profile.id
+        else:
+            currently_selected = get_campaign_profile_store().selected()
+            body["selected_id"] = currently_selected.id if currently_selected else None
     return body
+
+
+@app.post("/api/campaign-profiles/parse", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def parse_campaign_profile_text(req: CampaignProfileTextRequest) -> dict:
+    """Parse pasted brief text without requiring Drive access or saving a profile."""
+
+    if not req.raw_text.strip():
+        raise HTTPException(status_code=400, detail="Paste campaign brief text first.")
+    profile = parse_campaign_profile(
+        req.raw_text,
+        provenance=[
+            {
+                "source_type": "paste",
+                "source_url": req.source_url.strip(),
+                "status": "offline_paste",
+            }
+        ],
+    )
+    return {
+        "profile": profile.to_dict(),
+        "sources": [],
+        "provenance": profile.provenance,
+        "requires_review": bool(profile.ambiguities or profile.uncertainties),
+        "status": "offline_paste",
+    }
 
 
 @app.post("/api/campaign-profiles/sync", tags=["campaigns"], dependencies=[Depends(rate_limit)])
@@ -2913,9 +2946,9 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     if req.campaign_profile_id:
         campaign_profile_ids.append(req.campaign_profile_id)
     if not campaign_profile_ids:
-        selected_profile = get_campaign_profile_store().selected()
-        if selected_profile is not None:
-            campaign_profile_ids.append(selected_profile.id)
+        selected_campaign_profile = get_campaign_profile_store().selected()
+        if selected_campaign_profile is not None:
+            campaign_profile_ids.append(selected_campaign_profile.id)
     if campaign_profile_ids:
         profile_store = get_campaign_profile_store()
         campaign_profiles: list[CampaignProfile] = []

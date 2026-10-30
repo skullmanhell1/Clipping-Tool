@@ -195,6 +195,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ urls, ...options }),
     }).then(jsonOrThrow),
+  parseCampaignProfile: (rawText, sourceUrl = "") =>
+    apiFetch("/api/campaign-profiles/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_text: rawText, source_url: sourceUrl }),
+    }).then(jsonOrThrow),
   syncCampaignProfiles: (urls, options = {}) =>
     apiFetch("/api/campaign-profiles/sync", {
       method: "POST",

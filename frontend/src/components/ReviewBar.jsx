@@ -99,7 +99,10 @@ export default function ReviewBar({
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
         <span className="text-[10px] uppercase tracking-wide text-slate-600">Export</span>
         <a
-          href={selectedDownloadUrl || undefined}
+          href={selectedDownloadUrl || "#"}
+          onClick={(event) => {
+            if (!selectedDownloadUrl) event.preventDefault();
+          }}
           aria-disabled={!selectedDownloadUrl}
           className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
             selectedDownloadUrl
@@ -110,7 +113,10 @@ export default function ReviewBar({
           Download selected
         </a>
         <a
-          href={approvedDownloadUrl || undefined}
+          href={approvedDownloadUrl || "#"}
+          onClick={(event) => {
+            if (!approvedDownloadUrl) event.preventDefault();
+          }}
           aria-disabled={!approvedDownloadUrl}
           className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
             approvedDownloadUrl
