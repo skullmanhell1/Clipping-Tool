@@ -317,7 +317,7 @@ def list_folder_files(folder_id: str, *, page_size: int = 100) -> list[dict]:
     token = ""
     try:
         for _ in range(100):
-            params = {
+            params: dict[str, str | int] = {
                 "q": f"'{folder_id}' in parents and trashed = false",
                 "pageSize": max(1, min(int(page_size), 1000)),
                 "orderBy": "name",
