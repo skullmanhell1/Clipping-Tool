@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any
 
 from config import settings as _settings
-from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
+from worker.campaign_policy import preset_is_manual_only
 from worker.effects.caption_presets import BUILTIN_PRESETS as _BUILTIN_CAPTION_PRESETS
 
 #: Job defaults that come from configuration rather than from a literal here.
@@ -495,6 +495,42 @@ class ProcessingOptions:
             # An unknown profile name is dropped rather than recorded, so a job never claims
             # to have been produced by a bundle that does not exist.
             valid.pop("profile")
+        campaign_preset = valid.get("campaign_preset")
+        if isinstance(campaign_preset, dict):
+            edit_policy = campaign_preset.get("edit_policy") or {}
+            quality_policy = campaign_preset.get("quality_policy") or {}
+            meme_policy = campaign_preset.get("meme_policy") or {}
+            # Preset locks are authoritative. Ordinary settings remain user-editable when the
+            # preset does not explicitly constrain them, preserving the existing opt-in behavior.
+            for option_name in (
+                "reframe",
+                "zoom",
+                "transitions",
+                "hook_title",
+                "fades",
+                "progress_bar",
+            ):
+                if option_name in edit_policy and edit_policy[option_name] is not None:
+                    valid[option_name] = _as_bool(edit_policy[option_name])
+            enforced_settings = edit_policy.get("enforced_settings") or {}
+            if isinstance(enforced_settings, dict):
+                valid.update(
+                    {
+                        key: value
+                        for key, value in enforced_settings.items()
+                        if key in cls.__dataclass_fields__
+                    }
+                )
+            if edit_policy.get("meme_allowed") is False or meme_policy.get("allowed") is False:
+                valid.update(meme_mode=False, meme_auto_suggest=False, meme_events=[])
+            if quality_policy.get("allowed") is False:
+                valid.update(
+                    quality_preset="off",
+                    quality_smart_scale=False,
+                    quality_interpolation=False,
+                )
+            if preset_is_manual_only(campaign_preset):
+                valid.update(publish_to=[], publish_mode="review", schedule_at=None)
         # Normalise an empty-string language to None (auto).
         if valid.get("language") in ("", "auto", "Auto"):
             valid["language"] = None
@@ -670,26 +706,6 @@ class ProcessingOptions:
             if enum_field in valid:
                 v = valid[enum_field]
                 valid[enum_field] = v if v in known else default
-        if valid.get("profile") == BOXABL_PROFILE_NAME:
-            # This is a human-reviewed campaign. Never let a saved profile, explicit request, or
-            # UI publishing toggle turn its batch into unattended auto-publishing.
-            valid.update(
-                publish_to=[],
-                publish_mode="review",
-                schedule_at=None,
-                captions=True,
-                subtitle_sidecar=True,
-                reframe=False,
-                zoom=False,
-                transitions=False,
-                hook_title=True,
-                visual_selection=True,
-                kinetic_typography_enabled=False,
-                broll=False,
-                asset_sourcing_mode="off",
-                music="",
-                permissibility_mode=True,
-            )
         return cls(**valid)
 
 

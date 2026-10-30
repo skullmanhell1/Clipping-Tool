@@ -121,7 +121,7 @@ describe("JobCard review workflow", () => {
 
   it("reports every updated clip upward so the list re-renders", async () => {
     const { onClipUpdated } = setup();
-    await userEvent.click(screen.getByRole("button", { name: /^all$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /select all/i }));
     await userEvent.click(screen.getByRole("button", { name: /reject selected/i }));
     await waitFor(() => expect(onClipUpdated).toHaveBeenCalledTimes(3));
   });

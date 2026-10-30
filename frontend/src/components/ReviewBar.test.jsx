@@ -78,7 +78,7 @@ describe("ReviewBar", () => {
     expect(screen.getByRole("button", { name: /approve selected/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /reject selected/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /select pending/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^all$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /select all/i })).toBeDisabled();
   });
 
   it("surfaces a failure instead of swallowing it", () => {

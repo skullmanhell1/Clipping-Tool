@@ -9,11 +9,13 @@ const RESOLUTIONS = [
 
 const setField = (settings, onChange, key) => (value) => onChange({ ...settings, [key]: value });
 
-export default function QualitySettingsPanel({ settings, onChange, outputProfiles = [] }) {
+export default function QualitySettingsPanel({ settings, onChange, outputProfiles = [], campaignPreset = null }) {
   const resolution = Number(settings.output_short_side || 1080);
   const qualityWarning = resolution >= 1440
     ? "Higher output sizes can increase render time and file size; the source still limits real detail."
     : "Upscaling cannot recreate detail that is not present in the source.";
+  const qualityLocked = campaignPreset?.quality_policy?.allowed === false;
+  const qualityLockReason = campaignPreset?.quality_policy?.lock_reason || "Quality delivery is disabled by the active campaign preset.";
   const encoderOptions = [
     { value: "libx264", label: "CPU · libx264 (reliable)" },
     { value: "auto", label: "Auto-detect hardware" },
@@ -31,10 +33,12 @@ export default function QualitySettingsPanel({ settings, onChange, outputProfile
           <h3 className="mt-1 text-lg font-semibold text-white">Quality &amp; delivery</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Choose the output target without hiding the trade-offs between fidelity, speed and file size.</p>
         </div>
-        <label className="flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100"><input type="checkbox" checked={!!settings.quality_enabled} onChange={(event) => onChange({ ...settings, quality_enabled: event.target.checked })} className="accent-cyan-400" />Enable quality delivery</label>
+        <label className="flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100"><input type="checkbox" disabled={qualityLocked} checked={!!settings.quality_enabled} onChange={(event) => onChange({ ...settings, quality_enabled: event.target.checked })} className="accent-cyan-400" />Enable quality delivery</label>
         {outputProfiles.length > 0 ? <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[10px] text-cyan-100">Server profiles available</span> : null}
       </div>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {qualityLocked ? <p className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-2.5 text-xs text-amber-200">{qualityLockReason}</p> : null}
+      <fieldset disabled={qualityLocked} className={qualityLocked ? "mt-4 opacity-60" : "mt-4"}>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Dropdown label="Output resolution" value={resolution} onChange={setField(settings, onChange, "output_short_side")} options={RESOLUTIONS} />
         <Dropdown label="Upscale" value={settings.quality_upscale || "off"} onChange={setField(settings, onChange, "quality_upscale")} options={[{ value: "off", label: "Off · preserve source" }, { value: "auto", label: "Auto · resize only" }, { value: "2x", label: "2× · resize only" }]} />
         <Dropdown label="Speech denoise" value={settings.speech_denoise || "off"} onChange={setField(settings, onChange, "speech_denoise")} options={[{ value: "off", label: "Off" }, { value: "light", label: "Light" }, { value: "standard", label: "Standard" }, { value: "strong", label: "Strong" }]} />
@@ -55,6 +59,7 @@ export default function QualitySettingsPanel({ settings, onChange, outputProfile
       </div>
       <p className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.05] p-2.5 text-[11px] leading-5 text-amber-200">{qualityWarning}</p>
        <p className="mt-2 text-[11px] leading-5 text-slate-500">Quality controls are now part of the per-job request. Unsupported filters or hardware encoders degrade to a documented marker and the CPU path; upscaling can resize pixels but cannot recreate source detail.</p>
+      </fieldset>
     </section>
   );
 }

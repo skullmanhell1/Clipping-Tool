@@ -67,6 +67,15 @@ async function jsonOrThrow(res) {
   return data;
 }
 
+// The backend keeps one profile-compatible compliance route while the unified preset surface is
+// rolled out. Both client names intentionally share the same implementation during that bridge.
+const campaignCompliance = (payload) =>
+  apiFetch("/api/campaign-profiles/compliance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(jsonOrThrow);
+
 export const api = {
   info: () => apiFetch("/api/info").then(jsonOrThrow),
 
@@ -216,11 +225,48 @@ export const api = {
     }).then(jsonOrThrow),
   selectCampaignProfile: (profileId) =>
     apiFetch(`/api/campaign-profiles/${encodeURIComponent(profileId)}/select`, { method: "POST" }).then(jsonOrThrow),
-  campaignProfilesCompliance: (payload) =>
-    apiFetch("/api/campaign-profiles/compliance", {
+  campaignPresetCompliance: campaignCompliance,
+  campaignProfilesCompliance: campaignCompliance,
+  // Unified versioned campaign preset workflow. The older campaign-profile calls above remain
+  // available for compatibility with saved clients and imports.
+  campaignPresets: () => apiFetch("/api/campaign-presets").then(jsonOrThrow),
+  importCampaignPreset: (payload) =>
+    apiFetch("/api/campaign-presets/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }).then(jsonOrThrow),
+  saveCampaignPreset: (preset, select = false) =>
+    apiFetch("/api/campaign-presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: preset?.id || "", name: preset?.name || "", preset, select }),
+    }).then(jsonOrThrow),
+  renameCampaignPreset: (id, name) =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then(jsonOrThrow),
+  selectCampaignPreset: (id) =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/select`, { method: "POST" }).then(jsonOrThrow),
+  duplicateCampaignPreset: (id, name = "") =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/duplicate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then(jsonOrThrow),
+  deleteCampaignPreset: (id) =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}`, { method: "DELETE" }).then(jsonOrThrow),
+  syncCampaignPreset: (id) =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/sync`, { method: "POST" }).then(jsonOrThrow),
+  exportCampaignPreset: (id) =>
+    apiFetch(`/api/campaign-presets/${encodeURIComponent(id)}/export`).then(jsonOrThrow),
+  importCampaignPresetJson: (preset, select = false, save = true) =>
+    apiFetch("/api/campaign-presets/import-json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset, select, save }),
     }).then(jsonOrThrow),
   parseBrief: (rawText, payload = {}) =>
     apiFetch("/api/briefs/parse", {
@@ -265,6 +311,12 @@ export const api = {
   publishClip: (jobId, clipId, payload) =>
     apiFetch(`/api/jobs/${jobId}/clips/${clipId}/publish`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(jsonOrThrow),
+  setClipThumbnail: (jobId, clipId, at) =>
+    apiFetch(`/api/jobs/${jobId}/clips/${clipId}/thumbnail`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ at }),
+    }).then(jsonOrThrow),
   history: (platform = "") =>
     apiFetch(`/api/history${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`).then(jsonOrThrow),
 

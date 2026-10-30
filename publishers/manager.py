@@ -165,7 +165,7 @@ class PublishManager:
                     existing,
                 )
                 continue
-            route = routes.get(platform, {})
+            route = routes.get(platform) or routes.get(requested_platform, {})
             mentions = list(clip.mentions or [])
             affiliate_url = str(route.get("affiliate_url") or "").strip()
             if platform.lower() == "x" and affiliate_url and affiliate_url not in mentions:

@@ -59,13 +59,6 @@ from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_
 from updates import get_update_checker
 from worker import captions as cap
 from worker import output_profiles
-from worker.boxabl_campaign import (
-    PROFILE_NAME as BOXABL_PROFILE_NAME,
-)
-from worker.boxabl_campaign import (
-    campaign_publish_blockers,
-    is_approved_source_url,
-)
 from worker.brand_profiles import BrandProfileStore
 from worker.campaign_brief import parse_campaign_brief
 from worker.campaign_brief_sync import CampaignBriefSyncService
@@ -73,6 +66,15 @@ from worker.campaign_compliance import (
     check_clip_against_profiles,
 )
 from worker.campaign_import import CampaignImportError, CampaignImportService
+from worker.campaign_policy import (
+    campaign_validation_preset,
+    is_versioned_preset,
+    preset_apply_blockers,
+    preset_is_manual_only,
+    preset_required_check_ids,
+    preset_settings,
+    preset_source_blocker,
+)
 from worker.campaign_preset import (
     CampaignPreset,
     parse_campaign_preset,
@@ -514,25 +516,46 @@ def _apply_campaign_defaults(
             if not options.brand_outro_asset:
                 options.brand_outro_asset = profile.outro_asset
         if options.campaign_preset:
-            preset = CampaignPreset.from_dict(options.campaign_preset)
-            options.campaign_preset = preset.to_dict()
-            if "aspect" not in explicit and preset.aspect_ratios:
-                options.aspect = preset.aspect_ratios[0]
-            if "platform" not in explicit and preset.allowed_platforms:
-                options.platform = preset.allowed_platforms[0]
-            if not options.brand_logo:
-                options.brand_logo = preset.branding.logo
-            if not options.brand_font:
-                options.brand_font = preset.branding.font
-            if not options.brand_primary_color:
-                options.brand_primary_color = preset.branding.colors.get("primary", "")
-            if not options.brand_highlight_color:
-                options.brand_highlight_color = preset.branding.colors.get("accent", "")
-            if not options.brand_cta:
-                options.brand_cta = preset.cta
-            if "storytelling_enabled" not in explicit:
-                options.storytelling_enabled = True
-            options.public_visibility = "public"
+            raw_preset = dict(options.campaign_preset)
+            is_versioned = is_versioned_preset(raw_preset)
+            if is_versioned:
+                options.campaign_preset = raw_preset
+                versioned_settings = preset_settings(raw_preset)
+                for field_name, value in versioned_settings.items():
+                    if field_name in explicit or not hasattr(options, field_name):
+                        continue
+                    setattr(options, field_name, value)
+                posting = dict(raw_preset.get("posting") or {})
+                if posting.get("manual_only") or posting.get("review_only"):
+                    options.publish_to = []
+                    options.publish_mode = "review"
+                if "aspect" not in explicit and versioned_settings.get("aspect"):
+                    options.aspect = versioned_settings["aspect"]
+                if "platform" not in explicit and versioned_settings.get("platform"):
+                    options.platform = versioned_settings["platform"]
+                if "storytelling_enabled" not in explicit:
+                    options.storytelling_enabled = True
+                options.public_visibility = "public"
+            else:
+                preset = CampaignPreset.from_dict(raw_preset)
+                options.campaign_preset = preset.to_dict()
+                if "aspect" not in explicit and preset.aspect_ratios:
+                    options.aspect = preset.aspect_ratios[0]
+                if "platform" not in explicit and preset.allowed_platforms:
+                    options.platform = preset.allowed_platforms[0]
+                if not options.brand_logo:
+                    options.brand_logo = preset.branding.logo
+                if not options.brand_font:
+                    options.brand_font = preset.branding.font
+                if not options.brand_primary_color:
+                    options.brand_primary_color = preset.branding.colors.get("primary", "")
+                if not options.brand_highlight_color:
+                    options.brand_highlight_color = preset.branding.colors.get("accent", "")
+                if not options.brand_cta:
+                    options.brand_cta = preset.cta
+                if "storytelling_enabled" not in explicit:
+                    options.storytelling_enabled = True
+                options.public_visibility = "public"
     except Exception:
         # Missing/corrupt optional brief/profile state must not break legacy processing.
         pass
@@ -550,6 +573,12 @@ class ClipEditModel(BaseModel):
     cta: str | None = None
     mentions: list[str] | None = None
     thumbnail_text: str | None = None
+
+
+class ThumbnailFrameModel(BaseModel):
+    """Choose a review thumbnail frame from the rendered clip."""
+
+    at: float
 
 
 class RegenerateRequest(BaseModel):
@@ -661,6 +690,38 @@ class CampaignProfileTextRequest(BaseModel):
     source_url: str = ""
 
 
+class CampaignPresetImportRequest(BaseModel):
+    """Unified campaign import request for Docs, Drive folders, public links, or pasted text."""
+
+    urls: list[str] = Field(default_factory=list)
+    links: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    text: str = ""
+    force: bool = False
+    download_assets: bool = False
+    save: bool = False
+    select: bool = False
+
+
+class CampaignPresetSaveRequest(BaseModel):
+    """Save the complete versioned preset while keeping old profile routes compatible."""
+
+    id: str = ""
+    name: str = ""
+    preset: dict = Field(default_factory=dict)
+    select: bool = False
+
+
+class CampaignPresetActionRequest(BaseModel):
+    name: str = ""
+
+
+class CampaignPresetJsonRequest(BaseModel):
+    preset: dict = Field(default_factory=dict)
+    select: bool = False
+    save: bool = True
+
+
 class CampaignProfileModel(BaseModel):
     """Editable campaign-profile payload; unknown fields remain outside the policy model."""
 
@@ -683,11 +744,28 @@ class CampaignProfileModel(BaseModel):
     raw_text_hash: str = ""
     parser: str = "deterministic"
     editable: bool = True
+    schema_version: int = 2
+    source_library: list[dict] = Field(default_factory=list)
+    settings: dict = Field(default_factory=dict)
+    edit_policy: dict = Field(default_factory=dict)
+    quality_policy: dict = Field(default_factory=dict)
+    posting: dict = Field(default_factory=dict)
+    compliance: dict = Field(default_factory=dict)
+    source_links: list[str] = Field(default_factory=list)
+    source_revision: str = ""
+    source_content_hash: str = ""
+    last_synced_at: float = 0.0
+    changed: bool = False
+    warnings: list[dict] = Field(default_factory=list)
+    dismissed_warnings: list[str] = Field(default_factory=list)
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
 
 class CampaignProfileComplianceRequest(BaseModel):
     profile_ids: list[str] = Field(default_factory=list)
     profile_id: str = ""
+    profile: dict = Field(default_factory=dict)
     clip: dict = Field(default_factory=dict)
     job_id: str = ""
     clip_id: str = ""
@@ -695,11 +773,12 @@ class CampaignProfileComplianceRequest(BaseModel):
 
 
 class DailyScheduleRequest(BaseModel):
-    """Schedule exactly two clips for one campaign day."""
+    """Schedule the configured number of clips for one campaign day."""
 
     job_id: str
     clip_ids: list[str]
     platforms: list[str] = Field(default_factory=list)
+    campaign_checks: dict[str, bool] = Field(default_factory=dict)
     day: str = ""
     timezone: str = "UTC"
     peak_hours: list[str] = Field(default_factory=lambda: ["12:00", "19:00"])
@@ -1156,14 +1235,9 @@ def submit_url(req: UrlJobRequest) -> dict:
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     options = req.options.to_options()
-    if options.profile == BOXABL_PROFILE_NAME and not is_approved_source_url(req.url):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "BOXABL campaign URL sources must be individual links from the approved "
-                "Drive / YouTube source list in the campaign brief."
-            ),
-        )
+    source_blocker = preset_source_blocker(getattr(options, "campaign_preset", {}) or {}, req.url)
+    if source_blocker:
+        raise HTTPException(status_code=400, detail=source_blocker)
     manager = get_manager()
     project_cleanup = manager.start_new_project() if req.new_project else None
     job = manager.submit("url", req.url, options)
@@ -1192,14 +1266,11 @@ def submit_batch(req: BatchRequest) -> dict:
             validate_public_url(candidate)
         except UnsafeURLError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if options.profile == BOXABL_PROFILE_NAME and not is_approved_source_url(candidate):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Every BOXABL campaign URL must be an individual link from the approved "
-                    "Drive / YouTube source list in the campaign brief."
-                ),
-            )
+        source_blocker = preset_source_blocker(
+            getattr(options, "campaign_preset", {}) or {}, candidate
+        )
+        if source_blocker:
+            raise HTTPException(status_code=400, detail=source_blocker)
     items = [{"input_type": "url", "source": u} for u in urls]
     manager = get_manager()
     project_cleanup = manager.start_new_project() if req.new_project else None
@@ -1487,9 +1558,18 @@ async def upload(
 
     if campaign_preset:
         try:
-            optional_form["campaign_preset"] = json.loads(campaign_preset)
-        except (TypeError, ValueError):
-            optional_form["campaign_preset"] = {}
+            parsed_preset = json.loads(campaign_preset)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="campaign_preset must be a valid JSON object",
+            ) from exc
+        if not isinstance(parsed_preset, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="campaign_preset must be a valid JSON object",
+            )
+        optional_form["campaign_preset"] = parsed_preset
 
     options = ProcessingOptions.from_dict(
         {
@@ -1953,15 +2033,15 @@ def get_batch(batch_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Clip metadata editing + per-field regeneration
 # ---------------------------------------------------------------------------
-def _invalidate_boxabl_review(
+def _invalidate_campaign_review(
     job: Any,
     clip: Any,
     fields: dict[str, Any],
     *,
     force: bool = False,
 ) -> None:
-    """Require a fresh human review after a BOXABL clip or its copy changes."""
-    if getattr(getattr(job, "options", None), "profile", "") != BOXABL_PROFILE_NAME:
+    """Require a fresh human review after an active campaign clip or its copy changes."""
+    if not getattr(getattr(job, "options", None), "campaign_preset", None):
         return
 
     changed = force or any(
@@ -1971,7 +2051,7 @@ def _invalidate_boxabl_review(
     )
     if changed:
         fields["review_state"] = "pending"
-        fields["review_note"] = "Re-review this BOXABL campaign clip before publishing."
+        fields["review_note"] = "Re-review this campaign clip before publishing."
 
 
 @app.patch("/api/jobs/{job_id}/clips/{clip_id}", tags=["metadata"])
@@ -1985,12 +2065,53 @@ def edit_clip(job_id: str, clip_id: str, edit: ClipEditModel) -> dict:
     original = manager.store.get_clip(job_id, clip_id)
     if job is None or original is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
-    _invalidate_boxabl_review(job, original, fields)
+    _invalidate_campaign_review(job, original, fields)
     clip = manager.store.update_clip(job_id, clip_id, fields)
     if clip is None:
         raise HTTPException(status_code=404, detail="Job or clip not found")
     get_history().sync_clip(job_id, clip)
     return clip.to_dict()
+
+
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/thumbnail",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
+def set_clip_thumbnail(job_id: str, clip_id: str, req: ThumbnailFrameModel) -> dict:
+    """Generate a thumbnail at a creator-selected clip-relative timestamp."""
+
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    try:
+        at = float(req.at)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Thumbnail time must be numeric") from None
+    duration = float(getattr(clip, "duration", 0) or 0)
+    if not 0 <= at <= duration:
+        raise HTTPException(
+            status_code=422, detail=f"Thumbnail time must be between 0 and {duration:.2f} seconds"
+        )
+    video_path, _ = _resolve_clip_file(job_id, clip.filename)
+    thumbnail_name = f"clip_{Path(clip_id).name}.jpg"
+    thumbnail_path = video_path.with_name(thumbnail_name)
+    try:
+        from worker import ffmpeg_utils
+
+        ffmpeg_utils.generate_thumbnail(video_path, thumbnail_path, at=at)
+    except Exception as exc:
+        logger.exception("Could not generate selected thumbnail for %s/%s", job_id, clip_id)
+        raise HTTPException(status_code=409, detail=f"Could not generate thumbnail: {exc}") from exc
+    fields = {"thumbnail_url": f"clips/{Path(job_id).name}/{thumbnail_name}"}
+    _invalidate_campaign_review(job, clip, fields, force=True)
+    updated = manager.store.update_clip(job_id, clip_id, fields)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+    get_history().sync_clip(job_id, updated)
+    return {"at": at, "thumbnail_url": updated.thumbnail_url, "clip": updated.to_dict()}
 
 
 def _preset_detail(preset) -> dict:
@@ -2305,7 +2426,7 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
             "engagement_features",
         )
     }
-    _invalidate_boxabl_review(job, clip, fields, force=True)
+    _invalidate_campaign_review(job, clip, fields, force=True)
     stored = manager.store.update_clip(job_id, clip_id, fields) or updated
     get_history().sync_clip(job_id, stored)
     return stored.to_dict()
@@ -2357,7 +2478,7 @@ def regenerate_clip_field(job_id: str, clip_id: str, req: RegenerateRequest) -> 
     # update cannot miss. Falling back to it keeps the expression total without inventing an
     # error path for a state the store cannot reach.
     fields = {req.field: value}
-    _invalidate_boxabl_review(job, clip, fields)
+    _invalidate_campaign_review(job, clip, fields)
     updated = manager.store.update_clip(job_id, clip_id, fields) or clip
     get_history().sync_clip(job_id, updated)
     return {"field": req.field, "value": value, "clip": updated.to_dict()}
@@ -2631,22 +2752,282 @@ def delete_campaign_profile(profile_id: str) -> dict:
     return {"deleted": True, "id": profile_id}
 
 
+def _unified_preset_response(
+    profile: CampaignProfile, *, selected_id: str | None = None
+) -> dict[str, Any]:
+    data = profile.to_dict()
+    if selected_id is None:
+        selected_profile = get_campaign_profile_store().selected()
+        selected_id = selected_profile.id if selected_profile else None
+    selected = selected_id
+    return {
+        "preset": data,
+        "profile": data,
+        "selected_id": selected,
+        "requires_review": bool(
+            data.get("warnings") or data.get("ambiguities") or data.get("uncertainties")
+        ),
+        "apply_blockers": preset_apply_blockers(data),
+        "source_library": list(data.get("source_library") or []),
+    }
+
+
+def _unified_profile_from_request(req: CampaignPresetSaveRequest) -> CampaignProfile:
+    data = dict(req.preset or {})
+    if req.id and not data.get("id"):
+        data["id"] = req.id
+    if req.name.strip():
+        data["name"] = req.name.strip()
+    if not data:
+        data = {"id": req.id, "name": req.name or "Untitled campaign"}
+    return CampaignProfile.from_dict(data)
+
+
+def _save_unified_profile(
+    profile: CampaignProfile, *, profile_id: str = "", select: bool = False
+) -> dict[str, Any]:
+    if select:
+        blockers = preset_apply_blockers(profile.to_dict())
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Campaign preset requires review before applying",
+                    "blockers": blockers,
+                },
+            )
+    profile.updated_at = time.time()
+    saved = get_campaign_profile_store().save(profile, profile_id=profile_id or profile.id)
+    selected_id: str | None = saved.id
+    if select:
+        get_campaign_profile_store().select(saved.id)
+    else:
+        selected = get_campaign_profile_store().selected()
+        selected_id = selected.id if selected else None
+    return _unified_preset_response(saved, selected_id=selected_id)
+
+
+@app.post("/api/campaign-presets/import", tags=["campaigns"], dependencies=[Depends(rate_limit)])
+def import_unified_campaign_preset(req: CampaignPresetImportRequest) -> dict[str, Any]:
+    """Import several sources or paste a brief into one reviewable, versioned preset."""
+
+    urls = [*req.urls, *req.links, *req.source_urls]
+    if req.text.strip():
+        profile = CampaignProfile.from_dict(parse_campaign_profile(req.text).to_dict())
+        body: dict[str, Any] = {
+            "preset": profile.to_dict(),
+            "profile": profile.to_dict(),
+            "sources": list(profile.provenance),
+            "provenance": list(profile.provenance),
+            "sync": {
+                "status": "offline_paste",
+                "parser": "deterministic",
+                "synced_at": time.time(),
+            },
+            "sync_status": "offline_paste",
+            "requires_review": True,
+        }
+    else:
+        try:
+            result = CampaignImportService().import_urls(
+                urls, force=req.force, download_assets=req.download_assets
+            )
+        except CampaignImportError as exc:
+            raise _campaign_import_error(exc) from exc
+        profile = result.profile
+        profile.source_links = list(
+            dict.fromkeys(
+                str(source.source_url or "")
+                for source in result.sources
+                if str(source.source_url or "").strip()
+            )
+        )
+        profile.source_revision = ",".join(
+            dict.fromkeys(
+                str(source.revision_id or "") for source in result.sources if source.revision_id
+            )
+        )
+        profile.source_content_hash = profile.raw_text_hash
+        body = result.to_dict()
+        body["preset"] = profile.to_dict()
+        body["profile"] = profile.to_dict()
+
+    if req.save or req.select:
+        if req.select:
+            blockers = preset_apply_blockers(profile.to_dict())
+            if blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign preset requires review before applying",
+                        "blockers": blockers,
+                    },
+                )
+        saved = get_campaign_profile_store().save(profile)
+        if req.select:
+            get_campaign_profile_store().select(saved.id)
+        profile = saved
+        body.update(_unified_preset_response(saved, selected_id=saved.id if req.select else None))
+    else:
+        body["apply_blockers"] = preset_apply_blockers(profile.to_dict())
+        body["source_library"] = list(profile.source_library)
+    return body
+
+
+@app.get("/api/campaign-presets", tags=["campaigns"])
+def list_unified_campaign_presets() -> dict[str, Any]:
+    store = get_campaign_profile_store()
+    selected = store.selected()
+    profiles = [profile.to_dict() for profile in store.list()]
+    return {
+        "schema_version": 2,
+        "presets": profiles,
+        "profiles": profiles,
+        "selected_id": selected.id if selected else None,
+        "empty": not bool(profiles),
+    }
+
+
+@app.post("/api/campaign-presets", tags=["campaigns"])
+def save_unified_campaign_preset(req: CampaignPresetSaveRequest) -> dict[str, Any]:
+    profile = _unified_profile_from_request(req)
+    return _save_unified_profile(profile, profile_id=req.id, select=req.select)
+
+
+@app.patch("/api/campaign-presets/{preset_id}", tags=["campaigns"])
+def rename_unified_campaign_preset(
+    preset_id: str, req: CampaignPresetActionRequest
+) -> dict[str, Any]:
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Preset name cannot be empty")
+    profile = get_campaign_profile_store().rename(preset_id, req.name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    return _unified_preset_response(profile)
+
+
+@app.post("/api/campaign-presets/{preset_id}/select", tags=["campaigns"])
+def select_unified_campaign_preset(preset_id: str) -> dict[str, Any]:
+    profile = get_campaign_profile_store().get(preset_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    blockers = preset_apply_blockers(profile.to_dict())
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Campaign preset requires review before applying",
+                "blockers": blockers,
+            },
+        )
+    profile = get_campaign_profile_store().select(preset_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    return _unified_preset_response(profile)
+
+
+@app.post("/api/campaign-presets/{preset_id}/duplicate", tags=["campaigns"])
+def duplicate_unified_campaign_preset(
+    preset_id: str, req: CampaignPresetActionRequest
+) -> dict[str, Any]:
+    profile = get_campaign_profile_store().duplicate(preset_id, req.name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    return _unified_preset_response(profile)
+
+
+@app.delete("/api/campaign-presets/{preset_id}", tags=["campaigns"])
+def delete_unified_campaign_preset(preset_id: str) -> dict[str, Any]:
+    if not get_campaign_profile_store().delete(preset_id):
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    return {"deleted": True, "id": preset_id}
+
+
+@app.get("/api/campaign-presets/{preset_id}/export", tags=["campaigns"])
+def export_unified_campaign_preset(preset_id: str) -> dict[str, Any]:
+    profile = get_campaign_profile_store().get(preset_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    return profile.to_dict()
+
+
+@app.post("/api/campaign-presets/import-json", tags=["campaigns"])
+def import_unified_campaign_preset_json(req: CampaignPresetJsonRequest) -> dict[str, Any]:
+    if not req.preset:
+        raise HTTPException(status_code=400, detail="Provide a campaign preset JSON object")
+    profile = CampaignProfile.from_dict(req.preset)
+    if not req.save and not req.select:
+        return _unified_preset_response(profile, selected_id=None)
+    return _save_unified_profile(profile, profile_id=profile.id, select=req.select)
+
+
+@app.post(
+    "/api/campaign-presets/{preset_id}/sync", tags=["campaigns"], dependencies=[Depends(rate_limit)]
+)
+def sync_unified_campaign_preset(preset_id: str) -> dict[str, Any]:
+    store = get_campaign_profile_store()
+    existing = store.get(preset_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Campaign preset not found")
+    urls = list(existing.source_links or [])
+    if not urls:
+        raise HTTPException(
+            status_code=409, detail="This campaign preset has no re-syncable source links"
+        )
+    try:
+        result = CampaignImportService().import_urls(urls, force=True)
+    except CampaignImportError as exc:
+        raise _campaign_import_error(exc) from exc
+    merged = result.profile.to_dict()
+    merged["id"] = existing.id
+    merged["name"] = existing.name
+    merged["created_at"] = existing.created_at
+    merged["changed"] = bool(
+        existing.source_content_hash
+        and result.profile.raw_text_hash
+        and existing.source_content_hash != result.profile.raw_text_hash
+    )
+    # Preserve decisions made in the UI for links that are still present in the refreshed source.
+    old_decisions = {
+        str(item.get("url") or ""): item
+        for item in existing.source_library
+        if isinstance(item, dict) and item.get("url")
+    }
+    for item in merged.get("source_library") or []:
+        prior = old_decisions.get(str(item.get("url") or ""))
+        if prior and prior.get("status") in {"approved", "suggested", "banned"}:
+            item["status"] = prior["status"]
+            item["approved"] = prior["status"] == "approved"
+    merged["source_content_hash"] = result.profile.raw_text_hash
+    merged["last_synced_at"] = result.synced_at
+    saved = store.save(merged, profile_id=existing.id)
+    return {
+        **_unified_preset_response(saved),
+        "changed": bool(saved.changed),
+        "sync_status": "changed" if saved.changed else "synced",
+        "sources": [source.provenance() for source in result.sources],
+    }
+
+
 @app.post("/api/campaign-profiles/compliance", tags=["campaigns"])
 def campaign_profiles_compliance(req: CampaignProfileComplianceRequest) -> dict:
     store = get_campaign_profile_store()
-    ids = [*req.profile_ids]
-    if req.profile_id:
-        ids.append(req.profile_id)
-    if not ids:
-        selected = store.selected()
-        if selected:
-            ids.append(selected.id)
-    profiles = []
-    for profile_id in dict.fromkeys(ids):
-        profile = store.get(profile_id)
-        if profile is None:
-            raise HTTPException(status_code=404, detail=f"Campaign profile not found: {profile_id}")
-        profiles.append(profile)
+    profiles = [CampaignProfile.from_dict(req.profile)] if req.profile else []
+    if not profiles:
+        ids = [*req.profile_ids]
+        if req.profile_id:
+            ids.append(req.profile_id)
+        if not ids:
+            selected = store.selected()
+            if selected:
+                ids.append(selected.id)
+        for profile_id in dict.fromkeys(ids):
+            profile = store.get(profile_id)
+            if profile is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Campaign profile not found: {profile_id}"
+                )
+            profiles.append(profile)
     if not profiles:
         raise HTTPException(
             status_code=400, detail="Provide profile_ids or select a campaign profile first"
@@ -2671,11 +3052,24 @@ def campaign_profiles_compliance(req: CampaignProfileComplianceRequest) -> dict:
     return check_clip_against_profiles(profiles, clip, visibility=req.visibility)
 
 
-def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -> dict[str, Any]:
+def _clip_preset_facts(
+    job: Any,
+    clip: Any,
+    *,
+    visibility: str,
+    platform: str,
+    source_approved: bool = False,
+) -> dict[str, Any]:
     """Project a rendered clip into the pure campaign-policy vocabulary."""
 
     options = job.options
     return {
+        "title": getattr(clip, "title", ""),
+        "description": getattr(clip, "description", ""),
+        "caption": getattr(clip, "description", ""),
+        "transcript_text": getattr(clip, "transcript_text", ""),
+        "hook_text": getattr(clip, "hook_text", ""),
+        "mentions": list(getattr(clip, "mentions", []) or []),
         "visibility": visibility,
         "platform": platform,
         "aspect_ratio": getattr(options, "aspect", ""),
@@ -2684,8 +3078,6 @@ def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -
         "caption_style": getattr(options, "caption_preset", ""),
         "duration": getattr(clip, "duration", None),
         "captions_enabled": bool(getattr(options, "captions", False)),
-        "mentions": list(getattr(clip, "mentions", []) or []),
-        "caption": getattr(clip, "description", ""),
         "source_url": str(getattr(job, "source", "") or ""),
         "branding": {
             "logo": getattr(options, "brand_logo", ""),
@@ -2699,15 +3091,24 @@ def _clip_preset_facts(job: Any, clip: Any, *, visibility: str, platform: str) -
         "cliffhanger": bool(
             (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected")
         ),
+        "captions": bool(getattr(job.options, "captions", False)),
+        "language": getattr(job.options, "language", "") or "",
+        "caption_language": getattr(job.options, "language", "") or "",
+        "watermark": getattr(job.options, "brand_logo", ""),
+        "end_card": getattr(job.options, "brand_outro_asset", "")
+        or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
+        "source_approved": bool(source_approved),
+        "audio_source": getattr(job.options, "music", "") or "",
+        "meme": any(
+            "meme" in str(marker).casefold()
+            for marker in (getattr(clip, "effects_applied", []) or [])
+        ),
     }
 
 
 @app.post("/api/campaigns/{campaign_id}/daily-schedule", tags=["publishing"])
 def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
-    """Queue exactly two public clips at two distinct peak-time slots."""
-
-    if len(req.clip_ids) != 2 or len(set(req.clip_ids)) != 2:
-        raise HTTPException(status_code=400, detail="Exactly two different clip_ids are required")
+    """Queue a campaign's configured number of public clips at distinct peak-time slots."""
     if str(req.visibility).strip().casefold() != "public":
         raise HTTPException(
             status_code=400, detail="Campaign automation only supports public visibility"
@@ -2719,7 +3120,76 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    preset_data = getattr(job.options, "campaign_preset", {}) or {}
+    campaign_brief = getattr(campaign, "brief", None)
+    if not preset_data and campaign_brief is not None:
+        preset_data = CampaignPreset.from_dict(
+            {
+                **campaign_brief.to_dict(),
+                "name": getattr(campaign, "name", ""),
+            }
+        ).to_dict()
+    if preset_is_manual_only(preset_data):
+        raise HTTPException(
+            status_code=409,
+            detail="The active campaign preset requires human review before publishing.",
+        )
+    posting = dict(preset_data.get("posting") or {})
+    try:
+        daily_target = max(
+            1,
+            min(
+                10,
+                int(posting.get("daily_clip_target") or preset_data.get("daily_clip_target") or 2),
+            ),
+        )
+    except (TypeError, ValueError):
+        daily_target = 2
+    if len(req.clip_ids) != daily_target or len(set(req.clip_ids)) != daily_target:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Exactly {daily_target} different clip_ids are required for this campaign day",
+        )
     platforms = list(req.platforms or campaign.routes.keys())
+    resolved_platforms = [resolve_platform(platform) for platform in platforms]
+    if len(set(resolved_platforms)) != len(resolved_platforms):
+        raise HTTPException(
+            status_code=400, detail="Do not select the same publisher more than once"
+        )
+    allowed_platforms = list(
+        (preset_data.get("posting") or {}).get("platforms")
+        or preset_data.get("platforms")
+        or preset_data.get("allowed_platforms")
+        or []
+    )
+    if allowed_platforms:
+        allowed_keys = {
+            str(item).strip().casefold() for item in allowed_platforms if str(item).strip()
+        }
+        allowed_publishers = {resolve_platform(item) for item in allowed_keys}
+        disallowed = [
+            requested
+            for requested in platforms
+            if str(requested).strip().casefold() not in allowed_keys
+            and resolve_platform(requested) not in allowed_publishers
+        ]
+        if disallowed:
+            raise HTTPException(
+                status_code=409,
+                detail="The active campaign preset does not allow: "
+                + ", ".join(map(str, disallowed)),
+            )
+    missing_checks = [
+        check_id
+        for check_id in preset_required_check_ids(preset_data)
+        if req.campaign_checks.get(check_id) is not True
+    ]
+    if missing_checks:
+        raise HTTPException(
+            status_code=409,
+            detail="Complete the active campaign review checklist: " + ", ".join(missing_checks),
+        )
+
     if not platforms:
         raise HTTPException(status_code=400, detail="Campaign has no publishing routes")
     manager = get_publish_manager()
@@ -2730,7 +3200,13 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         if publisher is None:
             raise HTTPException(status_code=400, detail=f"Unknown publishing platform: {requested}")
         account_id = str(
-            routes.get(requested, campaign.routes.get(platform, {})).get("account_id") or ""
+            (
+                routes.get(requested)
+                or routes.get(platform)
+                or campaign.routes.get(requested)
+                or campaign.routes.get(platform, {})
+            ).get("account_id")
+            or ""
         )
         status = publisher.status(account_id)
         if not status.configured or not status.direct_publish:
@@ -2749,32 +3225,112 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         from zoneinfo import ZoneInfo
 
         calendar_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
-    slots = plan_daily_slots(calendar_day, timezone, req.peak_hours, visibility="public")
-    preset_data = getattr(job.options, "campaign_preset", {}) or {}
-    campaign_brief = getattr(campaign, "brief", None)
-    if not preset_data and campaign_brief is not None:
-        preset_data = CampaignPreset.from_dict(
-            {
-                **campaign_brief.to_dict(),
-                "name": getattr(campaign, "name", ""),
-            }
-        ).to_dict()
-    preset = CampaignPreset.from_dict(preset_data)
+    peak_hours = list(req.peak_hours)
+    preset_peak_hours = posting.get("peak_hours")
+    if preset_peak_hours and peak_hours == ["12:00", "19:00"]:
+        peak_hours = list(preset_peak_hours)
+    try:
+        slots = plan_daily_slots(
+            calendar_day,
+            timezone,
+            peak_hours,
+            visibility="public",
+            count=daily_target,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    live_states = {"queued", "scheduled", "uploading", "review_required"}
+    existing_attempts = get_history().scheduled_between(min(slots) - 60, max(slots) + 60)
+    collisions = []
+    for attempt in existing_attempts:
+        if attempt.get("state") not in live_states:
+            continue
+        attempt_platform = resolve_platform(str(attempt.get("platform") or ""))
+        if attempt_platform not in resolved_platforms:
+            continue
+        for slot in slots:
+            if abs(float(attempt.get("scheduled_at") or 0) - slot) <= 60:
+                collisions.append(
+                    {
+                        "attempt_id": attempt.get("id"),
+                        "platform": attempt.get("platform"),
+                        "scheduled_at": attempt.get("scheduled_at"),
+                    }
+                )
+                break
+    if collisions:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "One or more campaign peak slots are already occupied.",
+                "collisions": collisions,
+            },
+        )
+    preset = campaign_validation_preset(preset_data)
 
-    clip_items = []
+    validated_items = []
     for clip_id, slot in zip(req.clip_ids, slots, strict=True):
         clip = get_manager().store.get_clip(req.job_id, clip_id)
         if clip is None:
             raise HTTPException(status_code=404, detail=f"Clip not found: {clip_id}")
-        report = validate_clip_against_preset(
-            preset,
-            _clip_preset_facts(job, clip, visibility="public", platform=platforms[0]),
-        )
-        if report.status == "fail":
+        if getattr(clip, "review_state", "pending") != "approved":
             raise HTTPException(
                 status_code=409,
-                detail={"message": "Campaign preset compliance failed", "report": report.to_dict()},
+                detail="Approve every selected clip after watching it before scheduling public posts.",
             )
+        live_platforms = [
+            requested_platform
+            for requested_platform in platforms
+            if get_history().live_attempt_id(
+                req.job_id,
+                clip_id,
+                resolve_platform(requested_platform),
+            )
+        ]
+        if live_platforms:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Clip {clip_id} already has a live campaign attempt for: "
+                    + ", ".join(live_platforms)
+                ),
+            )
+        reports = []
+        for requested_platform in platforms:
+            facts = _clip_preset_facts(
+                job,
+                clip,
+                visibility="public",
+                platform=requested_platform,
+                source_approved=(
+                    getattr(job, "input_type", "") == "file"
+                    and req.campaign_checks.get("source_approved") is True
+                ),
+            )
+            report: Any
+            if is_versioned_preset(preset_data):
+                from worker.campaign_compliance import check_profile_compliance
+
+                report = check_profile_compliance(
+                    CampaignProfile.from_dict(preset_data), facts, visibility="public"
+                )
+            else:
+                report = validate_clip_against_preset(preset, facts)
+            reports.append((requested_platform, report))
+            if report.status != "pass":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign preset compliance failed",
+                        "platform": requested_platform,
+                        "report": report.to_dict(),
+                    },
+                )
+        validated_items.append((clip_id, slot, clip, reports))
+
+    clip_items = []
+    for clip_id, slot, clip, reports in validated_items:
+        report = reports[0][1]
         ids = manager.submit(
             job_id=req.job_id,
             clip=clip,
@@ -2793,6 +3349,9 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
                 "slot": slot,
                 "attempt_ids": ids,
                 "compliance": report.to_dict(),
+                "compliance_by_platform": {
+                    requested_platform: item.to_dict() for requested_platform, item in reports
+                },
             }
         )
     return {
@@ -2801,7 +3360,7 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         "day": calendar_day,
         "timezone": timezone,
         "visibility": "public",
-        "daily_clip_target": 2,
+        "daily_clip_target": daily_target,
         "slots": list(slots),
         "clips": clip_items,
         "attempts": [
@@ -2857,35 +3416,118 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         or ""
     ).strip()
     routes = {platform: dict(route) for platform, route in req.routes.items()}
-    if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
-        blockers = campaign_publish_blockers(
-            job=job,
-            clip=clip,
-            platforms=req.platforms,
-            mode=req.mode,
-            checks=req.campaign_checks,
-            affiliate_url=req.affiliate_url,
+    campaign_for_routes = (
+        get_history().campaign(publish_campaign_id) if publish_campaign_id else None
+    )
+    requested_platforms = list(req.platforms)
+    if not requested_platforms:
+        requested_platforms = list(routes)
+    if not requested_platforms and campaign_for_routes is not None:
+        requested_platforms = list(campaign_for_routes.routes)
+    resolved_requested = [resolve_platform(platform) for platform in requested_platforms]
+    if len(set(resolved_requested)) != len(resolved_requested):
+        raise HTTPException(
+            status_code=400, detail="Do not select the same publisher more than once"
         )
-        if blockers:
+    preset_data = dict(getattr(job.options, "campaign_preset", {}) or {})
+    if (
+        not preset_data
+        and campaign_for_routes is not None
+        and getattr(campaign_for_routes, "brief", None) is not None
+    ):
+        campaign_brief = campaign_for_routes.brief
+        if campaign_brief is None:
+            raise HTTPException(status_code=409, detail="Campaign brief is missing")
+        preset_data = CampaignPreset.from_dict(
+            {
+                **campaign_brief.to_dict(),
+                "name": getattr(campaign_for_routes, "name", ""),
+            }
+        ).to_dict()
+    if preset_data:
+        allowed_platforms = list(
+            (preset_data.get("posting") or {}).get("platforms")
+            or preset_data.get("platforms")
+            or preset_data.get("allowed_platforms")
+            or []
+        )
+        if allowed_platforms:
+            allowed_keys = {
+                str(item).strip().casefold() for item in allowed_platforms if str(item).strip()
+            }
+            allowed_publishers = {resolve_platform(item) for item in allowed_keys}
+            disallowed = [
+                requested
+                for requested in requested_platforms
+                if str(requested).strip().casefold() not in allowed_keys
+                and resolve_platform(requested) not in allowed_publishers
+            ]
+            if disallowed:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The active campaign preset does not allow: "
+                    + ", ".join(map(str, disallowed)),
+                )
+        source_blocker = preset_source_blocker(preset_data, getattr(job, "source", ""))
+        local_source_confirmed = (
+            getattr(job, "input_type", "") == "file"
+            and req.campaign_checks.get("source_approved") is True
+        )
+        if source_blocker and not local_source_confirmed:
+            raise HTTPException(status_code=409, detail=source_blocker)
+        if preset_is_manual_only(preset_data) and req.mode != "review":
             raise HTTPException(
                 status_code=409,
-                detail="BOXABL campaign preflight failed: " + " ".join(blockers),
+                detail="The active campaign preset requires human review before publishing.",
             )
-        if "x" in {platform.strip().lower() for platform in req.platforms}:
-            routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
-    # Public-only platform readiness runs after the BOXABL preflight so a campaign clip sent in
-    # auto mode gets the specific "use review mode" answer rather than a platform status error.
+        posting_policy = dict(preset_data.get("posting") or {})
+        if (
+            preset_is_manual_only(preset_data)
+            and getattr(clip, "review_state", "pending") != "approved"
+        ):
+            raise HTTPException(
+                status_code=409, detail="Approve the clip after watching it before publishing."
+            )
+        missing_checks = [
+            check_id
+            for check_id in preset_required_check_ids(preset_data)
+            if req.campaign_checks.get(check_id) is not True
+        ]
+        if missing_checks:
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the active campaign review checklist: " + " ".join(missing_checks),
+            )
+        affiliate_platforms = {
+            str(item).strip().casefold()
+            for item in posting_policy.get("affiliate_required_platforms") or []
+        }
+        if {str(item).strip().casefold() for item in requested_platforms} & affiliate_platforms:
+            affiliate_url = req.affiliate_url.strip()
+            if not affiliate_url.startswith("https://"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Add the required trackable HTTPS affiliate URL before publishing.",
+                )
+            for platform in affiliate_platforms & {
+                str(item).strip().casefold() for item in requested_platforms
+            }:
+                routes.setdefault(platform, {})["affiliate_url"] = affiliate_url
+    # Public-only platform readiness runs after the active preset preflight so a review-only
+    # campaign gets the specific policy answer rather than a platform status error.
     public_only = req.mode == "auto"
     if public_only:
         publish_manager = get_publish_manager()
-        for requested in req.platforms:
+        for requested in requested_platforms:
             platform = resolve_platform(requested)
             publisher = publish_manager.publishers.get(platform)
             if publisher is None:
                 raise HTTPException(
                     status_code=400, detail=f"Unknown publishing platform: {requested}"
                 )
-            status = publisher.status(str(routes.get(requested, {}).get("account_id") or ""))
+            status = publisher.status(
+                str((routes.get(requested) or routes.get(platform) or {}).get("account_id") or "")
+            )
             if not status.configured:
                 raise HTTPException(
                     status_code=409, detail=f"{platform} is not configured: {status.message}"
@@ -2923,25 +3565,47 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
     preset_data = dict(getattr(job.options, "campaign_preset", {}) or {})
     mentions_by_platform: dict[str, list[str]] = {}
     if preset_data:
-        preset = CampaignPreset.from_dict(preset_data)
-        mentions_by_platform = preset.required_mentions_by_platform()
-        report = validate_clip_against_preset(
-            preset,
-            _clip_preset_facts(
+        preset = campaign_validation_preset(preset_data)
+        mentions_by_platform = (
+            preset.required_mentions_by_platform()
+            if hasattr(preset, "required_mentions_by_platform")
+            else {}
+        )
+        validation_platforms = list(requested_platforms or [clip.platform or ""])
+        versioned_profile = (
+            CampaignProfile.from_dict(preset_data) if is_versioned_preset(preset_data) else None
+        )
+        for requested_platform in validation_platforms:
+            facts = _clip_preset_facts(
                 job,
                 clip,
                 visibility="public" if public_only else "private",
-                platform=req.platforms[0] if req.platforms else clip.platform,
-            ),
-        )
-        if report.status == "fail":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "Campaign preset compliance failed",
-                    "report": report.to_dict(),
-                },
+                platform=requested_platform,
+                source_approved=(
+                    getattr(job, "input_type", "") == "file"
+                    and req.campaign_checks.get("source_approved") is True
+                ),
             )
+            report: Any
+            if versioned_profile is not None:
+                from worker.campaign_compliance import check_profile_compliance
+
+                report = check_profile_compliance(
+                    versioned_profile,
+                    facts,
+                    visibility=facts["visibility"],
+                )
+            else:
+                report = validate_clip_against_preset(preset, facts)
+            if report.status != "pass":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign preset compliance failed",
+                        "platform": requested_platform,
+                        "report": report.to_dict(),
+                    },
+                )
     campaign_profile_ids = list(req.campaign_profile_ids)
     if req.campaign_profile_id:
         campaign_profile_ids.append(req.campaign_profile_id)
@@ -2951,51 +3615,60 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             campaign_profile_ids.append(selected_campaign_profile.id)
     if campaign_profile_ids:
         profile_store = get_campaign_profile_store()
-        campaign_profiles: list[CampaignProfile] = []
+        profiles: list[CampaignProfile] = []
         for profile_id in dict.fromkeys(campaign_profile_ids):
             campaign_profile = profile_store.get(profile_id)
             if campaign_profile is None:
                 raise HTTPException(
                     status_code=404, detail=f"Campaign profile not found: {profile_id}"
                 )
-            campaign_profiles.append(campaign_profile)
-        profile_facts = clip.to_dict()
-        profile_facts.update(
-            {
-                "platform": req.platforms[0] if req.platforms else clip.platform,
-                "aspect_ratio": getattr(job.options, "aspect", ""),
-                "visibility": "public" if public_only else "private",
-                "duration": getattr(clip, "duration", None),
-                "captions": bool(getattr(job.options, "captions", False)),
-                "language": getattr(job.options, "language", "") or "",
-                "caption_language": getattr(job.options, "language", "") or "",
-                "watermark": getattr(job.options, "brand_logo", ""),
-                "end_card": getattr(job.options, "brand_outro_asset", "")
-                or (getattr(clip, "storytelling_plan", {}) or {})
-                .get("end_card", {})
-                .get("detected"),
-                "source_url": getattr(job, "source", ""),
-                "audio_source": getattr(job.options, "music", "") or "",
-                "meme": any(
-                    "meme" in str(marker).casefold()
-                    for marker in (getattr(clip, "effects_applied", []) or [])
-                ),
-            }
-        )
-        profile_report = check_clip_against_profiles(
-            campaign_profiles, profile_facts, visibility=profile_facts["visibility"]
-        )
-        if profile_report["status"] != "pass":
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "Campaign profile compliance failed", "report": profile_report},
+            profiles.append(campaign_profile)
+        for requested_platform in list(requested_platforms or [clip.platform or ""]):
+            profile_facts = clip.to_dict()
+            profile_facts.update(
+                {
+                    "platform": requested_platform,
+                    "aspect_ratio": getattr(job.options, "aspect", ""),
+                    "visibility": "public" if public_only else "private",
+                    "duration": getattr(clip, "duration", None),
+                    "captions": bool(getattr(job.options, "captions", False)),
+                    "language": getattr(job.options, "language", "") or "",
+                    "caption_language": getattr(job.options, "language", "") or "",
+                    "watermark": getattr(job.options, "brand_logo", ""),
+                    "end_card": getattr(job.options, "brand_outro_asset", "")
+                    or (getattr(clip, "storytelling_plan", {}) or {})
+                    .get("end_card", {})
+                    .get("detected"),
+                    "source_url": getattr(job, "source", ""),
+                    "source_approved": (
+                        getattr(job, "input_type", "") == "file"
+                        and req.campaign_checks.get("source_approved") is True
+                    ),
+                    "audio_source": getattr(job.options, "music", "") or "",
+                    "meme": any(
+                        "meme" in str(marker).casefold()
+                        for marker in (getattr(clip, "effects_applied", []) or [])
+                    ),
+                }
             )
+            profile_report = check_clip_against_profiles(
+                profiles, profile_facts, visibility=profile_facts["visibility"]
+            )
+            if profile_report["status"] != "pass":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Campaign profile compliance failed",
+                        "platform": requested_platform,
+                        "report": profile_report,
+                    },
+                )
     path = Path(settings.clips_dir) / job_id / clip.filename
     ids = get_publish_manager().submit(
         job_id=job_id,
         clip=clip,
         video_path=path,
-        platforms=req.platforms,
+        platforms=requested_platforms,
         campaign_id=publish_campaign_id,
         mode=req.mode,
         schedule_at=req.schedule_at,

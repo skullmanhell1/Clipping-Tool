@@ -24,6 +24,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from config import settings
 from worker import (
@@ -61,15 +62,16 @@ from worker import metadata as meta_mod
 # 23 tests with "module 'worker.pipeline' has no attribute 'sel'".
 from worker import selection as sel
 from worker import transcript_trim as trim
-from worker.boxabl_campaign import (
-    PROFILE_NAME as BOXABL_PROFILE_NAME,
+from worker.campaign_compliance import check_profile_compliance
+from worker.campaign_policy import (
+    campaign_validation_preset,
+    enrich_campaign_metadata_for_preset,
+    is_versioned_preset,
+    normalize_campaign_text,
+    normalize_campaign_words,
 )
-from worker.boxabl_campaign import (
-    enrich_campaign_metadata,
-    normalize_boxabl_text,
-    normalize_boxabl_words,
-)
-from worker.campaign_preset import CampaignPreset, validate_clip_against_preset
+from worker.campaign_preset import validate_clip_against_preset
+from worker.campaign_profile import CampaignProfile
 from worker.effects import broll, compositor, filler, reframe
 from worker.engines import loader  # noqa: F401  (side-effect import: registers the engines)
 from worker.engines.base import Engine_Stage
@@ -772,9 +774,8 @@ def _run_pipeline(
 
         # 2. AI metadata first, so the hook title is available to the renderer.
         clip_text = c.text or cap_text(transcript, c.start, c.end)
-        is_boxabl_campaign = options.profile == BOXABL_PROFILE_NAME
-        if is_boxabl_campaign:
-            clip_text = normalize_boxabl_text(clip_text)
+        if campaign_preset:
+            clip_text = normalize_campaign_text(clip_text, campaign_preset)
         if options.metadata:
             report(base + clip_span / n * 0.3, f"Writing copy for clip {idx + 1}")
             md = meta_mod.generate_metadata(clip_text, options, client=llm_client)
@@ -785,10 +786,10 @@ def _run_pipeline(
                 applied.append(f"metadata_degraded:{md.fallback_reason}")
         else:
             md = meta_mod.ClipMetadata(platform=options.platform)
-        if is_boxabl_campaign:
-            md = enrich_campaign_metadata(md)
         if campaign_preset:
-            policy = CampaignPreset.from_dict(campaign_preset)
+            md = enrich_campaign_metadata_for_preset(md, campaign_preset)
+        if campaign_preset:
+            policy = campaign_validation_preset(campaign_preset)
             md.hashtags = list(dict.fromkeys([*policy.hashtags, *md.hashtags]))
             md.cta = md.cta or policy.cta
             if md.platform == "generic" and policy.allowed_platforms:
@@ -801,6 +802,8 @@ def _run_pipeline(
         # and "is the AI actually running?" is exactly the question it answers.
         if getattr(c, "fallback_reason", ""):
             applied.append(f"selection_degraded:{c.fallback_reason}")
+        if getattr(c, "features", {}).get("boundary_repaired"):
+            applied.append("selection_boundary_repaired")
 
         # Clip-relative words (rebased to 0 at the clip start) for captions/emoji.
         words = cap.slice_words(transcript, c.start, c.end) if transcript.words else []
@@ -811,9 +814,9 @@ def _run_pipeline(
         translated_words = (
             cap.slice_words(translated, c.start, c.end) if translated is not None else []
         )
-        if is_boxabl_campaign:
-            normalize_boxabl_words(words)
-            normalize_boxabl_words(translated_words)
+        if campaign_preset:
+            normalize_campaign_words(words, campaign_preset)
+            normalize_campaign_words(translated_words, campaign_preset)
 
         # Resolve meme events only on the clip-relative delivered timeline. Manual entries retain
         # their exact requested times; preset/heuristic entries are clamped and carry stable ids.
@@ -1671,7 +1674,7 @@ def _run_pipeline(
                     words,
                     clip_duration,
                     entities=(getattr(c, "features", {}) or {}).get("entities"),
-                    pattern_interval=CampaignPreset.from_dict(
+                    pattern_interval=campaign_validation_preset(
                         campaign_preset
                     ).pattern_interrupter_interval
                     or 5,
@@ -1683,32 +1686,48 @@ def _run_pipeline(
                 applied.append("storytelling_degraded")
         if campaign_preset:
             try:
-                compliance = validate_clip_against_preset(
-                    campaign_preset,
-                    {
-                        "visibility": getattr(options, "public_visibility", "public"),
-                        "platform": md.platform,
-                        "aspect_ratio": options.aspect,
-                        "hashtags": md.hashtags,
-                        "cta": md.cta,
-                        "caption_style": getattr(options, "caption_preset", ""),
-                        "duration": clip_duration,
-                        "captions_enabled": bool(getattr(options, "captions", False)),
-                        "mentions": list(md.mentions or []),
-                        "caption": md.description,
-                        "source_url": str(source),
-                        "branding": {
-                            "logo": getattr(options, "brand_logo", ""),
-                            "font": getattr(options, "brand_font", ""),
-                            "colors": {
-                                "primary": getattr(options, "brand_primary_color", ""),
-                                "accent": getattr(options, "brand_highlight_color", ""),
-                            },
+                facts = {
+                    "title": md.title,
+                    "description": md.description,
+                    "caption": md.description,
+                    "transcript_text": clip_text,
+                    "hook_text": md.hook_text,
+                    "mentions": list(md.mentions),
+                    "visibility": getattr(options, "public_visibility", "public"),
+                    "platform": md.platform,
+                    "aspect_ratio": options.aspect,
+                    "hashtags": md.hashtags,
+                    "cta": md.cta,
+                    "caption_style": getattr(options, "caption_preset", ""),
+                    "branding": {
+                        "logo": getattr(options, "brand_logo", ""),
+                        "font": getattr(options, "brand_font", ""),
+                        "colors": {
+                            "primary": getattr(options, "brand_primary_color", ""),
+                            "accent": getattr(options, "brand_highlight_color", ""),
                         },
-                        "hook": bool(md.hook_text),
-                        "cliffhanger": bool(storytelling_plan.get("end_card", {}).get("detected")),
                     },
-                )
+                    "hook": bool(md.hook_text),
+                    "cliffhanger": bool(storytelling_plan.get("end_card", {}).get("detected")),
+                    "duration": clip_duration,
+                    "captions": bool(options.captions and words),
+                    "language": transcript.language or "",
+                    "caption_language": transcript.language or "",
+                    "watermark": getattr(options, "brand_logo", ""),
+                    "end_card": getattr(options, "brand_outro_asset", "")
+                    or storytelling_plan.get("end_card", {}).get("detected"),
+                    "audio_source": getattr(options, "music", "") or "",
+                    "meme": any("meme" in str(marker).casefold() for marker in applied),
+                }
+                compliance: Any
+                if is_versioned_preset(campaign_preset):
+                    compliance = check_profile_compliance(
+                        CampaignProfile.from_dict(campaign_preset),
+                        facts,
+                        visibility=str(facts["visibility"]),
+                    )
+                else:
+                    compliance = validate_clip_against_preset(campaign_preset, facts)
                 compliance_report = compliance.to_dict()
                 applied.append(f"campaign_compliance:{compliance.status}")
             except Exception:

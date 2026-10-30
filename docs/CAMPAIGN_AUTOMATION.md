@@ -1,5 +1,9 @@
 # Campaign automation and retention workflow
 
+The saved, versioned workflow is the unified Campaign panel described in
+[`UNIFIED_CAMPAIGNS.md`](UNIFIED_CAMPAIGNS.md). This document covers the review-only parser and the
+public scheduling connector that remain useful for automation-focused clients.
+
 This release adds an opt-in automation layer for Whop clipping campaigns. It keeps the existing
 CPU-first renderer and publishing adapters, but gives them a shared, reviewable policy object.
 
@@ -22,21 +26,22 @@ long-form source -> transcript -> selection -> render -> review
         |
         +--> campaign-aware publish preflight
                     |
-                    +--> exactly two clips/day at two distinct slots
+                    +--> configured clips/day at distinct peak slots
                     +--> public-only direct publishing
 ```
 
 The parser treats document text as data. It never executes document instructions, downloads an
 asset without an operator-supplied path/provider, or makes a publish decision on its own.
 
-## Google Doc / Whop campaign presets
+## Google Doc / Drive campaign presets
 
 The existing Drive brief sync endpoint remains the source connector:
 
 - `POST /api/briefs/parse` accepts text from a connector and can sync it to a saved campaign.
 - `POST /api/briefs/{campaign_id}/sync` applies a webhook/poll snapshot and preserves the last
   good brief when a read fails.
-- `POST /api/campaign-presets/parse` returns a deterministic `CampaignPreset` for a pasted brief.
+- `POST /api/campaign-presets/parse` returns a deterministic `CampaignPreset` for a pasted brief;
+  `/api/campaign-presets/import` is the canonical endpoint for the saved unified preset workflow.
 
 The preset supports:
 
@@ -123,6 +128,6 @@ curl http://localhost:8000/healthz
 curl http://localhost:8000/api/info
 ```
 
-Then open the dashboard, paste the campaign brief into **Campaign automation**, review the parsed
+Then open the dashboard, paste the campaign brief into the **Campaign workspace**, review the parsed
 preset, render at least two clips, and use the daily schedule form only after the platform status
 shows direct-public approval.

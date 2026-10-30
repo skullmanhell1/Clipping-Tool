@@ -43,7 +43,7 @@ function eventLabel(event) {
   return event.label || event.asset || event.effect || event.type || "Timeline event";
 }
 
-export default function MemeModePanel({ settings, onChange }) {
+export default function MemeModePanel({ settings, onChange, campaignPreset = null }) {
   const [undoStack, setUndoStack] = useState([]);
   const [search, setSearch] = useState("");
   const [suggestions, setSuggestions] = useState(() =>
@@ -64,6 +64,8 @@ export default function MemeModePanel({ settings, onChange }) {
     if (!query) return SFX_LIBRARY;
     return SFX_LIBRARY.filter((item) => `${item.label} ${item.tags}`.toLowerCase().includes(query));
   }, [search]);
+  const memeLocked = campaignPreset?.meme_policy?.allowed === false || campaignPreset?.edit_policy?.meme_allowed === false;
+  const memeLockReason = campaignPreset?.meme_policy?.lock_reason || campaignPreset?.edit_policy?.lock_reason || "Meme mode is disabled by the active campaign preset.";
 
   const commit = (next) => {
     setUndoStack((current) => [...current.slice(-9), events]);
@@ -165,6 +167,7 @@ export default function MemeModePanel({ settings, onChange }) {
         <label className="flex items-center gap-2 rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-3 py-2 text-xs font-semibold text-fuchsia-100">
           <input
             type="checkbox"
+             disabled={memeLocked}
              checked={!!(settings.meme_mode || settings.meme_mode_enabled)}
              onChange={(event) => onChange({ ...settings, meme_mode: event.target.checked, meme_mode_enabled: event.target.checked })}
             className="accent-fuchsia-400"
@@ -173,7 +176,9 @@ export default function MemeModePanel({ settings, onChange }) {
         </label>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
+      {memeLocked ? <p className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-2.5 text-xs text-amber-200">{memeLockReason}</p> : null}
+      <fieldset disabled={memeLocked} className={memeLocked ? "mt-4 opacity-60" : "mt-4"}>
+      <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <div className="space-y-4">
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Choose a pack</p>
@@ -357,6 +362,7 @@ export default function MemeModePanel({ settings, onChange }) {
           ) : null}
         </div>
       </div>
+      </fieldset>
     </section>
   );
 }
