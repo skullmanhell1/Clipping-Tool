@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a fresh install resolved a media decoder that breaks every transcription
+
+- Bounded PyAV below 19 in `requirements.txt`. faster-whisper 1.2.1 calls
+  `av.open(..., metadata_errors="ignore")` unconditionally, and PyAV 19 rejects that keyword,
+  so `pip install -r requirements.txt` — which the Dockerfile runs — produced an app where
+  **every job failed at transcription** with `TypeError: open() got an unexpected keyword
+  argument 'metadata_errors'`. The lockfile pinned 18.0.0, which is exactly why the suite never
+  saw it: the tests ran on the good release while a plain install resolved the broken one.
+  Verified end to end after the fix: an uploaded video renders a 1080×1920 clip.
+
 ### Added — campaign automation and storytelling plans
 
 - Added deterministic Google-Doc campaign presets for branding, captions, formats, hashtags,

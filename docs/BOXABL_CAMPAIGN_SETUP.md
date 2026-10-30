@@ -1,6 +1,6 @@
 # BOXABL campaign setup
 
-This setup uses the supplied **BOXABL Content** source document and **ClipFlow x BOXABL - Clipper Guidelines & Approval Rules**. The built-in `boxabl_campaign` profile is available in the app's campaign brief panel.
+This setup uses the supplied **BOXABL Content** source document and **ClipFlow x BOXABL - Clipper Guidelines & Approval Rules**. On first load, the configured campaign preset store migrates the legacy `boxabl_campaign` data into the ordinary saved `BOXABL Casita` preset shown in the unified Campaign panel.
 
 ## Campaign workflow
 

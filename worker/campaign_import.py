@@ -185,10 +185,10 @@ class CampaignImportService:
                 code="invalid_url",
                 http_status=422,
             )
-        source_host = (urlsplit(url).hostname or "").lower()
+        hostname = (urlsplit(url).hostname or "").lower()
         source_type = (
             "google_docs"
-            if source_host in {"docs.google.com", "www.docs.google.com"}
+            if hostname in {"docs.google.com", "www.docs.google.com"}
             else "google_drive"
         )
         if not configured():

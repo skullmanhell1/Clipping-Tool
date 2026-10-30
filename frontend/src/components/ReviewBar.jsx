@@ -26,6 +26,10 @@ export default function ReviewBar({
   onReset,
   selectedDownloadUrl = "",
   approvedDownloadUrl = "",
+  filter = "all",
+  onFilterChange,
+  reviewNote = "",
+  onReviewNoteChange,
 }) {
   const hasSelection = selectedCount > 0;
 
@@ -43,11 +47,15 @@ export default function ReviewBar({
         </span>
 
         <span className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-slate-600">Show</span>
+          {[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["rejected", "Rejected"]].map(([value, label]) => <button key={value} type="button" onClick={() => onFilterChange?.(value)} className={`${chip} ${filter === value ? "border-brand-accent text-white" : ""}`} disabled={busy}>{label}</button>)}
+        </span>
+        <span className="flex items-center gap-1">
           <button type="button" onClick={onSelectPending} className={chip} disabled={busy}>
             Select pending
           </button>
           <button type="button" onClick={onSelectAll} className={chip} disabled={busy}>
-            All
+            Select all
           </button>
           <button
             type="button"
@@ -97,9 +105,13 @@ export default function ReviewBar({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
+        <input value={reviewNote} onChange={(event) => onReviewNoteChange?.(event.target.value)} placeholder="Optional review note for selected clips" className="min-w-[220px] flex-1 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-300" />
         <span className="text-[10px] uppercase tracking-wide text-slate-600">Export</span>
         <a
-          href={selectedDownloadUrl || undefined}
+          href={selectedDownloadUrl || "#"}
+          onClick={(event) => {
+            if (!selectedDownloadUrl) event.preventDefault();
+          }}
           aria-disabled={!selectedDownloadUrl}
           className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
             selectedDownloadUrl
@@ -110,7 +122,10 @@ export default function ReviewBar({
           Download selected
         </a>
         <a
-          href={approvedDownloadUrl || undefined}
+          href={approvedDownloadUrl || "#"}
+          onClick={(event) => {
+            if (!approvedDownloadUrl) event.preventDefault();
+          }}
           aria-disabled={!approvedDownloadUrl}
           className={`rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
             approvedDownloadUrl

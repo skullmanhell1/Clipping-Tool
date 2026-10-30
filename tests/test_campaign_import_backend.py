@@ -42,3 +42,27 @@ def test_multiple_profiles_return_individual_reports_and_generated_copy():
     assert report["profile_count"] == 2
     assert {item["profile_name"] for item in report["profiles"]} == {"Untitled campaign"}
     assert report["status"] == "fail"
+
+
+def test_campaign_profile_extracts_video_links_branding_and_public_policy():
+    profile = parse_campaign_profile(
+        """# Whop launch
+        Logo: assets/brand/logo.png
+        Font: Inter Bold
+        Primary colour: #7c3aed
+        Accent colour: #22d3ee
+        Public visibility: required
+        Approved video: https://youtu.be/abc123
+        Drive source: https://drive.google.com/file/d/video123/view
+        Google Doc: https://docs.google.com/document/d/brief123/edit
+        """
+    )
+
+    assert profile.branding["logo"] == "assets/brand/logo.png"
+    assert profile.branding["font"] == "Inter Bold"
+    assert profile.branding["colors"] == {"primary": "#7c3aed", "accent": "#22d3ee"}
+    assert profile.video_links == [
+        "https://youtu.be/abc123",
+        "https://drive.google.com/file/d/video123/view",
+    ]
+    assert profile.watermark_end_cards["public_visibility_required"] is True

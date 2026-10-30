@@ -82,7 +82,13 @@ def resolve_length_range(option: str) -> tuple[float, float, float]:
 def resolve_max_clips(option: str) -> int | None:
     """Return the max clip count for a Number of Clips UI option (None = all)."""
     key = (option or "auto").lower()
-    return CLIP_COUNT_PRESETS.get(key, None)
+    if key in CLIP_COUNT_PRESETS:
+        return CLIP_COUNT_PRESETS[key]
+    try:
+        value = int(key)
+    except (TypeError, ValueError):
+        return None
+    return value if 1 <= value <= 50 else None
 
 
 def fixed_length_segments(

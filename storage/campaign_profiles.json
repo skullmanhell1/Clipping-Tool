@@ -1,0 +1,444 @@
+{
+  "schema_version": 2,
+  "migrations": {
+    "boxabl_builtin_v1": 1
+  },
+  "selected_id": "",
+  "profiles": [
+    {
+      "schema_version": 2,
+      "id": "boxabl_campaign",
+      "name": "BOXABL Casita",
+      "length": {
+        "min_seconds": 30.0,
+        "max_seconds": 60.0,
+        "raw": "30-60 seconds"
+      },
+      "aspect_resolution": {
+        "aspect_ratios": [
+          "9:16"
+        ],
+        "resolutions": [
+          {
+            "width": 1080,
+            "height": 1920
+          }
+        ]
+      },
+      "platforms": [
+        "youtube_shorts",
+        "x",
+        "instagram"
+      ],
+      "branding": {},
+      "video_links": [],
+      "captions_language": {
+        "required": true,
+        "languages": [
+          "en"
+        ],
+        "style": "karaoke_bold"
+      },
+      "copy_rules": {
+        "hashtags": [
+          "#BOXABL"
+        ],
+        "mentions": [
+          "@boxabl"
+        ],
+        "required_copy": [
+          "BOXABL"
+        ],
+        "cta": "",
+        "language": "en"
+      },
+      "watermark_end_cards": {
+        "watermark_required": false,
+        "watermark": "",
+        "end_card_required": true,
+        "end_card": "BOXABL title card at 0:05-0:08",
+        "public_visibility_required": true
+      },
+      "banned_words_topics": {
+        "words": [
+          "Kanye West",
+          "ticker",
+          "equity",
+          "stock",
+          "stocks",
+          "shares"
+        ],
+        "topics": [
+          "politics",
+          "negative bait",
+          "unedited rip"
+        ]
+      },
+      "source_rules": {
+        "allowed": [
+          "https://youtu.be/0Cdqs2Q1Vis",
+          "https://youtu.be/3plLxp_7Jlo",
+          "https://youtu.be/5Lo54Lx7MCU",
+          "https://youtu.be/7rX5cPQrx_s",
+          "https://youtu.be/8JMrfSFQdpo",
+          "https://youtu.be/9ThVUNGj3To",
+          "https://youtu.be/Cz9cwL_fqTI",
+          "https://youtu.be/IBV7eIH3Bdw",
+          "https://youtu.be/JbS_VhA0rRo",
+          "https://youtu.be/KrahQlLAz44",
+          "https://youtu.be/b9erzF6LHKI",
+          "https://youtu.be/eS-fnedN2yI",
+          "https://youtu.be/rUArr8SWyf8",
+          "https://youtu.be/uu5aORByttg",
+          "https://drive.google.com/file/d/1OnH2B5N-TaGyHqPdmT0uxdCeA-38FXry/view"
+        ],
+        "prohibited": [],
+        "attribution": "Review source and platform-native tags before publishing."
+      },
+      "source_library": [
+        {
+          "id": "6659cac2f40600df",
+          "url": "https://youtu.be/0Cdqs2Q1Vis",
+          "title": "Graham Stephan",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "e7a6f180dc589785",
+          "url": "https://youtu.be/3plLxp_7Jlo",
+          "title": "Irina Dee",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "08ef2df788077178",
+          "url": "https://youtu.be/5Lo54Lx7MCU",
+          "title": "808",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "1a53b65dacba3b36",
+          "url": "https://youtu.be/7rX5cPQrx_s",
+          "title": "Airrack",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "8146d43a38459058",
+          "url": "https://youtu.be/8JMrfSFQdpo",
+          "title": "Enes Yilmazer",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "3eb240e8ab83292a",
+          "url": "https://youtu.be/9ThVUNGj3To",
+          "title": "BOXABL Factory Update",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "3cbf613bda4afb28",
+          "url": "https://youtu.be/Cz9cwL_fqTI",
+          "title": "NYSE interview",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "e6d63e30aad29c8d",
+          "url": "https://youtu.be/IBV7eIH3Bdw",
+          "title": "BOXABL Factory Update",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "0e3532efe6307b48",
+          "url": "https://youtu.be/JbS_VhA0rRo",
+          "title": "BOXABL Casita Tour",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "8f3be7cb637e0a14",
+          "url": "https://youtu.be/KrahQlLAz44",
+          "title": "Ellie in Space",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "19e8ce41e16fc250",
+          "url": "https://youtu.be/b9erzF6LHKI",
+          "title": "BOXABL Factory Update",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "324ce50741cba7c9",
+          "url": "https://youtu.be/eS-fnedN2yI",
+          "title": "Orkun Isitmak",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "dfc62e989c9ef9dc",
+          "url": "https://youtu.be/rUArr8SWyf8",
+          "title": "BOXABL Factory Update",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "d0ad1c789d69ee83",
+          "url": "https://youtu.be/uu5aORByttg",
+          "title": "Faze Rug",
+          "type": "youtube_video",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved source list."
+        },
+        {
+          "id": "1f318d40b0f221a7",
+          "url": "https://drive.google.com/file/d/1OnH2B5N-TaGyHqPdmT0uxdCeA-38FXry/view",
+          "title": "Elon Musk Clips",
+          "type": "google_drive_file",
+          "status": "approved",
+          "approved": true,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Migrated from the existing BOXABL approved Drive source."
+        },
+        {
+          "id": "3bdb9fe3c00f3952",
+          "url": "https://www.youtube.com/@BOXABL/videos",
+          "title": "Official BOXABL YouTube channel",
+          "type": "youtube_channel",
+          "status": "suggested",
+          "approved": false,
+          "origin": "migrated_boxabl_brief",
+          "reason": "Discovery reference only; accept individual videos before clipping."
+        }
+      ],
+      "audio_rules": {
+        "allowed": [],
+        "prohibited": [],
+        "attribution": ""
+      },
+      "meme_policy": {
+        "allowed": false,
+        "rules": [
+          "No unlicensed reaction assets or added meme audio."
+        ]
+      },
+      "payout_deadlines": {},
+      "settings": {
+        "clip_length": "30-60s",
+        "aspect": "9:16",
+        "strategy": "ai",
+        "captions": true,
+        "subtitle_sidecar": true,
+        "topic": "BOXABL Casita: show the complete 20x20 ft foldable factory-built home, its real features, stated price when present, or a genuine guest reaction.",
+        "vibe": "Energetic, clear, factual, positive, fast-paced; never political or negative-bait.",
+        "platform": "youtube",
+        "hashtag_count": 5,
+        "vocabulary": "BOXABL, Casita, foldable factory-built home, 20 by 20 feet",
+        "metadata": true,
+        "publish_mode": "review",
+        "reframe": false,
+        "zoom": false,
+        "transitions": false,
+        "hook_title": true,
+        "fades": true,
+        "progress_bar": true,
+        "emoji": "off",
+        "filler_removal": false,
+        "caption_preset": "karaoke_bold",
+        "caption_position": "bottom",
+        "caption_keyword_highlight": true,
+        "caption_keyword_ai": false,
+        "caption_emoji": false,
+        "broll": false,
+        "asset_sourcing_mode": "off",
+        "visual_selection": true,
+        "permissibility_mode": true,
+        "storytelling_enabled": true,
+        "public_visibility": "public",
+        "brand_name": "BOXABL",
+        "brand_variants": [
+          "boxable",
+          "box abl",
+          "box-able",
+          "box able",
+          "abl"
+        ],
+        "brand_hook_text": "BOXABL: A 20\u00d720 home that folds?",
+        "brand_card_text": "BOXABL",
+        "brand_thumbnail_text": "BOXABL CASITA",
+        "brand_mention": "@boxabl",
+        "brand_hashtag": "#BOXABL",
+        "locked_fields": [
+          "clip_length",
+          "aspect",
+          "platform",
+          "captions",
+          "caption_preset"
+        ]
+      },
+      "edit_policy": {
+        "reframe": false,
+        "zoom": false,
+        "meme_allowed": false,
+        "lock_reason": "Keep the full Casita visible; do not crop or zoom the home away.",
+        "enforced_settings": {
+          "captions": true,
+          "subtitle_sidecar": true,
+          "transitions": false,
+          "hook_title": true,
+          "broll": false,
+          "asset_sourcing_mode": "off",
+          "music": "",
+          "permissibility_mode": true,
+          "visual_selection": true,
+          "kinetic_typography_enabled": false
+        }
+      },
+      "quality_policy": {
+        "allowed": true,
+        "lock_reason": "Quality delivery remains available, but the source still limits real detail."
+      },
+      "posting": {
+        "platforms": [
+          "youtube_shorts",
+          "x",
+          "instagram"
+        ],
+        "manual_only": true,
+        "public_visibility_required": true,
+        "daily_clip_target": 2,
+        "timezone": "",
+        "peak_hours": [
+          "12:00",
+          "19:00"
+        ],
+        "affiliate_required_platforms": [
+          "x"
+        ]
+      },
+      "compliance": {
+        "required_copy": [
+          "BOXABL"
+        ],
+        "required_hashtags": [
+          "#BOXABL"
+        ],
+        "required_mentions": [
+          "@boxabl"
+        ],
+        "banned_words": [
+          "Kanye West",
+          "ticker",
+          "equity",
+          "stock",
+          "stocks",
+          "shares"
+        ],
+        "banned_topics": [
+          "politics",
+          "negative bait",
+          "unedited rip"
+        ],
+        "required_checks": [
+          {
+            "id": "source_approved",
+            "label": "Source is one of the official Drive / YouTube links in the campaign brief.",
+            "required": true
+          },
+          {
+            "id": "whole_home_2_5",
+            "label": "The complete Casita is clearly visible by 0:02\u20130:05.",
+            "required": true
+          },
+          {
+            "id": "brand_by_8",
+            "label": "Exact BOXABL branding is spoken or visible by 0:05\u20130:08.",
+            "required": true
+          },
+          {
+            "id": "hook_and_pacing",
+            "label": "The first two seconds have a strong hook and the edit stays brisk.",
+            "required": true
+          },
+          {
+            "id": "captions_verified",
+            "label": "Captions are legible and BOXABL is spelled exactly BOXABL.",
+            "required": true
+          },
+          {
+            "id": "no_prohibited_content",
+            "label": "I checked the whole clip: no Kanye West, stock/equity/ticker talk, political or negative bait, or raw rip.",
+            "required": true
+          }
+        ]
+      },
+      "source_links": [],
+      "source_revision": "",
+      "source_content_hash": "",
+      "last_synced_at": 1793360866.0032344,
+      "changed": false,
+      "warnings": [],
+      "dismissed_warnings": [],
+      "created_at": 1793360866.0032344,
+      "updated_at": 1793360866.0032344,
+      "ambiguities": [],
+      "uncertainties": [],
+      "provenance": [
+        {
+          "source_type": "legacy_builtin_migration",
+          "source_url": "worker.boxabl_campaign",
+          "content_hash": ""
+        }
+      ],
+      "raw_text_hash": "",
+      "parser": "legacy_migration",
+      "editable": true
+    }
+  ]
+}

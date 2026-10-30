@@ -465,28 +465,14 @@ export default function App() {
     setPublishing({
       ...DEFAULT_PUBLISHING,
       ...(profile.publishing || {}),
-      ...(profileSettings.profile === "boxabl_campaign" ? { mode: "review" } : {}),
     });
   }, [profiles]);
-
-  const applyBoxablCampaign = useCallback(() => {
-    const profile = builtinProfiles.find((item) => item.name === "boxabl_campaign");
-    if (!profile) return;
-    setActiveProfileId("");
-    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}), profile: profile.name });
-    setPublishing((current) => ({
-      ...DEFAULT_PUBLISHING,
-      ...current,
-      platforms: [],
-      campaign_id: "",
-      mode: "review",
-    }));
-  }, [builtinProfiles]);
 
   const loadProfiles = useCallback(async () => {
     try {
       const data = await api.profiles();
       setProfiles(data.profiles || []);
+    api.builtinProfiles().then((data) => setBuiltinProfiles(data.profiles || [])).catch(() => {});
       setDefaultProfileId(data.default_id || null);
       return data;
     } catch {
@@ -509,7 +495,6 @@ export default function App() {
         setDriveConfigured(!!info.google_drive?.configured);
       })
       .catch(() => setApiStatus("offline"));
-    api.builtinProfiles().then((data) => setBuiltinProfiles(data.profiles || [])).catch(() => {});
     api.updates().then(setUpdateInfo).catch(() => {});
     loadPublishingData();
     // Load profiles and pre-fill from the default profile once on startup.
@@ -708,11 +693,26 @@ export default function App() {
     }
   };
 
+  const applyBoxablCampaign = useCallback(() => {
+    const profile = builtinProfiles.find((item) => item.name === "boxabl_campaign");
+    if (!profile) return;
+    setActiveProfileId("");
+    setSettings({ ...DEFAULT_SETTINGS, ...(profile.settings || {}), profile: profile.name });
+    setPublishing((current) => ({
+      ...DEFAULT_PUBLISHING,
+      ...current,
+      platforms: [],
+      campaign_id: "",
+      mode: "review",
+    }));
+  }, [builtinProfiles]);
+
   const handleCampaignSaved = (campaign) => {
     setCampaigns((previous) => [campaign, ...previous.filter((item) => item.id !== campaign.id)]);
   };
 
-  const handlePresetApplied = (preset) => {
+  // A brief or a parsed campaign profile (the Campaigns screen) replaces the setup.
+  const applyLegacyCampaignPreset = (preset) => {
     const branding = preset.branding || {};
     const duration = preset.brief_rules?.clip_duration_seconds || {};
     const supportedLengths = [
@@ -737,21 +737,63 @@ export default function App() {
       .map((value) => platformAliases[value] || value)
       .find((value) => ["generic", "youtube", "tiktok", "instagram", "x", "whop"].includes(value))
       || DEFAULT_SETTINGS.platform;
+
+    // A unified campaign workspace sends a parsed profile; the brief editor sends brief_rules.
+    // Both are supported, because the two panels are deliberately separate screens.
+    const profile = preset.campaign_profile || {};
+    const length = profile.length || {};
+    const maxSeconds = Number(length.max_seconds);
+    const profileClipLength = Number.isFinite(maxSeconds)
+      ? maxSeconds <= 30
+        ? "<30s"
+        : maxSeconds <= 60
+          ? "30-60s"
+          : maxSeconds <= 90
+            ? "60-90s"
+            : "90s-3min"
+      : undefined;
+    const profileBranding = profile.branding || preset.branding || {};
+    const profileColors = profileBranding.colors || {};
+    const profileAspect = profile.aspect_resolution?.aspect_ratios?.[0] || preset.aspect_ratios?.[0];
+    const profilePlatform = profile.platforms?.[0] || preset.allowed_platforms?.[0];
+    const profileCaptions = profile.captions_language?.required;
+
     setSettings((previous) => ({
       ...previous,
       campaign_preset: preset,
       storytelling_enabled: true,
-      // A brief is a replacement, not a merge. Clear values the previous preset supplied when
-      // the new brief leaves them blank; otherwise old campaign branding quietly leaks forward.
-      aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
-      clip_length: briefClipLength,
-      platform: metadataPlatform,
-      brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
-      brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
-      brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
-      brand_highlight_color: branding.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
-      brand_cta: preset.cta || DEFAULT_SETTINGS.brand_cta,
-      caption_preset: preset.caption_style || DEFAULT_SETTINGS.caption_preset,
+      ...(Object.keys(profile).length
+        ? {
+            aspect: profileAspect || previous.aspect,
+            clip_length: profileClipLength || previous.clip_length,
+            platform: profilePlatform || previous.platform,
+            captions: profileCaptions === null || profileCaptions === undefined ? previous.captions : profileCaptions,
+            brand_logo: profileBranding.logo || profile.watermark_end_cards?.watermark || previous.brand_logo,
+            brand_font: profileBranding.font || previous.brand_font,
+            brand_primary_color: profileColors.primary || previous.brand_primary_color,
+            brand_highlight_color: profileColors.accent || previous.brand_highlight_color,
+            brand_cta: preset.cta || profile.copy_rules?.cta || previous.brand_cta,
+            caption_preset: preset.caption_style || profile.captions_language?.style || previous.caption_preset,
+            topic: profile.source_rules?.allowed?.join(", ") || previous.topic,
+            vocabulary: profile.copy_rules?.required_copy?.join(", ") || previous.vocabulary,
+            selection_prompt: [
+              ...(profile.banned_words_topics?.topics || []).map((item) => `Avoid topic: ${item}`),
+              ...(profile.banned_words_topics?.words || []).map((item) => `Avoid word: ${item}`),
+            ].join("; ") || previous.selection_prompt,
+          }
+        : {
+            // A brief is a replacement, not a merge. Clear values the previous preset supplied when
+            // the new brief leaves them blank; otherwise old campaign branding quietly leaks forward.
+            aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
+            clip_length: briefClipLength,
+            platform: metadataPlatform,
+            brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
+            brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
+            brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
+            brand_highlight_color: branding.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
+            brand_cta: preset.cta || DEFAULT_SETTINGS.brand_cta,
+            caption_preset: preset.caption_style || DEFAULT_SETTINGS.caption_preset,
+          }),
     }));
     setPublishing((previous) => ({
       ...previous,
@@ -759,6 +801,105 @@ export default function App() {
       mode: "review",
     }));
   };
+
+  // A versioned campaign preset (settings/posting/edit_policy) resets the setup to that
+  // preset's policy; brief and profile presets keep the replacement path above.
+  const handlePresetApplied = (preset) => {
+    if (!preset?.settings && !preset?.posting && !preset?.edit_policy) {
+      applyLegacyCampaignPreset(preset);
+      return;
+    }
+    const presetSettings = preset?.settings && typeof preset.settings === "object"
+      ? preset.settings
+      : {};
+    const posting = preset?.posting && typeof preset.posting === "object" ? preset.posting : {};
+    const editPolicy = preset?.edit_policy && typeof preset.edit_policy === "object"
+      ? preset.edit_policy
+      : {};
+    const qualityPolicy = preset?.quality_policy && typeof preset.quality_policy === "object"
+      ? preset.quality_policy
+      : {};
+    const memePolicy = preset?.meme_policy && typeof preset.meme_policy === "object"
+      ? preset.meme_policy
+      : {};
+    const enforcedSettings = editPolicy.enforced_settings && typeof editPolicy.enforced_settings === "object"
+      ? editPolicy.enforced_settings
+      : {};
+    const directEditSettings = ["reframe", "zoom", "transitions", "hook_title", "fades", "progress_bar"]
+      .filter((key) => Object.prototype.hasOwnProperty.call(editPolicy, key))
+      .reduce((result, key) => ({ ...result, [key]: editPolicy[key] }), {});
+    const presetPlatforms = Array.isArray(posting.platforms) && posting.platforms.length
+      ? posting.platforms
+      : Array.isArray(preset.platforms) && preset.platforms.length
+        ? preset.platforms
+        : Array.isArray(preset.allowed_platforms)
+          ? preset.allowed_platforms
+          : [];
+    const ratios = preset.aspect_resolution?.aspect_ratios || preset.aspect_ratios || [];
+    let brandColors = {};
+    if (presetSettings.brand_colors && typeof presetSettings.brand_colors === "object") {
+      brandColors = presetSettings.brand_colors;
+    } else if (typeof presetSettings.brand_colors === "string") {
+      try {
+        const parsedColors = JSON.parse(presetSettings.brand_colors);
+        if (parsedColors && typeof parsedColors === "object" && !Array.isArray(parsedColors)) {
+          brandColors = parsedColors;
+        }
+      } catch {
+        // Keep the previous brand colors until the review field contains valid JSON.
+      }
+    }
+    const memeDisallowed = editPolicy.meme_allowed === false || memePolicy.allowed === false;
+    const qualityDisallowed = qualityPolicy.allowed === false;
+    const manualOnly = !!(posting.manual_only || posting.review_only);
+    const strategyHints = [
+      presetSettings.content_type ? `Content type: ${presetSettings.content_type}.` : "",
+      presetSettings.clip_goal ? `Goal: ${presetSettings.clip_goal}.` : "",
+      presetSettings.target_audience ? `Audience: ${presetSettings.target_audience}.` : "",
+      presetSettings.hook_style ? `Prefer a ${presetSettings.hook_style.replace(/_/g, " ")} opening.` : "",
+    ].filter(Boolean).join(" ");
+    const effectiveSelectionPrompt = [presetSettings.selection_prompt, strategyHints]
+      .filter(Boolean)
+      .join(" ");
+
+    setSettings(() => ({
+      ...DEFAULT_SETTINGS,
+      ...presetSettings,
+      ...enforcedSettings,
+      ...directEditSettings,
+      campaign_preset: preset,
+      profile: "",
+      storytelling_enabled: presetSettings.storytelling_enabled ?? DEFAULT_SETTINGS.storytelling_enabled,
+      selection_prompt: effectiveSelectionPrompt || DEFAULT_SETTINGS.selection_prompt,
+      aspect: presetSettings.aspect || ratios[0] || DEFAULT_SETTINGS.aspect,
+      platform: presetSettings.platform || presetPlatforms[0] || DEFAULT_SETTINGS.platform,
+      output_platform: presetSettings.output_platform || presetPlatforms[0] || DEFAULT_SETTINGS.output_platform,
+      captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : DEFAULT_SETTINGS.captions),
+      brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || DEFAULT_SETTINGS.brand_logo,
+      brand_font: presetSettings.brand_font || preset.branding?.font || DEFAULT_SETTINGS.brand_font,
+      brand_primary_color: presetSettings.brand_primary_color || brandColors.primary || preset.branding?.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
+      brand_highlight_color: presetSettings.brand_highlight_color || brandColors.accent || preset.branding?.colors?.accent || DEFAULT_SETTINGS.brand_highlight_color,
+      brand_cta: presetSettings.brand_cta || preset.copy_rules?.cta || DEFAULT_SETTINGS.brand_cta,
+      caption_preset: presetSettings.caption_preset || preset.captions_language?.style || DEFAULT_SETTINGS.caption_preset,
+      meme_mode: memeDisallowed ? false : presetSettings.meme_mode ?? DEFAULT_SETTINGS.meme_mode,
+      meme_mode_enabled: memeDisallowed ? false : presetSettings.meme_mode_enabled ?? DEFAULT_SETTINGS.meme_mode_enabled,
+      meme_auto_suggest: memeDisallowed ? false : presetSettings.meme_auto_suggest ?? DEFAULT_SETTINGS.meme_auto_suggest,
+      meme_events: memeDisallowed ? [] : presetSettings.meme_events ?? DEFAULT_SETTINGS.meme_events,
+      meme_timeline_events: memeDisallowed ? [] : presetSettings.meme_timeline_events ?? DEFAULT_SETTINGS.meme_timeline_events,
+      quality_enabled: qualityDisallowed ? false : presetSettings.quality_enabled ?? DEFAULT_SETTINGS.quality_enabled,
+      quality_preset: qualityDisallowed ? "off" : presetSettings.quality_preset ?? DEFAULT_SETTINGS.quality_preset,
+      quality_upscale: qualityDisallowed ? "off" : presetSettings.quality_upscale ?? DEFAULT_SETTINGS.quality_upscale,
+      quality_smart_scale: qualityDisallowed ? false : presetSettings.quality_smart_scale ?? DEFAULT_SETTINGS.quality_smart_scale,
+      quality_interpolation: qualityDisallowed ? "off" : presetSettings.quality_interpolation ?? DEFAULT_SETTINGS.quality_interpolation,
+    }));
+    setActiveProfileId("");
+    setPublishing(() => ({
+      ...DEFAULT_PUBLISHING,
+      platforms: presetPlatforms,
+      mode: manualOnly ? "review" : presetSettings.publish_mode || "review",
+    }));
+  };
+
 
   const handlePublished = (attempts) => {
     setPublishAttempts((previous) => [
@@ -797,6 +938,9 @@ export default function App() {
   const activePreset = FORMAT_PRESETS.find((preset) =>
     Object.entries(preset.values).every(([key, value]) => settings[key] === value)
   );
+  const activeCampaignPreset = settings.campaign_preset && typeof settings.campaign_preset === "object"
+    ? settings.campaign_preset
+    : null;
 
   const applyFormatPreset = (preset) => {
     setSettings((previous) => ({ ...previous, ...preset.values }));
@@ -892,6 +1036,7 @@ export default function App() {
                 campaigns={campaigns}
                 publisherStatuses={publisherStatuses}
                 outputProfiles={outputProfiles}
+                campaignPreset={activeCampaignPreset}
               />
             </section>
           )}
@@ -1100,6 +1245,7 @@ export default function App() {
                     engines={engines}
                     capabilities={capabilities}
                     outputProfiles={outputProfiles}
+                    campaignPreset={activeCampaignPreset}
                   />
                   <div className="mt-4 rounded-2xl border border-white/[0.07] bg-slate-950/35 p-4">
                     <button
@@ -1117,9 +1263,9 @@ export default function App() {
                     </button>
                     {showMoreVideoTools ? (
                       <div id="more-video-tools" className="mt-4 space-y-4">
-                        <MemeModePanel settings={settings} onChange={setSettings} />
-                        <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} />
-                        <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} />
+                        <MemeModePanel settings={settings} onChange={setSettings} campaignPreset={activeCampaignPreset} />
+                        <QualitySettingsPanel settings={settings} onChange={setSettings} outputProfiles={outputProfiles} campaignPreset={activeCampaignPreset} />
+                        <FacialTrackingPanel settings={settings} onChange={setSettings} effects={effects} campaignPreset={activeCampaignPreset} />
                       </div>
                     ) : null}
                   </div>
@@ -1134,7 +1280,7 @@ export default function App() {
                   <PublishingPanel
                     value={publishing}
                     onChange={setPublishing}
-                    campaignProfile={settings.profile}
+                    campaignPreset={activeCampaignPreset}
                     statuses={publisherStatuses}
                     campaigns={campaigns}
                     onCampaignSaved={handleCampaignSaved}

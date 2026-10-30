@@ -1995,13 +1995,18 @@ def plan_daily_slots(
     peak_hours: Sequence[Any] | Mapping[Any, Any],
     *,
     visibility: Any = None,
-) -> tuple[int, int]:
-    """Return exactly two distinct UTC epoch slots for a local calendar day.
+    count: int = 2,
+) -> tuple[int, ...]:
+    """Return distinct UTC epoch slots for a local calendar day.
 
-    The first two distinct peak values are used in caller order. ``visibility`` is optional for
-    callers that already checked a preset, but if supplied it must be public.
+    The first ``count`` distinct peak values are used in caller order. ``visibility`` is optional
+    for callers that already checked a preset, but if supplied it must be public.
     """
 
+    try:
+        requested_count = max(1, min(10, int(count)))
+    except (TypeError, ValueError):
+        raise ValueError("slot count must be an integer between 1 and 10") from None
     if visibility is not None:
         result = validate_public_visibility(visibility)
         if result.status != "pass":
@@ -2028,15 +2033,18 @@ def plan_daily_slots(
         candidate = _time(value)
         if candidate not in parsed:
             parsed.append(candidate)
-    if len(parsed) < 2:
-        raise ValueError("at least two distinct peak hours are required")
+    if len(parsed) < requested_count:
+        if requested_count == 2:
+            raise ValueError("two distinct peak hours are required")
+        raise ValueError(f"at least {requested_count} distinct peak hours are required")
     zone = _zone(timezone)
     slots = [
-        int(datetime.combine(calendar_day, item, tzinfo=zone).timestamp()) for item in parsed[:2]
+        int(datetime.combine(calendar_day, item, tzinfo=zone).timestamp())
+        for item in parsed[:requested_count]
     ]
-    if slots[0] == slots[1]:
+    if len(set(slots)) != len(slots):
         raise ValueError("peak hours resolved to duplicate UTC slots")
-    return slots[0], slots[1]
+    return tuple(slots)
 
 
 parse_preset = parse_campaign_preset

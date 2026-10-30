@@ -24,6 +24,7 @@ and the deterministic paths work even when they are absent.
 from __future__ import annotations
 
 import os
+import statistics
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -202,9 +203,9 @@ def merge_scores(
 ) -> list[ClipCandidate]:
     """Blend transcript scores with visual-cue scores into one ranking.
 
-    For each transcript candidate, the visual score is the normalised mean of
-    ``brightness + motion`` across the keyframes whose timestamp falls inside the
-    candidate window; it is blended as
+    For each transcript candidate, the visual score compares brightness changes and motion
+    against the source baseline across keyframes inside the candidate window; motion carries
+    most of the weight so permanently bright footage is not rewarded. It is blended as
     ``combined = (1 - weight) * transcript_score + weight * visual_score * 100``.
     New :class:`ClipCandidate` objects are returned (same shape), preserving
     every field except ``score``, sorted by combined score descending
@@ -228,12 +229,72 @@ def merge_scores(
         weight = settings.visual_selection_weight
     weight = max(0.0, min(1.0, float(weight)))
     merged: list[ClipCandidate] = []
+    brightness_baseline = (
+        statistics.median(f.brightness for f in visual_frames) if visual_frames else 0.0
+    )
+    motion_baseline = statistics.median(f.motion for f in visual_frames) if visual_frames else 0.0
+    brightness_range = max(
+        (float(f.brightness) for f in visual_frames), default=brightness_baseline
+    ) - min((float(f.brightness) for f in visual_frames), default=brightness_baseline)
+    motion_range = (
+        max((float(f.motion) for f in visual_frames), default=motion_baseline) - motion_baseline
+    )
     for cand in transcript_candidates:
         inside = [f for f in visual_frames if cand.start <= f.t <= cand.end]
         if inside:
-            raw = sum(max(0.0, f.brightness) + max(0.0, f.motion) for f in inside)
-            raw /= len(inside)
-            visual_score = max(0.0, min(1.0, raw / 2.0))  # brightness+motion -> [0,1]
+            if len(visual_frames) < 2:
+                # With one frame there is no source baseline yet; preserve the direct cue reading
+                # rather than pretending the frame is average by definition.
+                visual_score = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (max(0.0, float(inside[0].brightness)) + max(0.0, float(inside[0].motion)))
+                        / 2.0,
+                    ),
+                )
+                combined = (1.0 - weight) * cand.score + weight * visual_score * 100.0
+                merged.append(
+                    ClipCandidate(
+                        start=cand.start,
+                        end=cand.end,
+                        score=round(combined, 2),
+                        reason=cand.reason,
+                        title=cand.title,
+                        text=cand.text,
+                        features={
+                            **dict(cand.features),
+                            "visual_selection_used": True,
+                            "visual_score": round(visual_score, 4),
+                        },
+                        cuts=list(cand.cuts),
+                        fallback_reason=cand.fallback_reason,
+                    )
+                )
+                continue
+            # Absolute brightness rewarded permanently bright footage rather than a visually
+            # interesting moment. Compare each candidate with the source baseline and let motion
+            # carry most of the weight; a cut, gesture, or camera move is stronger evidence than
+            # a globally bright studio background.
+            brightness_signal = (
+                0.5
+                if brightness_range < 0.02
+                else sum(
+                    min(1.0, abs(float(frame.brightness) - brightness_baseline) / 0.25)
+                    for frame in inside
+                )
+                / len(inside)
+            )
+            motion_signal = (
+                0.5
+                if motion_range < 0.02
+                else sum(
+                    min(1.0, max(0.0, float(frame.motion) - motion_baseline) / 0.12)
+                    for frame in inside
+                )
+                / len(inside)
+            )
+            visual_score = max(0.0, min(1.0, 0.25 * brightness_signal + 0.75 * motion_signal))
             combined = (1.0 - weight) * cand.score + weight * visual_score * 100.0
         else:
             # No sampled frame is an unavailable visual measurement, not a
@@ -253,7 +314,11 @@ def merge_scores(
                 # - and U1 made visual selection a default, so that was the normal path. The
                 # dict is copied rather than shared: two candidates aliasing one features dict
                 # would let a later annotation overwrite an earlier candidate's measurements.
-                features={**dict(cand.features), "visual_selection_used": True},
+                features={
+                    **dict(cand.features),
+                    "visual_selection_used": True,
+                    "visual_score": round(visual_score, 4),
+                },
                 cuts=list(cand.cuts),
                 fallback_reason=cand.fallback_reason,
             )

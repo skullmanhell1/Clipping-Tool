@@ -355,3 +355,47 @@ def test_the_table_names_the_dominant_error_kind():
 
 def test_the_empty_table_does_not_raise():
     assert wer.format_comparison([]) == "no results"
+
+
+# --------------------------------------------------------------------------- #
+# The decoder dependency this whole path runs on
+# --------------------------------------------------------------------------- #
+# faster-whisper does not decode media itself: `decode_audio` calls `av.open`, and 1.2.1 passes
+# `metadata_errors="ignore"` unconditionally. PyAV 19 rejects that keyword, so an unpinned
+# `pip install -r requirements.txt` produced an install on which **every job failed at
+# transcription** with:
+#
+#   TypeError: open() got an unexpected keyword argument 'metadata_errors'
+#
+# Nothing else in the suite could see it: `requirements.lock.txt` pins av 18.0.0, so the tests
+# ran against the good release while the Dockerfile and a plain local install resolved the broken
+# one. The bound belongs in the range itself, and this asserts the range carries it rather than
+# trusting that a comment will.
+
+
+def test_runtime_requirements_exclude_the_pyav_release_faster_whisper_cannot_use():
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    from config import BASE_DIR
+
+    lines = [
+        line.split("#")[0].strip()
+        for line in (BASE_DIR / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    ]
+    requirements = [Requirement(line) for line in lines if line]
+    av_specs = [req.specifier for req in requirements if req.name == "av"]
+
+    assert av_specs, (
+        "requirements.txt no longer names av, so a fresh install is free to resolve the release "
+        "whose `av.open` rejects faster-whisper's `metadata_errors` keyword"
+    )
+    specifier = av_specs[0]
+    assert not specifier.contains(Version("19.0.2")), (
+        "requirements.txt admits PyAV 19, where `av.open(..., metadata_errors=...)` raises and "
+        "every transcription fails; measured working here: av 18.0.0"
+    )
+    assert specifier.contains(Version("18.0.0")), (
+        "requirements.txt excludes the PyAV release the lockfile pins, so `pip install -r "
+        "requirements.txt` and `pip install -r requirements.lock.txt` would disagree"
+    )

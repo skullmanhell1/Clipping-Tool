@@ -296,6 +296,7 @@ export default function SettingsPanel({
   engines = [],
   capabilities = null,
   outputProfiles = [],
+  campaignPreset = null,
 }) {
   // U5: the presets' real values, so the picker can preview them. Falls back to the name-only
   // dropdown when the server does not report them, which keeps an older backend working.
@@ -384,6 +385,13 @@ export default function SettingsPanel({
     const v = e.target.value;
     onChange({ ...settings, [key]: v === "" ? "" : v });
   };
+  const lockedFields = new Set(campaignPreset?.settings?.locked_fields || []);
+  const enforcedSettings = campaignPreset?.edit_policy?.enforced_settings || {};
+  const editPolicy = campaignPreset?.edit_policy || {};
+  const locked = (field) =>
+    lockedFields.has(field) ||
+    Object.prototype.hasOwnProperty.call(enforcedSettings, field) ||
+    Object.prototype.hasOwnProperty.call(editPolicy, field);
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
@@ -392,8 +400,8 @@ export default function SettingsPanel({
       </h3>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Dropdown label="Language" value={settings.language} onChange={set("language")} options={LANGUAGES} />
-        <Dropdown label="Clip Length" value={settings.clip_length} onChange={set("clip_length")} options={CLIP_LENGTHS} />
-        <Dropdown label="Aspect Ratio" value={settings.aspect} onChange={set("aspect")} options={ASPECTS} />
+        <Dropdown label="Clip Length" value={settings.clip_length} onChange={set("clip_length")} options={CLIP_LENGTHS} disabled={locked("clip_length")} />
+        <Dropdown label="Aspect Ratio" value={settings.aspect} onChange={set("aspect")} options={ASPECTS} disabled={locked("aspect")} />
         <Dropdown label="Number of Clips" value={settings.num_clips} onChange={set("num_clips")} options={CLIP_COUNTS} />
         <Dropdown
           label="Encoding target"
@@ -423,7 +431,7 @@ export default function SettingsPanel({
         <div id="advanced-clip-settings" className="mt-4 space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Dropdown label="Selection" value={settings.strategy} onChange={set("strategy")} options={STRATEGIES} />
-            <Dropdown label="Platform" value={settings.platform} onChange={set("platform")} options={PLATFORMS} />
+            <Dropdown label="Platform" value={settings.platform} onChange={set("platform")} options={PLATFORMS} disabled={locked("platform")} />
             <Dropdown label="Vibe / Tone" value={settings.vibe} onChange={set("vibe")} options={VIBES} />
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="text-slate-400">Hashtag count</span>
@@ -580,17 +588,19 @@ export default function SettingsPanel({
             {presetDetails.length > 0 ? (
               <div className="mb-3">
                 <div className="mb-1 text-xs font-medium text-slate-400">Caption style</div>
+                <div className={locked("caption_preset") ? "pointer-events-none opacity-60" : ""}>
                 <CaptionStylePicker
-                  presets={presetDetails}
-                  value={settings.caption_preset}
-                  onChange={set("caption_preset")}
-                  brand={settings}
-                />
+                   presets={presetDetails}
+                   value={settings.caption_preset}
+                   onChange={set("caption_preset")}
+                   brand={settings}
+                 />
+                </div>
               </div>
             ) : null}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {presetDetails.length === 0 ? (
-                <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} />
+                <Dropdown label="Caption preset" value={settings.caption_preset} onChange={set("caption_preset")} options={CAPTION_PRESETS} disabled={locked("caption_preset")} />
               ) : null}
               <Dropdown label="Caption Position" value={settings.caption_position} onChange={set("caption_position")} options={CAPTION_POSITIONS} />
             </div>
@@ -897,11 +907,11 @@ export default function SettingsPanel({
               Effects
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Toggle label="Zoom / Ken Burns" checked={settings.zoom} onChange={setFlag("zoom")} />
-              <Toggle label="Punch-in intro" checked={settings.transitions} onChange={setFlag("transitions")} />
-              <Toggle label="Hook title overlay" hint="Burns the AI hook text at the start" checked={settings.hook_title} onChange={setFlag("hook_title")} />
-              <Toggle label="Fade in / out" checked={settings.fades} onChange={setFlag("fades")} />
-              <Toggle label="Progress bar" checked={settings.progress_bar} onChange={setFlag("progress_bar")} />
+              <Toggle label="Zoom / Ken Burns" checked={settings.zoom} onChange={setFlag("zoom")} disabled={locked("zoom")} />
+              <Toggle label="Punch-in intro" checked={settings.transitions} onChange={setFlag("transitions")} disabled={locked("transitions")} />
+              <Toggle label="Hook title overlay" hint="Burns the AI hook text at the start" checked={settings.hook_title} onChange={setFlag("hook_title")} disabled={locked("hook_title")} />
+              <Toggle label="Fade in / out" checked={settings.fades} onChange={setFlag("fades")} disabled={locked("fades")} />
+              <Toggle label="Progress bar" checked={settings.progress_bar} onChange={setFlag("progress_bar")} disabled={locked("progress_bar")} />
               <Toggle
                 label="Filler-word removal"
                 hint='Cuts "um"/"uh" and long pauses'
@@ -954,10 +964,11 @@ export default function SettingsPanel({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-6">
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+        <label className={`flex items-center gap-2 text-sm text-slate-300 ${locked("captions") ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
           <input
             type="checkbox"
             checked={settings.captions}
+            disabled={locked("captions")}
             onChange={(e) => onChange({ ...settings, captions: e.target.checked })}
             className="h-4 w-4 accent-emerald-500"
           />

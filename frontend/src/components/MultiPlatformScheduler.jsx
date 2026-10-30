@@ -50,6 +50,7 @@ export default function MultiPlatformScheduler({
   campaigns = [],
   publisherStatuses = {},
   outputProfiles = [],
+  campaignPreset = null,
   onError,
   onPublished,
 }) {
@@ -90,6 +91,23 @@ export default function MultiPlatformScheduler({
     ({ job, clip }) => job.id === selection.jobId && clip.id === selection.clipId,
   );
   const selectedCampaign = campaigns.find((campaign) => campaign.id === campaignId);
+  const allowedPlatforms = Array.isArray(campaignPreset?.posting?.platforms) && campaignPreset.posting.platforms.length
+    ? campaignPreset.posting.platforms
+    : Array.isArray(campaignPreset?.platforms)
+      ? campaignPreset.platforms
+      : [];
+  const manualOnly = !!(campaignPreset?.posting?.manual_only || campaignPreset?.posting?.review_only);
+  const campaignReviewRequired = manualOnly
+    || Boolean(campaignPreset?.source_library?.length)
+    || Boolean(campaignPreset?.compliance?.required_checks?.length);
+  const platformAllowed = (platform) =>
+    !allowedPlatforms.length || allowedPlatforms.includes(platform) ||
+    (platform === "youtube_shorts" && allowedPlatforms.includes("youtube"));
+
+  useEffect(() => {
+    if (!allowedPlatforms.length) return;
+    setSelectedPlatforms((current) => current.filter(platformAllowed));
+  }, [campaignPreset?.id, allowedPlatforms.join(",")]);
 
   const selectedProfiles = useMemo(
     () =>
@@ -112,6 +130,7 @@ export default function MultiPlatformScheduler({
   };
 
   const togglePlatform = (platform) => {
+    if (!platformAllowed(platform)) return;
     setSelectedPlatforms((current) =>
       current.includes(platform)
         ? current.filter((item) => item !== platform)
@@ -144,6 +163,14 @@ export default function MultiPlatformScheduler({
     }
     if (!selectedPlatforms.length) {
       setError("Choose at least one platform.");
+      return;
+    }
+    if (campaignReviewRequired) {
+      setError("The active campaign has review checks. Complete them and publish from the clip review card instead.");
+      return;
+    }
+    if (selectedPlatforms.some((platform) => !platformAllowed(platform))) {
+      setError("The active campaign preset does not allow one or more selected platforms.");
       return;
     }
     if (durationBlocker) {
@@ -212,7 +239,7 @@ export default function MultiPlatformScheduler({
           </p>
         </div>
         <span className="rounded-full border border-violet-300/20 px-2 py-1 text-[10px] text-violet-200">
-          Direct / auto mode
+          {campaignReviewRequired ? "Campaign review required" : "Direct / auto mode"}
         </span>
       </div>
 
@@ -261,11 +288,11 @@ export default function MultiPlatformScheduler({
           </div>
 
           <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
+             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Platforms
               </span>
-              <span className="text-[10px] text-slate-500">Metadata is adapted per destination</span>
+               <span className="text-[10px] text-slate-500">{allowedPlatforms.length ? `Campaign allows ${allowedPlatforms.join(", ")}` : "Metadata is adapted per destination"}</span>
             </div>
             <div className="grid gap-2 md:grid-cols-3">
               {PLATFORM_OPTIONS.map((option) => {
@@ -286,7 +313,7 @@ export default function MultiPlatformScheduler({
                         type="checkbox"
                         checked={selected}
                         onChange={() => togglePlatform(option.id)}
-                        disabled={!configured}
+                        disabled={!configured || !platformAllowed(option.id)}
                         className="mt-0.5 accent-violet-400"
                       />
                       <span className="min-w-0">
@@ -351,13 +378,13 @@ export default function MultiPlatformScheduler({
               >
                 Suggest times
               </button>
-              <button
+               <button
                 type="button"
                 onClick={publish}
-                disabled={busy || !selectedPlatforms.length || Boolean(durationBlocker)}
+                disabled={busy || campaignReviewRequired || !selectedPlatforms.length || Boolean(durationBlocker)}
                 className="rounded-lg bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {busy ? "Queueing…" : schedule ? "Schedule selected" : "Publish selected"}
+                {busy ? "Queueing…" : campaignReviewRequired ? "Publish from clip review" : schedule ? "Schedule selected" : "Publish selected"}
               </button>
             </div>
           </div>

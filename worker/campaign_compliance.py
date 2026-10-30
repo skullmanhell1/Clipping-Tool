@@ -53,6 +53,13 @@ def _items(value: Any) -> list[Any]:
     return [value] if value not in (None, "") else []
 
 
+def _platform_key(value: Any) -> str:
+    """Compare publisher aliases consistently while retaining product-specific output limits elsewhere."""
+
+    key = str(value or "").strip().casefold()
+    return "youtube" if key == "youtube_shorts" else key
+
+
 def _check(results: list[dict[str, Any]], rule: str, passed: bool | None, message: str) -> None:
     results.append(
         {
@@ -171,8 +178,8 @@ def check_profile_compliance(
         else "required mentions are present",
     )
 
-    platforms = [str(item).casefold() for item in _items(profile.platforms)]
-    actual_platform = str(_value(clip, "platform", "") or "").casefold()
+    platforms = [_platform_key(item) for item in _items(profile.platforms)]
+    actual_platform = _platform_key(_value(clip, "platform", ""))
     _check(
         results,
         "platform",
@@ -266,7 +273,9 @@ def check_profile_compliance(
         str(item).casefold() for item in source_rules.get("prohibited", []) if str(item).strip()
     ]
     if allowed_sources or prohibited_sources:
-        if not source_url:
+        if _value(clip, "source_approved", False) is True:
+            _check(results, "source", True, "local source approval is recorded")
+        elif not source_url:
             _check(results, "source", None, "source provenance was not provided")
         else:
             folded_source = source_url.casefold()
