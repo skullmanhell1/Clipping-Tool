@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,10 @@ class CampaignProfileStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(
-                {"selected_id": self._selected_id, "profiles": [item.to_dict() for item in self._profiles.values()]},
+                {
+                    "selected_id": self._selected_id,
+                    "profiles": [item.to_dict() for item in self._profiles.values()],
+                },
                 indent=2,
             ),
             encoding="utf-8",
@@ -54,9 +56,15 @@ class CampaignProfileStore:
         with self._lock:
             return self._profiles.get(str(profile_id))
 
-    def save(self, profile: CampaignProfile | dict[str, Any], *, profile_id: str = "") -> CampaignProfile:
+    def save(
+        self, profile: CampaignProfile | dict[str, Any], *, profile_id: str = ""
+    ) -> CampaignProfile:
         with self._lock:
-            item = profile if isinstance(profile, CampaignProfile) else CampaignProfile.from_dict(profile)
+            item = (
+                profile
+                if isinstance(profile, CampaignProfile)
+                else CampaignProfile.from_dict(profile)
+            )
             if profile_id and profile_id in self._profiles:
                 item.id = profile_id
             elif not item.id or item.id in self._profiles and item is not self._profiles[item.id]:

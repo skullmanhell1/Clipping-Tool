@@ -114,6 +114,27 @@ hypothesis_settings.register_profile("clipper", deadline=None)
 hypothesis_settings.load_profile("clipper")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rate_limit_window():
+    """Give every test its own rate-limit budget.
+
+    ``api.security.limiter`` is module-level on purpose — one budget shared across the expensive
+    routes, because twenty uploads and twenty previews are forty expensive operations rather than
+    two separate allowances. That also means the counter survives from test to test, so a suite
+    that makes a few dozen rate-limited calls in under a minute starts returning 429 for tests
+    that have nothing to do with limiting. The symptom is unrelated tests failing in a full run
+    and passing in isolation, which is the worst shape a failure can take.
+
+    ``tests/test_api_security.py`` already did this for its own module. Doing it here is the same
+    guarantee for everyone: a test may spend the whole budget, and the next test starts fresh.
+    """
+    from api import security
+
+    security.limiter.reset()
+    yield
+    security.limiter.reset()
+
+
 @pytest.fixture
 def history(tmp_path):
     """A fresh, isolated HistoryStore backed by a per-test SQLite file."""
@@ -289,6 +310,8 @@ class FakeWord:
 #: Every optional effect, at its disabled value.
 EFFECTS_OFF: dict = {
     "reframe": False,
+    "reframe_zero_phase": False,
+    "reframe_reset_on_cut": False,
     "zoom": False,
     "transitions": False,
     "hook_title": False,

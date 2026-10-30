@@ -28,7 +28,8 @@ TOKEN_EXPIRY_MARGIN_S = 120.0
 #: refreshing too often rather than using a dead token.
 DEFAULT_TOKEN_TTL_S = 1800.0
 
-YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+# OAuth token endpoint; the URL itself is not a secret.
+YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105
 YOUTUBE_UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
@@ -47,9 +48,7 @@ def _google_error(response, action: str) -> PublisherError:
             first_error = nested_errors[0]
             if isinstance(first_error, dict):
                 nested_reason = str(first_error.get("reason") or "").strip()
-        reason = str(
-            nested_reason or error.get("status") or error.get("code") or ""
-        ).strip()
+        reason = str(nested_reason or error.get("status") or error.get("code") or "").strip()
         message = str(error.get("message") or "").strip()
         details = ": ".join(part for part in (reason, message) if part)
     else:

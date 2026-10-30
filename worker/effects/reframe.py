@@ -1488,9 +1488,7 @@ def detect_faces_report(
     )
     result: list[list[FaceBox]] = []
     for t, boxes in report.samples:
-        result.append(
-            [FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h, d.score) for d in boxes]
-        )
+        result.append([FaceBox(round(float(t), 3), d.x, d.y, d.w, d.h, d.score) for d in boxes])
     return result, report
 
 

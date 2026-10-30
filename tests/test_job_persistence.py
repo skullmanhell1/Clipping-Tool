@@ -124,9 +124,7 @@ def test_processing_options_round_trip(store, db_path):
 
 def test_find_more_avoid_windows_survive_a_restart(store, db_path):
     """The relationship metadata must persist so an inspected child job remains explainable."""
-    job = _completed_job(
-        avoid_windows=[{"start": 12.0, "end": 25.0}, {"start": 44.5, "end": 58.0}]
-    )
+    job = _completed_job(avoid_windows=[{"start": 12.0, "end": 25.0}, {"start": 44.5, "end": 58.0}])
     store.add(job)
 
     restored = _restart(db_path).get(job.id)

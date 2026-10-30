@@ -714,7 +714,9 @@ def render_clip(
     broll_notes: list[str] = []
     broll_records: list[dict] = []
     if broll_cues:
-        broll_base = "vlook" if (meme_video_plan.filters or look_chain) else meme_video_plan.output_label
+        broll_base = (
+            "vlook" if (meme_video_plan.filters or look_chain) else meme_video_plan.output_label
+        )
         try:
             broll_input_args, broll_graph, broll_notes = broll.build_broll_overlay(
                 broll_cues,
@@ -767,7 +769,9 @@ def render_clip(
         if frame_plan is not None:
             quality_video_filters.extend(getattr(frame_plan, "filters", ()) or ())
         applied.extend(
-            marker for marker in (getattr(quality_plan, "markers", ()) or ()) if marker not in applied
+            marker
+            for marker in (getattr(quality_plan, "markers", ()) or ())
+            if marker not in applied
         )
     look_with_meme = quality_video_filters + meme_video_plan.filters + look_chain
 
@@ -981,14 +985,18 @@ def render_clip(
         applied.extend(m for m in turn_plan.markers if m not in applied)
 
     speech_label = audio_out
-    quality_audio_filters = list(getattr(quality_plan, "audio_filters", ()) or ()) if quality_plan else []
+    quality_audio_filters = (
+        list(getattr(quality_plan, "audio_filters", ()) or ()) if quality_plan else []
+    )
     if quality_audio_filters and info.has_audio:
         graph_parts.append(f"[{audio_out}]{','.join(quality_audio_filters)}[aquality]")
         audio_out = "aquality"
         speech_label = audio_out
         audio_changed = True
         applied.extend(
-            marker for marker in (getattr(quality_plan, "markers", ()) or ()) if marker not in applied
+            marker
+            for marker in (getattr(quality_plan, "markers", ()) or ())
+            if marker not in applied
         )
     if music_path is not None:
         # Music follows the engine block and precedes the b-roll/emoji inputs, so
@@ -1048,16 +1056,20 @@ def render_clip(
 
     # Meme SFX are mixed after music/engine audio and before the legacy AU9 stings.  This keeps
     # their absolute input indices stable and lets each event carry its own volume/duck amount.
-    meme_audio_plan = meme_render.build_audio_plan(
-        meme_events,
-        duration=duration,
-        temp_dir=temp_dir,
-        input_offset=meme_overlay_offset + meme_overlay_plan.input_args.count("-i"),
-        speech_label=audio_out,
-        sfx_library=meme_sfx_library,
-        default_volume=meme_default_volume,
-        default_duck=meme_default_duck,
-    ) if info.has_audio else meme_render.MemeAudioPlan(output_label=audio_out)
+    meme_audio_plan = (
+        meme_render.build_audio_plan(
+            meme_events,
+            duration=duration,
+            temp_dir=temp_dir,
+            input_offset=meme_overlay_offset + meme_overlay_plan.input_args.count("-i"),
+            speech_label=audio_out,
+            sfx_library=meme_sfx_library,
+            default_volume=meme_default_volume,
+            default_duck=meme_default_duck,
+        )
+        if info.has_audio
+        else meme_render.MemeAudioPlan(output_label=audio_out)
+    )
     applied.extend(marker for marker in meme_audio_plan.markers if marker not in applied)
     if meme_audio_plan.graph:
         graph_parts.append(meme_audio_plan.graph)
@@ -1247,4 +1259,6 @@ def render_clip(
 
     cmd += ["-movflags", "+faststart", str(dest)]
     _run(cmd)
-    return RenderResult(dest, applied, broll_records, meme_overlay_plan.assets + meme_audio_plan.assets)
+    return RenderResult(
+        dest, applied, broll_records, meme_overlay_plan.assets + meme_audio_plan.assets
+    )

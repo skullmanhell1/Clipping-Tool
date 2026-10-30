@@ -268,9 +268,7 @@ def active_profile() -> OutputProfile | None:
     """The active per-render profile, or the legacy environment profile when unset."""
     override = _PROFILE_OVERRIDE.get()
     platform = (
-        override
-        if override is not None
-        else str(getattr(settings, "output_platform", "") or "")
+        override if override is not None else str(getattr(settings, "output_platform", "") or "")
     )
     return profile_for(platform)
 

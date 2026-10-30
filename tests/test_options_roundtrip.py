@@ -224,7 +224,10 @@ def test_preexisting_fields_keep_v060_defaults():
 
 
 def test_output_platform_accepts_known_targets_and_rejects_unknown_values():
-    assert ProcessingOptions.from_dict({"output_platform": "youtube_shorts"}).output_platform == "youtube_shorts"
+    assert (
+        ProcessingOptions.from_dict({"output_platform": "youtube_shorts"}).output_platform
+        == "youtube_shorts"
+    )
     assert ProcessingOptions.from_dict({"output_platform": "NOT_A_PLATFORM"}).output_platform == ""
 
 

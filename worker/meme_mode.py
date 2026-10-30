@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -33,7 +34,10 @@ def _as_bool(value: Any, default: bool = True) -> bool:
 
 
 def _stable_id(*parts: Any) -> str:
-    digest = hashlib.sha1("|".join(str(part) for part in parts).encode("utf-8")).hexdigest()
+    # Stable identifiers only; this digest is not used for security or content integrity.
+    digest = hashlib.sha1(  # noqa: S324 - not a security context
+        "|".join(str(part) for part in parts).encode("utf-8")
+    ).hexdigest()
     return f"meme_{digest[:12]}"
 
 
@@ -78,19 +82,25 @@ class MemeEvent:
         }
 
 
-def event_from_dict(value: MemeEvent | Mapping[str, Any], *, default_source: str = "manual") -> MemeEvent | None:
+def event_from_dict(
+    value: MemeEvent | Mapping[str, Any], *, default_source: str = "manual"
+) -> MemeEvent | None:
     if isinstance(value, MemeEvent):
         return value
     if not isinstance(value, Mapping):
         return None
     kind = str(value.get("kind") or value.get("type") or "").strip().lower()
-    effect = str(
-        value.get("effect")
-        or value.get("name")
-        or value.get("action")
-        or value.get("asset")
-        or ""
-    ).strip().lower()
+    effect = (
+        str(
+            value.get("effect")
+            or value.get("name")
+            or value.get("action")
+            or value.get("asset")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     # The browser editor uses ``effect`` for visual events while the persisted worker model uses
     # ``visual`` as the kind. Accept both spellings so hand-authored timeline JSON and older saved
     # profiles cannot silently disappear at render time.
@@ -107,7 +117,9 @@ def event_from_dict(value: MemeEvent | Mapping[str, Any], *, default_source: str
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         payload = {}
-    event_id = str(value.get("id") or "").strip() or _stable_id(kind, effect, start, end, sorted(payload.items()))
+    event_id = str(value.get("id") or "").strip() or _stable_id(
+        kind, effect, start, end, sorted(payload.items())
+    )
     return MemeEvent(
         id=event_id,
         kind=kind,
@@ -123,13 +135,17 @@ def event_from_dict(value: MemeEvent | Mapping[str, Any], *, default_source: str
     )
 
 
-def normalize_events(events: Iterable[MemeEvent | Mapping[str, Any]] | None, duration: float) -> list[MemeEvent]:
+def normalize_events(
+    events: Iterable[MemeEvent | Mapping[str, Any]] | None, duration: float
+) -> list[MemeEvent]:
     """Clamp events to a clip while retaining exact caller-supplied times when valid."""
     try:
         raw_length = float(duration)
     except (TypeError, ValueError):
         raw_length = 0.0
-    length = math.inf if math.isinf(raw_length) and raw_length > 0 else max(0.0, _number(raw_length))
+    length = (
+        math.inf if math.isinf(raw_length) and raw_length > 0 else max(0.0, _number(raw_length))
+    )
     out: list[MemeEvent] = []
     for value in events or ():
         event = event_from_dict(value)
@@ -144,7 +160,9 @@ def normalize_events(events: Iterable[MemeEvent | Mapping[str, Any]] | None, dur
     return sorted(out, key=lambda item: (item.start, item.end, item.id))
 
 
-def rebase_events(events: Iterable[MemeEvent | Mapping[str, Any]], keeps: Sequence[Any], duration: float) -> list[MemeEvent]:
+def rebase_events(
+    events: Iterable[MemeEvent | Mapping[str, Any]], keeps: Sequence[Any], duration: float
+) -> list[MemeEvent]:
     """Map clip-relative event times through a destructive keep-interval plan."""
     parsed = normalize_events(events, float("inf"))
     mapped: list[MemeEvent] = []
@@ -227,19 +245,25 @@ class MemeTimeline:
         return [event.to_dict() for event in self.events]
 
 
-def add_event(events: Iterable[MemeEvent | Mapping[str, Any]], event: MemeEvent | Mapping[str, Any]) -> list[dict[str, Any]]:
+def add_event(
+    events: Iterable[MemeEvent | Mapping[str, Any]], event: MemeEvent | Mapping[str, Any]
+) -> list[dict[str, Any]]:
     timeline = MemeTimeline(events)
     timeline.add(event)
     return timeline.to_dict()
 
 
-def remove_event(events: Iterable[MemeEvent | Mapping[str, Any]], event_id: str) -> list[dict[str, Any]]:
+def remove_event(
+    events: Iterable[MemeEvent | Mapping[str, Any]], event_id: str
+) -> list[dict[str, Any]]:
     timeline = MemeTimeline(events)
     timeline.remove(event_id)
     return timeline.to_dict()
 
 
-def undo_event(events: Iterable[MemeEvent | Mapping[str, Any]], event: MemeEvent | Mapping[str, Any]) -> list[dict[str, Any]]:
+def undo_event(
+    events: Iterable[MemeEvent | Mapping[str, Any]], event: MemeEvent | Mapping[str, Any]
+) -> list[dict[str, Any]]:
     """Restore one previously removed event when the caller retains its stable-id record."""
     timeline = MemeTimeline(events)
     parsed = event_from_dict(event)
@@ -255,15 +279,35 @@ PRESET_PACKS: dict[str, dict[str, Any]] = {
             {"kind": "visual", "effect": "zoom_punch", "start": 0.0, "duration": 0.35},
             {"kind": "visual", "effect": "shake", "start": 0.45, "duration": 0.45},
             {"kind": "visual", "effect": "flash", "start": 0.9, "duration": 0.12},
-            {"kind": "sfx", "effect": "pop", "start": 0.9, "duration": 0.1, "volume": 0.35, "duck": 0.25},
-            {"kind": "overlay", "effect": "text", "start": 1.0, "duration": 0.9, "payload": {"text": "WHAT?!", "position": "center", "scale": 0.11}},
+            {
+                "kind": "sfx",
+                "effect": "pop",
+                "start": 0.9,
+                "duration": 0.1,
+                "volume": 0.35,
+                "duck": 0.25,
+            },
+            {
+                "kind": "overlay",
+                "effect": "text",
+                "start": 1.0,
+                "duration": 0.9,
+                "payload": {"text": "WHAT?!", "position": "center", "scale": 0.11},
+            },
         ],
     },
     "subtle": {
         "label": "Subtle",
         "events": [
             {"kind": "visual", "effect": "zoom_punch", "start": 0.0, "duration": 0.25},
-            {"kind": "sfx", "effect": "click", "start": 0.0, "duration": 0.05, "volume": 0.18, "duck": 0.12},
+            {
+                "kind": "sfx",
+                "effect": "click",
+                "start": 0.0,
+                "duration": 0.05,
+                "volume": 0.18,
+                "duck": 0.12,
+            },
         ],
     },
     "gaming_rage": {
@@ -272,8 +316,26 @@ PRESET_PACKS: dict[str, dict[str, Any]] = {
             {"kind": "visual", "effect": "shake", "start": 0.0, "duration": 0.8},
             {"kind": "visual", "effect": "glitch_vhs", "start": 0.8, "duration": 0.5},
             {"kind": "visual", "effect": "chromatic_aberration", "start": 1.3, "duration": 0.4},
-            {"kind": "sfx", "effect": "bass_drop", "start": 1.3, "duration": 0.45, "volume": 0.3, "duck": 0.35},
-            {"kind": "overlay", "effect": "text", "start": 1.35, "duration": 1.2, "payload": {"text": "RAGE QUIT", "position": "center", "scale": 0.1, "animate": "pop"}},
+            {
+                "kind": "sfx",
+                "effect": "bass_drop",
+                "start": 1.3,
+                "duration": 0.45,
+                "volume": 0.3,
+                "duck": 0.35,
+            },
+            {
+                "kind": "overlay",
+                "effect": "text",
+                "start": 1.35,
+                "duration": 1.2,
+                "payload": {
+                    "text": "RAGE QUIT",
+                    "position": "center",
+                    "scale": 0.1,
+                    "animate": "pop",
+                },
+            },
         ],
     },
 }
@@ -287,14 +349,30 @@ def preset_events(name: str, duration: float) -> list[MemeEvent]:
     return [
         event
         for index, item in enumerate(pack["events"])
-        if (event := event_from_dict({**item, "id": _stable_id("preset", key, index, item.get("start")), "source": "preset"}))
+        if (
+            event := event_from_dict(
+                {
+                    **item,
+                    "id": _stable_id("preset", key, index, item.get("start")),
+                    "source": "preset",
+                }
+            )
+        )
     ][:]
 
 
 def _word_value(word: Any) -> tuple[float, float, str]:
     if isinstance(word, Mapping):
-        return _number(word.get("start")), _number(word.get("end"), _number(word.get("start")) + 0.2), str(word.get("text") or "")
-    return _number(getattr(word, "start", 0.0)), _number(getattr(word, "end", 0.2), _number(getattr(word, "start", 0.0)) + 0.2), str(getattr(word, "text", "") or "")
+        return (
+            _number(word.get("start")),
+            _number(word.get("end"), _number(word.get("start")) + 0.2),
+            str(word.get("text") or ""),
+        )
+    return (
+        _number(getattr(word, "start", 0.0)),
+        _number(getattr(word, "end", 0.2), _number(getattr(word, "start", 0.0)) + 0.2),
+        str(getattr(word, "text", "") or ""),
+    )
 
 
 KEYWORD_EFFECTS: dict[str, str] = {
@@ -346,24 +424,66 @@ def suggest_events(
             continue
         end = min(length, max(start + 0.12, end))
         candidates.append(
-            MemeEvent(_stable_id("auto", "keyword", token, start), "visual", effect, start, min(end + 0.18, length), source="auto")
+            MemeEvent(
+                _stable_id("auto", "keyword", token, start),
+                "visual",
+                effect,
+                start,
+                min(end + 0.18, length),
+                source="auto",
+            )
         )
         candidates.append(
-            MemeEvent(_stable_id("auto", "caption", token, start), "caption", "emphasis", start, min(end + 0.35, length), payload={"text": raw_text.strip()}, source="auto")
+            MemeEvent(
+                _stable_id("auto", "caption", token, start),
+                "caption",
+                "emphasis",
+                start,
+                min(end + 0.35, length),
+                payload={"text": raw_text.strip()},
+                source="auto",
+            )
         )
         if len(candidates) >= max_events:
             break
     for at in _energy_peaks(energy):
         if 0.0 <= at < length:
-            candidates.append(MemeEvent(_stable_id("auto", "loud", at), "visual", "shake", at, min(length, at + 0.25), source="auto"))
-    for start, end in silences:
+            candidates.append(
+                MemeEvent(
+                    _stable_id("auto", "loud", at),
+                    "visual",
+                    "shake",
+                    at,
+                    min(length, at + 0.25),
+                    source="auto",
+                )
+            )
+    for _start, end in silences:
         end_time = _number(end)
         if end_time > 0.0 and end_time < length:
-            candidates.append(MemeEvent(_stable_id("auto", "silence", end_time), "visual", "flash", end_time, min(length, end_time + 0.12), source="auto"))
+            candidates.append(
+                MemeEvent(
+                    _stable_id("auto", "silence", end_time),
+                    "visual",
+                    "flash",
+                    end_time,
+                    min(length, end_time + 0.12),
+                    source="auto",
+                )
+            )
     for at in scene_cuts:
         cut = _number(at)
         if 0.0 < cut < length:
-            candidates.append(MemeEvent(_stable_id("auto", "scene", cut), "visual", "zoom_punch", cut, min(length, cut + 0.22), source="auto"))
+            candidates.append(
+                MemeEvent(
+                    _stable_id("auto", "scene", cut),
+                    "visual",
+                    "zoom_punch",
+                    cut,
+                    min(length, cut + 0.22),
+                    source="auto",
+                )
+            )
     # Stable de-duplication keeps a loud keyword from receiving three identical effects.
     unique: dict[tuple[str, str, int], MemeEvent] = {}
     for event in candidates:
