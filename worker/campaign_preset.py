@@ -2034,6 +2034,8 @@ def plan_daily_slots(
         if candidate not in parsed:
             parsed.append(candidate)
     if len(parsed) < requested_count:
+        if requested_count == 2:
+            raise ValueError("two distinct peak hours are required")
         raise ValueError(f"at least {requested_count} distinct peak hours are required")
     zone = _zone(timezone)
     slots = [

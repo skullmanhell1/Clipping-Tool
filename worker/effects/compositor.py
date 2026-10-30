@@ -472,8 +472,6 @@ def render_clip(
                 max_lines=2,
             )
         cues = cap.words_to_cues(words, fit=cue_fit) if need_caps else []
-        if need_caps:
-            applied.append("caption_measured_wrap")
 
         if use_preset:
             preset, substituted = caption_presets.resolve_preset(options.caption_preset)

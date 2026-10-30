@@ -59,6 +59,11 @@ from storage_backends.retention import active_job_ids, cleanup_expired, cleanup_
 from updates import get_update_checker
 from worker import captions as cap
 from worker import output_profiles
+from worker.boxabl_campaign import PROFILE_NAME as BOXABL_PROFILE_NAME
+from worker.boxabl_campaign import (
+    campaign_publish_blockers,
+    is_approved_source_url,
+)
 from worker.brand_profiles import BrandProfileStore
 from worker.campaign_brief import parse_campaign_brief
 from worker.campaign_brief_sync import CampaignBriefSyncService
@@ -1235,6 +1240,11 @@ def submit_url(req: UrlJobRequest) -> dict:
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     options = req.options.to_options()
+    if getattr(options, "profile", "") == "boxabl_campaign" and not is_approved_source_url(req.url):
+        raise HTTPException(
+            status_code=400,
+            detail="Use an approved BOXABL source link from the campaign brief.",
+        )
     source_blocker = preset_source_blocker(getattr(options, "campaign_preset", {}) or {}, req.url)
     if source_blocker:
         raise HTTPException(status_code=400, detail=source_blocker)
@@ -2041,7 +2051,10 @@ def _invalidate_campaign_review(
     force: bool = False,
 ) -> None:
     """Require a fresh human review after an active campaign clip or its copy changes."""
-    if not getattr(getattr(job, "options", None), "campaign_preset", None):
+    options = getattr(job, "options", None)
+    if not getattr(options, "campaign_preset", None) and getattr(options, "profile", "") != (
+        "boxabl_campaign"
+    ):
         return
 
     changed = force or any(
@@ -3113,6 +3126,14 @@ def schedule_campaign_day(campaign_id: str, req: DailyScheduleRequest) -> dict:
         raise HTTPException(
             status_code=400, detail="Campaign automation only supports public visibility"
         )
+    # Validate the request shape before looking anything up: a malformed day is a 400 even
+    # when the campaign id does not exist, so the caller learns what they got wrong rather
+    # than being told the campaign is missing.
+    if len(req.clip_ids) != 2 or len(set(req.clip_ids)) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly two different clip_ids are required for this campaign day",
+        )
     campaign = get_history().campaign(campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -3416,6 +3437,22 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
         or ""
     ).strip()
     routes = {platform: dict(route) for platform, route in req.routes.items()}
+    if getattr(job.options, "profile", "") == BOXABL_PROFILE_NAME:
+        blockers = campaign_publish_blockers(
+            job=job,
+            clip=clip,
+            platforms=req.platforms,
+            mode=req.mode,
+            checks=req.campaign_checks,
+            affiliate_url=req.affiliate_url,
+        )
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="BOXABL campaign preflight failed: " + " ".join(blockers),
+            )
+        if "x" in {platform.strip().lower() for platform in req.platforms}:
+            routes.setdefault("x", {})["affiliate_url"] = req.affiliate_url.strip()
     campaign_for_routes = (
         get_history().campaign(publish_campaign_id) if publish_campaign_id else None
     )

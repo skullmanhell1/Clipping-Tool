@@ -491,6 +491,21 @@ class ProcessingOptions:
             # Bundle first, explicit request second.
             valid = {**profile.settings, "profile": profile.name, **valid}
             valid["profile"] = profile.name
+            if profile.name == "boxabl_campaign":
+                # These are campaign policy, not preferences: a request may not opt out of
+                # review-only publishing, whole-home framing, or the local-only asset rules.
+                valid.update(
+                    {
+                        "publish_to": [],
+                        "publish_mode": "review",
+                        "schedule_at": None,
+                        "reframe": False,
+                        "zoom": False,
+                        "kinetic_typography_enabled": False,
+                        "broll": False,
+                        "music": "",
+                    }
+                )
         elif "profile" in valid:
             # An unknown profile name is dropped rather than recorded, so a job never claims
             # to have been produced by a bundle that does not exist.
