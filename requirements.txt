@@ -47,6 +47,18 @@ yt-dlp>=2024.7.1,<2027.0.0
 
 # --- Transcription ---
 faster-whisper>=1.0,<2.0
+# PyAV is faster-whisper's media decoder, pulled in transitively, and its own declared floor
+# (`av>=11`) is too permissive. faster-whisper 1.2.1 calls
+# `av.open(..., metadata_errors="ignore")` unconditionally, and PyAV 19 rejects that keyword:
+#
+#   TypeError: open() got an unexpected keyword argument 'metadata_errors'
+#
+# The failure is not an install error — it is every job dying at transcription, one layer
+# below the UI's "Starting" stage, which reads like a bad upload rather than a broken
+# dependency. Measured here: av 19.0.2 raises, av 18.0.0 decodes. `requirements.lock.txt`
+# already pins 18.0.0, so this bound makes a plain `pip install -r requirements.txt` agree
+# with the lock instead of resolving past it. Bump deliberately, with a transcription test.
+av>=18,<19
 
 # --- Face tracking / vision ---
 # `cv2` comes from mediapipe's own dependency, `opencv-contrib-python` (I7).
