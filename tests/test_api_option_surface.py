@@ -168,6 +168,14 @@ def test_a_built_in_profile_actually_expands(name):
         )
 
 
+def test_a_campaign_brand_name_reaches_the_options_surface():
+    """The campaign card must not depend on the generic brand kit being filled in."""
+    resolved = OptionsModel(
+        campaign_preset={"settings": {"brand_name": "BOXABL"}}
+    ).to_options()
+    assert resolved.brand_name == "BOXABL"
+
+
 def test_an_explicit_value_still_beats_the_profile():
     """The precedence `from_dict` documents, which `exclude_unset` must not invert."""
     resolved = OptionsModel(profile="gaming", caption_preset="minimal").to_options()

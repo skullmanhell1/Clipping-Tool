@@ -36,6 +36,15 @@ const clip = (id, overrides = {}) => ({
   ...overrides,
 });
 
+const measuredClip = (id, overrides = {}) =>
+  clip(id, {
+    engagement_score: 78,
+    engagement_features: {
+      quality_scores: { hook: 0.82, flow: 0.74, impact: 0.7, clarity: 0.86, relevance: 0.68 },
+    },
+    ...overrides,
+  });
+
 const job = (clips) => ({
   id: "job1",
   status: "completed",
@@ -96,6 +105,70 @@ describe("JobCard review workflow", () => {
     expect(screen.getByText("2 selected")).toBeInTheDocument();
   });
 
+  it("applies the status filter to the visible clips", async () => {
+    setup([
+      clip("a", { review_state: "approved" }),
+      clip("b"),
+      clip("c", { review_state: "rejected" }),
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Rejected" }));
+    expect(screen.getByTestId("clip-c")).toBeInTheDocument();
+    expect(screen.queryByTestId("clip-a")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("clip-b")).not.toBeInTheDocument();
+  });
+
+  it("filters to top picks and clips needing attention", async () => {
+    setup([
+      measuredClip("a", { engagement_score: 82 }),
+      measuredClip("b", { engagement_score: 30 }),
+      clip("c"),
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Top picks" }));
+    expect(screen.getByTestId("clip-a")).toBeInTheDocument();
+    expect(screen.queryByTestId("clip-b")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("clip-c")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Needs attention" }));
+    expect(screen.getByTestId("clip-b")).toBeInTheDocument();
+    expect(screen.queryByTestId("clip-a")).not.toBeInTheDocument();
+  });
+
+  it("sorts by measured signal on request", async () => {
+    const { container } = setup([
+      measuredClip("a", { engagement_score: 30 }),
+      measuredClip("b", { engagement_score: 82 }),
+    ]);
+    await userEvent.selectOptions(screen.getByLabelText("Sort clips"), "score");
+    const order = [...container.querySelectorAll("[data-testid]")]
+      .map((node) => node.getAttribute("data-testid"))
+      .filter((id) => /^clip-[ab]$/.test(id));
+    expect(order).toEqual(["clip-b", "clip-a"]);
+  });
+
+  it("scopes select-shown to the filtered list", async () => {
+    setup([clip("a", { review_state: "approved" }), clip("b"), clip("c")]);
+    await userEvent.click(screen.getByRole("button", { name: "Pending" }));
+    await userEvent.click(screen.getByRole("button", { name: /select shown/i }));
+    await userEvent.click(screen.getByRole("button", { name: /approve selected/i }));
+    await waitFor(() => expect(api.reviewClips).toHaveBeenCalledTimes(1));
+    const [, ids, state] = api.reviewClips.mock.calls[0];
+    expect(ids.sort()).toEqual(["b", "c"]);
+    expect(state).toBe("approved");
+  });
+
+  it("drops a selection that a filter hides", async () => {
+    setup([clip("a", { review_state: "approved" }), clip("b")]);
+    await userEvent.click(screen.getByRole("button", { name: "Approved" }));
+    await userEvent.click(screen.getByRole("button", { name: /select shown/i }));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Pending" }));
+    await waitFor(() => expect(screen.getByText("nothing selected")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /approve selected/i })).toBeDisabled();
+    expect(api.reviewClips).not.toHaveBeenCalled();
+  });
+
   it("applies a batch verdict to exactly the selection", async () => {
     setup();
     await userEvent.click(screen.getByLabelText(/select clip a for batch review/i));
@@ -121,7 +194,7 @@ describe("JobCard review workflow", () => {
 
   it("reports every updated clip upward so the list re-renders", async () => {
     const { onClipUpdated } = setup();
-    await userEvent.click(screen.getByRole("button", { name: /select all/i }));
+    await userEvent.click(screen.getByRole("button", { name: /select shown/i }));
     await userEvent.click(screen.getByRole("button", { name: /reject selected/i }));
     await waitFor(() => expect(onClipUpdated).toHaveBeenCalledTimes(3));
   });

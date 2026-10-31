@@ -50,6 +50,19 @@ export default function BrandKitPanel({ settings, onChange, fonts = [] }) {
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Row
+          label="Brand name on video"
+          hint="Burned into the campaign brand card at 0:05–0:08. A campaign's own card text takes precedence, so BOXABL keeps its exact required spelling."
+        >
+          <input
+            type="text"
+            value={settings.brand_name || ""}
+            onChange={(event) => set("brand_name")(event.target.value)}
+            placeholder="BOXABL"
+            className={inputClass}
+          />
+        </Row>
+
+        <Row
           label="Caption font"
           hint="Overrides the style's own font. Only the vendored faces are listed, because a font that is not installed is silently substituted at render time."
         >

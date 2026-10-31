@@ -27,6 +27,14 @@ const TRANSCRIPT = {
   ],
 };
 
+const PAUSED_TRANSCRIPT = {
+  ...TRANSCRIPT,
+  words: [
+    { start: 0.0, end: 0.4, text: "keep", probability: 0.99 },
+    { start: 1.6, end: 2.0, text: "this", probability: 0.98 },
+  ],
+};
+
 const setup = (props = {}) => {
   const onApply = vi.fn();
   render(<TranscriptEditor jobId="job1" clipId="c1" onApply={onApply} {...props} />);
@@ -64,6 +72,65 @@ describe("TranscriptEditor (U4)", () => {
   it("cannot apply anything until a word is struck", async () => {
     setup();
     expect(await screen.findByRole("button", { name: /apply cuts/i })).toBeDisabled();
+  });
+
+  it("selects filler words for review without rendering immediately", async () => {
+    const { onApply } = setup();
+    await screen.findByRole("button", { name: /Cut “um”/ });
+
+    await userEvent.click(screen.getByRole("button", { name: /Select filler words/ }));
+
+    expect(screen.getByRole("button", { name: /Restore “um”/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /apply cuts/i })).not.toBeDisabled();
+    expect(screen.getByText(/1 word cut/)).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it("does not classify ordinary words as filler", async () => {
+    api.clipTranscript.mockResolvedValue({
+      ...TRANSCRIPT,
+      words: [
+        { start: 0.0, end: 0.4, text: "like" },
+        { start: 0.6, end: 1.0, text: "this" },
+      ],
+    });
+    setup();
+    await screen.findByRole("button", { name: /Cut “like”/ });
+
+    expect(screen.queryByRole("button", { name: /Select filler words/ })).not.toBeInTheDocument();
+  });
+
+  it("exposes internal pauses and applies their exact ranges", async () => {
+    api.clipTranscript.mockResolvedValue(PAUSED_TRANSCRIPT);
+    const { onApply } = setup();
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Cut 1.2 second pause after “keep”/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
+    expect(onApply).toHaveBeenCalledWith([{ start: 0.4, end: 1.6 }]);
+  });
+
+  it("can select every pause at the current threshold", async () => {
+    api.clipTranscript.mockResolvedValue(PAUSED_TRANSCRIPT);
+    const { onApply } = setup();
+    await userEvent.click(await screen.findByRole("button", { name: /Select pauses \(1\)/ }));
+    expect(
+      screen.getByRole("button", { name: /Restore 1.2 second pause after “keep”/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: /apply cuts/i }));
+    expect(onApply).toHaveBeenCalledWith([{ start: 0.4, end: 1.6 }]);
+  });
+
+  it("hides pauses below the chosen threshold", async () => {
+    api.clipTranscript.mockResolvedValue(PAUSED_TRANSCRIPT);
+    setup();
+    await screen.findByRole("button", { name: /Cut 1.2 second pause/ });
+    await userEvent.selectOptions(screen.getByLabelText("Minimum pause length"), "1.8");
+    expect(screen.queryByRole("button", { name: /pause after/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /apply cuts/i })).toBeDisabled();
   });
 
   it("sends the struck word's own time range, not its index", async () => {

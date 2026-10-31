@@ -11,6 +11,7 @@ from typing import Any
 from config import settings
 from publishers import build_publishers, preflight, resolve_platform, retry, tailoring
 from publishers.base import PublishRequest, PublishState
+from publishers.delivery import select_delivery
 from publishers.history import HistoryStore, get_history
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,18 @@ class PublishManager:
     def statuses(self):
         return {name: p.status().to_dict() for name, p in self.publishers.items()}
 
+    @staticmethod
+    def _delivery_path(
+        clip: Any, requested_platform: str, video_path: str | Path
+    ) -> tuple[Path, dict[str, Any]]:
+        """Backward-compatible name for the shared delivery selector.
+
+        Selection lives in :mod:`publishers.delivery` because the readiness endpoint and the
+        publish worker must agree about which file a destination receives. Two copies of this
+        rule would eventually disagree and the preview would stop predicting the upload.
+        """
+        return select_delivery(clip, requested_platform, video_path)
+
     def submit(
         self,
         *,
@@ -166,6 +179,9 @@ class PublishManager:
                 )
                 continue
             route = routes.get(platform) or routes.get(requested_platform, {})
+            delivery_path, delivery = self._delivery_path(
+                clip, requested_platform or platform, video_path
+            )
             mentions = list(clip.mentions or [])
             affiliate_url = str(route.get("affiliate_url") or "").strip()
             if platform.lower() == "x" and affiliate_url and affiliate_url not in mentions:
@@ -232,7 +248,8 @@ class PublishManager:
                     merged_mentions.append(text)
             brief_values["mentions"] = merged_mentions
             req = {
-                "video_path": str(video_path),
+                "video_path": str(delivery_path),
+                "delivery": delivery,
                 "title": clip.title,
                 "description": brief_values.get("description", clip.description),
                 "hashtags": brief_values.get("hashtags", clip.hashtags),

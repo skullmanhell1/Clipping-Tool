@@ -116,3 +116,46 @@ describe("CampaignAutomationPanel Google Doc import", () => {
     expect(screen.queryByText("Spring Launch")).not.toBeInTheDocument();
   });
 });
+
+
+  it("saves a reviewed brief as a reusable campaign preset and refreshes the library", async () => {
+    const user = userEvent.setup();
+    const onPresetApplied = vi.fn();
+    const onPresetSaved = vi.fn();
+    vi.spyOn(api, "parseCampaignPresetFromDrive").mockResolvedValue({
+      preset,
+      provenance: { source_type: "google_docs" },
+      sync: { status: "synced" },
+    });
+    const importPreset = vi.spyOn(api, "importCampaignPreset").mockResolvedValue({
+      preset: { ...preset, id: "", settings: { clip_length: "20-60s" } },
+    });
+    const savePreset = vi.spyOn(api, "saveCampaignPreset").mockResolvedValue({
+      preset: { ...preset, id: "saved-1", name: "Spring Launch saved" },
+    });
+
+    renderPanel({ driveConfigured: true, onPresetApplied, onPresetSaved });
+    await user.type(
+      screen.getByLabelText("Google Doc or Drive link"),
+      "https://docs.google.com/document/d/brief-12345/edit",
+    );
+    await user.click(screen.getByRole("button", { name: "Load and review brief" }));
+    await screen.findByText("Spring Launch");
+
+    const name = screen.getByLabelText("Campaign preset name");
+    await user.clear(name);
+    await user.type(name, "Spring Launch saved");
+    await user.click(screen.getByRole("button", { name: "Save as campaign preset" }));
+
+    expect(importPreset).toHaveBeenCalledWith({
+      urls: ["https://docs.google.com/document/d/brief-12345/edit"],
+    });
+    expect(savePreset).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Spring Launch saved" }),
+      true,
+    );
+    expect(onPresetApplied).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "saved-1", name: "Spring Launch saved" }),
+    );
+    expect(onPresetSaved).toHaveBeenCalled();
+  });

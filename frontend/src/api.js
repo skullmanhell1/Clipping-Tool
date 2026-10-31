@@ -384,6 +384,25 @@ export const api = {
       body: JSON.stringify({ settings, cuts }),
     }).then(jsonOrThrow),
 
+  // What each selected destination will receive, checked server-side against the file on disk,
+  // the campaign route, and the publisher's current status. Read-only: no attempt is created.
+  deliveryReadiness: (jobId, clipId, platforms = [], campaignId = "") => {
+    const params = new URLSearchParams({ platforms: platforms.join(",") });
+    if (campaignId) params.set("campaign_id", campaignId);
+    return apiFetch(
+      `/api/jobs/${jobId}/clips/${clipId}/delivery-readiness?${params.toString()}`,
+    ).then(jsonOrThrow);
+  },
+
+  // One destination-specific encode of the same clip. The canonical file is untouched; the
+  // response carries the updated clip with a `variants` record for the new file.
+  renderVariant: (jobId, clipId, platform, settings = {}, cuts = []) =>
+    apiFetch(`/api/jobs/${jobId}/clips/${clipId}/variants`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform, settings, cuts }),
+    }).then(jsonOrThrow),
+
   // U4: word-level timings for one clip, for the transcript editor. Answers 409 when the
   // transcript is not in the cache the render used — the editor cannot be opened in that case,
   // and jsonOrThrow surfaces the API's own explanation of why.

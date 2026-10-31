@@ -36,6 +36,10 @@ PUBLISHER_TYPES = {
 #: not break" without that actually being true.
 PLATFORM_ALIASES = {
     "youtube_shorts": "youtube",
+    # Campaign briefs can name the product explicitly. The publisher is the same Instagram
+    # account, and before this alias existed such a request was skipped as unknown before
+    # preflight or variant selection could run.
+    "instagram_reels": "instagram",
 }
 
 

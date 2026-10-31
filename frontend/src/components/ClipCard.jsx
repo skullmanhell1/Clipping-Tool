@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, formatDuration } from "../api.js";
+import { clipQuality } from "../clipQuality.js";
 import ClipPlayer from "./ClipPlayer.jsx";
+import PlatformVariants from "./PlatformVariants.jsx";
 import TranscriptEditor from "./TranscriptEditor.jsx";
 
 const PLATFORM_LABELS = {
@@ -40,12 +42,137 @@ const BOXABL_REVIEW_ITEMS = [
   ["no_prohibited_content", "No Kanye West, stock/equity/ticker talk, political/negative bait, or unedited rip."],
 ];
 
+function presetReviewItems(preset) {
+  if (!preset || typeof preset !== "object") return [];
+  const raw = Array.isArray(preset.compliance?.required_checks)
+    ? preset.compliance.required_checks
+    : [];
+  const items = raw.map((entry, index) => {
+    if (typeof entry === "string") return [entry, entry];
+    const id = entry?.id || entry?.key || entry?.label || `campaign-check-${index}`;
+    return [String(id), entry?.label || entry?.message || String(id)];
+  });
+  if (
+    Array.isArray(preset.source_library)
+    && preset.source_library.length
+    && !items.some(([id]) => id === "source_approved")
+  ) {
+    items.push(["source_approved", "Source is on this campaign's approved source list."]);
+  }
+  return items;
+}
+
+function publishErrorText(error) {
+  const detail = error?.detail;
+  const report = detail?.report;
+  const reportProfiles = Array.isArray(report?.profiles) ? report.profiles : [];
+  const reportResults = reportProfiles.length
+    ? reportProfiles.flatMap((profile) =>
+        (profile.results || []).map((result) => ({
+          ...result,
+          profile: profile.profile_name || profile.profile_id || "",
+        })),
+      )
+    : (report?.results || []);
+  const failures = reportResults
+    .filter((result) => result.status !== "pass")
+    .map((result) => `${result.profile ? `${result.profile}: ` : ""}${result.message || result.rule}`);
+  const blockers = Array.isArray(detail?.blockers) ? detail.blockers : [];
+  const details = [...new Set([...failures, ...blockers].filter(Boolean))];
+  if (!details.length) return error?.message || "Publish request failed.";
+  const headline = detail?.message || error.message || "Campaign compliance failed";
+  return `${headline}: ${details.slice(0, 4).join("; ")}`;
+}
+
 function scoreColor(score) {
   if (score >= 80) return "bg-emerald-500/90";
   if (score >= 60) return "bg-lime-500/90";
   if (score >= 40) return "bg-amber-500/90";
   if (score > 0) return "bg-orange-500/90";
   return "bg-slate-600/90";
+}
+
+function ClipSignals({ clip }) {
+  const { signals, reasons, engagement, topPick, needsAttention, attention } = clipQuality(clip);
+  if (signals.length === 0 && reasons.length === 0 && engagement === null) return null;
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3" data-testid="clip-signals">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+              Why this clip
+            </h4>
+            {topPick ? (
+              <span
+                data-testid="top-pick-badge"
+                className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200"
+              >
+                Top pick
+              </span>
+            ) : null}
+            {needsAttention ? (
+              <span
+                data-testid="attention-badge"
+                title={attention.join(" · ")}
+                className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200"
+              >
+                Needs attention
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-[10px] text-slate-500">
+            Measured review signals. They explain the ranking; they are not a prediction of views.
+          </p>
+        </div>
+        {engagement !== null ? (
+          <span className="rounded-full border border-cyan-400/20 bg-cyan-400/[0.06] px-2 py-1 text-[10px] font-semibold text-cyan-200">
+            {engagement}/100 measured engagement
+          </span>
+        ) : null}
+      </div>
+
+      {signals.length > 0 ? (
+        <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+          {signals.map((signal) => (
+            <div key={signal.key} title={signal.hint}>
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="text-slate-300">{signal.label}</span>
+                <span className="tabular-nums text-slate-500">{signal.percent}</span>
+              </div>
+              <div
+                role="meter"
+                aria-label={`${signal.label} signal`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={signal.percent}
+                aria-valuetext={`${signal.percent} out of 100`}
+                className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800"
+              >
+                <div
+                  className={`h-full rounded-full ${signal.tone}`}
+                  style={{ width: `${signal.percent}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {reasons.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {reasons.map((reason) => (
+            <span
+              key={reason}
+              className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300"
+            >
+              {reason}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function Field({ label, children, onRegenerate, busy }) {
@@ -82,6 +209,7 @@ export default function ClipCard({
   jobId,
   clip,
   campaignProfile = "",
+  campaignPreset = null,
   llmAvailable,
   publishing,
   publisherStatuses,
@@ -95,6 +223,7 @@ export default function ClipCard({
   onRegisterPlayer,
   focused = false,
   settings,
+  outputProfiles = [],
 }) {
   const [form, setForm] = useState({
     title: clip.title || "",
@@ -117,10 +246,29 @@ export default function ClipCard({
   const [editingTranscript, setEditingTranscript] = useState(false);
   const [campaignChecks, setCampaignChecks] = useState({});
   const isBoxablCampaign = campaignProfile === "boxabl_campaign";
+  const campaignReviewItems = useMemo(
+    () => (isBoxablCampaign ? BOXABL_REVIEW_ITEMS : presetReviewItems(campaignPreset)),
+    [campaignPreset, isBoxablCampaign],
+  );
+  const isCampaignClip = isBoxablCampaign || campaignReviewItems.length > 0;
+  const campaignReviewName = campaignPreset?.name
+    || (isBoxablCampaign ? "BOXABL campaign" : "Campaign");
+  const campaignPosting = campaignPreset?.posting || {};
+  const campaignManualOnly = isBoxablCampaign
+    || Boolean(campaignPosting.manual_only || campaignPosting.review_only);
+  const campaignAffiliatePlatforms = (isBoxablCampaign
+    ? ["x"]
+    : (campaignPosting.affiliate_required_platforms || [])).map((platform) =>
+    String(platform).toLowerCase(),
+  );
 
   useEffect(() => {
     setSelectedPlatforms(publishing?.platforms || []);
   }, [publishing?.platforms]);
+
+  useEffect(() => {
+    setCampaignChecks({});
+  }, [campaignPreset?.id, campaignProfile]);
 
   const update = (key) => (event) => {
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -199,26 +347,29 @@ export default function ClipCard({
       setError("Save metadata changes before publishing.");
       return;
     }
-    if (isBoxablCampaign) {
-      if (publishing?.mode !== "review") {
-        setError("BOXABL clips must be uploaded in review mode.");
+    if (isCampaignClip) {
+      if (campaignManualOnly && publishing?.mode !== "review") {
+        setError(`${campaignReviewName} requires review mode, not automatic publishing.`);
         return;
       }
       if (clip.review_state !== "approved") {
-        setError("Watch and approve this clip before publishing it.");
+        setError("Watch and approve this clip before uploading it.");
         return;
       }
-      if (selectedPlatforms.includes("instagram")) {
+      if (isBoxablCampaign && selectedPlatforms.includes("instagram")) {
         setError("Instagram API publishing is blocked for this campaign because it cannot set the required native @boxabl tag. Download the clip and publish/tag it manually in Instagram.");
         return;
       }
-      const requiredChecks = BOXABL_REVIEW_ITEMS.map(([key]) => key);
+      const requiredChecks = campaignReviewItems.map(([key]) => key);
       if (requiredChecks.some((key) => campaignChecks[key] !== true)) {
-        setError("Complete every BOXABL campaign review checkbox before uploading.");
+        setError(`Complete every ${campaignReviewName} review checkbox before uploading.`);
         return;
       }
-      if (selectedPlatforms.includes("x") && !publishing?.affiliate_url?.trim()) {
-        setError("Add your personal trackable affiliate URL in Publishing settings for X.");
+      const affiliateRequired = selectedPlatforms.some((platform) =>
+        campaignAffiliatePlatforms.includes(String(platform).toLowerCase()),
+      );
+      if (affiliateRequired && !publishing?.affiliate_url?.trim()) {
+        setError("Add your personal trackable affiliate URL in Publishing settings for the required platform.");
         return;
       }
     }
@@ -240,12 +391,12 @@ export default function ClipCard({
         mode: publishing.mode || "review",
         schedule_at: toEpoch(publishing.schedule),
         routes,
-        campaign_checks: isBoxablCampaign ? campaignChecks : {},
-        affiliate_url: isBoxablCampaign ? publishing?.affiliate_url || "" : "",
+        campaign_checks: isCampaignClip ? campaignChecks : {},
+        affiliate_url: publishing?.affiliate_url || "",
       });
       onPublished?.(result.attempts || []);
     } catch (publishError) {
-      setError(publishError.message || "Publish request failed.");
+      setError(publishErrorText(publishError));
     } finally {
       setPublishingNow(false);
     }
@@ -425,6 +576,16 @@ export default function ClipCard({
           </div>
         )}
 
+        <ClipSignals clip={clip} />
+
+        <PlatformVariants
+          jobId={jobId}
+          clip={clip}
+          settings={settings}
+          outputProfiles={outputProfiles}
+          onUpdated={onUpdated}
+        />
+
         {clip.quality_plan?.before_after && clip.quality_plan.before_after.before && clip.quality_plan.before_after.after ? (
           <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/[0.04] p-3 text-[10px] text-slate-300">
             <div className="flex items-center justify-between gap-2">
@@ -587,16 +748,17 @@ export default function ClipCard({
           )}
         </div>
 
-        {isBoxablCampaign ? (
+        {isCampaignClip ? (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-200">
-                  BOXABL campaign review
+                  {campaignReviewName} review
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  A 0:05–0:08 BOXABL title card is rendered automatically. Watch the clip to
-                  verify the Casita framing, source, spoken branding, captions, and context.
+                  {isBoxablCampaign
+                    ? "A 0:05–0:08 BOXABL title card is rendered automatically. Watch the clip to verify the Casita framing, source, spoken branding, captions, and context."
+                    : "Review the rendered clip against this saved campaign's required checks. The API enforces the same checks before accepting the upload."}
                 </p>
               </div>
               <span className="rounded-full border border-amber-300/20 px-2 py-1 text-[10px] text-amber-100">
@@ -604,7 +766,7 @@ export default function ClipCard({
               </span>
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {BOXABL_REVIEW_ITEMS.map(([key, label]) => (
+              {campaignReviewItems.map(([key, label]) => (
                 <label key={key} className="flex items-start gap-2 text-xs leading-5 text-slate-300">
                   <input
                     type="checkbox"
@@ -618,7 +780,7 @@ export default function ClipCard({
                 </label>
               ))}
             </div>
-            {selectedPlatforms.includes("instagram") ? (
+            {isBoxablCampaign && selectedPlatforms.includes("instagram") ? (
               <p className="mt-2 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-2 text-[11px] leading-5 text-rose-200">
                 Instagram API publishing is blocked for this campaign because the current publisher cannot
                 apply its required native @boxabl account tag. Download this clip and post/tag it manually
@@ -681,6 +843,18 @@ export default function ClipCard({
               {sortedAttempts.slice(0, 8).map((attempt) => (
                 <div key={attempt.id} className="flex flex-wrap items-center gap-2 text-xs">
                   <span className="capitalize text-slate-300">{attempt.platform}</span>
+                  {attempt.request_json?.delivery ? (
+                    <span
+                      className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400"
+                      title={attempt.request_json.delivery.filename || ""}
+                    >
+                      {attempt.request_json.delivery.kind === "variant"
+                        ? "platform variant"
+                        : attempt.request_json.delivery.fallback
+                          ? "canonical fallback"
+                          : "canonical"}
+                    </span>
+                  ) : null}
                   <span className={ATTEMPT_COLORS[attempt.state] || "text-slate-400"}>
                     {attempt.state.replaceAll("_", " ")}
                   </span>

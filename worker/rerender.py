@@ -29,6 +29,7 @@ loss that looks like a feature.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import uuid
 from contextlib import nullcontext
@@ -77,6 +78,10 @@ class RerenderError(RuntimeError):
     """Raised when a clip cannot be re-rendered. Carries a message fit for an API response."""
 
 
+class VariantError(RuntimeError):
+    """Raised when a requested delivery variant cannot be produced."""
+
+
 def resolve_source(job: Job) -> Path:
     """The local file to re-read for ``job``, or raise :class:`RerenderError`.
 
@@ -123,6 +128,7 @@ def rerender_clip(
     clips_dir: Path | None = None,
     temp_dir: Path | None = None,
     progress_cb=None,
+    output_filename: str | None = None,
 ) -> ClipResult:
     """Re-render ``clip`` in place and return the updated :class:`ClipResult`.
 
@@ -135,11 +141,18 @@ def rerender_clip(
     is what the transcript editor displays and therefore what it can produce without knowing
     where in the source the clip was found. Omitted or empty, the render is exactly what it
     was before the parameter existed.
+
+    ``output_filename`` is used by platform variants. When set, the fresh render is written
+    under that name instead of replacing the clip's canonical file, and the returned record
+    points at the new file. The canonical clip is not touched.
     """
     source = resolve_source(job)
     options = merge_options(job.options, option_overrides)
 
     clips_dir = Path(clips_dir or (Path(settings.clips_dir) / job.id))
+    target_name = Path(output_filename).name if output_filename else clip.filename
+    if output_filename and target_name != output_filename:
+        raise RerenderError("The variant filename must be a plain filename.")
     # Recorded so the `finally` below knows whether this call owns the scratch directory and may
     # therefore delete it. See the note there.
     temp_dir_was_derived = temp_dir is None
@@ -195,30 +208,38 @@ def rerender_clip(
             raise RerenderError("The re-render did not write a clip file.")
 
         # Keep the clip's existing filename, so every URL, publish record and history row that
-        # already points at it stays valid. A new name would orphan all of them.
-        final_video = clips_dir / clip.filename
+        # already points at it stays valid. A new name would orphan all of them. Variants are the
+        # deliberate exception: they are new files with their own name and their own record.
+        final_video = clips_dir / target_name
         shutil.move(str(new_video), str(final_video))
 
+        thumbnail_name = Path(target_name).with_suffix(".jpg").name
         new_thumb = staging / Path(fresh.filename).with_suffix(".jpg").name
         if new_thumb.is_file():
-            shutil.move(
-                str(new_thumb), str(clips_dir / Path(clip.filename).with_suffix(".jpg").name)
-            )
+            shutil.move(str(new_thumb), str(clips_dir / thumbnail_name))
 
         # Sidecars (O11) are named from the clip stem, so they follow the same rule.
         for extra in staging.glob(f"{Path(fresh.filename).stem}.*"):
             if extra.suffix in (".srt", ".vtt", ".json"):
                 shutil.move(
                     str(extra),
-                    str(clips_dir / f"{Path(clip.filename).stem}{extra.suffix}"),
+                    str(clips_dir / f"{Path(target_name).stem}{extra.suffix}"),
                 )
+
+        if output_filename:
+            thumb_exists = (clips_dir / thumbnail_name).is_file()
+            video_url = f"clips/{clips_dir.name}/{target_name}"
+            thumbnail_url = f"clips/{clips_dir.name}/{thumbnail_name}" if thumb_exists else ""
+        else:
+            video_url = clip.video_url
+            thumbnail_url = clip.thumbnail_url
 
         updated = replace(
             fresh,
             id=clip.id,
-            filename=clip.filename,
-            video_url=clip.video_url,
-            thumbnail_url=clip.thumbnail_url,
+            filename=target_name,
+            video_url=video_url,
+            thumbnail_url=thumbnail_url,
             **{name: getattr(clip, name) for name in PRESERVED_FIELDS},
         )
         return updated
@@ -237,3 +258,77 @@ def rerender_clip(
         # lifetime, and the evaluation harness passes one it inspects afterwards.
         if temp_dir_was_derived:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def variant_filename(original_filename: str, platform: str) -> str:
+    """A stable, readable filename for one platform variant.
+
+    Stable matters: re-rendering the same destination replaces its file instead of accumulating
+    ``_2``, ``_3`` copies. The platform is reduced to a safe slug because it becomes part of a
+    URL and a filename on disk.
+    """
+    stem = Path(str(original_filename or "clip")).stem or "clip"
+    suffix = Path(str(original_filename or "clip.mp4")).suffix or ".mp4"
+    slug = re.sub(r"[^a-z0-9]+", "_", str(platform or "variant").strip().lower()).strip("_")
+    return f"{stem}_{slug or 'variant'}{suffix}"
+
+
+def render_platform_variant(
+    job: Job,
+    clip: ClipResult,
+    platform: str,
+    *,
+    option_overrides: dict[str, Any] | None = None,
+    cuts: list | None = None,
+    clips_dir: Path | None = None,
+    temp_dir: Path | None = None,
+    progress_cb=None,
+) -> dict[str, Any]:
+    """Render one destination-specific file and return its delivery record.
+
+    The platform profile supplies the aspect and short side rather than inheriting the canonical
+    clip's geometry. That is the whole point: a 9:16 TikTok cut and a 16:9 YouTube upload are two
+    deliverables of the same selected moment, not two different clips.
+
+    The canonical clip and its metadata are untouched. If the destination already has a file, it
+    is replaced under the same name so links to that variant do not accumulate dead copies.
+    """
+    profile = output_profiles.profile_for(platform)
+    if profile is None:
+        raise VariantError(f"Unknown platform variant: {platform!r}")
+
+    overrides = dict(option_overrides or {})
+    overrides.update(
+        {
+            "aspect": profile.aspect,
+            "output_platform": profile.name,
+            "output_short_side": profile.short_side,
+        }
+    )
+    filename = variant_filename(clip.filename, profile.name)
+    rendered = rerender_clip(
+        job,
+        clip,
+        option_overrides=overrides,
+        cuts=cuts,
+        clips_dir=clips_dir,
+        temp_dir=temp_dir,
+        progress_cb=progress_cb,
+        output_filename=filename,
+    )
+    width, height = profile.size
+    return {
+        "platform": profile.name,
+        "label": output_profiles.label_for(profile.name),
+        "filename": rendered.filename,
+        "video_url": rendered.video_url,
+        "thumbnail_url": rendered.thumbnail_url,
+        "aspect": profile.aspect,
+        "width": width,
+        "height": height,
+        "short_side": profile.short_side,
+        "max_duration_s": profile.max_duration_s,
+        "duration": rendered.duration,
+        "start": rendered.start,
+        "end": rendered.end,
+    }

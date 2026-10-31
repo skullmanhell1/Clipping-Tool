@@ -28,6 +28,11 @@ export default function ReviewBar({
   approvedDownloadUrl = "",
   filter = "all",
   onFilterChange,
+  qualityFilter = "all",
+  onQualityFilterChange,
+  sortMode = "source",
+  onSortModeChange,
+  visibleCount = null,
   reviewNote = "",
   onReviewNoteChange,
 }) {
@@ -44,18 +49,48 @@ export default function ReviewBar({
           <span className="text-slate-400">{counts.pending || 0} to review</span>
           {" · "}
           {total} total
+          {Number.isInteger(visibleCount) ? ` · ${visibleCount} shown` : ""}
         </span>
 
         <span className="flex items-center gap-1">
           <span className="text-[10px] uppercase tracking-wide text-slate-600">Show</span>
-          {[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["rejected", "Rejected"]].map(([value, label]) => <button key={value} type="button" onClick={() => onFilterChange?.(value)} className={`${chip} ${filter === value ? "border-brand-accent text-white" : ""}`} disabled={busy}>{label}</button>)}
+          {[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["rejected", "Rejected"]].map(([value, label]) => <button key={value} type="button" onClick={() => onFilterChange?.(value)} aria-pressed={filter === value} className={`${chip} ${filter === value ? "border-brand-accent text-white" : ""}`} disabled={busy}>{label}</button>)}
         </span>
         <span className="flex items-center gap-1">
-          <button type="button" onClick={onSelectPending} className={chip} disabled={busy}>
+          <span className="text-[10px] uppercase tracking-wide text-slate-600">Quality</span>
+          {[["all", "Any"], ["top", "Top picks"], ["attention", "Needs attention"]].map(([value, label]) => <button key={value} type="button" onClick={() => onQualityFilterChange?.(value)} aria-pressed={qualityFilter === value} className={`${chip} ${qualityFilter === value ? "border-brand-accent text-white" : ""}`} disabled={busy}>{label}</button>)}
+        </span>
+        <label className="flex items-center gap-1 text-[10px] text-slate-600">
+          Sort
+          <select
+            aria-label="Sort clips"
+            value={sortMode}
+            onChange={(event) => onSortModeChange?.(event.target.value)}
+            disabled={busy}
+            className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] text-slate-300"
+          >
+            <option value="source">Source order</option>
+            <option value="score">Best signal first</option>
+          </select>
+        </label>
+        <span className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onSelectPending}
+            className={chip}
+            disabled={busy}
+            title="Select pending clips currently shown"
+          >
             Select pending
           </button>
-          <button type="button" onClick={onSelectAll} className={chip} disabled={busy}>
-            Select all
+          <button
+            type="button"
+            onClick={onSelectAll}
+            className={chip}
+            disabled={busy}
+            title="Select all clips currently shown"
+          >
+            Select shown
           </button>
           <button
             type="button"

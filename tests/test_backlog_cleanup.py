@@ -196,6 +196,7 @@ def test_the_shorts_alias_still_keeps_its_own_posting_windows():
     [
         ("YouTube_Shorts", "youtube"),
         ("  youtube_shorts  ", "youtube"),
+        ("Instagram_Reels", "instagram"),
         ("youtube", "youtube"),
         ("TikTok", "tiktok"),
         ("", ""),

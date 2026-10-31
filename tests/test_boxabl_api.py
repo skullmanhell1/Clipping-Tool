@@ -9,6 +9,8 @@ import api.main as api_main
 from api.main import app
 from config import settings
 from worker.boxabl_campaign import REQUIRED_REVIEW_CHECKS
+from worker.campaign_profile import parse_campaign_profile
+from worker.campaign_profile_store import CampaignProfileStore
 from worker.jobs import get_manager
 from worker.models import ClipResult, Job, JobStatus, ProcessingOptions
 
@@ -176,3 +178,35 @@ def test_x_campaign_link_is_carried_to_the_x_publisher_route(client, monkeypatch
     )
     assert response.status_code == 200
     assert queue.kwargs["route_overrides"]["x"]["affiliate_url"] == affiliate_url
+
+
+def test_selected_profile_does_not_block_an_unrelated_publish(client, monkeypatch, tmp_path):
+    """The library's selected preset is not an implicit gate on an existing job."""
+    job, clip = _campaign_job()
+    store = CampaignProfileStore(tmp_path / "profiles.json")
+    unrelated = store.save(
+        parse_campaign_profile("Campaign: Unrelated\nAspect ratio: 1:1\nBanned words: boxabl")
+    )
+    assert store.select(unrelated.id) is not None
+    monkeypatch.setattr(api_main, "get_campaign_profile_store", lambda: store)
+
+    class PublisherQueue:
+        kwargs = None
+
+        def submit(self, **kwargs):
+            self.kwargs = kwargs
+            return ["not-queued"]
+
+    queue = PublisherQueue()
+    monkeypatch.setattr(api_main, "get_publish_manager", lambda: queue)
+    response = client.post(
+        f"/api/jobs/{job.id}/clips/{clip.id}/publish",
+        json={
+            "platforms": ["youtube"],
+            "mode": "review",
+            "campaign_checks": {key: True for key in REQUIRED_REVIEW_CHECKS},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert queue.kwargs is not None

@@ -47,6 +47,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from api.delivery_readiness import router as delivery_readiness_router
 from api.security import ClipsAuthMiddleware, rate_limit, require_api_token
 from config import settings
 from profiles import get_profile_store
@@ -72,6 +73,7 @@ from worker.campaign_compliance import (
 )
 from worker.campaign_import import CampaignImportError, CampaignImportService
 from worker.campaign_policy import (
+    campaign_brand_text,
     campaign_validation_preset,
     is_versioned_preset,
     preset_apply_blockers,
@@ -267,6 +269,10 @@ app.add_middleware(
 # a browser reports a cross-origin failure instead of the actual authentication error.
 app.add_middleware(ClipsAuthMiddleware)
 
+# Read-only readiness uses the same delivery selector as the publish worker, but lives in its
+# own module so the route's reasoning is reviewable without navigating this file.
+app.include_router(delivery_readiness_router)
+
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -410,6 +416,7 @@ class OptionsModel(BaseModel):
     # font, CTA, colour pickers, logo sliders, and bumper assets all sent values that were discarded on
     # arrival. `ProcessingOptions` has always carried them and the renderer has always
     # honoured them, so nothing was broken except the wiring between the two.
+    brand_name: str = ""
     brand_font: str = ""
     brand_primary_color: str = ""
     brand_highlight_color: str = ""
@@ -472,6 +479,11 @@ def _apply_campaign_defaults(
     # Brief/profile application happens after normal option expansion so explicit request values
     # still win, while a brief can supply defaults for fields the request left blank.
     try:
+        # A campaign's exact brand name is the fallback card text when the seller did not put
+        # one in the reusable brand kit. Resolve it before preset normalisation, while the
+        # original campaign payload is still available.
+        if options.campaign_preset and not options.brand_name:
+            options.brand_name = campaign_brand_text(options.campaign_preset)
         brief_campaign_id = options.brief_id or options.campaign_id
         if brief_campaign_id:
             campaign = get_history().campaign(brief_campaign_id)
@@ -625,6 +637,19 @@ class RerenderRequest(BaseModel):
     invite it being applied to clips it was not drawn against.
     """
 
+    settings: dict = {}
+    cuts: list[CutRange] = Field(default_factory=list)
+
+
+class VariantRequest(BaseModel):
+    """Render one platform-specific delivery of an existing clip.
+
+    ``settings`` works like :class:`RerenderRequest.settings`: partial options, unknown keys
+    ignored. The platform profile still decides aspect and short side, because a variant that
+    inherited the canonical 9:16 frame would not be a different delivery.
+    """
+
+    platform: str
     settings: dict = {}
     cuts: list[CutRange] = Field(default_factory=list)
 
@@ -1490,6 +1515,7 @@ async def upload(
     # to the documented default rather than 422 a whole upload, and `ProcessingOptions
     # .from_dict` already does that coercion. `None` means "not sent", and is filtered out
     # below so the dataclass default applies rather than a null overwriting it.
+    brand_name: str | None = Form(None),
     brand_font: str | None = Form(None),
     brand_primary_color: str | None = Form(None),
     brand_highlight_color: str | None = Form(None),
@@ -1545,6 +1571,7 @@ async def upload(
         "stem_backend": stem_backend,
         "stem_model": stem_model,
         "stem_retain_stems": stem_retain_stems,
+        "brand_name": brand_name,
         "brand_font": brand_font,
         "brand_primary_color": brand_primary_color,
         "brand_highlight_color": brand_highlight_color,
@@ -1837,10 +1864,6 @@ def download_job_bundle(
 
     profile_store = get_campaign_profile_store()
     requested_profiles = [item.strip() for item in campaign_profile_ids.split(",") if item.strip()]
-    if not requested_profiles:
-        selected_profile = profile_store.selected()
-        if selected_profile is not None:
-            requested_profiles = [selected_profile.id]
     if requested_profiles:
         profiles = []
         for profile_id in dict.fromkeys(requested_profiles):
@@ -1867,7 +1890,7 @@ def download_job_bundle(
             reports.append(
                 {
                     "clip_id": clip.id,
-                    **check_clip_against_profiles(profiles, facts, visibility="public"),
+                    **check_clip_against_profiles(profiles, facts, visibility=None),
                 }
             )
         if any(item["status"] != "pass" for item in reports):
@@ -2437,11 +2460,65 @@ def rerender_clip_endpoint(job_id: str, clip_id: str, req: RerenderRequest) -> d
             "engagement_score",
             "retention_plan",
             "engagement_features",
+            "variants",
         )
     }
     _invalidate_campaign_review(job, clip, fields, force=True)
     stored = manager.store.update_clip(job_id, clip_id, fields) or updated
     get_history().sync_clip(job_id, stored)
+    return stored.to_dict()
+
+
+@app.post(
+    "/api/jobs/{job_id}/clips/{clip_id}/variants",
+    tags=["metadata"],
+    dependencies=[Depends(rate_limit)],
+)
+def create_clip_variant(job_id: str, clip_id: str, req: VariantRequest) -> dict:
+    """Render one destination-specific file for an existing clip.
+
+    The canonical file keeps its name and every publish/history link that points at it. The
+    variant is an additional file described by a record on the clip, so downloading one platform
+    delivery does not require re-running the whole source or replacing what already went live.
+    """
+    manager = get_manager()
+    job = manager.store.get(job_id)
+    clip = manager.store.get_clip(job_id, clip_id)
+    if job is None or clip is None:
+        raise HTTPException(status_code=404, detail="Job or clip not found")
+
+    from worker import rerender as rerender_module
+    from worker import transcript_trim as trim
+
+    if len(req.cuts) > trim.MAX_CUTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many cuts: {len(req.cuts)} (limit {trim.MAX_CUTS}).",
+        )
+
+    try:
+        variant = rerender_module.render_platform_variant(
+            job,
+            clip,
+            req.platform,
+            option_overrides=req.settings or None,
+            cuts=[(c.start, c.end) for c in req.cuts],
+        )
+    except rerender_module.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except rerender_module.RerenderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Variant render failed for %s/%s", job_id, clip_id)
+        raise HTTPException(status_code=500, detail=f"Variant render failed: {exc}") from exc
+
+    variants = [
+        item
+        for item in (getattr(clip, "variants", None) or [])
+        if item.get("platform") != variant["platform"]
+    ]
+    variants.append(variant)
+    stored = manager.store.update_clip(job_id, clip_id, {"variants": variants}) or clip
     return stored.to_dict()
 
 
@@ -3065,11 +3142,29 @@ def campaign_profiles_compliance(req: CampaignProfileComplianceRequest) -> dict:
     return check_clip_against_profiles(profiles, clip, visibility=req.visibility)
 
 
+def _automatic_campaign_brand_card(job: Any, clip: Any) -> bool:
+    """Whether the renderer adds the campaign's explicit brand card to this clip.
+
+    The compositor places the card only when the campaign supplies card text and the clip is
+    longer than five seconds. Compliance must use the same condition; otherwise a real rendered
+    card is reported as missing, or a short clip is credited with a card it never received.
+    """
+
+    from worker.campaign_policy import campaign_brand_config
+
+    config = campaign_brand_config(getattr(job.options, "campaign_preset", {}) or {})
+    try:
+        duration = float(getattr(clip, "duration", 0) or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return bool(config.get("card_text")) and duration > 5.0
+
+
 def _clip_preset_facts(
     job: Any,
     clip: Any,
     *,
-    visibility: str,
+    visibility: str | None,
     platform: str,
     source_approved: bool = False,
 ) -> dict[str, Any]:
@@ -3109,7 +3204,8 @@ def _clip_preset_facts(
         "caption_language": getattr(job.options, "language", "") or "",
         "watermark": getattr(job.options, "brand_logo", ""),
         "end_card": getattr(job.options, "brand_outro_asset", "")
-        or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected"),
+        or (getattr(clip, "storytelling_plan", {}) or {}).get("end_card", {}).get("detected")
+        or _automatic_campaign_brand_card(job, clip),
         "source_approved": bool(source_approved),
         "audio_source": getattr(job.options, "music", "") or "",
         "meme": any(
@@ -3616,7 +3712,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
             facts = _clip_preset_facts(
                 job,
                 clip,
-                visibility="public" if public_only else "private",
+                visibility="public" if public_only else None,
                 platform=requested_platform,
                 source_approved=(
                     getattr(job, "input_type", "") == "file"
@@ -3633,7 +3729,9 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                     visibility=facts["visibility"],
                 )
             else:
-                report = validate_clip_against_preset(preset, facts)
+                report = validate_clip_against_preset(
+                    preset, facts, visibility_required=public_only
+                )
             if report.status != "pass":
                 raise HTTPException(
                     status_code=409,
@@ -3643,13 +3741,14 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                         "report": report.to_dict(),
                     },
                 )
-    campaign_profile_ids = list(req.campaign_profile_ids)
-    if req.campaign_profile_id:
-        campaign_profile_ids.append(req.campaign_profile_id)
-    if not campaign_profile_ids:
-        selected_campaign_profile = get_campaign_profile_store().selected()
-        if selected_campaign_profile is not None:
-            campaign_profile_ids.append(selected_campaign_profile.id)
+    # Only an explicitly selected profile gates this publish. The library's globally selected
+    # preset is a browser convenience, not a second policy engine: the job already carries its
+    # own campaign_preset and built-in profile, and silently adding another profile here made an
+    # unrelated selection fail an otherwise-valid upload with the generic "profile compliance"
+    # error.
+    campaign_profile_ids = list(
+        dict.fromkeys(item for item in [*req.campaign_profile_ids, req.campaign_profile_id] if item)
+    )
     if campaign_profile_ids:
         profile_store = get_campaign_profile_store()
         profiles: list[CampaignProfile] = []
@@ -3666,7 +3765,7 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                 {
                     "platform": requested_platform,
                     "aspect_ratio": getattr(job.options, "aspect", ""),
-                    "visibility": "public" if public_only else "private",
+                    "visibility": "public" if public_only else None,
                     "duration": getattr(clip, "duration", None),
                     "captions": bool(getattr(job.options, "captions", False)),
                     "language": getattr(job.options, "language", "") or "",
@@ -3675,7 +3774,8 @@ def publish_clip(job_id: str, clip_id: str, req: PublishClipRequest) -> dict:
                     "end_card": getattr(job.options, "brand_outro_asset", "")
                     or (getattr(clip, "storytelling_plan", {}) or {})
                     .get("end_card", {})
-                    .get("detected"),
+                    .get("detected")
+                    or _automatic_campaign_brand_card(job, clip),
                     "source_url": getattr(job, "source", ""),
                     "source_approved": (
                         getattr(job, "input_type", "") == "file"
@@ -4225,6 +4325,26 @@ class _ZipSink:
         return data
 
 
+def _clip_for_filename(job, filename: str):
+    """The clip that owns ``filename``, including one of its platform variants.
+
+    The two download routes used to match only ``clip.filename``. A variant is a real rendered
+    file with its own name, so serving it is not a fallback: it is the same ownership check,
+    widened to the files the clip record says it produced.
+    """
+    if job is None:
+        return None
+    for clip in job.clips:
+        if clip.filename == filename:
+            return clip
+        if any(
+            str(item.get("filename") or "") == filename
+            for item in (getattr(clip, "variants", None) or [])
+        ):
+            return clip
+    return None
+
+
 def _resolve_clip_file(job_id: str, filename: str) -> tuple[Path, str]:
     """Resolve a clip file inside ``clips_dir``, or 404. Returns ``(path, safe_name)``.
 
@@ -4329,7 +4449,7 @@ def download_clip(job_id: str, filename: str) -> StreamingResponse:
     """
     path, safe_name = _resolve_clip_file(job_id, filename)
     job = get_manager().store.get(job_id)
-    clip = next((c for c in job.clips if c.filename == safe_name), None) if job else None
+    clip = _clip_for_filename(job, safe_name)
     if clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
     chunk_size = max(1, int(settings.upload_chunk_bytes))
@@ -4353,8 +4473,7 @@ def download_video_only(job_id: str, filename: str) -> FileResponse:
     """
     path, safe_name = _resolve_clip_file(job_id, filename)
     job = get_manager().store.get(job_id)
-    known = any(c.filename == safe_name for c in job.clips) if job else False
-    if not known:
+    if _clip_for_filename(job, safe_name) is None:
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, filename=safe_name, media_type="video/mp4")
 

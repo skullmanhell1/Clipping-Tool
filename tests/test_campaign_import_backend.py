@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from worker.campaign_compliance import check_clip_against_profiles, generate_campaign_copy
+from worker.campaign_compliance import (
+    check_clip_against_profiles,
+    check_profile_compliance,
+    generate_campaign_copy,
+)
+from worker.campaign_preset import CampaignPreset, validate_clip_against_preset
 from worker.campaign_profile import parse_campaign_profile
 
 
@@ -66,3 +71,38 @@ def test_campaign_profile_extracts_video_links_branding_and_public_policy():
         "https://drive.google.com/file/d/video123/view",
     ]
     assert profile.watermark_end_cards["public_visibility_required"] is True
+
+
+def test_source_rules_match_equivalent_youtube_urls():
+    profile = parse_campaign_profile("Approved sources: https://youtu.be/abc123")
+    clip = {
+        "caption": "A safe clip",
+        "source_url": "https://www.youtube.com/watch?v=abc123&t=12",
+    }
+
+    report = check_profile_compliance(profile, clip, visibility=None)
+    source = next(item for item in report.results if item["rule"] == "source")
+
+    assert source["status"] == "pass"
+
+
+def test_review_uploads_do_not_enforce_public_visibility():
+    profile = parse_campaign_profile("Public visibility: required")
+    clip = {"caption": "A safe clip"}
+
+    report = check_profile_compliance(profile, clip, visibility=None)
+
+    assert not any(item["rule"] == "visibility" for item in report.results)
+
+
+def test_legacy_preset_review_skips_posting_visibility_requirement():
+    preset = CampaignPreset(name="Review", require_public_visibility=True)
+
+    publish_report = validate_clip_against_preset(preset, {"visibility": None})
+    review_report = validate_clip_against_preset(
+        preset, {"visibility": None}, visibility_required=False
+    )
+
+    assert publish_report.for_rule("visibility").status == "unknown"
+    assert review_report.for_rule("visibility").status == "pass"
+    assert review_report.status == "pass"

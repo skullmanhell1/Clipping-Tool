@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — campaign brand name on video
+
+- Campaign presets now carry their exact `brand_name` into the renderer, and the brand kit
+  exposes a fallback name for ordinary renders. The 0:05–0:08 brand card uses the
+  campaign's `brand_card_text` when present, so BOXABL keeps its exact spelling and timing.
+- The brand name is accepted by JSON jobs, the upload form, saved profiles, and the
+  frontend option payload; the campaign preset supplies it automatically.
+
+### Added — platform delivery variants
+
+- Reviewed clips can now render separate TikTok, Instagram Reels, YouTube Shorts, YouTube
+  landscape, X, and Whop files. Each variant uses the destination profile's aspect and short
+  side, gets its own thumbnail/download links, and is stored under a stable filename.
+- The canonical clip file and every existing publish/history URL remain untouched. A base
+  re-render clears stale variants so an old destination delivery cannot masquerade as current.
+- Variant downloads use the same clip-ownership check as canonical clips and expose both a
+  video-only file and a packaged download.
+- Added `POST /api/jobs/{job_id}/clips/{clip_id}/variants` and a review-card delivery panel.
+- Publishing now selects the exact matching destination variant for manual, direct-scheduler,
+  campaign-day, and other submissions that carry rendered variants. It never substitutes a
+  different platform's geometry; a missing variant falls back to the canonical clip, and the
+  attempt records which file was used.
+- Added `instagram_reels` as a resolver alias for the Instagram publisher, including its
+  preflight limits, so campaign briefs that name the product destination are not silently dropped.
+- Added `GET /api/jobs/{job_id}/clips/{clip_id}/delivery-readiness`, backed by the same selector
+  as publishing. It verifies the file on disk, campaign account, publisher status, variant
+  geometry, and product duration limit before anything is queued.
+- The direct scheduler now shows per-destination readiness, offers a one-click render for a
+  canonical fallback, and disables queueing while a selected destination is genuinely blocked.
+
 ### Fixed — a fresh install resolved a media decoder that breaks every transcription
 
 - Bounded PyAV below 19 in `requirements.txt`. faster-whisper 1.2.1 calls

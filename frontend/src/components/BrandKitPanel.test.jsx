@@ -34,6 +34,17 @@ describe("BrandKitPanel", () => {
     expect(values).toEqual(["", "Anton", "Bangers"]);
   });
 
+  it("sends the brand name that will be burned into the video", () => {
+    const { onChange } = setup({ brand_cta: "Follow" });
+    fireEvent.change(screen.getByLabelText(/brand name on video/i), {
+      target: { value: "BOXABL" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      brand_cta: "Follow",
+      brand_name: "BOXABL",
+    });
+  });
+
   it("reports a font choice without touching anything else", async () => {
     const { onChange } = setup({ brand_cta: "Follow" });
     await userEvent.selectOptions(

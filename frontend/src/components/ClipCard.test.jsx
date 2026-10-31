@@ -52,6 +52,78 @@ const setup = (clip = CLIP, props = {}) => {
   return { ...utils, onUpdated };
 };
 
+describe("ClipCard measured review signals", () => {
+  it("shows the score breakdown and the measured reasons behind the ranking", () => {
+    setup({
+      ...CLIP,
+      engagement_score: 76,
+      retention_plan: {
+        mode: "balanced",
+        hook_score: 0.82,
+        quality_scores: { flow: 0.74, impact: 0.61, clarity: 0.88, relevance: 0.4 },
+        reasons: ["front_loaded_hook", "clear_payoff"],
+      },
+    });
+
+    expect(screen.getByText("Why this clip")).toBeInTheDocument();
+    expect(screen.getByText("76/100 measured engagement")).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "Hook signal" })).toHaveAttribute(
+      "aria-valuenow",
+      "82",
+    );
+    expect(screen.getByRole("meter", { name: "Clarity signal" })).toHaveAttribute(
+      "aria-valuenow",
+      "88",
+    );
+    expect(screen.getByText("Strong opening")).toBeInTheDocument();
+    expect(screen.getByText("Clear payoff")).toBeInTheDocument();
+    expect(screen.getByText(/not a prediction of views/i)).toBeInTheDocument();
+    expect(screen.getByTestId("top-pick-badge")).toHaveTextContent("Top pick");
+  });
+
+  it("marks a weak axis for attention instead of calling it a top pick", () => {
+    setup({
+      ...CLIP,
+      engagement_score: 55,
+      retention_plan: {
+        mode: "balanced",
+        hook_score: 0.3,
+        quality_scores: { flow: 0.7, impact: 0.7, clarity: 0.4, relevance: 0.6 },
+      },
+    });
+
+    expect(screen.getByTestId("attention-badge")).toHaveAttribute(
+      "title",
+      "weak opening · unclear thought",
+    );
+    expect(screen.queryByTestId("top-pick-badge")).not.toBeInTheDocument();
+  });
+
+  it("falls back to engagement features when no retention plan was run", () => {
+    setup({
+      ...CLIP,
+      engagement_features: {
+        hook_score: 0.9,
+        quality_scores: { flow: 0.55, impact: 0.45, clarity: 0.65, relevance: 0.5 },
+      },
+    });
+
+    expect(screen.getByRole("meter", { name: "Hook signal" })).toHaveAttribute(
+      "aria-valuenow",
+      "90",
+    );
+    expect(screen.getByRole("meter", { name: "Flow signal" })).toHaveAttribute(
+      "aria-valuenow",
+      "55",
+    );
+  });
+
+  it("does not invent a signal panel when no measurements exist", () => {
+    setup();
+    expect(screen.queryByText("Why this clip")).not.toBeInTheDocument();
+  });
+});
+
 describe("ClipCard review verdict (U9)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -93,6 +165,18 @@ describe("ClipCard review verdict (U9)", () => {
     setup();
     await userEvent.click(screen.getByRole("button", { name: /approve/i }));
     expect(await screen.findByText("server said no")).toBeInTheDocument();
+  });
+});
+
+describe("ClipCard platform variants", () => {
+  it("mounts the delivery panel when the server advertises platforms", () => {
+    setup(CLIP, {
+      outputProfiles: [
+        { name: "tiktok", label: "TikTok", recommended_aspect: "9:16", width: 1080, height: 1920 },
+      ],
+    });
+    expect(screen.getByTestId("platform-variants")).toBeInTheDocument();
+    expect(screen.getByText("TikTok")).toBeInTheDocument();
   });
 });
 
@@ -294,6 +378,29 @@ describe("BOXABL campaign publish preflight", () => {
     expect(screen.getByRole("checkbox", { name: labels[0] })).not.toBeChecked();
   });
 
+  it("shows which delivery file a publish attempt used", () => {
+    setup(CLIP, {
+      attempts: [
+        {
+          id: "attempt-1",
+          job_id: "job1",
+          clip_id: "c1",
+          platform: "youtube",
+          state: "queued",
+          request_json: {
+            delivery: { kind: "variant", filename: "clip_c1_youtube.mp4" },
+          },
+        },
+      ],
+    });
+
+    expect(screen.getByText("platform variant")).toBeInTheDocument();
+    expect(screen.getByText("platform variant")).toHaveAttribute(
+      "title",
+      "clip_c1_youtube.mp4",
+    );
+  });
+
   it("blocks Instagram API publish so the native account tag is not skipped", async () => {
     setup(
       { ...CLIP, review_state: "approved" },
@@ -337,5 +444,73 @@ describe("ClipCard batch selection and player (U3, U9)", () => {
   it("records the verdict on the card for the grid to read", () => {
     setup({ ...CLIP, review_state: "approved" });
     expect(screen.getByTestId("clip-c1")).toHaveAttribute("data-review-state", "approved");
+  });
+});
+
+
+describe("saved campaign review checklist", () => {
+  const preset = {
+    id: "podcast",
+    name: "Podcast Launch",
+    compliance: {
+      required_checks: [{ id: "brand_check", label: "Brand check" }],
+    },
+    posting: { manual_only: true },
+  };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api, "publishClip").mockResolvedValue({ attempts: [] });
+  });
+
+  it("renders the checks defined by the active saved preset", () => {
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignPreset: preset,
+        publishing: { platforms: ["youtube"], mode: "review" },
+        publisherStatuses: { youtube: { configured: true, message: "Ready" } },
+      },
+    );
+
+    expect(screen.getByText(/Podcast Launch review/i)).toBeInTheDocument();
+    expect(screen.getByText("Brand check")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /brand check/i })).not.toBeChecked();
+  });
+
+  it("shows the backend's exact profile blockers instead of a generic failure", async () => {
+    const user = userEvent.setup();
+    const failure = new Error("Campaign profile compliance failed");
+    failure.detail = {
+      message: "Campaign profile compliance failed",
+      report: {
+        profiles: [
+          {
+            profile_name: "BOXABL Casita",
+            results: [
+              {
+                rule: "length",
+                status: "fail",
+                message: "clip duration is outside the campaign range",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    api.publishClip.mockRejectedValueOnce(failure);
+
+    setup(
+      { ...CLIP, review_state: "approved" },
+      {
+        campaignPreset: preset,
+        publishing: { platforms: ["youtube"], mode: "review" },
+        publisherStatuses: { youtube: { configured: true, message: "Ready" } },
+      },
+    );
+    await user.click(screen.getByRole("checkbox", { name: /brand check/i }));
+    await user.click(screen.getByRole("button", { name: /upload for review/i }));
+
+    expect(await screen.findByText(/clip duration is outside the campaign range/i)).toBeInTheDocument();
   });
 });

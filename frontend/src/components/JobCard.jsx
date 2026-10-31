@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClipCard from "./ClipCard.jsx";
 import ReviewBar from "./ReviewBar.jsx";
 import { api, formatDuration } from "../api.js";
+import { clipQuality } from "../clipQuality.js";
 
 const STATUS_STYLES = {
   queued: "bg-slate-700 text-slate-200",
@@ -45,6 +46,7 @@ export default function JobCard({
   onPublished,
   onJobsAdded,
   settings,
+  outputProfiles = [],
 }) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
@@ -54,6 +56,9 @@ export default function JobCard({
   const [selectedClips, setSelectedClips] = useState(() => new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState("");
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [qualityFilter, setQualityFilter] = useState("all");
+  const [sortMode, setSortMode] = useState("source");
   const [morePrompt, setMorePrompt] = useState("");
   const [moreCount, setMoreCount] = useState("3");
   const [moreBusy, setMoreBusy] = useState(false);
@@ -65,8 +70,37 @@ export default function JobCard({
   // Memoised because `job.clips || []` allocates a fresh array on every render, which would make
   // the keyboard effect below re-bind its window listener continuously.
   const clips = useMemo(() => job.clips || [], [job.clips]);
+  const qualityByClip = useMemo(
+    () => new Map(clips.map((clip) => [clip.id, clipQuality(clip)])),
+    [clips],
+  );
+  const visibleClips = useMemo(() => {
+    let next = clips;
+    if (reviewFilter !== "all") {
+      next = next.filter((clip) => (clip.review_state || "pending") === reviewFilter);
+    }
+    if (qualityFilter === "top") {
+      next = next.filter((clip) => qualityByClip.get(clip.id)?.topPick);
+    } else if (qualityFilter === "attention") {
+      next = next.filter((clip) => qualityByClip.get(clip.id)?.needsAttention);
+    }
+    if (sortMode === "score") {
+      next = [...next].sort(
+        (left, right) =>
+          (qualityByClip.get(right.id)?.overall ?? -1) -
+          (qualityByClip.get(left.id)?.overall ?? -1),
+      );
+    }
+    return next;
+  }, [clips, qualityByClip, qualityFilter, reviewFilter, sortMode]);
+
+  const selectedVisibleCount = useMemo(
+    () => visibleClips.filter((clip) => selectedClips.has(clip.id)).length,
+    [selectedClips, visibleClips],
+  );
 
   const toggleSelected = useCallback((clipId) => {
+    if (!clipId) return;
     setSelectedClips((previous) => {
       const next = new Set(previous);
       if (next.has(clipId)) next.delete(clipId);
@@ -77,7 +111,11 @@ export default function JobCard({
 
   const applyBatch = useCallback(
     async (state) => {
-      const ids = [...selectedClips];
+      // Only act on what the reviewer can currently see. A hidden selection must never become a
+      // destructive batch action after a filter change.
+      const ids = visibleClips
+        .filter((clip) => selectedClips.has(clip.id))
+        .map((clip) => clip.id);
       if (!ids.length) return;
       setBatchBusy(true);
       setBatchError("");
@@ -93,12 +131,12 @@ export default function JobCard({
         setBatchBusy(false);
       }
     },
-    [job.id, onClipUpdated, selectedClips],
+    [job.id, onClipUpdated, selectedClips, visibleClips],
   );
 
   const reviewFocused = useCallback(
     async (state) => {
-      const clip = clips[focusIndex];
+      const clip = visibleClips[focusIndex];
       if (!clip) return;
       const next = clip.review_state === state ? "pending" : state;
       try {
@@ -108,7 +146,7 @@ export default function JobCard({
         setBatchError(error.message || "Could not record the review.");
       }
     },
-    [clips, focusIndex, job.id, onClipUpdated],
+    [visibleClips, focusIndex, job.id, onClipUpdated],
   );
 
   const counts = useMemo(() => {
@@ -121,8 +159,8 @@ export default function JobCard({
   }, [clips]);
 
   const selectedClipIds = useMemo(
-    () => clips.filter((clip) => selectedClips.has(clip.id)).map((clip) => clip.id),
-    [clips, selectedClips],
+    () => visibleClips.filter((clip) => selectedClips.has(clip.id)).map((clip) => clip.id),
+    [visibleClips, selectedClips],
   );
   const approvedClipIds = useMemo(
     () => clips.filter((clip) => clip.review_state === "approved").map((clip) => clip.id),
@@ -139,7 +177,7 @@ export default function JobCard({
   // a select has focus: `a` must type an `a` when the user is writing a caption, and getting that
   // wrong would silently approve clips while someone edits metadata.
   useEffect(() => {
-    if (!clips.length) return undefined;
+    if (!visibleClips.length) return undefined;
     const onKeyDown = (event) => {
       const tag = (event.target?.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) {
@@ -149,7 +187,7 @@ export default function JobCard({
 
       switch (event.key) {
         case "j":
-          setFocusIndex((index) => Math.min(clips.length - 1, index + 1));
+          setFocusIndex((index) => Math.min(visibleClips.length - 1, index + 1));
           break;
         case "k":
           setFocusIndex((index) => Math.max(0, index - 1));
@@ -161,7 +199,7 @@ export default function JobCard({
           reviewFocused("rejected");
           break;
         case "s":
-          toggleSelected(clips[focusIndex]?.id);
+          toggleSelected(visibleClips[focusIndex]?.id);
           break;
         case " ":
           // Prevented, or space scrolls the page out from under the clip being reviewed.
@@ -186,12 +224,28 @@ export default function JobCard({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clips, focusIndex, reviewFocused, toggleSelected]);
+  }, [visibleClips, focusIndex, reviewFocused, toggleSelected]);
 
   useEffect(() => {
-    // Keep the focus inside the list when clips arrive or disappear.
-    setFocusIndex((index) => Math.max(0, Math.min(index, Math.max(0, clips.length - 1))));
-  }, [clips.length]);
+    // A new filter or sort order is a new list; keeping the old index would silently move the
+    // keyboard target to an unrelated clip.
+    setFocusIndex(0);
+  }, [qualityFilter, reviewFilter, sortMode]);
+
+  useEffect(() => {
+    // Keep the focus inside the list when clips arrive, disappear, or are filtered out.
+    setFocusIndex((index) => Math.max(0, Math.min(index, Math.max(0, visibleClips.length - 1))));
+  }, [visibleClips.length]);
+
+  useEffect(() => {
+    // A selection is a statement about the clips in front of the reviewer. Drop the part that a
+    // filter just hid so a later batch cannot approve clips the reviewer can no longer see.
+    setSelectedClips((current) => {
+      const visible = new Set(visibleClips.map((clip) => clip.id));
+      const next = new Set([...current].filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleClips]);
 
   const percentage = Math.round((job.progress || 0) * 100);
   const badge = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
@@ -377,15 +431,24 @@ export default function JobCard({
             <ReviewBar
               counts={counts}
               total={clips.length}
-              selectedCount={selectedClips.size}
+              selectedCount={selectedVisibleCount}
               busy={batchBusy}
               error={batchError}
-              onSelectAll={() => setSelectedClips(new Set(clips.map((clip) => clip.id)))}
+              filter={reviewFilter}
+              onFilterChange={setReviewFilter}
+              qualityFilter={qualityFilter}
+              onQualityFilterChange={setQualityFilter}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+              visibleCount={visibleClips.length}
+              onSelectAll={() =>
+                setSelectedClips(new Set(visibleClips.map((clip) => clip.id)))
+              }
               onSelectNone={() => setSelectedClips(new Set())}
               onSelectPending={() =>
                 setSelectedClips(
                   new Set(
-                    clips
+                    visibleClips
                       .filter((clip) => (clip.review_state || "pending") === "pending")
                       .map((clip) => clip.id),
                   ),
@@ -397,18 +460,35 @@ export default function JobCard({
               selectedDownloadUrl={api.jobDownloadUrl(job.id, selectedClipIds)}
               approvedDownloadUrl={api.jobDownloadUrl(job.id, approvedClipIds)}
             />
+            {visibleClips.length === 0 ? (
+              <div className="mb-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+                No clips match these review filters.{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReviewFilter("all");
+                    setQualityFilter("all");
+                  }}
+                  className="text-brand-accent underline"
+                >
+                  Reset filters
+                </button>
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {clips.map((clip, index) => (
+              {visibleClips.map((clip, index) => (
                 <ClipCard
                   key={clip.id}
                   jobId={job.id}
                   clip={clip}
                   campaignProfile={job.options?.profile || ""}
+                  campaignPreset={job.options?.campaign_preset || null}
                   settings={
                     job.options?.profile === "boxabl_campaign"
                       ? { ...(settings || {}), profile: "boxabl_campaign" }
                       : settings
                   }
+                  outputProfiles={outputProfiles}
                   selected={selectedClips.has(clip.id)}
                   onToggleSelected={toggleSelected}
                   focused={index === focusIndex}

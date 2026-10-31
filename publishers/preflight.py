@@ -133,7 +133,10 @@ _ASPECT_TOLERANCE = 0.02
 
 def limits_for(platform: str) -> PlatformLimits:
     """The limits for ``platform``, or the permissive fallback."""
-    return PLATFORM_LIMITS.get((platform or "").strip().lower(), _FALLBACK_LIMITS)
+    key = (platform or "").strip().lower()
+    if key == "instagram_reels":
+        key = "instagram"
+    return PLATFORM_LIMITS.get(key, _FALLBACK_LIMITS)
 
 
 @dataclass

@@ -402,6 +402,24 @@ def test_u6_an_unconfigured_kit_changes_no_graph(tmp_path, monkeypatch):
     assert not [m for m in record.effects_applied if m.startswith("brand")]
 
 
+def test_u6_a_standalone_brand_name_reaches_the_brand_card(tmp_path, monkeypatch):
+    """A brand name must work for a normal render, not only for a saved campaign preset."""
+    from dataclasses import replace
+
+    from tests import test_kinetic_compositor as kinetic_tests
+
+    # The shared parity fixture is a 3 s clip. The brand card deliberately waits until 0:05,
+    # so extend the fake media rather than making the card fire earlier than the campaign does.
+    monkeypatch.setattr(
+        kinetic_tests,
+        "MEDIA_INFO",
+        replace(kinetic_tests.MEDIA_INFO, duration=12.0),
+    )
+    record = _render(tmp_path / "brand-name", monkeypatch, brand_name="BOXABL")
+    assert "campaign_brand_overlay" in record.effects_applied
+    assert "BOXABL" in (record.ass_text or "")
+
+
 # --------------------------------------------------------------------------- #
 # U7 - per-clip re-render
 # --------------------------------------------------------------------------- #

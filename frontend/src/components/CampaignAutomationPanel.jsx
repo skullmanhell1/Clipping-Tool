@@ -9,12 +9,14 @@ export default function CampaignAutomationPanel({
   jobs = [],
   driveConfigured = false,
   onPresetApplied,
+  onPresetSaved,
   onScheduled,
 }) {
   const [driveUrl, setDriveUrl] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [usePasteFallback, setUsePasteFallback] = useState(false);
   const [preset, setPreset] = useState(null);
+  const [presetName, setPresetName] = useState("");
   const [provenance, setProvenance] = useState(null);
   const [campaignId, setCampaignId] = useState("");
   const [jobId, setJobId] = useState("");
@@ -46,6 +48,7 @@ export default function CampaignAutomationPanel({
         ? await api.parseCampaignPreset(pasteText)
         : await api.parseCampaignPresetFromDrive(driveUrl);
       setPreset(result.preset);
+      setPresetName(result.preset?.name || "");
       setProvenance(result);
       setMessage("New brief loaded for review. Applying it replaces the previous campaign preset.");
     } catch (parseError) {
@@ -61,6 +64,7 @@ export default function CampaignAutomationPanel({
 
   const clearBrief = () => {
     setPreset(null);
+    setPresetName("");
     setProvenance(null);
     setDriveUrl("");
     setPasteText("");
@@ -72,6 +76,30 @@ export default function CampaignAutomationPanel({
     if (!preset) return;
     onPresetApplied?.(preset);
     setMessage("Preset applied to job options. No publish campaign was created or saved.");
+  };
+
+  const saveAsPreset = async () => {
+    if (!preset) return;
+    setBusy("save-preset");
+    setError("");
+    setMessage("");
+    try {
+      const imported = await api.importCampaignPreset(
+        usePasteFallback ? { text: pasteText } : { urls: [driveUrl] },
+      );
+      const next = imported?.preset || imported?.profile;
+      if (!next) throw new Error("The campaign import returned no preset.");
+      const name = (presetName || next.name || preset.name || "Untitled campaign").trim();
+      const saved = await api.saveCampaignPreset({ ...next, id: next.id || "", name }, true);
+      const applied = saved?.preset || saved?.profile || { ...next, name };
+      onPresetApplied?.(applied);
+      onPresetSaved?.(applied);
+      setMessage(`Saved and applied “${applied.name || name}”. It is now in Saved campaign presets.`);
+    } catch (saveError) {
+      setError(saveError.message || "Could not save this campaign as a preset.");
+    } finally {
+      setBusy("");
+    }
   };
 
   const toggleClip = (id) => {
@@ -274,6 +302,29 @@ export default function CampaignAutomationPanel({
                 {sourceRule.style_references?.length ? (
                   <p className="mt-2 text-[10px] text-slate-500">Style reference only: {sourceRule.style_references.join(", ")}</p>
                 ) : null}
+              </div>
+              <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-400/[0.04] p-3">
+                <p className="text-xs font-semibold text-cyan-100">Keep this as a reusable preset</p>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    aria-label="Campaign preset name"
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    placeholder="Campaign preset name"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveAsPreset}
+                    disabled={busy === "save-preset"}
+                    className="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-500 disabled:opacity-40"
+                  >
+                    {busy === "save-preset" ? "Saving…" : "Save as campaign preset"}
+                  </button>
+                </div>
+                <p className="mt-2 text-[10px] text-slate-500">
+                  Creates a versioned preset from the brief and applies it. It does not publish.
+                </p>
               </div>
               <button
                 type="button"

@@ -368,6 +368,7 @@ class ProcessingOptions:
     # All empty by default, and each is additive - an unset field leaves the preset's own value
     # alone rather than overwriting it with a default. Bumper assets are materialized and appended
     # after the main clip has been composited.
+    brand_name: str = ""  # exact name burned into the campaign brand card
     brand_font: str = ""  # caption font, overriding the preset's
     brand_primary_color: str = ""  # "#RRGGBB"; converted to ASS internally
     brand_highlight_color: str = ""  # "#RRGGBB"
@@ -1132,6 +1133,13 @@ class ClipResult:
     meme_events: list[dict] = field(default_factory=list)
     meme_assets: list[dict] = field(default_factory=list)
     quality_plan: dict = field(default_factory=dict)
+
+    # Platform delivery variants. The original file stays the canonical clip and keeps its
+    # filename because publish records and links already point at it. Each entry describes one
+    # additional rendered file: ``{platform, label, filename, video_url, thumbnail_url,
+    # aspect, width, height, short_side, max_duration_s, duration, start, end}``. Older persisted
+    # clips simply load with an empty list.
+    variants: list[dict] = field(default_factory=list)
 
     # --- U9: batch review ------------------------------------------------
     #

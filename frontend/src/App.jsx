@@ -4,6 +4,7 @@ import HistoryView from "./components/HistoryView.jsx";
 import InputBar from "./components/InputBar.jsx";
 import BoxablCampaignPanel from "./components/BoxablCampaignPanel.jsx";
 import CampaignAutomationPanel from "./components/CampaignAutomationPanel.jsx";
+import CampaignPresetLibrary from "./components/CampaignPresetLibrary.jsx";
 import CampaignImportPanel from "./components/CampaignImportPanel.jsx";
 import FacialTrackingPanel from "./components/FacialTrackingPanel.jsx";
 import JobCard from "./components/JobCard.jsx";
@@ -105,6 +106,7 @@ const DEFAULT_SETTINGS = {
   caption_preset: "karaoke",
   // U6: the brand kit. Part of `settings` on purpose - saved profiles store the whole settings
   // blob, so a kit is saved, applied and set as default by machinery that already exists.
+  brand_name: "",
   brand_font: "",
   brand_primary_color: "",
   brand_highlight_color: "",
@@ -270,6 +272,7 @@ function toOptions(settings, publishing) {
     filler_removal: settings.filler_removal,
     // Tier 1 — animated captions / b-roll / visual selection
     caption_preset: settings.caption_preset,
+    brand_name: settings.brand_name,
     brand_font: settings.brand_font,
     brand_primary_color: settings.brand_primary_color,
     brand_highlight_color: settings.brand_highlight_color,
@@ -409,6 +412,7 @@ export default function App() {
   const [publishing, setPublishing] = useState(DEFAULT_PUBLISHING);
   const [publisherStatuses, setPublisherStatuses] = useState({});
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignPresetRefresh, setCampaignPresetRefresh] = useState(0);
   const [publishAttempts, setPublishAttempts] = useState([]);
   const [input, setInput] = useState({ urls: [], files: [] });
   const [preview, setPreview] = useState(null);
@@ -711,6 +715,10 @@ export default function App() {
     setCampaigns((previous) => [campaign, ...previous.filter((item) => item.id !== campaign.id)]);
   };
 
+  const handleCampaignPresetSaved = () => {
+    setCampaignPresetRefresh((current) => current + 1);
+  };
+
   // A brief or a parsed campaign profile (the Campaigns screen) replaces the setup.
   const applyLegacyCampaignPreset = (preset) => {
     const branding = preset.branding || {};
@@ -768,6 +776,7 @@ export default function App() {
             clip_length: profileClipLength || previous.clip_length,
             platform: profilePlatform || previous.platform,
             captions: profileCaptions === null || profileCaptions === undefined ? previous.captions : profileCaptions,
+            brand_name: preset.settings?.brand_name || profileBranding.campaign_brand || profile.campaign_brand || preset.campaign_brand || previous.brand_name,
             brand_logo: profileBranding.logo || profile.watermark_end_cards?.watermark || previous.brand_logo,
             brand_font: profileBranding.font || previous.brand_font,
             brand_primary_color: profileColors.primary || previous.brand_primary_color,
@@ -787,6 +796,7 @@ export default function App() {
             aspect: preset.aspect_ratios?.[0] || DEFAULT_SETTINGS.aspect,
             clip_length: briefClipLength,
             platform: metadataPlatform,
+            brand_name: preset.settings?.brand_name || branding.campaign_brand || DEFAULT_SETTINGS.brand_name,
             brand_logo: branding.logo || DEFAULT_SETTINGS.brand_logo,
             brand_font: branding.font || DEFAULT_SETTINGS.brand_font,
             brand_primary_color: branding.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
@@ -875,6 +885,7 @@ export default function App() {
       platform: presetSettings.platform || presetPlatforms[0] || DEFAULT_SETTINGS.platform,
       output_platform: presetSettings.output_platform || presetPlatforms[0] || DEFAULT_SETTINGS.output_platform,
       captions: presetSettings.captions ?? (preset.captions_language?.required !== undefined ? preset.captions_language.required !== false : DEFAULT_SETTINGS.captions),
+      brand_name: presetSettings.brand_name || preset.branding?.campaign_brand || preset.campaign_brand || DEFAULT_SETTINGS.brand_name,
       brand_logo: presetSettings.brand_logo || preset.watermark_end_cards?.watermark || DEFAULT_SETTINGS.brand_logo,
       brand_font: presetSettings.brand_font || preset.branding?.font || DEFAULT_SETTINGS.brand_font,
       brand_primary_color: presetSettings.brand_primary_color || brandColors.primary || preset.branding?.colors?.primary || DEFAULT_SETTINGS.brand_primary_color,
@@ -1037,6 +1048,8 @@ export default function App() {
                 publisherStatuses={publisherStatuses}
                 outputProfiles={outputProfiles}
                 campaignPreset={activeCampaignPreset}
+                settings={settings}
+                onClipUpdated={handleClipUpdated}
               />
             </section>
           )}
@@ -1065,6 +1078,18 @@ export default function App() {
               <section className="space-y-4">
                 <WorkflowHeading
                   number="01"
+                  title="Saved campaign presets"
+                  description="Apply, duplicate, or remove a saved campaign without reloading its brief."
+                />
+                <CampaignPresetLibrary
+                  refreshToken={campaignPresetRefresh}
+                  onPresetApplied={handlePresetApplied}
+                />
+              </section>
+
+              <section className="space-y-4">
+                <WorkflowHeading
+                  number="02"
                   title="Campaign brief and posting plan"
                   description="Load the brief that explains what clips should follow. The public scheduler is here too."
                 />
@@ -1074,13 +1099,14 @@ export default function App() {
                   jobs={jobs}
                   driveConfigured={driveConfigured}
                   onPresetApplied={handlePresetApplied}
+                  onPresetSaved={handleCampaignPresetSaved}
                   onScheduled={loadPublishingData}
                 />
               </section>
 
               <section className="space-y-4">
                 <WorkflowHeading
-                  number="02"
+                  number="03"
                   title="Import or review a campaign profile"
                   description="This profile tool edits campaign details and checks captions; it is different from loading a clipping brief."
                 />
@@ -1089,7 +1115,7 @@ export default function App() {
 
               <section className="space-y-4">
                 <WorkflowHeading
-                  number="03"
+                  number="04"
                   title="Built-in campaign"
                   description="Use this ready-made campaign setup when it is available in your workspace."
                 />
@@ -1103,7 +1129,7 @@ export default function App() {
 
               <section className="space-y-4">
                 <WorkflowHeading
-                  number="04"
+                  number="05"
                   title="Save settings to reuse"
                   description="Keep a named setup for clip length, captions, effects, and publishing."
                 />
@@ -1353,6 +1379,7 @@ export default function App() {
                         onJobsAdded={handleJobsAdded}
                         // U7: a re-render applies the settings selected above.
                         settings={toOptions(settings, publishing)}
+                        outputProfiles={outputProfiles}
                       />
                     ))}
                   </div>

@@ -75,6 +75,7 @@ def test_unknown_platforms_get_the_permissive_fallback():
     assert preflight.limits_for("does-not-exist").name == "generic"
     assert preflight.limits_for("").name == "generic"
     assert preflight.limits_for("  TikTok ").name == "tiktok"
+    assert preflight.limits_for("instagram_reels").name == "instagram"
 
 
 def test_youtube_shorts_has_its_own_three_minute_product_limit():

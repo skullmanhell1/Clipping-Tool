@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import DeliveryReadiness from "./DeliveryReadiness.jsx";
 
 const PLATFORM_OPTIONS = [
   {
@@ -51,6 +52,8 @@ export default function MultiPlatformScheduler({
   publisherStatuses = {},
   outputProfiles = [],
   campaignPreset = null,
+  settings = {},
+  onClipUpdated = null,
   onError,
   onPublished,
 }) {
@@ -72,6 +75,11 @@ export default function MultiPlatformScheduler({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [readiness, setReadiness] = useState(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessError, setReadinessError] = useState("");
+  const [readinessRefresh, setReadinessRefresh] = useState(0);
+  const [renderingPlatform, setRenderingPlatform] = useState("");
 
   useEffect(() => {
     if (!completedClips.length) {
@@ -100,14 +108,21 @@ export default function MultiPlatformScheduler({
   const campaignReviewRequired = manualOnly
     || Boolean(campaignPreset?.source_library?.length)
     || Boolean(campaignPreset?.compliance?.required_checks?.length);
+  const allowedPlatformsKey = allowedPlatforms.join(",");
   const platformAllowed = (platform) =>
     !allowedPlatforms.length || allowedPlatforms.includes(platform) ||
     (platform === "youtube_shorts" && allowedPlatforms.includes("youtube"));
 
   useEffect(() => {
-    if (!allowedPlatforms.length) return;
-    setSelectedPlatforms((current) => current.filter(platformAllowed));
-  }, [campaignPreset?.id, allowedPlatforms.join(",")]);
+    if (!allowedPlatformsKey) return;
+    const allowed = new Set(allowedPlatformsKey.split(","));
+    setSelectedPlatforms((current) =>
+      current.filter(
+        (platform) =>
+          allowed.has(platform) || (platform === "youtube_shorts" && allowed.has("youtube")),
+      ),
+    );
+  }, [campaignPreset?.id, allowedPlatformsKey]);
 
   const selectedProfiles = useMemo(
     () =>
@@ -116,6 +131,68 @@ export default function MultiPlatformScheduler({
         .filter(Boolean),
     [outputProfiles, selectedPlatforms],
   );
+
+  const variantFor = (platform) => {
+    const variantPlatform = platform === "instagram_reels" ? "instagram" : platform;
+    return (selectedRecord?.clip?.variants || []).find(
+      (variant) => variant?.platform === variantPlatform,
+    );
+  };
+  const selectedVariantsKey = (selectedRecord?.clip?.variants || [])
+    .map((variant) => `${variant?.platform}:${variant?.filename}`)
+    .join("|");
+  const selectedJobId = selectedRecord?.job?.id || "";
+  const selectedClipId = selectedRecord?.clip?.id || "";
+  const readinessPlatforms = selectedPlatforms.join(",");
+
+  // Server-side check: a browser cannot tell that a recorded variant file has been deleted, or
+  // which campaign account the route uses. Re-running after a render is what removes the
+  // fallback badge rather than leaving a misleading one behind.
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedJobId || !readinessPlatforms) {
+      setReadiness(null);
+      setReadinessLoading(false);
+      setReadinessError("");
+      return undefined;
+    }
+    setReadiness(null);
+    setReadinessLoading(true);
+    setReadinessError("");
+    api
+      .deliveryReadiness(
+        selectedJobId,
+        selectedClipId,
+        readinessPlatforms.split(","),
+        campaignId,
+      )
+      .then((result) => {
+        if (!cancelled) setReadiness(result);
+      })
+      .catch((readinessFailure) => {
+        if (!cancelled) {
+          setReadiness(null);
+          setReadinessError(
+            readinessFailure.message || "Could not check delivery readiness.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setReadinessLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedJobId,
+    selectedClipId,
+    readinessPlatforms,
+    campaignId,
+    selectedVariantsKey,
+    readinessRefresh,
+  ]);
+
+  const blockedDestinations = readiness?.summary?.blocked || 0;
 
   const durationBlocker = selectedRecord
     ? selectedPlatforms.find((platform) => {
@@ -222,6 +299,29 @@ export default function MultiPlatformScheduler({
       onError?.(text);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const renderMissingVariant = async (destination) => {
+    if (!selectedRecord || renderingPlatform) return;
+    setRenderingPlatform(destination.requested_platform);
+    setReadinessError("");
+    try {
+      const updated = await api.renderVariant(
+        selectedRecord.job.id,
+        selectedRecord.clip.id,
+        destination.requested_platform,
+        settings,
+        [],
+      );
+      onClipUpdated?.(selectedRecord.job.id, updated);
+      setReadinessRefresh((value) => value + 1);
+    } catch (renderError) {
+      const text = renderError.message || "Could not render this platform variant.";
+      setReadinessError(text);
+      onError?.(text);
+    } finally {
+      setRenderingPlatform("");
     }
   };
 
@@ -336,19 +436,41 @@ export default function MultiPlatformScheduler({
 
           {selectedProfiles.length > 0 ? (
             <div className="flex flex-wrap gap-2 text-[10px] text-slate-400">
-              {selectedProfiles.map((profile) => (
-                <span key={profile.name} className="rounded-full border border-slate-700 px-2 py-1">
-                  {profile.label}: {profile.width}×{profile.height} · max {profile.max_duration_s || "—"}s
-                </span>
-              ))}
+              {selectedProfiles.map((profile) => {
+                const variant = variantFor(profile.name);
+                return (
+                  <span
+                    key={profile.name}
+                    className={`rounded-full border px-2 py-1 ${
+                      variant ? "border-emerald-400/40 text-emerald-200" : "border-slate-700"
+                    }`}
+                  >
+                    {profile.label}: {profile.width}×{profile.height} · max {profile.max_duration_s || "—"}s
+                    {" · "}
+                    {variant ? "variant ready" : "canonical"}
+                  </span>
+                );
+              })}
             </div>
           ) : null}
 
           {selectedRecord ? (
-            <p className="text-[10px] text-slate-500">
-              Selected clip: {formatDuration(selectedRecord.clip.duration)}. A non-vertical source
-              can still publish, but re-rendering with the matching output profile is recommended.
-            </p>
+            <>
+              <DeliveryReadiness
+                readiness={readiness}
+                loading={readinessLoading}
+                error={readinessError}
+                busyPlatform={renderingPlatform}
+                onRender={renderMissingVariant}
+                onRetry={() => setReadinessRefresh((value) => value + 1)}
+              />
+              <p className="text-[10px] text-slate-500">
+                Selected clip: {formatDuration(selectedRecord.clip.duration)}. A ready platform
+                variant is sent automatically; otherwise the canonical clip is used. A non-vertical
+                source can still publish, but re-rendering with the matching output profile is
+                recommended.
+              </p>
+            </>
           ) : null}
 
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -381,10 +503,28 @@ export default function MultiPlatformScheduler({
                <button
                 type="button"
                 onClick={publish}
-                disabled={busy || campaignReviewRequired || !selectedPlatforms.length || Boolean(durationBlocker)}
+                disabled={
+                  busy ||
+                  campaignReviewRequired ||
+                  !selectedPlatforms.length ||
+                  readinessLoading ||
+                  Boolean(durationBlocker) ||
+                  Boolean(renderingPlatform) ||
+                  blockedDestinations > 0
+                }
                 className="rounded-lg bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {busy ? "Queueing…" : campaignReviewRequired ? "Publish from clip review" : schedule ? "Schedule selected" : "Publish selected"}
+                {busy
+                  ? "Queueing…"
+                  : readinessLoading
+                    ? "Checking delivery…"
+                    : campaignReviewRequired
+                      ? "Publish from clip review"
+                      : blockedDestinations > 0
+                        ? "Resolve delivery blockers"
+                        : schedule
+                          ? "Schedule selected"
+                          : "Publish selected"}
               </button>
             </div>
           </div>
@@ -418,6 +558,12 @@ export default function MultiPlatformScheduler({
             <p className="rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-2 text-xs text-rose-200">
               This clip exceeds the selected platform&apos;s duration limit. Re-render it with the
               matching short-form profile before scheduling.
+            </p>
+          ) : null}
+          {blockedDestinations > 0 ? (
+            <p className="rounded-lg border border-rose-400/20 bg-rose-400/[0.06] p-2 text-xs text-rose-200">
+              Resolve the blocked destinations above before queueing. Ready and fallback
+              destinations will not be published while one selected platform is blocked.
             </p>
           ) : null}
           {message ? <p className="text-xs text-emerald-300">{message}</p> : null}

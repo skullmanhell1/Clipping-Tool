@@ -237,12 +237,25 @@ def source_blocker(preset: Mapping[str, Any] | None, url: str) -> str:
     return "This source is not in the active campaign preset's approved source library."
 
 
+def source_matches(left: Any, right: Any) -> bool:
+    """Public form of the direct-source equivalence used by the source library.
+
+    Campaign compliance has to compare the same URL the profile stores with the URL the job
+    actually recorded. A youtu.be link, a /watch?v= link and a /shorts/ link are the same
+    source, and treating them as different is a false compliance failure rather than a safety
+    check.
+    """
+
+    return _source_matches(left, right)
+
+
 __all__ = [
     "clean_url",
     "extract_source_manifest",
     "make_source_entry",
     "source_blocker",
     "source_id",
+    "source_matches",
     "source_status",
     "source_type",
     "youtube_video_id",

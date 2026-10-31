@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from worker.campaign_profile import CampaignProfile
+from worker.campaign_sources import source_matches
 
 
 @dataclass(frozen=True)
@@ -267,20 +268,26 @@ def check_profile_compliance(
     source_rules = profile.source_rules
     source_url = str(_value(clip, "source_url", "") or "")
     allowed_sources = [
-        str(item).casefold() for item in source_rules.get("allowed", []) if str(item).strip()
+        str(item).strip() for item in source_rules.get("allowed", []) if str(item).strip()
     ]
     prohibited_sources = [
-        str(item).casefold() for item in source_rules.get("prohibited", []) if str(item).strip()
+        str(item).strip() for item in source_rules.get("prohibited", []) if str(item).strip()
     ]
     if allowed_sources or prohibited_sources:
         if _value(clip, "source_approved", False) is True:
-            _check(results, "source", True, "local source approval is recorded")
+            _check(results, "source", True, "source approval is recorded")
         elif not source_url:
             _check(results, "source", None, "source provenance was not provided")
         else:
             folded_source = source_url.casefold()
-            allowed = not allowed_sources or any(item in folded_source for item in allowed_sources)
-            prohibited = any(item in folded_source for item in prohibited_sources)
+            allowed = not allowed_sources or any(
+                item.casefold() in folded_source or source_matches(item, source_url)
+                for item in allowed_sources
+            )
+            prohibited = any(
+                item.casefold() in folded_source or source_matches(item, source_url)
+                for item in prohibited_sources
+            )
             _check(
                 results,
                 "source",

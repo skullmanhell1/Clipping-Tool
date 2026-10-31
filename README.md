@@ -42,6 +42,9 @@ and **OFF by default** (an all-off run behaves exactly like v0.7.0):
 Advanced output controls, all **individually toggleable** and **OFF by default**
 (so an all-off run behaves exactly like v0.6.0):
 
+- **Exact brand card:** a campaign can put its own name on the video. The renderer burns an
+  on-brand card at 0:05–0:08, using the campaign's exact spelling (BOXABL is the seeded
+  example), and the brand kit exposes a fallback name for non-campaign renders.
 - **Animated caption presets:** in addition to karaoke / boxed / minimal, choose
   **pop**, **typewriter**, or **hormozi** — word-timed animations rendered with
   libass (no `drawtext`).
@@ -156,6 +159,18 @@ Campaign posting targets can be configured from 1 to 10 clips per day, with matc
 slots. Compliance preview can check either draft copy or a selected rendered clip.
 Clip review also supports status filters and filter-scoped batch actions, while campaign application
 selects the first configured platform output profile automatically.
+Reviewed clips can also render destination-specific delivery variants for TikTok, Instagram Reels,
+YouTube Shorts, YouTube landscape, X, and Whop. The original file and its publish links stay
+untouched; each variant is a separate file with the destination's aspect and resolution, its own
+download links, and a stable filename. Rendering happens one destination at a time so the encode
+cost and any failure belong to the file being produced. Publishing selects the exact matching
+variant automatically, including from the direct scheduler and campaign-day scheduling; if that
+file is missing, or the destination has no variant, the canonical clip is used and the attempt
+records which delivery was chosen. Before queueing from the direct scheduler, a server-side
+readiness check shows the exact file, geometry, duration limit, and campaign account for each
+destination. It reports ready variants, canonical fallbacks with a one-click render action, and
+blockers such as a deleted file, an unconfigured publisher, or a clip over the product limit;
+blocked destinations cannot be queued accidentally.
 Reviewers can choose and save a precise thumbnail frame for each rendered clip.
 Review decisions also support per-clip notes and shared notes for batch actions.
 Selection protects against mid-thought openings and dangling endings, and caption rendering uses

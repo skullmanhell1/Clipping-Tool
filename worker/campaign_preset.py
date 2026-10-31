@@ -1798,19 +1798,34 @@ def _branding_result(facts: Any, metadata: Any, preset: CampaignPreset) -> Compl
 
 
 def validate_clip_against_preset(
-    preset: CampaignPreset | Mapping[str, Any], clip_facts: Any = None, metadata: Any = None
+    preset: CampaignPreset | Mapping[str, Any],
+    clip_facts: Any = None,
+    metadata: Any = None,
+    *,
+    visibility_required: bool = True,
 ) -> ComplianceReport:
-    """Validate facts and metadata; absent evidence is unknown, not an implicit pass."""
+    """Validate facts and metadata; absent evidence is unknown, not an implicit pass.
+
+    ``visibility_required=False`` is for review-only checks: public visibility is a posting
+    requirement, and a clip being prepared for review has not been posted yet.
+    """
 
     policy = _copy(preset)
     facts, meta = clip_facts, metadata
     results: list[ComplianceResult] = []
-    results.append(
-        validate_public_visibility(
-            _first(facts, meta, "visibility", "visibility_status", "is_public", "public"),
-            required=policy.require_public_visibility,
+    if visibility_required:
+        results.append(
+            validate_public_visibility(
+                _first(facts, meta, "visibility", "visibility_status", "is_public", "public"),
+                required=policy.require_public_visibility,
+            )
         )
-    )
+    else:
+        results.append(
+            _result(
+                "visibility", ComplianceStatus.PASS, "public visibility is not required for review"
+            )
+        )
 
     platform = _first(facts, meta, "platform", "target_platform")
     if not policy.allowed_platforms:

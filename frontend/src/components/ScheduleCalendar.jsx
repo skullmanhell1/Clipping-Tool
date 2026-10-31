@@ -71,6 +71,8 @@ export default function ScheduleCalendar({
   publisherStatuses = {},
   outputProfiles = [],
   campaignPreset = null,
+  settings = {},
+  onClipUpdated = null,
 }) {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [attempts, setAttempts] = useState([]);
@@ -175,6 +177,8 @@ export default function ScheduleCalendar({
         publisherStatuses={publisherStatuses}
         outputProfiles={outputProfiles}
         campaignPreset={campaignPreset}
+        settings={settings}
+        onClipUpdated={onClipUpdated}
         onError={onError}
         onPublished={load}
       />

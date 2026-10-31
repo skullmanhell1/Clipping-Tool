@@ -25,6 +25,9 @@ const setup = (overrides = {}) => {
     onApprove: vi.fn(),
     onReject: vi.fn(),
     onReset: vi.fn(),
+    onFilterChange: vi.fn(),
+    onQualityFilterChange: vi.fn(),
+    onSortModeChange: vi.fn(),
     ...overrides,
   };
   const utils = render(<ReviewBar {...props} />);
@@ -64,6 +67,27 @@ describe("ReviewBar", () => {
     expect(props.onReset).not.toHaveBeenCalled();
   });
 
+  it("reports status, quality and sort changes", async () => {
+    const props = setup();
+    await userEvent.click(screen.getByRole("button", { name: "Pending" }));
+    expect(props.onFilterChange).toHaveBeenCalledWith("pending");
+    await userEvent.click(screen.getByRole("button", { name: "Top picks" }));
+    expect(props.onQualityFilterChange).toHaveBeenCalledWith("top");
+    await userEvent.selectOptions(screen.getByLabelText("Sort clips"), "score");
+    expect(props.onSortModeChange).toHaveBeenCalledWith("score");
+  });
+
+  it("shows how many clips are currently visible", () => {
+    setup({ visibleCount: 2 });
+    expect(screen.getByTestId("review-tally")).toHaveTextContent("2 shown");
+  });
+
+  it("offers 'select shown' for the current filtered list", async () => {
+    const props = setup();
+    await userEvent.click(screen.getByRole("button", { name: /select shown/i }));
+    expect(props.onSelectAll).toHaveBeenCalledTimes(1);
+  });
+
   it("offers 'select pending', which is the second-pass action", async () => {
     // Selecting the undecided clips by hand is the work the batch action exists to remove.
     const props = setup();
@@ -78,7 +102,7 @@ describe("ReviewBar", () => {
     expect(screen.getByRole("button", { name: /approve selected/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /reject selected/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /select pending/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /select all/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /select shown/i })).toBeDisabled();
   });
 
   it("surfaces a failure instead of swallowing it", () => {

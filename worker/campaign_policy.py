@@ -93,6 +93,9 @@ def preset_settings(preset: Mapping[str, Any] | None) -> dict[str, Any]:
     settings.setdefault("brand_primary_color", colors.get("primary") or "")
     settings.setdefault("brand_highlight_color", colors.get("accent") or "")
     settings.setdefault("brand_cta", copy_rules.get("cta") or data.get("cta") or "")
+    # The campaign's exact name is the visual brand-card default. Keeping it in the normal
+    # settings surface is what lets the brand kit and the renderer agree on one spelling.
+    settings.setdefault("brand_name", campaign_brand_text(data))
     if "clip_length" in settings:
         settings["clip_length"] = canonical_clip_length(settings.get("clip_length"))
     if "num_clips" in settings:

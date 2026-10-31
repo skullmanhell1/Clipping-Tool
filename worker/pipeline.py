@@ -1700,6 +1700,7 @@ def _run_pipeline(
                     "cta": md.cta,
                     "caption_style": getattr(options, "caption_preset", ""),
                     "branding": {
+                        "name": getattr(options, "brand_name", ""),
                         "logo": getattr(options, "brand_logo", ""),
                         "font": getattr(options, "brand_font", ""),
                         "colors": {

@@ -17,6 +17,7 @@ function mockStartup(jobs = []) {
   vi.spyOn(api, "updates").mockResolvedValue({});
   vi.spyOn(api, "publisherStatuses").mockResolvedValue({ platforms: {} });
   vi.spyOn(api, "campaigns").mockResolvedValue({ campaigns: [] });
+  vi.spyOn(api, "campaignPresets").mockResolvedValue({ presets: [], selected_id: null });
   vi.spyOn(api, "history").mockResolvedValue({ publish_attempts: [] });
   vi.spyOn(api, "profiles").mockResolvedValue({ profiles: [], default_id: null });
   vi.spyOn(api, "listJobs").mockResolvedValue({ jobs });

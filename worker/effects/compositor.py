@@ -393,7 +393,7 @@ def render_clip(
     # guide's specified window even when the speaker never says it.
     campaign_brand_text = campaign_brand_config(getattr(options, "campaign_preset", {}) or {}).get(
         "card_text", ""
-    )
+    ) or str(getattr(options, "brand_name", "") or "").strip()
     need_brand = bool(campaign_brand_text) and duration > 5.0
 
     # Caption ownership (Reqs 3.2, 3.9). ``None`` on every v0.8.0 / all-off run,

@@ -204,6 +204,27 @@ describe("transcript trimming requests (U4)", () => {
     });
   });
 
+  it("asks for delivery readiness for the selected destinations and campaign", async () => {
+    const fetchMock = stubOk();
+    await api.deliveryReadiness("job1", "c1", ["tiktok", "youtube_shorts"], "campaign 1");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/jobs/job1/clips/c1/delivery-readiness?platforms=tiktok%2Cyoutube_shorts&campaign_id=campaign+1",
+    );
+    expect(fetchMock.mock.calls[0][1]?.method).toBeUndefined();
+  });
+
+  it("sends a platform variant as one destination with the current settings", async () => {
+    const fetchMock = stubOk();
+    await api.renderVariant("job1", "c1", "youtube", { color: "vivid" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/jobs/job1/clips/c1/variants");
+    expect(JSON.parse(init.body)).toEqual({
+      platform: "youtube",
+      settings: { color: "vivid" },
+      cuts: [],
+    });
+  });
+
   it("reads a clip transcript with a plain GET", async () => {
     const fetchMock = stubOk();
     await api.clipTranscript("job1", "c1");

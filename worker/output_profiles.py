@@ -207,6 +207,12 @@ def profile_for(platform: str) -> OutputProfile | None:
     )
 
 
+def label_for(platform: str) -> str:
+    """A human-readable destination label, including for an unknown key."""
+    key = str(platform or "").strip().lower()
+    return _PROFILE_LABELS.get(key, key.replace("_", " ").title() or "Variant")
+
+
 def available_profiles() -> list[dict]:
     """Return output profiles in the shape the settings UI can render.
 
@@ -230,7 +236,7 @@ def available_profiles() -> list[dict]:
         if profile is None:
             continue
         data = profile.to_dict()
-        data["label"] = _PROFILE_LABELS.get(name, name.replace("_", " ").title())
+        data["label"] = label_for(name)
         data["description"] = f"{data['width']}×{data['height']} output"
         data["recommended_aspect"] = profile.aspect
         profiles.append(data)

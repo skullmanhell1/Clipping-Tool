@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from worker.branding import logo_filter, materialize_font, materialize_video
+from worker.campaign_policy import campaign_brand_config, preset_settings
 
 
 def test_local_font_asset_is_copied_to_configured_font_directory(tmp_path):
@@ -58,3 +59,10 @@ def test_local_video_asset_is_copied_to_the_managed_brand_directory(tmp_path):
 
 def test_invalid_video_assets_fail_softly(tmp_path):
     assert materialize_video(str(tmp_path / "missing.mp4"), dest_dir=tmp_path / "render") is None
+
+
+def test_campaign_brand_name_is_the_default_card_text():
+    """The exact campaign spelling must survive into the options the renderer reads."""
+    preset = {"settings": {"brand_name": "BOXABL"}}
+    assert campaign_brand_config(preset)["card_text"] == "BOXABL"
+    assert preset_settings(preset)["brand_name"] == "BOXABL"
